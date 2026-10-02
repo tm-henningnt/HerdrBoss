@@ -93,6 +93,52 @@ test('activation with a present source pane does not record sourceMissing', (t) 
   assert.equal(Object.hasOwn(item, 'previousPromptSkipped'), false);
 });
 
+test('a goal-set warning is included in the project handoff notice', (t) => {
+  const f = activationFixture(t);
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const item = {
+    id: 'handoff-warning', project: 'alpha', workspace: 'ws', sourcePane: 'ws:p1', newPane: 'ws:p2',
+    toKind: 'claude', peerPanes: ['ws:p3'],
+    goalWarning: { exitCode: 3, message: 'Goal set exited with code 3; the Owner goal is not confirmed in pane ws:p2.' },
+  };
+  const out = runHandoffModule(f.root, `import { handoffNotices } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(handoffNotices(JSON.parse(process.env.TEST_WARNING_ITEM), [
+  { id: 'ws:p3', workspace: 'ws', agent: 'pi' }, { id: 'other:p1', label: 'boss', agent: 'claude' },
+])));`, { ...f.env, TEST_WARNING_ITEM: JSON.stringify(item) });
+  assert.match(JSON.parse(out)[0].text, /Goal set exited with code 3/);
+  assert.match(JSON.parse(out)[1].text, /Goal set exited with code 3/);
+});
+
+test('handoff notices wait for goal verification and read the saved warning', (t) => {
+  const goal = 'Ship the release safely.';
+  const f = activationFixture(t, {
+    successorKind: 'claude', goalScreen: '',
+    record: { toKind: 'claude', goal, goalSource: 'status' },
+  });
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const out = runHandoffModule(f.root, `import { activateHandoff, handoffNotices, listHandoffs } from ${JSON.stringify(handoffUrl)};
+const panes = [{ id: 'ws:p3', workspace: 'ws', agent: 'pi' }, { id: 'other:p1', workspace: 'other', label: 'boss', agent: 'claude' }];
+let release;
+let started;
+const waiting = new Promise((resolve) => { started = resolve; });
+const activation = activateHandoff('handoff-activate', { confirmed: true, goalSetter: async () => {
+  started();
+  return new Promise((resolve) => { release = resolve; });
+} });
+await waiting;
+const stale = listHandoffs()[0];
+const during = handoffNotices(stale, panes);
+release({ outcome: 'busy', attempts: 0 });
+await activation;
+const after = handoffNotices(stale, panes);
+console.log(JSON.stringify({ during, after, saved: listHandoffs()[0].goalWarning }));`, f.env);
+  const result = JSON.parse(out);
+  assert.deepEqual(result.during, []);
+  assert.equal(result.after.length, 2);
+  assert.ok(result.after.every((notice) => /Goal set exited with code 2/.test(notice.text)));
+  assert.equal(result.saved.exitCode, 2);
+});
+
 test('a different Herdr error for the source pane stops activation', (t) => {
   const f = activationFixture(t, { paneErrors: { 'ws:p1': 'internal_error' } });
   assert.throws(() => f.activate(), /internal_error/);
@@ -121,11 +167,17 @@ test('dashboard and CLI docs describe the activation labels without standby', ()
   assert.match(help, /<b>orch previous<\/b>/);
   assert.match(help, /<b>boss previous<\/b>/);
   assert.match(help, /Boss-workspace peers and the Owner/);
+  assert.match(help, /Codex, Pi, and OpenCode get the goal in the successor prompt/);
+  assert.match(help, /90-second wait and two attempts/);
+  assert.match(help, /handover notice waits for the check/);
   const row = cli.split('\n').find((line) => line.startsWith('| `handoff activate'));
   assert.match(row, /`orch previous`/);
   assert.match(row, /`boss previous`/);
   assert.match(row, /name its agent `<slug>-orch`/);
   assert.match(row, /failed agent rename keeps activation active/);
+  assert.match(row, /Codex, Pi, and OpenCode get the goal in the successor prompt/);
+  assert.match(row, /90-second wait and two attempts/);
+  assert.match(row, /handover notices wait for this check/i);
   assert.doesNotMatch(row, /standby/);
 });
 

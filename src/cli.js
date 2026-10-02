@@ -742,7 +742,7 @@ async function main() {
       // A sandbox cannot write handoff records. Fail before the first Herdr call or file write.
       if (['prepare', 'activate', 'ready', 'cancel'].includes(action)) assertDataWritable();
       if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
-      if (action === 'activate') { console.log(JSON.stringify(activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
+      if (action === 'activate') { console.log(JSON.stringify(await activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
       if (action === 'ready') { console.log(JSON.stringify(markHandoffReady(target), null, 2)); break; }
       if (action === 'cancel') {
         if (!target || args.length > 3 || (args.length === 3 && args[2] !== '--force')) throw new Error('Usage: handoff cancel ID [--force]');

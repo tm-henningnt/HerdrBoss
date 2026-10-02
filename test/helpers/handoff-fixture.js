@@ -162,7 +162,7 @@ export function handoffPromptCalls(root) {
 }
 
 // A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields. On an error it writes the envelope to stderr and exits 1, like the installed CLI.
-export function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [], agentNames = null, failAgentRenames = [] } = {}) {
+export function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [], agentNames = null, failAgentRenames = [], successorKind = 'codex', goalScreen = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -173,7 +173,7 @@ export function activationFixture(t, { boss = false, failPrompts = [], paneListF
   const agents = agentNames ?? [{ pane_id: `${ws}:p1`, name: 'source-agent' }];
   const panes = [
     { pane_id: `${ws}:p1`, workspace_id: ws, label: boss ? 'boss' : 'orch', agent: 'claude', agent_status: 'working' },
-    { pane_id: `${ws}:p2`, workspace_id: ws, label: null, agent: 'codex', agent_status: 'idle' },
+    { pane_id: `${ws}:p2`, workspace_id: ws, label: null, agent: successorKind, agent_status: 'idle' },
     { pane_id: `${ws}:p3`, workspace_id: ws, label: null, agent: 'pi', agent_status: 'working' },
     { pane_id: `${ws}:p4`, workspace_id: ws, label: null, agent: null, agent_status: null },
     { pane_id: 'other:p1', workspace_id: 'other', label: boss ? 'orch' : 'boss', agent: 'claude', agent_status: 'idle' },
@@ -183,7 +183,7 @@ export function activationFixture(t, { boss = false, failPrompts = [], paneListF
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
-const panes = JSON.parse(process.env.TEST_PANES);
+const panes = fs.existsSync(process.env.TEST_PANES_FILE) ? JSON.parse(fs.readFileSync(process.env.TEST_PANES_FILE, 'utf8')) : JSON.parse(process.env.TEST_PANES);
 const paneErrors = JSON.parse(process.env.TEST_PANE_ERRORS);
 if (args[0] === 'pane' && paneErrors[args[2]]) {
   console.error(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
@@ -196,6 +196,11 @@ if (args[0] === 'agent' && args[1] === 'prompt' && paneErrors[args[2]]) {
 if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_RENAMES).includes(args[2])) {
   console.error(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
   process.exit(1);
+}
+if (args[0] === 'pane' && args[1] === 'rename') {
+  const pane = panes.find((entry) => entry.pane_id === args[2]);
+  if (pane) pane.label = args[3];
+  fs.writeFileSync(process.env.TEST_PANES_FILE, JSON.stringify(panes));
 }
 if (args[0] === 'agent' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_AGENT_RENAMES).includes(args[2])) {
   console.error(JSON.stringify({ id: 'cli:agent:rename', error: { code: 'rename_failed', message: 'Agent error rename_failed.' } }));
@@ -211,6 +216,15 @@ if (args[0] === 'agent' && args[1] === 'list') result = { agents: JSON.parse(pro
 if (args[0] === 'agent' && args[1] === 'prompt' && JSON.parse(process.env.TEST_FAIL_PROMPTS).includes(args[2])) {
   console.error(JSON.stringify({ id: 'cli:agent:prompt', error: { code: 'pane_not_found', message: 'Pane not found.' } }));
   process.exit(1);
+}
+if (args[0] === 'agent' && args[1] === 'prompt' && args[2] === process.env.TEST_GOAL_PANE && args[3]?.startsWith('/goal ')) {
+  fs.writeFileSync(process.env.TEST_GOAL_STATE, args[3].slice('/goal '.length));
+}
+if (args[0] === 'pane' && args[1] === 'read' && args[2] === process.env.TEST_GOAL_PANE) {
+  const goal = fs.existsSync(process.env.TEST_GOAL_STATE) ? fs.readFileSync(process.env.TEST_GOAL_STATE, 'utf8') : process.env.TEST_GOAL_SCREEN || '';
+  const ready = ['──────────────', '❯', '──────────────', '  ? for shortcuts'].join('\\n');
+  process.stdout.write(goal ? '  ◎ /goal active\\n  Goal: ' + goal + '\\n' + ready : ready);
+  process.exit(0);
 }
 console.log(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), result }));
 `);
@@ -229,17 +243,19 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
   }]));
   const env = {
     ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-    TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
+    TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_PANES_FILE: path.join(root, 'panes.json'), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
     TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0', TEST_PANE_ERRORS: JSON.stringify(paneErrors), TEST_FAIL_RENAMES: JSON.stringify(failRenames),
     TEST_AGENTS: JSON.stringify(agents), TEST_FAIL_AGENT_RENAMES: JSON.stringify(failAgentRenames),
+    TEST_SUCCESSOR_KIND: successorKind, TEST_GOAL_PANE: `${ws}:p2`, TEST_GOAL_STATE: path.join(root, 'goal-state.txt'), TEST_GOAL_SCREEN: goalScreen ?? record.goal ?? (boss ? '' : 'Ship the release safely.'),
   };
+  fs.writeFileSync(path.join(root, 'panes.json'), JSON.stringify(panes));
   const handoffUrl = new URL('../../src/handoff.js', import.meta.url).href;
   const activate = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
-console.log(JSON.stringify(activateHandoff('handoff-activate', { confirmed: true })));`, env));
+console.log(JSON.stringify(await activateHandoff('handoff-activate', { confirmed: true })));`, env));
   const activateWithWarnings = () => JSON.parse(runHandoffModule(root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 const warnings = [];
 console.warn = (...args) => warnings.push(args.join(' '));
-const item = activateHandoff('handoff-activate', { confirmed: true });
+const item = await activateHandoff('handoff-activate', { confirmed: true });
 console.log(JSON.stringify({ item, warnings }));`, env));
   const calls = () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse);
   const prompts = () => Object.fromEntries(calls().filter((args) => args[0] === 'agent' && args[1] === 'prompt').map((args) => [args[2], args[3]]));
