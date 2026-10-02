@@ -31,6 +31,7 @@ To remove the service, run `bin/herdr-boss uninstall`. On other systems, run `he
 
 - [User guide](docs/user-guide.md): how it works, rules, configuration, remote access, handover, and browsers.
 - [CLI reference](docs/cli.md): every command and option, including `herdr-boss project new` to create a project.
+- [Factories spec](docs/specs/factories.md): the fleet of factories, with the glossary in [docs/CONTEXT.md](docs/CONTEXT.md).
 - [Harness setup](docs/harness-setup.md): the Claude, Codex, OpenCode, and Pi settings that orchestration needs.
 - [Project status files](docs/project-status.md): what orchestrators publish for their project page.
 - [Orchestrator instructions](docs/orchestrator-instructions.md): add the shared rules to a project.

@@ -14,6 +14,10 @@ Herdr users who coordinate coding agents across multiple projects. The primary u
 
 Herdr Boss keeps multi-project agent work moving within available subscriptions and machine capacity. Success balances continuity of each project's orchestration with useful worker throughput. It should help users see resource pressure early, allocate workers across projects, and move orchestration to another provider before a quota prevents progress.
 
+## Scope
+
+Herdr Boss covers all factories of the Owner. A factory is one Herdr server, one Herdr Boss service, and their data, projects, harnesses, and browser. Factory zero runs natively on the Owner's Mac. Container factories run on the Mac or on other hosts. The host tool, the factory image, the fleet summary, and the head office are part of this repository (ADR 0004). The text on one machine below applies to each factory. The glossary is in [docs/CONTEXT.md](docs/CONTEXT.md) and the design is in [docs/specs/factories.md](docs/specs/factories.md).
+
 ## Positioning
 
 Herdr Boss combines live Herdr pane and agent state, provider quota readings, machine and browser ownership, project-published status, and a shared worker kit in one local control plane. Project orchestrators can follow its current bulletin and publish into its dashboard instead of each project building its own resource monitor and dashboard.

@@ -1,6 +1,6 @@
 # HerdrBoss agent instructions
 
-HerdrBoss is the resource supervisor, shared dashboard, and orchestration kit for all Herdr projects on this machine. Read [PRODUCT.md](PRODUCT.md) for its purpose and [docs/user-guide.md](docs/user-guide.md) for how it works.
+HerdrBoss is the resource supervisor, shared dashboard, and orchestration kit for all Herdr projects of each factory in the Owner's fleet. Factory zero is this machine. Read [PRODUCT.md](PRODUCT.md) for its purpose and [docs/user-guide.md](docs/user-guide.md) for how it works. The factories spec is [docs/specs/factories.md](docs/specs/factories.md) and the glossary is [docs/CONTEXT.md](docs/CONTEXT.md).
 
 ## Roles
 
