@@ -349,16 +349,16 @@ test('choices and a rating show in the bar with their labels and state', () => {
   assert.doesNotMatch(html, /data-rv-decision="(accept|deny)"/);
 });
 
-test('the note field grows, has 16 px text in CSS, and shows the draft over the stored note', () => {
+test('the note field is in the answer area, grows, has 16 px text in CSS, and shows the draft over the stored note', () => {
   const spec = { id: 'x', title: 'X', type: 'image', src: 'x.png', ask: ['accept', 'note'] };
   const pack = packWith(spec, { note: EVIL, rev: 1 });
-  const html = render(pack);
+  const html = bar(pack);
   assert.match(html, /<textarea id="rv-note-x" class="rv-note-field" data-rv-note maxlength="2000"/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(html, /<img src=x/);
-  assert.match(render(pack, { note: 'Draft' }), />Draft<\/textarea>/);
-  assert.doesNotMatch(render(packWith(spec, { note: '', rev: 1 })), /<textarea/, 'no field until Note opens it or a note exists');
-  assert.match(render(packWith(spec, { note: '', rev: 1 }), { noteOpen: true }), /<textarea/);
+  assert.match(bar(pack, { note: 'Draft' }), />Draft<\/textarea>/);
+  assert.doesNotMatch(bar(packWith(spec, { note: '', rev: 1 })), /<textarea/, 'no field until Note opens it or a note exists');
+  assert.match(bar(packWith(spec, { note: '', rev: 1 }), { noteOpen: true }), /<textarea/);
 });
 
 test('the save state shows Saved, a plain error, or the conflict choice with the other answer', () => {

@@ -510,6 +510,8 @@ export function validatePack(folder, options = {}) {
           const at = `${where}.choices[${index}]`;
           if (!isObject(choice)) { error('choices', `${at} must be an object with id and label.`, { where: at }); return null; }
           const entry = { id: checkId(choice.id, `${at}.id`, seen, 'choice'), label: checkText(choice.label, `${at}.label`, 100, { required: true }) };
+          const consequence = checkText(choice.consequence, `${at}.consequence`, 300);
+          if (consequence?.trim()) entry.consequence = consequence;
           if (choice.recommended !== undefined && typeof choice.recommended !== 'boolean') error('choices', `${at}.recommended must be true or false.`, { where: at });
           else if (choice.recommended === true) { entry.recommended = true; recommended += 1; }
           return entry;

@@ -13,6 +13,7 @@ import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, remo
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
 import { createTapGuard, startViewedTimer, ANSWER_EMPTY } from './review-save.js';
 import { createSidebar } from './review-sidebar.js';
+import { createAnswerWidth } from './review-answer.js';
 import { visibleItems, loadFilter, saveFilter } from './review-filter.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
@@ -6152,7 +6153,7 @@ const HELP = {
     <p>Above 900 px, the answer controls sit in a sticky column at the right of the evidence and stay in view as the item scrolls. At 900 px and below, the answer bar stays at the bottom edge. The title, item count, and Viewed control stay in the top bar.</p>
     <h3>Zoom and pins</h3><p>Pinch to zoom, or double tap for 2×. Double tap again for the fit size. Drag to pan a zoomed image. On a desktop, hold Ctrl and turn the wheel, or press <kbd>+</kbd> and <kbd>-</kbd>. <kbd>z</kbd> toggles the fit size and 100 %. Select <b>Add pin</b>, then tap the image to drop a numbered pin. Write the pin note in the field under the image. An item takes at most 20 pins.</p>
     <h3>Legacy pages</h3><p>A page item shows an imported HTML page in a frame. The frame blocks network use, local storage, pop-ups, and downloads. Select <b>Add pin</b>, then tap the page to pin a note. <b>Page outline</b> scrolls the page to a heading or an image. When the page has an external link, a tap shows <b>Open live link</b> with the host name. A page that loads data from the network shows without that data. The read-only preview cannot load pages.</p>
-    <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. A choice that the project recommends has the badge <b>Recommended</b>. You can still pick another choice. <b>Ask later</b> is always there. It keeps the item open, moves it to the end of the pack, and opens the next open item. The section list marks it <b>Ask later</b>, and the result lists it as open and skipped. A new answer on the item removes the mark. Select a pressed button again to clear it. A second tap on the same button within 400 ms does nothing. Swipe left or right to go to the next or the previous item.</p>
+    <h3>Answers</h3><p>The answer bar shows only the questions of the item: <b>Deny</b>, <b>Note</b>, <b>Live</b>, <b>Accept</b>, the choices, and the rating. A choice that the project recommends has the badge <b>Recommended</b>. You can still pick another choice. Each choice is a card with a radio mark, the label, the consequence text, and the key number. <b>Ask later</b> is always there, below the choices. The note field is below <b>Ask later</b>. Above 900 px, the answer area has a handle at its left edge. Drag the handle at the left edge of the answer area to change its width. Use <kbd>←</kbd> and <kbd>→</kbd> on the handle for small steps, and double-click it or press <kbd>Home</kbd> to reset the width. The width is at least 280 px and at most 60 % of the window. The browser remembers it. On a phone the area is full width and has no handle. It keeps the item open, moves it to the end of the pack, and opens the next open item. The section list marks it <b>Ask later</b>, and the result lists it as open and skipped. A new answer on the item removes the mark. Select a pressed button again to clear it. A second tap on the same button within 400 ms does nothing. Swipe left or right to go to the next or the previous item.</p>
     <h3>Autosave and offline</h3><p>Each change saves by itself. There is no Save button. A typed note saves 600 ms after the last key, and at once when you leave the field or the item. The line under the item and the pill above the answer bar show <b>Saved</b>, <b>Saving...</b>, <b>Offline, will save when back</b>, or <b>Not saved</b> with <b>Retry</b>. The pill also shows the count of waiting changes. Without a network the changes wait in this browser, also over a reload. The page tries again after 2, 4, 8, and 16 seconds, then every 30 seconds, and at once when the network comes back. <b>Sign in again</b> stops the saves until you sign in. A change that the service refuses shows <b>Not saved</b>, the reason, <b>Retry</b>, and <b>Discard</b>. A change for an item that a new pack version changed shows <b>Changed in the new version</b> and <b>Discard</b>. Such a change keeps <b>Submit review</b> disabled with <b>N changes were not saved</b> until you retry it, discard it, or answer the item again. Two tabs of one pack keep each other's waiting changes. <b>Retry</b> in the pill also sends the changes that a closed tab left. When another device changed the same answer first, select <b>Keep mine</b> or <b>Use theirs</b>. For changes that waited offline, the pack page asks once for all of them. A second device shows your changes without a reload.</p>
     <h3>Keys</h3><p>On the lists: <kbd>j</kbd> and <kbd>k</kbd> move to the next or the previous row. <kbd>J</kbd> and <kbd>K</kbd> move to the next or the previous section. <kbd>Enter</kbd> opens the row. <kbd>u</kbd> or <kbd>Esc</kbd> goes back. <kbd>s</kbd> goes to the summary.</p><p>In the item viewer: <kbd>j</kbd> or <kbd>→</kbd> next item, <kbd>k</kbd> or <kbd>←</kbd> previous item, <kbd>J</kbd> and <kbd>K</kbd> next or previous section, <kbd>n</kbd> next open item, <kbd>a</kbd> Accept, <kbd>d</kbd> Deny, <kbd>b</kbd> Ask later, <kbd>l</kbd> Needs live check, <kbd>c</kbd> note, <kbd>p</kbd> pin mode, <kbd>1</kbd> to <kbd>6</kbd> choice or rating, <kbd>v</kbd> Viewed, <kbd>e</kbd> Viewed and next, <kbd>t</kbd> toggle the pair, <kbd>z</kbd> fit or 100 %, <kbd>s</kbd> summary, <kbd>u</kbd> or <kbd>Esc</kbd> back.</p><p><kbd>?</kbd> opens this help. The keys do nothing while the focus is in a text field, except <kbd>Esc</kbd>, which leaves the field.</p>
     <h3>Phone and desktop</h3><p>On a phone the page fills the screen, and the bar with <b>Submit review</b> sits at the bottom edge. Select the menu button at the top left to open the other pages. On a screen of 900 px or wider, the sections are at the left and the summary is at the right.</p>
@@ -6364,6 +6365,17 @@ const reviewSidebar = createSidebar({
     $app.querySelector('[data-review-resize]')?.setAttribute('aria-valuenow', String(state.width));
   },
 });
+// The width of the answer area of an open item (901 px and wider), remembered per browser in public/review-answer.js.
+let reviewAnswerDrag = false;
+const reviewAnswerArea = createAnswerWidth({
+  storage: reviewStorage,
+  viewport: () => window.innerWidth,
+  apply: (width) => {
+    if (!reviewAnswerDrag) { reviewsRender(); return; }
+    $app.querySelector('.review-page')?.style.setProperty('--review-answer', `${width}px`);
+    $app.querySelector('[data-review-answer-resize]')?.setAttribute('aria-valuenow', String(width));
+  },
+});
 // The Needs you filter of a pack, kept per pack in the browser (public/review-filter.js). The state loads once for each pack.
 const reviewFilterOf = (key) => { const ui = reviewUi(key); if (ui.needsYouOnly === undefined) ui.needsYouOnly = loadFilter(reviewStorage, key); return ui.needsYouOnly; };
 const reviewNeedsYou = (key) => reviewFilterOf(key);
@@ -6433,7 +6445,7 @@ function reviewsView(s) {
     if (entry?.data) {
       const ui = pinProposedVerdict(reviewUi(key), entry.data);
       const viewer = route.view === 'item' ? reviewViewerView(key, route.item) : undefined;
-      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), sidebar: reviewSidebarView(), needsYouOnly: reviewNeedsYou(key), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
+      page = packPageHtml(entry.data, { ...ui, ...reviewSyncView(key), sidebar: reviewSidebarView(), answerWidth: reviewAnswerArea.get(), needsYouOnly: reviewNeedsYou(key), current: reviewItemFromHash(location.hash), item: route.view === 'item' ? route.item : undefined, viewer }, h);
     } else if (entry?.error && entry.status === 404) page = reviewMessageHtml('Review not found', 'This review pack does not exist. The project can have deleted it.', h);
     else if (entry?.error) page = reviewMessageHtml('Review', `The review could not load. ${entry.error}`, h, { alert: true, retry: true });
     else page = reviewMessageHtml('Review', 'Loading the review…', h);
@@ -6624,6 +6636,10 @@ document.addEventListener('keydown', (e) => {
   if (currentRoute() !== 'reviews' || appDrawerOpen || !document.getElementById('help-panel').hidden || $nav.classList.contains('open')) return;
   if (e.target.closest?.('[data-review-resize]')) {
     if (!e.ctrlKey && !e.metaKey && !e.altKey && reviewSidebar.key(e.key)) { e.preventDefault(); reviews.focus = '[data-review-resize]'; }
+    return;
+  }
+  if (e.target.closest?.('[data-review-answer-resize]')) {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && reviewAnswerArea.key(e.key)) { e.preventDefault(); reviews.focus = '[data-review-answer-resize]'; }
     return;
   }
   const inField = Boolean(e.target.closest?.('input, textarea, select, [contenteditable="true"]'));
@@ -8755,6 +8771,38 @@ document.addEventListener('pointerdown', (e) => {
   handle.addEventListener('pointermove', move);
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
+});
+
+// The handle of the answer area. The area ends at the right edge of the page, so the width is the distance to that edge.
+document.addEventListener('pointerdown', (e) => {
+  const handle = currentRoute() === 'reviews' ? e.target.closest?.('[data-review-answer-resize]') : null;
+  if (!handle || e.button > 0) return;
+  const page = handle.closest('.review-page');
+  if (!page) return;
+  e.preventDefault();
+  reviewAnswerDrag = true;
+  handle.classList.add('dragging');
+  handle.setPointerCapture?.(e.pointerId);
+  handle.focus({ preventScroll: true });
+  const right = page.getBoundingClientRect().right;
+  const move = (event) => reviewAnswerArea.resize(right - event.clientX, false);
+  const end = (event) => {
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end);
+    handle.releasePointerCapture?.(event.pointerId);
+    handle.classList.remove('dragging');
+    reviewAnswerArea.resize(right - event.clientX, event.type === 'pointerup');
+    reviewAnswerDrag = false;
+    reviewsRender();
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+});
+document.addEventListener('dblclick', (e) => {
+  if (currentRoute() !== 'reviews' || !e.target.closest?.('[data-review-answer-resize]')) return;
+  reviewAnswerArea.reset();
 });
 
 // A window resize pulls the column under half of the new width.

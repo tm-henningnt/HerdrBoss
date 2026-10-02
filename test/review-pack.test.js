@@ -684,6 +684,14 @@ test('one choice may carry recommended: true and the normalized choice keeps it'
   assert.deepEqual(item(result).choices, [{ id: 'a', label: 'Keep before' }, { id: 'b', label: 'Use after', recommended: true }]);
 });
 
+test('a choice may carry a consequence text of at most 300 characters', () => {
+  const ok = choiceItem([{ id: 'a', label: 'Keep before', consequence: 'Client code stays on one host.' }, { id: 'b', label: 'Use after', consequence: '  ' }]);
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.deepEqual(item(ok).choices, [{ id: 'a', label: 'Keep before', consequence: 'Client code stays on one host.' }, { id: 'b', label: 'Use after' }]);
+  assert.equal(choiceItem([{ id: 'a', label: 'A', consequence: 'x'.repeat(301) }, { id: 'b', label: 'B' }]).ok, false);
+  assert.equal(choiceItem([{ id: 'a', label: 'A', consequence: 5 }, { id: 'b', label: 'B' }]).ok, false);
+});
+
 test('two recommended choices, or a recommended value that is not a boolean, are errors', () => {
   const two = choiceItem([{ id: 'a', label: 'A', recommended: true }, { id: 'b', label: 'B', recommended: true }]);
   assert.ok(rules(two).includes('choices'), JSON.stringify(two.errors));

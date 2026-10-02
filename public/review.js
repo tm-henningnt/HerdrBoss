@@ -8,6 +8,7 @@ import { itemViewerHtml, answerBarHtml, viewerBarHtml, itemSpec, viewerIcon, ver
 import { visibleItems, needsYouCount } from './review-filter.js';
 import { safeUrl } from './markdown.js';
 import { sidebarHandleHtml, clampWidth, SIDEBAR_DEFAULT, SIDEBAR_RAIL } from './review-sidebar.js';
+import { answerHandleHtml, clampAnswer, ANSWER_DEFAULT } from './review-answer.js';
 import { syncStatusHtml, packStatusHtml, submitLock, rowSyncText } from './review-sync.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -553,14 +554,15 @@ export function packPageHtml(pack, ui, h) {
   const list = sectionsNavHtml(pack, sections, ui, esc, collapsed) + (collapsed ? '' : sidebarHandleHtml(sideWidth, viewport));
   const main = `<div class="review-main">${ui.item ? itemPanelHtml(pack, ui, h) : summaryHtml(pack, { ...ui, time: h.time }, esc)}</div>`;
   let foot = '';
-  if (openItem) foot = answerBarHtml(pack, openItem, ui.viewer || {}, h);
+  const answerWidth = clampAnswer(ui.answerWidth ?? ANSWER_DEFAULT, viewport);
+  if (openItem) foot = answerHandleHtml(answerWidth, viewport) + answerBarHtml(pack, openItem, ui.viewer || {}, h);
   else if (open && !ui.item) {
     const lock = submitLock(ui.packSync?.count || 0, ui.packSync?.unsaved || 0);
     foot = `<div class="review-foot" data-key="review-foot">${packStatusHtml(ui.packSync || { kind: '' }, esc)}<span class="review-foot-count">${counts.open ? `${plural(counts.open, 'open item')}` : 'All items answered'}</span>`
       + `<p class="review-foot-status" role="status">${esc(ui.submitStatus || '')}</p>`
       + `<button type="submit" form="review-submit-form" class="review-submit"${ui.submitting || lock.disabled ? ' disabled' : ''}>${esc(lock.label)}</button></div>`;
   }
-  return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px">`
+  return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px${openItem ? `; --review-answer: ${answerWidth}px` : ''}">`
     + `<div class="app-bar review-app-bar">${bar}</div>`
     + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}</div>`;
 }

@@ -579,7 +579,6 @@ export function itemViewerHtml(pack, item, ui, h) {
     + agentEvidenceHtml(pack, item, spec, ui, h)
     + body
     + pinNotesHtml(item, ui, h, disabled)
-    + noteHtml(item, ui, h, disabled)
     + statusHtml(ui, h)
     + conflictHtml(spec, ui, h)
     + closed
@@ -602,7 +601,9 @@ export function answerBarHtml(pack, item, ui, h) {
   const rows = [];
   if (ask.includes('choice')) {
     const choices = (spec.choices || []).filter(Boolean).map((choice, i) => `<button type="button" class="rv-choice" data-rv-choice="${esc(choice.id)}" aria-pressed="${answer.choice === choice.id ? 'true' : 'false'}"${busy('choice')}${off}>`
-      + `${answer.choice === choice.id ? viewerIcon('check') : ''}<span>${esc(choice.label)}</span>${choice.recommended === true ? '<span class="rv-recommended">Recommended</span>' : ''}${kbd(i + 1)}</button>`).join('');
+      + `<span class="rv-radio" aria-hidden="true"></span><span class="rv-choice-body"><span class="rv-choice-label">${esc(choice.label)}</span>`
+      + `${typeof choice.consequence === 'string' && choice.consequence ? `<span class="rv-choice-text">${esc(choice.consequence)}</span>` : ''}</span>`
+      + `${choice.recommended === true ? '<span class="rv-recommended">Recommended</span>' : ''}${kbd(i + 1)}</button>`).join('');
     rows.push(`<div class="rv-choices" role="group" aria-label="Choice">${choices}</div>`);
   }
   if (ask.includes('rating')) {
@@ -624,6 +625,7 @@ export function answerBarHtml(pack, item, ui, h) {
   if (main.length) rows.push(`<div class="rv-acts" style="--rv-acts: ${main.length}">${main.join('')}</div>`);
   // Ask later is built in. It needs no `ask` entry. The item stays open and moves to the end of the pack.
   rows.push(`<div class="rv-later">${button('data-rv-decision="skip"', 'decision', answer.decision === 'skip', '', 'later', 'Ask later', 'b')}</div>`);
+  rows.push(noteHtml(item, ui, h, pack.state !== 'open'));
   const readOnly = off ? '<p class="rv-help-line">Read only.</p>' : '';
   // The pill sits above the bar in its own slot, so a status change never moves a button under the finger.
   return `<div class="rv-answer" data-key="rv-answer:${esc(item.id)}" role="group" aria-label="Answer">${packStatusHtml(ui.packSync || { kind: '' }, esc)}${readOnly}${rows.join('')}</div>`;

@@ -330,7 +330,10 @@ The answer bar shows only the questions in `ask` of the item:
 - **Deny** and **Accept** set the decision. Select the pressed button again to clear the decision.
 - **Note** opens the note field. The field grows with the text and has at most 2000 characters. The page saves the note 600 ms after the last key, and when the field loses the focus.
 - **Live** marks the item **Needs live check**. The live row under the evidence has the live links of the item, or else the live links of the pack. Each link opens in a new tab. Select **Checked** after the check. Select **Live** again to clear the mark.
-- A choice shows one button for each alternative. A rating shows one star for each step.
+- A choice shows one option card for each alternative. A card has a radio mark, the label, the consequence text, and the key number. The recommended choice has the badge **Recommended**. The selected card has a thick border, a tinted background, and a filled radio mark. The pack sets the consequence text in the optional `consequence` field of the choice (at most 300 characters). The text wraps and is never cut. A phone shows one column of cards. A window wider than 1100 px shows two columns. A rating shows one star for each step.
+- **Ask later** and the note field are below the choices.
+
+Drag the handle at the left edge of the answer area to change its width. The handle shows above 900 px only. The width is at least 280 px and at most 60 % of the window. Press the left or right arrow key on the handle for a step of 16 px. Double-click the handle or press Home to reset the width to 400 px. The browser remembers the width. On a phone the area is full width below the evidence and has no handle.
 
 The page marks an item **Viewed** when the item stays open and visible for 1.5 seconds. The time does not count while the browser tab is hidden. The **Viewed** toggle in the top bar sets or clears the mark.
 
