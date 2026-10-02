@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=0084129d473c -->
+<!-- herdr-boss kit v=591e80a2bfbe -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -54,6 +54,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Inspect each worker diff and run acceptance commands independently.
 - Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
 - Publish project status through Herdr Boss. Do not build a separate project dashboard.
+- Publish the status with `herdr-boss publish <slug> <file> --sync` at each task boundary. The option sets each card state from git, workers and issues before it installs the status, and prints how many cards changed.
 - Set `waitingOn: owner` only for the escalation categories.
 - Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.
 - Use `blockedBy` for waits on other tasks.
