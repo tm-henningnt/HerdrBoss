@@ -19,8 +19,12 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
 | `herdr-boss serve --read-only-preview [--host <address>]` | Run a dashboard preview. It binds `127.0.0.1` and accepts local requests only. `--host` sets another bind address, an IP address or a host name, and works only with `--read-only-preview`. The start line prints the bind address. It allows API reads and blocks API changes, prompts, notifications, process reaping, Chrome clone sweeps, handovers, and browser launches. It never reads, creates, or changes access files. It needs a `HERDR_BOSS_DIR` that the service does not use. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
-| `herdr-boss logs` | Print the last 100 lines of the server log. |
+| `herdr-boss logs` | Print the last 100 lines of the server log. It reads `service.log` in the data directory when that file exists, and `server.log` otherwise. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
+
+`GET /api/health` returns the health body: `schema`, `contractVersion`, `version`, `kitRevision`, `tickAgeSeconds`, `herdrReachable`, and `clockOffsetSeconds`. Use `curl -fsS http://127.0.0.1:4477/api/health` on the machine of the service. The body holds no path and no secret. See the Health route section of the user guide.
+
+Set `allowedHosts` to accept more `Host` names, for example `["*.localhost", "factory-two"]`. The default is an empty list. Set `log.maxMegabytes` and `log.keepFiles` to control the rotation of `service.log` in the data directory. The Settings reference lists each setting.
 
 Restart the service after a configuration change:
 
@@ -825,6 +829,9 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Orchestrator label | `orchestratorLabel` | The pane label that marks the orchestrator of a project. | orch | Text | One pane label | Not applicable. | A wrong label makes Herdr Boss miss the orchestrator panes. | Change it in config.json. Restart the service. |
 | Port | `port` | The port of the dashboard and the API. | 4477 | TCP port | 1 to 65535 | Not applicable. | A change also changes the address that other tools use. | Change it in config.json. Restart the service. |
 | Host | `host` | The network address that the server listens on. 0.0.0.0 allows remote access with the access token. 127.0.0.1 allows only this machine. | 0.0.0.0 | Address | An IP address of this machine | Not applicable. | Set 127.0.0.1 to turn remote access off. | Change it in config.json. Restart the service. |
+| Allowed hosts | `allowedHosts` | Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, or *.localhost for each name below localhost. A port, an address, and a bare * are not allowed. | Empty list | List of host names | Up to 50 names | A request that names a listed host passes the host check. A request from another machine still needs the access token. | Remove a name to refuse requests that use it. | Select Save in the group. The change takes effect at once. |
+| Log size limit | `log.maxMegabytes` | The size at which the server log file service.log rotates. The server also writes the log to standard output. | 10 | Megabytes | 1 to 1000 | The log file holds more history and uses more disk space. | The log file rotates sooner and holds less history. | Select Save in the group. The change takes effect at once. |
+| Old log files | `log.keepFiles` | The number of rotated log files that Herdr Boss keeps, as service.log.1 and service.log.2. | 2 | Files | 1 to 2 | More history stays on disk. | Herdr Boss deletes the older file at the next rotation. | Select Save in the group. The change takes effect at once. |
 
 #### Analytics (Advanced)
 

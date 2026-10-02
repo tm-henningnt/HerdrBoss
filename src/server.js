@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine, standDownPlan } from './engine.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
-import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
+import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, hostAllowedByList, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects, SLUG } from './projects.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
@@ -26,6 +26,8 @@ import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationS
 import { listHandoffs } from './handoff.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
+import { createRotatingLog } from './server-log.js';
+import { createHealth } from './health.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
@@ -122,15 +124,16 @@ async function readBody(req, limit = 1024 * 1024, raw = false) {
 }
 
 // The host list of the control plane: a loopback name, a Tailscale name, or an address of this machine.
-function allowedHost(req) {
+// The allowedHosts setting adds host names to this rule. The default list is empty.
+function allowedHost(req, extraHosts = []) {
   const hostname = (req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
   const localAddresses = Object.values(os.networkInterfaces()).flat().filter(Boolean).map((iface) => iface.address.toLowerCase());
-  return ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.ts.net') || localAddresses.includes(hostname.replace(/^\[|\]$/g, ''));
+  return ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.ts.net') || localAddresses.includes(hostname.replace(/^\[|\]$/g, '')) || hostAllowedByList(hostname, extraHosts);
 }
 
-function allowedRequest(req, pathname) {
+function allowedRequest(req, pathname, extraHosts = []) {
   const host = req.headers.host || '';
-  if (!allowedHost(req)) return false;
+  if (!allowedHost(req, extraHosts)) return false;
   const origin = req.headers.origin;
   if (origin === 'null') {
     if (pathname !== '/login' || req.method !== 'POST' || !['same-origin', 'none', undefined].includes(req.headers['sec-fetch-site'])) return false;
@@ -198,7 +201,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, health = createHealth() } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -233,10 +236,17 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     ...goalSet,
   });
   const clients = new Set();
+  // The server log goes to standard output and to service.log in the data directory. The file rotates by size.
+  // launchd writes standard output to server.log, so the rotating file is a separate file.
+  const logFile = createRotatingLog({ file: path.join(DATA_DIR, 'service.log'), maxBytes: () => (cfg.log?.maxMegabytes ?? 10) * 1024 * 1024, keepFiles: () => cfg.log?.keepFiles ?? 2 });
+  const serverLog = (text, isError = false) => {
+    (isError ? console.error : console.log)(text);
+    logFile.write(`${new Date().toISOString()} ${text}`);
+  };
   // The review pages update a second device through `review` events: ids and numbers only, never content.
   const reviewApi = createReviewApi({ dataDir: DATA_DIR, onChange: (event) => broadcast('review', event) });
   // The raw route serves legacy HTML pages to a sandboxed frame. Its tokens stay in memory. See src/review-raw.js.
-  const reviewRaw = createRawRoute({ dataDir: DATA_DIR, hostAllowed: allowedHost, tokens: rawTokens });
+  const reviewRaw = createRawRoute({ dataDir: DATA_DIR, hostAllowed: (req) => allowedHost(req, cfg.allowedHosts), tokens: rawTokens });
   let closed = false;
   let timer;
   let tickPromise;
@@ -271,6 +281,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     }
     reviewHeads = next;
   };
+  // Error and guard events also reach the server log. Other events stay in events.jsonl.
+  engine.on('event', (event) => { if (['error', 'guard'].includes(event?.type)) serverLog(`${event.type}: ${event.text}`, event.type === 'error'); });
   engine.on('state', (s) => { broadcast('state', s); pushReviewHeads(); });
   engine.on('message', (event) => broadcast('message', event));
   const stopMessageWatch = messageStore.onChange((event) => {
@@ -331,7 +343,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
       if (req.url.startsWith('/review-raw/')) return reviewRaw.handle(req, res);
-      if (!allowedRequest(req, p)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
+      if (!allowedRequest(req, p, cfg.allowedHosts)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
       // The project-new GET routes show local paths, so the preview refuses them too.
       const projectNewRoute = p === '/api/project-new' || p.startsWith('/api/project-new/');
       if (readOnlyPreview && p.startsWith('/api/') && (projectNewRoute || !['GET', 'HEAD'].includes(req.method))) {
@@ -398,6 +410,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
+      if (p === '/api/health' && req.method === 'GET') return send(res, 200, await health(engine));
       if (p === '/api/state') {
         if (engine.state) {
           refreshMailbox();
@@ -1109,7 +1122,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   });
 
   server.listen(cfg.port, bindHost, () => {
-    console.log(`herdr-boss: http://${bindHost}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
+    serverLog(`herdr-boss: http://${bindHost}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
   });
 
   server.on('close', () => {
@@ -1123,7 +1136,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     try {
       tickPromise = engine.tick();
       await tickPromise;
-    } catch (e) { engine.log('error', `tick failed: ${e.message}`); console.error(maskBrowserText(e.stack || e.message)); }
+    } catch (e) { engine.log('error', `tick failed: ${e.message}`); serverLog(maskBrowserText(e.stack || e.message), true); }
     finally { tickPromise = null; }
     if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };
