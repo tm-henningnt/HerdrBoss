@@ -144,7 +144,7 @@ export function listProjects() {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const errors = validateProject(data);
-      const fileMtime = fs.statSync(file).mtimeMs;
+      const fileMtime = fs.statSync(file).mtime.getTime();
       const recordedPublish = Date.parse(data.updated || '');
       const publishedMs = Math.max(Number.isFinite(recordedPublish) ? recordedPublish : -Infinity, fileMtime);
       const publishedAt = new Date(publishedMs).toISOString();
