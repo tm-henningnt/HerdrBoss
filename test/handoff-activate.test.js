@@ -6,6 +6,10 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { activationFixture, handoffFixture, runHandoffCli, runHandoffModule, WORKER_LINE, writeRuns } from './helpers/handoff-fixture.js';
 
+function enableAutoCommand(f) {
+  fs.writeFileSync(path.join(f.root, 'policy.json'), JSON.stringify({ goals: { autoCommand: true } }));
+}
+
 test('project activation labels the successor orch and the previous pane orch previous', (t) => {
   const f = activationFixture(t);
   const item = f.activate();
@@ -26,6 +30,30 @@ test('project activation labels the successor orch and the previous pane orch pr
   assert.equal(stored.ownerGoal, 'Ship the release safely.');
 });
 
+test('default policy puts a Claude handover goal in the activation prompt and skips goal set', (t) => {
+  const goal = 'Ship the release safely.';
+  const f = activationFixture(t, {
+    successorKind: 'claude', goalScreen: '',
+    record: { toKind: 'claude', goal, goalSource: 'status' },
+  });
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+let goalSetCalls = 0;
+const item = await activateHandoff('handoff-activate', { confirmed: true, goalSetter: async () => {
+  goalSetCalls += 1;
+  return { outcome: 'active' };
+} });
+console.log(JSON.stringify({ item, goalSetCalls }));`, f.env));
+  const successorPrompt = f.prompts()['ws:p2'];
+  assert.match(successorPrompt, new RegExp(`The current Owner goal is: ${goal}`));
+  assert.doesNotMatch(successorPrompt, /^\/goal/m);
+  assert.equal(result.item.goalDelivery, 'prompt');
+  assert.ok(result.item.goalSentAt);
+  assert.equal(result.item.goalSendingAt, undefined);
+  assert.equal(result.goalSetCalls, 0);
+  assert.equal(f.calls().some((args) => args[0] === 'pane' && args[1] === 'read' && args[2] === 'ws:p2'), false);
+});
+
 test('activation checks a missing Claude goal with the bounded goal-set wait', (t) => {
   const goal = 'Ship the release safely.';
   const f = activationFixture(t, {
@@ -33,6 +61,7 @@ test('activation checks a missing Claude goal with the bounded goal-set wait', (
     goalScreen: '',
     record: { toKind: 'claude', goal, goalSource: 'status' },
   });
+  enableAutoCommand(f);
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
 const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 import { readFileSync } from 'node:fs';
@@ -63,6 +92,7 @@ test('activation keeps a goal that already shows on the successor pane', (t) => 
     goalScreen: `Goal: ${goal}`,
     record: { toKind: 'claude', goal, goalSource: 'status' },
   });
+  enableAutoCommand(f);
   const item = f.activate();
   assert.equal(f.calls().some((args) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'ws:p2' && args[3] === `/goal ${goal}`), false);
   assert.ok(item.goalVerifiedAt);
@@ -77,6 +107,7 @@ test('goal-set exit codes 2 and 3 warn without blocking the engine fallback', (t
       goalScreen: '',
       record: { toKind: 'claude', goal, goalSource: 'status' },
     });
+    enableAutoCommand(f);
     const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
     const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 const warnings = [];
@@ -107,6 +138,7 @@ test('a thrown goal-set check leaves the engine free to send the goal', (t) => {
   const f = activationFixture(t, {
     successorKind: 'claude', goalScreen: '', record: { toKind: 'claude', goal, goalSource: 'status' },
   });
+  enableAutoCommand(f);
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 const item = await activateHandoff('handoff-activate', { confirmed: true, goalSetter: async () => { throw new Error('fixture setter failure'); } });
@@ -124,6 +156,7 @@ test('an engine send marker prevents activation from sending a second Claude goa
     successorKind: 'claude', goalScreen: '',
     record: { toKind: 'claude', goal, goalSource: 'status', goalSentAt: sentAt },
   });
+  enableAutoCommand(f);
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
 let setterCalls = 0;
@@ -170,6 +203,7 @@ test('goal verification patches the latest handoff and preserves engine and peer
   const f = activationFixture(t, {
     successorKind: 'claude', goalScreen: '', record: { toKind: 'claude', goal, goalSource: 'status' },
   });
+  enableAutoCommand(f);
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
   runHandoffModule(f.root, `import fs from 'node:fs';
 import path from 'node:path';

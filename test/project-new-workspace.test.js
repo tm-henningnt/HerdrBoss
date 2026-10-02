@@ -114,8 +114,9 @@ test('project new starts a Codex orchestrator on the project browser', () => {
   } finally { f.cleanup(); }
 });
 
-test('goalDelivery gives command for Claude, prompt for other kinds, and nothing without a goal or for the Boss', () => {
-  assert.equal(goalDelivery({ goal: GOAL, kind: 'claude' }), 'command');
+test('goalDelivery uses plain text by default and command for Claude only when enabled', () => {
+  assert.equal(goalDelivery({ goal: GOAL, kind: 'claude' }), 'prompt');
+  assert.equal(goalDelivery({ goal: GOAL, kind: 'claude', autoCommand: true }), 'command');
   assert.equal(goalDelivery({ goal: GOAL, kind: 'codex' }), 'prompt');
   assert.equal(goalDelivery({ goal: GOAL, kind: 'pi' }), 'prompt');
   assert.equal(goalDelivery({ goal: '', kind: 'claude' }), undefined);
@@ -196,9 +197,25 @@ test('the default ladder starts Codex and puts the goal in the first prompt, not
   } finally { f.cleanup(); }
 });
 
+test('default policy puts a Claude project goal in the first prompt without sending /goal', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const result = start(f, herdr, { kind: 'claude' });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(herdr.state.prompts.length, 1);
+    assert.match(herdr.state.prompts[0].text, new RegExp(`The current Owner goal is: ${GOAL}`));
+    assert.doesNotMatch(herdr.state.prompts[0].text, /^\/goal/m);
+    assert.equal(herdr.calls.some((args) => args[0] === 'agent' && args[1] === 'prompt' && /^\/goal\b/.test(args[3] || '')), false);
+    assert.equal(herdr.calls.some((args) => args[0] === 'goal' && args[1] === 'set'), false);
+    assert.deepEqual(herdr.state.paneReads, []);
+  } finally { f.cleanup(); }
+});
+
 test('a Claude orchestrator gets /goal as its own prompt before the first prompt, and the pane shows it', () => {
   const f = fixture();
   try {
+    writePolicy(f, { goals: { autoCommand: true } });
     const herdr = fakeHerdr();
     const result = start(f, herdr, { kind: 'claude' });
     assert.equal(result.ok, true, result.error);
@@ -217,6 +234,7 @@ test('a Claude orchestrator gets /goal as its own prompt before the first prompt
 test('a Claude /goal that the pane does not show fails the step, and --resume does not send it again', () => {
   const f = fixture();
   try {
+    writePolicy(f, { goals: { autoCommand: true } });
     const herdr = fakeHerdr();
     herdr.state.goalVisible = false;
     const failed = start(f, herdr, { kind: 'claude' });
@@ -236,6 +254,7 @@ test('a Claude /goal that the pane does not show fails the step, and --resume do
 test('the goal is the --goal text, else the Settings default goal', () => {
   const f = fixture();
   try {
+    writePolicy(f, { goals: { autoCommand: true } });
     const herdr = fakeHerdr();
     const result = runProjectNew({ slug: 'demo', group: f.group, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling, start: true, herdr, hooks: hooks(herdr), env: {}, kind: 'claude' });
     assert.equal(result.ok, true, result.error);

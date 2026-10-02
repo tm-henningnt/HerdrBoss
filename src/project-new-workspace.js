@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadPolicy } from './control.js';
-import { cleanGoal, goalDelivery, goalShown } from './goal.js';
+import { cleanGoal, goalDelivery, goalPromptText, goalShown } from './goal.js';
 import { handoffTarget, successorAgentArgs } from './handoff.js';
 import { loadModels } from './kit/config.js';
 import { agentReadyVisible, createHerdrRunner, deliverPrompt, isAgentPaneBusy, readAgentText, waitForAgentReady, waitForWorkerPane } from './kit/workers.js';
@@ -84,10 +84,10 @@ function findPane(herdr, ids, workspace) {
   return paneId(pane);
 }
 
-function firstPrompt({ slug, pane, boss, goal }) {
+function firstPrompt({ slug, pane, boss, goal, kind }) {
   return `[herdr-boss] You are the orchestrator of the new project ${slug}. Your pane is ${pane}, labeled orch. ${boss ? `The Boss pane is ${boss}. ` : ''}`
     + 'Read AGENTS.md, docs/orchestration/memory.md, and docs/orchestration/herdr-boss.md. '
-    + `Then start with the published task "${FIRST_TASK}".${goal ? ` The current Owner goal is: ${goal}` : ''}`;
+    + `Then start with the published task "${FIRST_TASK}".${goal ? `\n${goalPromptText({ goal, kind, autoCommand: false })}` : ''}`;
 }
 
 const TRUST_OPTION = { claude: 'Yes, I trust this folder', codex: 'Trust and continue' };
@@ -207,12 +207,12 @@ export function workspaceStep(inputs, context) {
   }
 
   const goal = cleanGoal(inputs.goal) ?? cleanGoal(policy.defaultOrchestratorGoal);
-  const delivery = goalDelivery({ goal, kind });
+  const delivery = goalDelivery({ goal, kind, autoCommand: policy.goals.autoCommand });
   const settle = () => hooks.waitForReady(name, kind, { herdr, readText: hooks.readText, wait: hooks.wait });
   if (delivery === 'command') {
     if (!ids.goalSent) {
       settle();
-      herdr(['agent', 'prompt', name, `/goal ${goal}`]);
+      herdr(['agent', 'prompt', name, goalPromptText({ goal, kind, autoCommand: policy.goals.autoCommand })]);
       context.remember({ goalSent: true });
     }
     if (!ids.goalVerified) {
@@ -232,7 +232,7 @@ export function workspaceStep(inputs, context) {
     if (!ids.goalSent) settle();
     let boss = null;
     try { boss = paneId(rows(herdr(['pane', 'list']), 'panes').find((p) => p.label === 'boss')); } catch { /* The prompt works without the Boss pane. */ }
-    const text = firstPrompt({ slug: inputs.slug, pane, boss, goal: delivery === 'prompt' ? goal : null });
+    const text = firstPrompt({ slug: inputs.slug, pane, boss, goal: delivery === 'prompt' ? goal : null, kind });
     deliverPrompt(name, text, `orchestrator of the new project ${inputs.slug}`, { herdr, readText: hooks.readText, wait: hooks.wait, kind });
     context.remember({ promptSent: true });
   }

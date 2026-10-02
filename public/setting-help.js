@@ -485,8 +485,15 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value hands over sooner and keeps the context short.',
     apply: 'policy',
   }),
+  S('capacity', 'goals.autoCommand', 'Automatic Claude goal command', {
+    what: 'Lets Herdr Boss send /goal automatically when it gives an Owner goal to a Claude agent. When this is off, Herdr Boss sends the goal as plain text. Manual herdr-boss goal set still sends /goal.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets a Claude agent set the Owner goal as an active goal.',
+    lower: 'Turning it off sends the Owner goal as plain text.',
+    apply: 'policy',
+  }),
   S('capacity', 'defaultOrchestratorGoal', 'Default orchestrator goal', {
-    what: 'The /goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last /goal command of its session. A Claude successor gets /goal after it answers. Other harnesses get the goal in the activation prompt. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the orchestrator waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
+    what: 'The goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the orchestrator waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
     default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',
     raise: 'A longer text gives more direction and uses more context.',
     lower: 'An empty text gives a new orchestrator no default goal.',
