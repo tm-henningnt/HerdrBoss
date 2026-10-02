@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 import { TEST_GIT_IDENTITY } from './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
