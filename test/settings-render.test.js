@@ -90,6 +90,47 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   assert.equal(button.disabled, false);
 });
 
+test('a Quota save shows the value that the server stored and notes a difference from the typed value', async () => {
+  const app = await views();
+  const inputs = [
+    { type: 'number', dataset: { serviceSetting: 'quota.warnPercent' }, value: '90' },
+    { type: 'number', dataset: { serviceSetting: 'quota.criticalPercent' }, value: '100' },
+  ];
+  const status = { textContent: '' };
+  app.context.document = { querySelectorAll: () => inputs, querySelector: () => status };
+  // The server answers with the stored values. The critical level differs from the typed value.
+  app.context.fetch = async () => ({ ok: true, json: async () => ({ settings: [
+    { group: 'Quota', setting: 'quota.warnPercent', value: 90, source: 'config' },
+    { group: 'Quota', setting: 'quota.criticalPercent', value: 98, source: 'default' },
+  ] }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.equal(inputs[0].value, '90');
+  assert.equal(inputs[1].value, '98', 'the field shows the stored value');
+  assert.match(status.textContent, /quota\.criticalPercent is stored as 98\. You typed 100\./);
+  assert.doesNotMatch(status.textContent, /quota\.warnPercent/);
+
+  // A stored value equal to the typed value gives the plain message.
+  inputs[1].value = '100';
+  app.context.fetch = async () => ({ ok: true, json: async () => ({ settings: [
+    { group: 'Quota', setting: 'quota.warnPercent', value: 90, source: 'config' },
+    { group: 'Quota', setting: 'quota.criticalPercent', value: 100, source: 'config' },
+  ] }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.equal(inputs[1].value, '100');
+  assert.equal(status.textContent, 'Saved.');
+});
+
+test('a rejected Quota save shows the server error and keeps the typed value', async () => {
+  const app = await views();
+  const inputs = [{ type: 'number', dataset: { serviceSetting: 'quota.criticalPercent' }, value: '101' }];
+  const status = { textContent: '' };
+  app.context.document = { querySelectorAll: () => inputs, querySelector: () => status };
+  app.context.fetch = async () => ({ ok: false, json: async () => ({ ok: false, error: 'quota.criticalPercent must be a whole number from 51 to 100.' }) });
+  await app.saveServiceSettings('Quota', { disabled: false });
+  assert.match(status.textContent, /from 51 to 100/);
+  assert.equal(inputs[0].value, '101');
+});
+
 // The section of each info button: the nearest h2 or h3 before it.
 function buttons(html) {
   const found = [];

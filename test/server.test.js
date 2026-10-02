@@ -541,6 +541,60 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'invalid night caps must not change config.json');
 });
 
+test('quota.criticalPercent 100 persists across an engine restart and other writes keep it', { timeout: 20000 }, async (t) => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  const configFile = path.join(dataDir, 'config.json');
+  fs.rmSync(configFile, { force: true });
+  const start = async () => {
+    const cfg = loadConfig();
+    cfg.host = '127.0.0.1';
+    cfg.port = 0;
+    cfg.tickSeconds = 3600;
+    const app = serve(cfg, {
+      liveDataDir: process.env.HERDR_BOSS_DIR,
+      createEngine: (config) => {
+        const engine = new EventEmitter();
+        engine.cfg = config;
+        engine.state = { serviceSettings: serviceSettingsView(config), quotaThresholds: {} };
+        engine.memory = {};
+        engine.tick = async () => engine.state;
+        engine.log = () => {};
+        return engine;
+      },
+    });
+    await new Promise((resolve, reject) => { app.server.once('listening', resolve); app.server.once('error', reject); });
+    return { app, cfg, base: `http://127.0.0.1:${app.server.address().port}` };
+  };
+  const put = (base, changes) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ changes }) });
+  t.after(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  let first = await start();
+  try {
+    // 90 below 100 passes. The default warning level 90 is below 100 as well.
+    assert.equal((await put(first.base, { 'quota.criticalPercent': 100 })).status, 200);
+    const equal = await put(first.base, { 'quota.warnPercent': 99, 'quota.criticalPercent': 99 });
+    assert.equal(equal.status, 400);
+    assert.match((await equal.json()).error, /warnPercent must be below quota\.criticalPercent/);
+    const result = await (await put(first.base, { 'quota.warnPercent': 90, 'quota.criticalPercent': 100 })).json();
+    assert.equal(result.settings.find(({ setting }) => setting === 'quota.criticalPercent').value, 100);
+    // A write of another group keeps the quota section.
+    assert.equal((await put(first.base, { tickSeconds: 30 })).status, 200);
+  } finally { await first.app.close(); }
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).quota.criticalPercent, 100);
+
+  const second = await start();
+  try {
+    assert.equal(second.cfg.quota.criticalPercent, 100);
+    assert.equal(serviceSettingsView(second.cfg).find(({ setting }) => setting === 'quota.criticalPercent').value, 100);
+    assert.equal((await put(second.base, { 'machine.memFreeWarnPercent': 20 })).status, 200);
+  } finally { await second.app.close(); }
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).quota.criticalPercent, 100);
+});
+
 test('POST /api/watch/start and /api/watch/stop write and clear the watch state, and the time checks refuse', { timeout: 20000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
