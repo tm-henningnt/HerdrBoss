@@ -243,7 +243,7 @@ export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.no
     const period = String(since);
     notices.push({
       key: `workers:no-report:${run.name}:${run.pane}:${startedAt || 'unknown'}:${period}`,
-      severity: 'warn', scope: pane.workspace, immediate: true, once: true,
+      severity: 'info', scope: pane.workspace, once: true,
       title: `Worker ${run.name} is idle without a report`,
       text: `Worker ${run.name} in ${run.pane} is idle for 10 min with no report.json. Check it, then resume or collect it.`,
     });
@@ -420,9 +420,9 @@ export function alertPromptDue(alert, record, now, cooldown) {
   return !alert.key.startsWith('machine:disk:') && !alert.once && now - record.at > cooldown;
 }
 
-// Stale-status notices use the existing digest path while an orchestrator works. Other notices wait until it is idle or done.
+// Orchestrators receive pane digests only when they are idle or done. Immediate warnings use the urgent path.
 export function orchestratorCanReceiveNotice(orch, alerts) {
-  return orch.status === 'idle' || orch.status === 'done' || alerts.some((alert) => (isStaleStatusAlert(alert) && orch.status === 'working') || skipsIdleGate(alert));
+  return orch.status === 'idle' || orch.status === 'done' || alerts.some(skipsIdleGate);
 }
 
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
@@ -436,6 +436,9 @@ export function joinsNoticeDigest(alert) {
   if (alert.key.startsWith('machine:disk:')) return false;
   return alert.key.startsWith('machine:') || alert.key.startsWith('browser:');
 }
+
+const isSharedInfoDigestItem = (alert) => !isKitAlert(alert)
+  && (SEV[alert.severity] < SEV.warn || joinsNoticeDigest(alert));
 
 // A project that stays behind on a required kit change gets a reminder after this time, and again each time this time passes.
 export const KIT_REMIND_MS = 2 * 3600 * 1000;
@@ -467,8 +470,9 @@ export function kitReminderAlerts({ projects, tracker, now, current, changes, he
   return alerts;
 }
 
-// A pane gets at most one prompt with info notices in this interval, and none while the pane works.
+// A pane gets at most one info digest in this interval. A working pane can receive one after a digest item waits 3 hours.
 export const INFO_PROMPT_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const INFO_PROMPT_WORKING_DELAY_MS = 3 * 60 * 60 * 1000;
 const INFO_PROMPT_LINES = 8;
 
 // Bulletin-only alert sources: they set prompt: false, so deliver sends no pane prompt for them.
@@ -2851,6 +2855,11 @@ export class Engine extends EventEmitter {
           const projectRec = isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:') ? this.memory.pushes[`${a.key}@project`] : null;
           const due = alertPromptDue(a, projectRec || rec, now, cooldown);
           if (!due) continue;
+          // Keep the first due time while the item stays active, including across engine restarts.
+          if (isSharedInfoDigestItem(a) && !Number.isFinite(this.memory.infoDueSince?.[a.key])) {
+            this.memory.infoDueSince ||= {};
+            this.memory.infoDueSince[a.key] = now;
+          }
           let alert = a;
           if (isKitAlert(a)) {
             // A pane gets at most one kit digest in the interval. The digest lists the required changes that the pane has not received.
@@ -2876,15 +2885,20 @@ export class Engine extends EventEmitter {
         }
       }
       this.memory.infoPrompts ||= {};
+      this.memory.infoDueSince ||= {};
       for (const { o, list: due } of perPane.values()) {
+        const overdueDigest = o.status === 'working' && due.some((a) => isSharedInfoDigestItem(a)
+          && Number.isFinite(this.memory.infoDueSince[a.key])
+          && now - this.memory.infoDueSince[a.key] > INFO_PROMPT_WORKING_DELAY_MS);
         // A notice that cannot go out now stays unsent, so it is due again at the next tick.
-        if (!orchestratorCanReceiveNotice(o, due)) continue;
+        if (!orchestratorCanReceiveNotice(o, due) && !overdueDigest) continue;
         const settled = o.status === 'idle' || o.status === 'done';
         const urgent = due.filter((a) => SEV[a.severity] >= SEV.warn && !joinsNoticeDigest(a) && (settled || skipsIdleGate(a)));
-        const infoAllowed = settled && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
+        const canSendInfoDigest = settled || overdueDigest;
+        const infoAllowed = canSendInfoDigest && now - (this.memory.infoPrompts[o.id] || 0) >= INFO_PROMPT_INTERVAL_MS;
         // A kit digest has its own interval, so the shared info interval does not hold it and it does not start that interval.
         const info = due.filter((a) => (SEV[a.severity] < SEV.warn || joinsNoticeDigest(a)) && (
-          isKitAlert(a) ? settled : isStaleStatusAlert(a) ? (settled || o.status === 'working') : settled && infoAllowed
+          isKitAlert(a) ? settled : canSendInfoDigest && infoAllowed
         )).sort((a, b) => Number(isStaleStatusAlert(b)) - Number(isStaleStatusAlert(a)));
         if (!urgent.length && !info.length) continue;
         urgent.sort((x, y) => SEV[y.severity] - SEV[x.severity]);
@@ -2896,19 +2910,20 @@ export class Engine extends EventEmitter {
           ...(info.length > INFO_PROMPT_LINES ? [`- and ${info.length - INFO_PROMPT_LINES} more`] : []),
           `Current rules: ${path.join(DATA_DIR, 'bulletin.md')}. Dashboard: ${dashboardUrl(this.cfg)}`,
         ].join('\n');
+        const sentAlerts = [...urgent, ...info.slice(0, INFO_PROMPT_LINES)];
         try {
-          await this.promptService(o.id, text, { herdr, now, messages: [...urgent, ...info.slice(0, INFO_PROMPT_LINES)].map((a) => ({
+          await this.promptService(o.id, text, { herdr, now, messages: sentAlerts.map((a) => ({
             text: a.text, kind: a.key.startsWith('nudge:') ? 'nudge' : 'reminder', project: a.project, taskId: a.taskId,
           })) });
-          for (const a of list) {
+          for (const a of sentAlerts) {
             const record = { at: now, severity: a.severity };
             this.memory.pushes[`${a.key}@${o.id}`] = record;
             if (isStaleStatusAlert(a) || a.key.startsWith('workers:uncollected:')) this.memory.pushes[`${a.key}@project`] = record;
           }
-          if (info.some((a) => !isKitAlert(a))) this.memory.infoPrompts[o.id] = now;
-          const kitSent = list.find((a) => isKitAlert(a));
+          if (sentAlerts.some((a) => !isKitAlert(a) && (SEV[a.severity] < SEV.warn || joinsNoticeDigest(a)))) this.memory.infoPrompts[o.id] = now;
+          const kitSent = sentAlerts.find((a) => isKitAlert(a));
           if (kitSent) this.memory.kitDigests[o.id] = { at: now, hashes: [...(this.memory.kitDigests[o.id]?.hashes || []), ...(kitSent.digestHashes || [])] };
-          this.log('push', `Sent ${list.length} notice(s) to ${o.id} (${o.workspace})`, { pane: o.id, titles: list.map((a) => a.title) });
+          this.log('push', `Sent ${sentAlerts.length} notice(s) to ${o.id} (${o.workspace})`, { pane: o.id, titles: sentAlerts.map((a) => a.title) });
         } catch (e) {
           this.log('error', `Prompt to ${o.id} failed: ${(e.stderr || e.message).slice(0, 200)}`);
         }
@@ -2919,6 +2934,8 @@ export class Engine extends EventEmitter {
     const week = 7 * 86400 * 1000;
     this.memory.pushes = pruneInactiveDiskPromptRecords(this.memory.pushes, active);
     for (const [k, v] of Object.entries(this.memory.pushes)) if (!active.has(k.split('@')[0]) && now - v.at > week) delete this.memory.pushes[k];
+    this.memory.infoDueSince ||= {};
+    for (const [key, at] of Object.entries(this.memory.infoDueSince)) if (!active.has(key) || now - at > week) delete this.memory.infoDueSince[key];
     for (const [k, at] of Object.entries(this.memory.notified)) if (!active.has(k) && now - at > week) delete this.memory.notified[k];
     const pendingHashes = new Set((this.memory.kitNotice?.pending || []).map((change) => change.hash));
     for (const [pane, rec] of Object.entries(this.memory.kitDigests)) {
