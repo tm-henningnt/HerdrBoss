@@ -13,7 +13,7 @@ Factory zero on the Mac holds the head office role until a second host exists. A
 ## Consequences
 
 - No new hardware is needed for the first phases. The fleet view stops while the Mac sleeps. The factories keep working.
-- The standby and succession questions wait for the second host.
+- The standby and succession questions wait for the second host. The second host is the Windows home server (ADR 0013).
 - Section 2 of the spec no longer excludes every public cloud service. A cloud VM is allowed as a host when it is reachable only over the tailnet.
 
 ## Alternatives rejected

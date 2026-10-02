@@ -9,7 +9,7 @@ The Mac needs a container runtime for the spike and for the first factory. OrbSt
 ## Decision
 
 - The Mac uses OrbStack without a paid licence. The Mac runs only personal factories.
-- Client and commercial factories run on the Owner's Windows host with Docker. The Windows runtime is asked in round 2.
+- Client and commercial factories run on a Windows host with Docker Engine in WSL2 (ADR 0014).
 - The spike runs on the Mac with OrbStack. The Owner approved it.
 
 ## Consequences

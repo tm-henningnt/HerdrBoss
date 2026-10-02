@@ -38,19 +38,31 @@ _Avoid_: server, box, node
 The way the host tool reaches the container runtime of a host: `local`, `ssh`, `portainer`, or `agent`.
 _Avoid_: connector, driver
 
+**Factory Boss**:
+The Boss agent of one factory. It supervises the orchestrators of that factory.
+_Avoid_: local Boss, sub-Boss
+
 **Fleet**:
 All factories that one Owner manages.
 _Avoid_: cluster, estate
 
-### Accounts
+### Accounts and quota
+
+**Account scope**:
+The factories that may use one harness account or subscription.
+_Avoid_: account binding, account lock
 
 **Shared account**:
-A harness account or subscription that two or more factories use. Its quota is one pool for all of them.
+A harness account or subscription whose account scope holds two or more factories. Its quota is one pool for all of them.
 _Avoid_: common login, pooled account
 
-**Factory account**:
-A harness account or subscription that exactly one factory uses.
-_Avoid_: dedicated login, own subscription
+**Factory share**:
+The percentage of one shared account's quota that one factory may use.
+_Avoid_: allocation, factory ceiling, factory quota
+
+**Guidance**:
+Factory shares and nudge messages that the head office sends to the Boss of a factory.
+_Avoid_: instructions, commands, policy push
 
 ### Tools and artifacts
 
@@ -111,4 +123,5 @@ _Avoid_: transfer, handoff
 - A **Host** runs one or more **Factories**. **Factory zero** is the only factory that is not a **Container factory**.
 - The **Head office** is a role that one **Factory** holds in one **Epoch**. It reads one **Fleet summary** from each factory.
 - A **Standby** is on the **Succession list**. A **Client-premises factory** is never a **Standby**.
+- The **Head office** sends **Guidance** to each **Factory Boss**. Each **Factory** enforces its own **Factory share** of each **Shared account** in its **Account scope**.
 - A **Transfer** moves a project between two **Factories**. A **Handover** stays inside one **Factory**.

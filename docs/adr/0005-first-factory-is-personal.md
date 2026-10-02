@@ -1,6 +1,6 @@
 # ADR 0005: The first container factory is a personal factory on the Mac
 
-Status: Accepted. Owner decision, factories interview round 1, item `first-use`.
+Status: Superseded by ADR 0013. Owner decision, factories interview round 1, item `first-use`.
 
 ## Context
 
