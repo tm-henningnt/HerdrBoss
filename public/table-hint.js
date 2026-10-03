@@ -20,7 +20,9 @@ function update(wrap) {
 }
 
 // The scroll event does not bubble, so one capture listener serves all tables. A DOM change or a resize checks all tables again.
-export function installTableHints(doc = document, win = window) {
+// It reads the globals inside the function, and does nothing where there is no page (a Node test that loads the app code).
+export function installTableHints(doc = globalThis.document, win = globalThis.window) {
+  if (typeof doc?.addEventListener !== 'function' || !doc.body || typeof win?.MutationObserver !== 'function' || typeof win.requestAnimationFrame !== 'function') return;
   const refresh = () => doc.querySelectorAll('.md-table-wrap').forEach(update);
   let queued = false;
   const later = () => {

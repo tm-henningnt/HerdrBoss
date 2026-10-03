@@ -45,3 +45,10 @@ test('a table that fits has no hint, and a scroll of another element is ignored'
   page.listeners.scroll({ target: { classList: { contains: () => false } } });
   assert.equal(page.wrap.getAttribute('data-more'), null);
 });
+
+test('installTableHints does nothing where there is no page', () => {
+  assert.equal(typeof globalThis.document, 'undefined');
+  assert.doesNotThrow(() => installTableHints());
+  assert.doesNotThrow(() => installTableHints({}, {}));
+  assert.doesNotThrow(() => installTableHints({ addEventListener() {}, body: {} }, {}));
+});
