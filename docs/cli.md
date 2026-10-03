@@ -1229,7 +1229,7 @@ herdr-boss lease bind serve-ports "$PORT" --pid $!
 herdr-boss lease release serve-ports "$PORT"
 ```
 
-A lease ends before its TTL in these cases. The bound process is gone: Herdr Boss releases the lease within one tick. The process ID belongs to another process now: the start time differs. The port has no listener for `idleMinutes` of the pool (default 20), also for a lease that no server bound. The holder gets one notice. A `serve-live` helper calls `lease acquire serve-ports --wait 600`, which waits up to 10 minutes for a free port, and binds the lease to its server process.
+A lease ends before its TTL in these cases. The bound process is gone: Herdr Boss releases the lease within one tick. The process ID belongs to another process now: the start time differs. The port has no listener for `idleMinutes` of the pool (default 20), also for a lease that no server bound. Herdr Boss probes `127.0.0.1` and `::1`. A listener on either address counts. The port has no listener only when both addresses refuse the connection. An address that gives no answer, for example `::1` on a machine without IPv6, does not make the probe unknown. The holder gets one notice. A `serve-live` helper calls `lease acquire serve-ports --wait 600`, which waits up to 10 minutes for a free port, and binds the lease to its server process.
 
 A server must bind its PID at start. Take the lease, start the server, then run `lease bind POOL PORT --pid PID` at once. A caller that knows the PID before the lease runs `lease acquire POOL --pid PID`.
 

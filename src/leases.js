@@ -114,29 +114,50 @@ export function withResourcePoolMutation(operation, { dataDir = DATA_DIR } = {})
   });
 }
 
-// A synchronous probe: a child Node process connects to 127.0.0.1:PORT. Return true when the connection opens, false on ECONNREFUSED,
-// and null (unknown) on a timeout or any other error. Only a refused connection means that nothing listens.
+// The loopback addresses that a probe tries. A server can bind either one.
+const LOOPBACK_HOSTS = ['127.0.0.1', '::1'];
+// Errors that mean the address has no answer on this machine, for example an IPv6-less machine. They do not make the probe unknown.
+const NO_ANSWER_CODES = ['EADDRNOTAVAIL', 'EAFNOSUPPORT', 'ENETUNREACH', 'EHOSTUNREACH'];
+
+// Combine the results of the loopback addresses. Each result is 'open', 'refused', 'none' (no answer from the address), or 'unknown'.
+// Return true when one address accepts, null when one result is unknown or all addresses gave no answer, and false when the others refuse.
+function combineLoopback(results) {
+  if (results.includes('open')) return true;
+  if (results.includes('unknown')) return null;
+  return results.includes('refused') ? false : null;
+}
+
+// A synchronous probe: a child Node process connects to 127.0.0.1:PORT and [::1]:PORT. Return true when one connection opens,
+// false when both are refused (ECONNREFUSED), and null (unknown) on a timeout or any other error. An address without an answer on this machine,
+// such as ::1 without IPv6, counts as no answer and not as unknown. Only a refused connection means that nothing listens.
 export function tcpListening(port, { timeoutMs = 1000 } = {}) {
-  const script = `const s = require('node:net').connect({ host: '127.0.0.1', port: ${Number(port)} });
-s.setTimeout(${timeoutMs}); s.on('connect', () => { s.destroy(); process.exit(0); });
-s.on('timeout', () => process.exit(2)); s.on('error', (e) => process.exit(e.code === 'ECONNREFUSED' ? 1 : 2));`;
+  const script = `const net = require('node:net'); const none = ${JSON.stringify(NO_ANSWER_CODES)};
+Promise.all(${JSON.stringify(LOOPBACK_HOSTS)}.map((host) => new Promise((resolve) => {
+  const s = net.connect({ host, port: ${Number(port)} }); s.setTimeout(${timeoutMs});
+  s.on('connect', () => { s.destroy(); resolve('open'); }); s.on('timeout', () => { s.destroy(); resolve('unknown'); });
+  s.on('error', (e) => resolve(e.code === 'ECONNREFUSED' ? 'refused' : none.includes(e.code) ? 'none' : 'unknown'));
+}))).then((r) => process.exit(r.includes('open') ? 0 : r.includes('unknown') ? 2 : r.includes('refused') ? 1 : 2));`;
   const result = spawnSync(process.execPath, ['-e', script], { stdio: 'ignore', timeout: timeoutMs + 2000, env: { PATH: process.env.PATH ?? '' } });
   if (result.status === 0) return true;
   return result.status === 1 ? false : null;
 }
 
-// The same check without a child process. Resolve true when 127.0.0.1:PORT accepts a connection, false on ECONNREFUSED,
-// and null (unknown) on a timeout or any other error.
-export function tcpListeningAsync(port, { timeoutMs = 300 } = {}) {
+function probeHostAsync(host, port, timeoutMs) {
   return new Promise((resolve) => {
-    const socket = net.connect({ host: '127.0.0.1', port: Number(port) });
+    const socket = net.connect({ host, port });
     let done = false;
     const finish = (value) => { if (done) return; done = true; socket.destroy(); resolve(value); };
     socket.setTimeout(timeoutMs);
-    socket.on('connect', () => finish(true));
-    socket.on('timeout', () => finish(null));
-    socket.on('error', (error) => finish(error.code === 'ECONNREFUSED' ? false : null));
+    socket.on('connect', () => finish('open'));
+    socket.on('timeout', () => finish('unknown'));
+    socket.on('error', (error) => finish(error.code === 'ECONNREFUSED' ? 'refused' : NO_ANSWER_CODES.includes(error.code) ? 'none' : 'unknown'));
   });
+}
+
+// The same check without a child process. Resolve true when 127.0.0.1:PORT or [::1]:PORT accepts a connection, false when both are refused,
+// and null (unknown) on a timeout or any other error. An address without an answer on this machine counts as no answer.
+export async function tcpListeningAsync(port, { timeoutMs = 300 } = {}) {
+  return combineLoopback(await Promise.all(LOOPBACK_HOSTS.map((host) => probeHostAsync(host, Number(port), timeoutMs))));
 }
 
 // A pool with an idle rule: a ports pool that is not the built-in browser pool.
