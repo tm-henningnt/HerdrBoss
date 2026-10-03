@@ -35,7 +35,7 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
           if (inputFile) inputFd = fs.openSync(inputFile, 'r');
           if (outputFile) outputFd = fs.openSync(outputFile, 'wx', 0o600);
           child = spawn('docker', [...(selected ? ['--context', selected] : []), ...args], {
-            env: childEnv, shell: false, stdio: interactive ? ['inherit', 'inherit', 'pipe'] : [inputFd ?? (input === undefined ? 'ignore' : 'pipe'), outputFd ?? 'pipe', 'pipe'],
+            env: childEnv, shell: false, stdio: interactive ? 'inherit' : [inputFd ?? (input === undefined ? 'ignore' : 'pipe'), outputFd ?? 'pipe', 'pipe'],
           });
         } catch { closeFiles(); reject(new Error('Docker could not start.')); return; }
         let stdout = '';
@@ -48,8 +48,8 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
           killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
         }, timeout);
         child.stdout?.on('data', (chunk) => { stdout += chunk; });
-        child.stderr.on('data', (chunk) => { stderr += chunk; });
-        if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
+        child.stderr?.on('data', (chunk) => { stderr += chunk; });
+        if (input !== undefined) { child.stdin?.on('error', () => {}); child.stdin?.end(input); }
         child.once('error', () => { clearTimeout(timer); clearTimeout(killTimer); closeFiles(); reject(new Error('Docker could not start.')); });
         child.once('close', (code) => {
           clearTimeout(timer);
@@ -57,7 +57,7 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
           closeFiles();
           if (timedOut) reject(context ? hostUnreachable() : new Error('Docker did not finish before the time limit.'));
           else if (context && code !== 0 && /connection refused|connection timed out|no route to host|network is unreachable|could not resolve|dial tcp|exit status 255/i.test(stderr)) reject(hostUnreachable());
-          else resolve({ code: code ?? 1, stdout, stderr });
+          else resolve({ code: code ?? 1, stdout: interactive ? '' : stdout, stderr: interactive ? '' : stderr });
         });
       });
     },

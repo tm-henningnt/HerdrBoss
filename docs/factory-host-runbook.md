@@ -55,7 +55,7 @@ Run `herdr-boss factory update NAME --tier service` for a Herdr Boss code update
 
 Run `herdr-boss factory build NAME` to build the new pinned image. Then run `herdr-boss factory update NAME --tier image` for a harness or tool update. This makes a private backup, replaces the labeled container, and keeps its four labeled volumes. It starts fresh sessions only for active project orchestrators. It leaves paused projects stopped. It never starts a Boss session. If a Boss pane is live, the update refuses unless you add `--allow-boss-restart`.
 
-When the flag allows replacement, the command prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+When the flag allows replacement, the command prints: The Boss pane is gone. Run 'herdr-boss factory boss start NAME' to start the Boss in the factory.
 
 The update refuses a working worker, a live suite or push lock, or a prepared handover. Use `--dry-run` to check the selected tier first.
 

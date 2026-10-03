@@ -106,7 +106,7 @@ console.log(JSON.stringify({ started }));
 const DATA_LOSS_MESSAGE = 'Rollback after a data migration needs --accept-data-loss.';
 
 function bossGoneMessage(name) {
-  return `The Boss pane is gone. Run 'herdr-boss factory configure ${name} --resume' to check the factory, then start the Boss in the factory Boss pane yourself.\n`;
+  return `The Boss pane is gone. Run 'herdr-boss factory boss start ${name}' to start the Boss in the factory.\n`;
 }
 
 function parse(args) {

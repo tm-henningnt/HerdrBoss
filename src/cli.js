@@ -133,6 +133,8 @@ const USAGE = `herdr-boss <command>
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
   factory configure NAME [--resume] [--step STEP]  Check the container, volumes, Herdr server, and service. Exit 3 waits for Owner logins.
+  factory login NAME claude|codex  Sign in to one harness at the Owner terminal, then check its login.
+  factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]  Start or check the factory Boss session.
   factory connect [--check|--undo] NAME  Connect a registered factory to Fleet. Check prints name, state, and age only. Undo reverses the connection.
   factory host add|list|remove  Keep private host connections. Use --docker-context CONTEXT for Docker. Run factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
   goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
