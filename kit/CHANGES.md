@@ -189,3 +189,7 @@ Summary: Give every review item that needs a decision accept and deny, agent-ver
 ## a525a7ad7655
 Impact: useful
 Summary: Add the docs rule: a change of behavior changes the docs and the page help in the same branch, or records a Docs-Exempt reason; the worker brief, the review task rules, and the review-pack evidence rule carry it.
+
+## 4facf6b20cc0
+Impact: useful
+Summary: Shorten the review pack rules in the orchestrator skill to stay within the word limit; the content is the same as in revisions 1c6764de0c20 and a525a7ad7655.

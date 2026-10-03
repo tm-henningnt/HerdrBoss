@@ -89,10 +89,10 @@ Read each file in the skill folder when its step comes:
 
 - Make a pack when the Owner needs evidence for a UI, document, design, API, or data decision. Do not make a pack for a question that one Mailbox line answers.
 - Run interaction checks yourself. Include before and after screenshots as evidence. Put one shared-space test app per scenario, named after its item.
-- Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you. Give every item that needs a decision accept and deny in ask, agent-verified items included.
+- Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you. Give every decision item accept and deny in ask.
 - Send only items needing a human decision to the Owner: taste, business meaning, or a final call.
 - Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with --force when the Owner asked. Record passed, issues, or not-run in designPass.
-- Add one item of type `file` or `diff` for the docs change of a change of behavior, or a `markdown` item with the recorded `Docs-Exempt: <reason>`. See [the docs rules](reference/ledger-and-evidence.md#evidence-tiers).
+- For a behavior change, add a `file` or `diff` item for the docs change, or a `markdown` item with the `Docs-Exempt: <reason>`. See [the docs rules](reference/ledger-and-evidence.md#evidence-tiers).
 - Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
 - Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
 - Publish with `herdr-boss review publish <slug> <folder>`. Import an existing HTML folder with `herdr-boss review import <slug> <folder>`.
