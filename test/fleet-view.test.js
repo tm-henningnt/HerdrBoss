@@ -6,6 +6,20 @@ import { createDocument, find } from './fake-dom.js';
 import { patchHtml } from '../public/keyed.js';
 const fixture = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/fleet-summary.valid.personal.json', import.meta.url)));
 
+test('the Fleet table shows factory zero and both Windows factories with last seen and a red outage reason', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const factories = ['factory-zero', 'win1', 'win2'].map((name, index) => ({ name, remote: index !== 0,
+    status: index === 2 ? 'offline' : 'healthy', error: index === 2 ? 'unreachable' : null, ageSeconds: index === 2 ? 90 : 0,
+    lastSeenAt: fixture.generatedAt, summary: { ...fixture, factoryId: name, name } }));
+  const html = fleetView({ factories, pollSeconds: 30 });
+  for (const name of ['factory-zero', 'win1', 'win2']) assert.match(html, new RegExp(name));
+  assert.match(html, /Last seen/);
+  assert.match(html, /fleet-state-offline/);
+  assert.match(html, /Host unreachable/);
+  assert.match(html, /abcdef|012345/);
+  assert.match(html, /90 s old/);
+});
+
 test('the Fleet page shows stale age, shared quota, spend, drift, and safe Owner item links', async () => {
   const { fleetView, fleetMailbox } = await import('../public/fleet.js');
   const rows = [

@@ -12,6 +12,49 @@ process.env.HERDR_FACTORIES_DIR = path.join(root, 'factories');
 const factory = (id, url) => ({ factoryId: id, name: id, hostId: 'example-host', kind: 'native', profile: 'personal', dashboardUrl: url, version: '0.1.0', kitRevision: 'abcdef012345' });
 function registry(file, factories) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId: 'example-host', runtime: 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: 'local' }], factories })); }
 
+test('the poller classifies private failures and retains the last successful sighting across an outage', async (t) => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'failure-codes.json');
+  registry(registryFile, [factory('win1', 'http://192.0.2.1')]);
+  let now = Date.parse(fixture.generatedAt), failure = null;
+  const poller = createFleetPoller({ dir: path.join(root, 'failure-codes'), registryFile, now: () => now,
+    localSummary: async () => ({ ...fixture, name: 'factory-zero', factoryId: 'factory-zero' }),
+    credentials: () => ({ win1: 'hf_read_' + 'a'.repeat(64) }),
+    fetchImpl: async () => {
+      if (failure instanceof Error) throw failure;
+      return failure || new Response(JSON.stringify({ ...fixture, name: 'win1', factoryId: 'win1', dashboardUrl: 'http://192.0.2.1' }), { headers: { 'content-type': 'application/json' } });
+    } });
+  t.after(() => poller.stop());
+  await poller.poll();
+  const good = poller.view().factories.find((row) => row.remote);
+  assert.equal(good.lastSeenAt, new Date(now).toISOString());
+  for (const [error, reason] of [[Object.assign(new Error('PRIVATE endpoint'), { code: 'EHOSTUNREACH' }), 'unreachable'],
+    [Object.assign(new Error('PRIVATE timeout'), { name: 'TimeoutError' }), 'timeout'],
+    [new Response('PRIVATE token', { status: 403 }), 'auth'],
+    [new Response('{}', { headers: { 'content-type': 'application/json' } }), 'contract-mismatch']]) {
+    failure = error; now += 30000; await poller.poll();
+    const row = poller.view().factories.find((row) => row.remote);
+    assert.equal(row.status, 'offline'); assert.equal(row.error, reason);
+    assert.equal(row.lastSeenAt, good.lastSeenAt); assert.deepEqual(row.summary, good.summary);
+    assert.doesNotMatch(JSON.stringify(row), /PRIVATE/);
+  }
+});
+
+test('a refused poll cancels its unread body without storing private error content', async (t) => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'cancel-error-body.json');
+  registry(registryFile, [factory('win1', 'http://192.0.2.1')]);
+  let cancelled = false;
+  const poller = createFleetPoller({ dir: path.join(root, 'cancel-error-body'), registryFile,
+    localSummary: async () => ({ ...fixture, name: 'factory-zero', factoryId: 'factory-zero' }),
+    credentials: () => ({ win1: 'hf_read_' + 'a'.repeat(64) }), now: () => Date.parse(fixture.generatedAt),
+    fetchImpl: async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 403 }) });
+  t.after(() => poller.stop());
+  await poller.poll();
+  assert.equal(cancelled, true);
+  assert.equal(poller.view().factories.find((row) => row.remote).error, 'auth');
+});
+
 test('the poller sends only the read credential, keeps last good data, and refuses a cloned identity', async (t) => {
   const { createFleetPoller } = await import('../src/fleet-poller.js');
   let now = Date.parse(fixture.generatedAt), outage = false, clone = false;

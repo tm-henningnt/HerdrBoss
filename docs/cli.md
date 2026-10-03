@@ -1536,6 +1536,9 @@ herdr-boss factory stop NAME [--now]
 herdr-boss factory status NAME [--json]
 herdr-boss factory list [--json]
 herdr-boss factory configure NAME [--resume] [--step STEP]
+herdr-boss factory connect NAME
+herdr-boss factory connect --check NAME
+herdr-boss factory connect --undo NAME
 ```
 
 If `NAME` names a private host connection, `new` uses that host. Otherwise it uses local Docker. Use `--host` to select a host explicitly. The local host needs no connection record.
@@ -1553,6 +1556,25 @@ The private connection file is `registry.json`. The fleet file is `fleet.json`. 
 `configure` checks `container`, `volumes`, `herdr`, and `service` in order. It checks finished steps again before it skips their work. `--resume` retains the flow record. `--step service` stops after the service check and exits 0. The container check rejects host mounts, host devices, a host PID, network, IPC, or user namespace, an unconfined AppArmor profile, added capabilities, a privileged container, and a missing Codex security profile. A failed safety check disables Codex in that factory policy.
 
 The service check measures `/api/health` through container loopback. It also checks the factory hostname. A hostname response of 401 means the host rule accepts the name and requires a login. The wizard keeps that login requirement.
+
+`connect` makes a registered container factory available to Fleet. Run it first for one factory. Check the result before you connect the next factory. The command gets the stable factory ID from the factory. It sets the dashboard base URL and imports a read credential through the private fleet command. The credential files have mode 600. The command prints no credential, address, key path, or Docker context name.
+
+The command uses `tailscale serve` in the WSL distribution. It forwards to the container loopback dashboard port. The command reuses a matching Serve route before it tries to change Serve. It accepts an HTTP route and the default HTTPS route. It refuses a port that belongs to another Serve route. It runs Serve as the factory SSH user. It does not retry with root rights or install a proxy service. It never replaces the factory container or binds a port to all host interfaces.
+
+If Serve refuses the change with an access denied message, `connect` prints the exact masked error and exits 3. The connection waits for the Owner. Run one of these commands in the WSL Owner terminal:
+
+```sh
+sudo tailscale set --operator=USER
+sudo tailscale serve --bg PORT
+```
+
+Replace `USER` with the registered host user. The terminal hint prints that name. Replace `PORT` with the registered loopback dashboard port. Use the first command to let the factory user configure Serve. Use the second command to create one forward with root rights. Its default HTTPS listener forwards to that dashboard port. Retry `factory connect NAME` after the Owner step. The command reuses the existing forward and does not need the operator right for that path.
+
+`connect` saves a private progress record. Run the same command again after a failed step. It keeps one factory registration. It reuses the current private credential export in the factory. It creates a new credential only when that export is missing or no longer current. The factory retains this private export for a later resume. A new credential keeps the previous credential valid for ten minutes. Dashboard requests still need Owner access. The read credential permits only GET summary and health.
+
+The command checks that the tailnet health route requires Owner access before it imports a credential. It enables **Poll registered factories** through the local dashboard API. It does not restart factory zero. It restarts the remote supervised service only when its allowed host list changes. `connect --check NAME` sends one summary request. It prints one line: name, state, and summary age. An unknown age prints `unknown`. Exit code 0 means that the factory answered with a valid summary. Exit code 1 means that a check or connection step failed. Exit code 3 means that the Owner must enable Serve or configure a forward. Another Serve failure, such as a stopped Tailscale daemon or a missing login, exits 1 with the code `serve-failed` and the masked error. The command does not wait for the Owner in that case. Private connection settings remain outside the dashboard because they hold connection fields.
+
+`connect --undo NAME` reverses what `connect` created. It turns off the Serve forward for the registered dashboard port only, and only when `connect` created that forward. It never runs `serve reset`. It removes the allowed host entry that `connect` added, and restarts the remote supervised service. It removes the imported read credential of that factory. It turns off **Poll registered factories** when no other factory stays registered. It removes the registration from `fleet.json` as the last step. The private token export file in the factory stays. Run the command again after a failed step. A second run prints that nothing is left to undo.
 
 The harness, GitHub, and project steps are pending in this release. A normal `configure` exits 3 and writes one Owner instruction file. The Boss can post that file as one Mailbox item. Run login commands at an Owner terminal. Do not send a code or token to a pane or a Mailbox answer. `factory login` and login verification are not part of this slice.
 
