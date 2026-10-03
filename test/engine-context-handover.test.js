@@ -939,7 +939,8 @@ test('the successor input screen is read at most once every 15 seconds', { timeo
       { at: '2026-09-29T12:01:15.000Z', herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) }, screen: '' },
     ],
   });
-  const reads = out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'read');
+  const reads = out.herdrCalls.filter(({ args }) => args[0] === 'pane' && args[1] === 'read' && args.includes(successor.id));
+  // The Agents view reads the pane of a working worker for its Doing now line. That read is not a successor read.
   assert.deepEqual(reads.map(({ step }) => step), [0, 3]);
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 1);
   assert.equal(out.records[0].readyAt, undefined);
