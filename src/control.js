@@ -10,7 +10,7 @@ const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
   attachments: { retentionDays: 30 },
   agentMessages: { retentionDays: 14, metaRetentionDays: 180, promptTimeoutSeconds: 25 },
-  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
+  machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskClearFreeGB: 24, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
   locks: { slots: 2, shortLimitMinutes: 6, guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 } },
   maxWorkers: 8,
   borrowIdle: true,
@@ -111,6 +111,8 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   const { ignoredRoutes: _derived, ...stored } = saved;
   const savedMachine = isObject(stored.machine) ? stored.machine : {};
   const machine = { ...POLICY_DEFAULTS.machine, ...savedMachine };
+  // A saved warning value above the default clear value keeps the saved policy valid.
+  if (!Object.hasOwn(savedMachine, 'diskClearFreeGB') && Number.isFinite(machine.diskWarnFreeGB)) machine.diskClearFreeGB = Math.max(POLICY_DEFAULTS.machine.diskClearFreeGB, machine.diskWarnFreeGB);
   const savedLocks = isObject(stored.locks) ? stored.locks : {};
   const locks = {
     ...POLICY_DEFAULTS.locks,
@@ -189,7 +191,8 @@ export function validatePolicy(value, models) {
     if (!Number.isInteger(value.machine.kitDigestMinutes) || value.machine.kitDigestMinutes < 10 || value.machine.kitDigestMinutes > 1440) errors.push('machine.kitDigestMinutes must be an integer from 10 to 1440.');
     if (typeof value.machine.swapRefuseEnabled !== 'boolean') errors.push('machine.swapRefuseEnabled must be boolean.');
     if (!Number.isFinite(value.machine.swapMinUsedGB) || value.machine.swapMinUsedGB < 0 || value.machine.swapMinUsedGB > 1024) errors.push('machine.swapMinUsedGB must be a number from 0 to 1024.');
-    for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
+    for (const [key, max] of [['diskWarnFreeGB', 1048576], ['diskClearFreeGB', 1048576], ['diskCriticalFreeGB', 1048576]]) if (!Number.isFinite(value.machine[key]) || value.machine[key] < 0 || value.machine[key] > max) errors.push(`machine.${key} must be a number from 0 to ${max}.`);
+    if (Number.isFinite(value.machine.diskClearFreeGB) && Number.isFinite(value.machine.diskWarnFreeGB) && value.machine.diskClearFreeGB < value.machine.diskWarnFreeGB) errors.push('machine.diskClearFreeGB must be at least machine.diskWarnFreeGB.');
   }
   if (!isObject(value.attachments)) errors.push('attachments must be an object.');
   else if (!Number.isInteger(value.attachments.retentionDays) || value.attachments.retentionDays < 1 || value.attachments.retentionDays > 365) errors.push('attachments.retentionDays must be an integer from 1 to 365.');

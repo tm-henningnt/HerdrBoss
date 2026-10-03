@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
@@ -447,13 +448,13 @@ export function orchestratorCanReceiveNotice(orch, alerts) {
 const skipsIdleGate = (alert) => !!alert.immediate && SEV[alert.severity] >= SEV.warn;
 const isStaleStatusAlert = (alert) => !!alert.key?.startsWith('status:stale:');
 
-// A machine or browser warning that is not immediate joins the info digest of the pane. It waits for
+// A machine, browser, or board digest warning that is not immediate joins the info digest of the pane. It waits for
 // the info interval instead of waking the orchestrator at every tick. A disk warning has its own
 // path, and a critical warning stays urgent.
 export function joinsNoticeDigest(alert) {
   if (SEV[alert.severity] !== SEV.warn || alert.immediate) return false;
   if (alert.key.startsWith('machine:disk:')) return false;
-  return alert.key.startsWith('machine:') || alert.key.startsWith('browser:');
+  return alert.key.startsWith('machine:') || alert.key.startsWith('browser:') || isBoardDigest(alert);
 }
 
 const isSharedInfoDigestItem = (alert) => !isKitAlert(alert)
@@ -487,6 +488,19 @@ export function kitReminderAlerts({ projects, tracker, now, current, changes, he
   }
   for (const slug of Object.keys(tracker)) if (!seen.has(slug)) delete tracker[slug];
   return alerts;
+}
+
+const PANE_GONE_GRACE_MS = 10 * 60000;
+const textHash = (text) => createHash('sha1').update(String(text ?? '')).digest('hex').slice(0, 16);
+
+// An orchestrator that waits for a worker report has a worker pane that runs in its workspace. It has had no turn
+// since the last digest when its status has not changed since that digest.
+export function orchWaitsWithoutTurn(orch, lastDigest, panes, paneSince, text) {
+  // A changed digest text is news, so it is never skipped.
+  if (!lastDigest || !Number.isFinite(lastDigest.at) || lastDigest.hash !== textHash(text)) return false;
+  const waits = (panes || []).some((p) => p.workspace === orch.workspace && p.agent && !p.orch && p.status === 'working');
+  const since = paneSince?.[orch.id]?.since;
+  return waits && Number.isFinite(since) && since <= lastDigest.at;
 }
 
 // A pane gets at most one info digest in this interval. A working pane can receive one after a digest item waits 3 hours.
@@ -1279,7 +1293,7 @@ export class Engine extends EventEmitter {
       // A prepared successor waits idle by design, so the idle-worker rule skips it.
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
-      const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy, (this.memory.alertState ||= {}));
       if (this.act) evaluation.alerts.push(...this.quotaPlanService.expiryNotices({ now }));
       evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now));
       evaluation.alerts.push(...workerTransitions.notices);
@@ -1665,10 +1679,17 @@ export class Engine extends EventEmitter {
   trackPaneStatus(herdr, now) {
     if (!herdr) return;
     const next = {};
+    // A pane that leaves one pane list keeps its first-seen time for a grace period.
+    const gone = this.memory.paneGone = Object.fromEntries(Object.entries(this.memory.paneGone || {}).filter(([, g]) => now - g.at <= PANE_GONE_GRACE_MS));
     for (const p of herdr.panes) {
       const status = p.agent ? p.status : 'shell';
       const prev = this.memory.paneSince[p.id];
-      next[p.id] = prev && prev.status === status ? prev : { status, since: now };
+      const first = Number.isFinite(prev?.first) ? prev.first : (!prev && Number.isFinite(gone[p.id]?.first) ? gone[p.id].first : undefined);
+      delete gone[p.id];
+      next[p.id] = prev && prev.status === status ? prev : { status, since: now, ...(first !== undefined ? { first } : prev ? {} : { first: now }) };
+    }
+    for (const [id, prev] of Object.entries(this.memory.paneSince)) {
+      if (!next[id] && Number.isFinite(prev.first)) gone[id] = { first: prev.first, at: gone[id]?.at ?? now };
     }
     this.memory.paneSince = next;
   }
@@ -2981,6 +3002,7 @@ export class Engine extends EventEmitter {
           const projectRec = isStaleStatusAlert(a) || isBoardDigest(a) || a.key.startsWith('workers:uncollected:') ? this.memory.pushes[`${a.key}@project`] : null;
           const due = alertPromptDue(a, projectRec || rec, now, cooldown);
           if (!due) continue;
+          if (isBoardDigest(a) && orchWaitsWithoutTurn(o, projectRec, herdr?.panes, this.memory.paneSince, a.text)) continue;
           // Keep the first due time while the item stays active, including across engine restarts.
           if (isSharedInfoDigestItem(a) && !Number.isFinite(this.memory.infoDueSince?.[a.key])) {
             this.memory.infoDueSince ||= {};
@@ -2993,7 +3015,7 @@ export class Engine extends EventEmitter {
             if (sent && now - sent.at >= 0 && now - sent.at < kitDigestMs) continue;
             const pending = this.memory.kitNotice?.pending;
             if (Array.isArray(pending)) {
-              const unsent = unsentKitChanges(this.memory.kitNotice, sent?.hashes);
+              const unsent = unsentKitChanges(this.memory.kitNotice, sent?.hashes, this.memory.paneSince?.[o.id]?.first);
               if (!unsent.length) continue;
               alert = { ...a, text: formatKitNotice(unsent, this.memory.kitNotice.revision), digestHashes: unsent.map((change) => change.hash) };
             }
@@ -3042,7 +3064,7 @@ export class Engine extends EventEmitter {
             text: a.text, kind: a.key.startsWith('nudge:') ? 'nudge' : 'reminder', project: a.project, taskId: a.taskId,
           })) });
           for (const a of sentAlerts) {
-            const record = { at: now, severity: a.severity };
+            const record = { at: now, severity: a.severity, ...(isBoardDigest(a) ? { hash: textHash(a.text) } : {}) };
             this.memory.pushes[`${a.key}@${o.id}`] = record;
             if (isStaleStatusAlert(a) || isBoardDigest(a) || a.key.startsWith('workers:uncollected:')) this.memory.pushes[`${a.key}@project`] = record;
           }

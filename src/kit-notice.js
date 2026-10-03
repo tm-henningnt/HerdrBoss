@@ -137,7 +137,9 @@ export function kitNoticeTargets(orchs, held = new Set()) {
 }
 
 // The pending changes that one pane has not received. sent is the list of commit hashes that the pane got.
-export function unsentKitChanges(state, sent = []) {
+// firstSeen is the time when the engine first saw the pane. A pane that started after a change
+// loaded the change with its kit at start, so the pane does not get a notice for that change.
+export function unsentKitChanges(state, sent = [], firstSeen = null) {
   const got = new Set(sent);
-  return (state?.pending || []).filter((change) => !got.has(change.hash));
+  return (state?.pending || []).filter((change) => !got.has(change.hash) && !(Number.isFinite(firstSeen) && firstSeen > change.at));
 }

@@ -90,7 +90,7 @@ A card with `computedState` `stuck` shows in the Stuck lane. The lane sits betwe
 
 The engine checks each project at each tick. It keeps the time when the project first had a divergence. The time restarts when the divergence ends. A paused or stood-down project has no digest and no clock.
 
-1. After more than 30 minutes of divergence, the engine sends the project orchestrator one line: `N cards differ from git: <ids>. Publish the status with --sync.` The line lists at most 10 ids. It goes at most once each hour for each project. A working orchestrator receives it when it is idle or done.
+1. After more than 30 minutes of divergence, the engine sends the project orchestrator one line: `N cards differ from git: <ids>. Publish the status with --sync.` The line lists at most 10 ids. The line joins the info digest of the pane, so it goes at most once in each 2-hour interval for each project. A working orchestrator receives it when it is idle or done. The engine sends no line when a worker of the project runs and the orchestrator had no turn since the last line.
 2. After 3 hours of divergence, the engine sends the Boss one notice for that divergence period.
 
 The engine finds the orchestrator pane in the live Herdr pane list at each tick, by the workspace of the project and the label `orch`. It does not keep a pane id. The once-each-hour record belongs to the project, so a pane id change does not send the line again. The code is in `src/board-digest.js`. The stuck state does not count as a divergence, so it sends no digest.

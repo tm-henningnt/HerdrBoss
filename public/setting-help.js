@@ -263,11 +263,18 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower factor acts sooner. A blank field turns the backstop off.',
     apply: 'policy',
   }),
-  S('machine', 'machine.diskWarnFreeGB', 'Disk warning below free GB', {
-    what: 'The free disk space below which Herdr Boss sends a disk warning. A GB is 2³⁰ bytes. This notice stays on when the guard is off.',
+  S('machine', 'machine.diskWarnFreeGB', 'Disk warning at free GB or less', {
+    what: 'The free disk space at or below which Herdr Boss raises the disk warning. A GB is 2³⁰ bytes. This notice stays on when the guard is off.',
     default: '20', unit: 'GB free', range: '0 to 1048576',
     raise: 'A higher value gives the warning earlier.',
     lower: 'A lower value gives the warning later.',
+    apply: 'policy',
+  }),
+  S('machine', 'machine.diskClearFreeGB', 'Disk warning clears at free GB', {
+    what: 'The free disk space at or above which the disk warning clears. The warning raises at the warning value or less and stays active until the free space reaches this value. A GB is 2³⁰ bytes.',
+    default: '24', unit: 'GB free', range: '0 to 1048576, at least the warning value',
+    raise: 'A higher value keeps the warning active longer and gives fewer repeat notices when the free space moves around the warning value.',
+    lower: 'A lower value clears the warning sooner. A value near the warning value allows repeat notices.',
     apply: 'policy',
   }),
   S('machine', 'machine.diskCriticalFreeGB', 'Disk critical below free GB', {

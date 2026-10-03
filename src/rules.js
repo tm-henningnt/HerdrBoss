@@ -197,7 +197,8 @@ export function swapWarnStep(state, limits) {
   return { samples, active };
 }
 
-export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) {
+// state is the caller's memory for hysteresis. A disk warning raises at the warn value or less and clears at the clear value or more.
+export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null, state = {}) {
   const alerts = [];
   const advice = [];
   const avoidKinds = new Set();
@@ -289,7 +290,10 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null) 
     if (Number.isFinite(m.diskFreeBytes) && policy?.machine) {
       const freeGB = m.diskFreeBytes / 2 ** 30;
       const critical = freeGB < policy.machine.diskCriticalFreeGB;
-      if (critical || freeGB < policy.machine.diskWarnFreeGB) {
+      const { diskWarnFreeGB: warnGB, diskClearFreeGB: clearGB = warnGB } = policy.machine;
+      if (freeGB <= warnGB || critical) state.diskWarn = true;
+      else if (freeGB >= clearGB) state.diskWarn = false;
+      if (critical || state.diskWarn) {
         const freePercent = Number.isFinite(m.diskFreePercent) ? `${m.diskFreePercent.toFixed(1)}%` : 'unknown percent';
         for (const [workspace, counts] of Object.entries(snap.worktreeCounts || {})) {
           if (!(counts.linked > 0)) continue;

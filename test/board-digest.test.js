@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { alertPromptDue } from '../src/engine.js';
+import { alertPromptDue, INFO_PROMPT_INTERVAL_MS } from '../src/engine.js';
 import { boardDigestAlerts, DIVERGE_AFTER_MS, DIVERGE_EVERY_MS, DIVERGE_BOSS_AFTER_MS } from '../src/board-digest.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -115,14 +115,14 @@ function run(t, scenario) {
 
 const pane = (id, workspace, status, label = 'orch') => ({ id, workspace, workspaceLabel: workspace, label, orch: true, agent: 'claude', status });
 
-test('the digest reaches only an idle orchestrator of the project, once each hour', (t) => {
+test('the digest reaches only an idle orchestrator of the project, once each info interval', (t) => {
   const idle = [pane('wA:p1', 'wA', 'idle'), pane('wB:p1', 'wB', 'idle'), pane('wA:p9', 'wA', 'idle', 'boss')];
   const working = [pane('wA:p1', 'wA', 'working'), pane('wB:p1', 'wB', 'idle')];
   const prompts = run(t, {
     rounds: [working, idle, idle, idle, idle],
-    offsets: [0, MIN, 30 * MIN, DIVERGE_EVERY_MS, DIVERGE_EVERY_MS + MIN],
+    offsets: [0, MIN, DIVERGE_EVERY_MS, INFO_PROMPT_INTERVAL_MS, INFO_PROMPT_INTERVAL_MS + MIN],
   });
-  assert.deepEqual(prompts.map((p) => p.pane), ['wA:p1', 'wA:p1'], 'a working pane waits; an idle pane gets one line in the first hour and one in the next');
+  assert.deepEqual(prompts.map((p) => p.pane), ['wA:p1', 'wA:p1'], 'a working pane waits; an idle pane gets one line, no second line inside the info interval, and one line after it');
   assert.match(prompts[0].text, /- 2 cards differ from git: A1, A2\. Publish the status with --sync\./);
 });
 
