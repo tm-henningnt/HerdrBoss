@@ -109,6 +109,7 @@ try {
     'worktreeRoot', 'projectRoot',
     'machine.memFreeWarnPercent',
     'quota.warnPercent', 'quota.criticalPercent',
+    'quotaPlan.burstPace', 'quotaPlan.applyThreshold', 'quotaPlan.margin', 'quotaPlan.horizon', 'quotaPlan.tolerance', 'quotaPlan.slowFactor',
     'staleStatusMinutes',
     'workers.staleIdleMinutes',
     'workers.paneCloseDelayMinutes',
@@ -119,8 +120,10 @@ try {
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
-    'config', 'config', 'config', 'config', 'config', 'default', 'default', 'config', 'config', 'default', 'config', 'config',
-    'config', 'default', 'default', 'default', 'config', 'config', 'config', 'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',
+    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default',
+    'config', 'config', 'default', 'default', 'config', 'config', 'default',
+    'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
+    'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',
@@ -136,6 +139,8 @@ try {
     group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',
   });
   assert.deepEqual(state.serviceSettings, view, 'the engine puts this same view in state');
+  assert.deepEqual(Object.keys(state.quotaPlanSummary).sort(), ['nextCreditAt', 'plannedUsageNow', 'state']);
+  assert.equal(state.quotaPlanSummary.state, 'unavailable');
   assert.equal(state.serviceSettings.find(({ setting }) => setting === 'providerKinds').value.codex.includes('pi'), true);
   for (const text of [JSON.stringify(view), JSON.stringify(state)]) {
     assert.equal(text.includes(accessTokenPath), false, 'the access token path never enters the view or API state');
@@ -426,6 +431,8 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   cfg.port = 0;
   cfg.tickSeconds = 3600;
   let engine;
+  let configuredQuotaPlan;
+  const quotaPlanReplans = [];
   const { server, close } = serve(cfg, {
     liveDataDir: process.env.HERDR_BOSS_DIR,
     createEngine: (config) => {
@@ -434,6 +441,12 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       engine.state = {
         serviceSettings: serviceSettingsView(config),
         quotaThresholds: { warnPercent: config.quota.warnPercent, criticalPercent: config.quota.criticalPercent },
+        quotas: [{ provider: 'codex' }],
+      };
+      engine.quotaPlanService = {
+        configure: (settings) => { configuredQuotaPlan = structuredClone(settings); },
+        replan: (options) => { quotaPlanReplans.push(options); },
+        summary: () => ({ nextCreditAt: null, state: 'unavailable', plannedUsageNow: null }),
       };
       engine.memory = {};
       engine.tick = async () => engine.state;
@@ -459,6 +472,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       projectRoot: '~/fixture projects',
       'quota.warnPercent': 85,
       'quota.criticalPercent': 96,
+      'quotaPlan.burstPace': 1.5,
       'machine.memFreeWarnPercent': 22,
       tickSeconds: 20,
       quotaSeconds: 600,
@@ -476,6 +490,12 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(result.settings.find(({ setting }) => setting === 'projectRoot').value, path.join(homeDir, 'fixture projects'));
   assert.equal(engine.cfg.quota.warnPercent, 85);
   assert.equal(engine.cfg.quota.criticalPercent, 96);
+  assert.equal(engine.cfg.quotaPlan.burstPace, 1.5);
+  assert.equal(result.settings.find(({ setting }) => setting === 'quotaPlan.burstPace').value, 1.5);
+  assert.deepEqual(configuredQuotaPlan, engine.cfg.quotaPlan);
+  assert.equal(quotaPlanReplans.length, 1);
+  assert.equal(quotaPlanReplans[0].provider, 'codex');
+  assert.equal(quotaPlanReplans[0].force, true);
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
   assert.equal(engine.cfg.tickSeconds, 20);
   assert.equal(engine.cfg.quotaSeconds, 600);

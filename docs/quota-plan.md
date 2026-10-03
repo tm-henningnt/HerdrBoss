@@ -8,7 +8,9 @@ The model also supports other providers.
 The core reads no file.
 The core reads no clock.
 The caller supplies time and data.
-This task adds the design, the core, and unit tests.
+The service connects the core to Codex quota readings and history.
+It refreshes the plan after a good quota reading.
+It skips a write when the inputs have not changed.
 
 ## Model
 
@@ -247,6 +249,46 @@ The second reading must be later.
 The helper returns true only for a drop greater than 30 points.
 It does not identify which credit or provider event caused the drop.
 
+## Herdr Boss service
+
+`src/quota-plan-service.js` reads the Codex quota rows from `state.json`.
+It selects the longest measured window that is not marked as an extra window.
+It uses that window's usage, reset time, and length.
+It reads the available reset credits from `codexResetCredits.credits`.
+The collector keeps only each credit's stable ID, status, grant time, and expiry time.
+It drops every other provider field.
+The existing `resetCredits` count remains in the quota row.
+
+The service reads matching provider and window rows from the last 14 days of `quota-history.jsonl`.
+It passes those readings to `hourlyBurnP90`.
+It records a possible reset when the same window drops by more than 30 points between readings.
+It then calculates a new plan.
+
+The service stores `quota-plan.json` in the data directory.
+The file keeps announced resets, observed resets, credit IDs marked used, the current plan, and the last 50 plan records.
+Each plan record has its time, input digest, and planned credit times.
+The service writes the file through a temporary file and rename.
+A quota tick with the same input digest skips a plan write.
+
+The `quotaPlan` settings control burst pace, application threshold, margin, horizon, guidance tolerance, and slow scenario pace.
+The service supports Codex only.
+The calculation core can support other providers when a later service connects them.
+
+Use `herdr-boss quota plan codex` to view the guidance.
+The `--announce` option adds a reset to this calculation only.
+The `--what-if` option sets a horizon for this calculation only.
+Neither option saves an event.
+Use `herdr-boss quota announce codex --at TIME` to save a reset announcement.
+The time must be in the future and within 30 days.
+Only the Owner can use `POST /api/quota-plan/codex/announce`.
+`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets.
+The state API has a small `quotaPlanSummary` object for later dashboard use.
+
+Herdr Boss never applies a reset credit.
+The Owner applies it in the Codex app.
+Use `herdr-boss quota credit used ID` only after the Owner confirms the application.
+The plan does not change worker admission or dispatch.
+
 ## Algorithm
 
 First calculate simple burst events without a search.
@@ -412,18 +454,12 @@ The reference simulator keeps the burst rate throughout.
 
 ## Later tasks
 
-Add the CLI and JSON output in a later task.
-Add settings and the Analytics chart in a later task.
-Add plan history and re-planning in a later task.
-Re-plan on each quota tick and on credit list changes.
-Record an observed reset when usage drops by more than 30 points.
-Re-plan after an announced or observed reset.
 Add the fleet lane text and bulletin guidance in a later task.
 Compare actual usage with the planned curve.
 Add one Mailbox prompt when a credit is due or expires within 48 hours.
 Show the actual usage and the planned application time in that prompt.
 Add a warning 24 hours before expiry.
-Mark a credit used only after confirmation or reset evidence.
+Add the Analytics chart in a later task.
+Add an automatic mark after reset evidence in a later task.
 The Owner applies it in the Codex app.
 Herdr Boss never opens or changes `/usage`.
-Add CLI docs and page help with those interfaces.

@@ -140,6 +140,7 @@ const DEFAULTS = {
   // Minimum seconds before the same alert is pushed again.
   alertCooldownSeconds: 6 * 3600,
   quota: { warnPercent: 90, criticalPercent: 98 },
+  quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5 },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
   // Optional legacy shared browsers. Only alert about explicitly configured entries.
   sharedBrowsers: [],
@@ -177,6 +178,12 @@ const SERVICE_SETTINGS = [
   ['Machine', 'machine.memFreeWarnPercent'],
   ['Quota', 'quota.warnPercent'],
   ['Quota', 'quota.criticalPercent'],
+  ['Quota plan', 'quotaPlan.burstPace'],
+  ['Quota plan', 'quotaPlan.applyThreshold'],
+  ['Quota plan', 'quotaPlan.margin'],
+  ['Quota plan', 'quotaPlan.horizon'],
+  ['Quota plan', 'quotaPlan.tolerance'],
+  ['Quota plan', 'quotaPlan.slowFactor'],
   ['Status', 'staleStatusMinutes'],
   ['Workers', 'workers.staleIdleMinutes'],
   ['Workers', 'workers.paneCloseDelayMinutes'],
@@ -410,6 +417,7 @@ const SERVICE_SETTING_RANGES = new Map([
   ['machine.memFreeWarnPercent', [1, 50]],
   ['quota.warnPercent', [50, 99]],
   ['quota.criticalPercent', [51, 100]],
+  ['quotaPlan.applyThreshold', [50, 100]],
   ['staleStatusMinutes', [5, 1440]],
   ['workers.staleIdleMinutes', [5, 1440]],
   ['workers.paneCloseDelayMinutes', [0, 60]],
@@ -424,6 +432,13 @@ const SERVICE_SETTING_RANGES = new Map([
   ['log.maxMegabytes', [1, 1000]],
   ['log.keepFiles', [1, 2]],
 ]);
+const SERVICE_SETTING_DECIMALS = new Map([
+  ['quotaPlan.burstPace', [0.1, 10]],
+  ['quotaPlan.margin', [0, 50]],
+  ['quotaPlan.tolerance', [0, 50]],
+  ['quotaPlan.slowFactor', [0.1, 1]],
+]);
+const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon']);
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
@@ -485,6 +500,7 @@ function validateServiceSettingValues(changes) {
   const normalizedChanges = {};
   for (const [setting, value] of entries) {
     const range = SERVICE_SETTING_RANGES.get(setting);
+    const decimalRange = SERVICE_SETTING_DECIMALS.get(setting);
     if (Object.hasOwn(ROOT_DEFAULTS, setting)) {
       try { normalizedChanges[setting] = resolveRootPath(value); } catch (error) { throw new Error(`${setting}: ${error.message}`); }
       continue;
@@ -513,6 +529,17 @@ function validateServiceSettingValues(changes) {
       }
       if (!Number.isSafeInteger(value) || value < range[0] || value > range[1]) {
         throw new Error(`${setting} must be a whole number from ${range[0]} to ${range[1]}.`);
+      }
+      normalizedChanges[setting] = value;
+    } else if (decimalRange) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < decimalRange[0] || value > decimalRange[1]) {
+        throw new Error(`${setting} must be a number from ${decimalRange[0]} to ${decimalRange[1]}.`);
+      }
+      normalizedChanges[setting] = value;
+    } else if (SERVICE_SETTING_TEXT.has(setting)) {
+      if (setting === 'quotaPlan.horizon' && value !== 'last-expiry'
+        && (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value)))) {
+        throw new Error('quotaPlan.horizon must be last-expiry or an ISO time.');
       }
       normalizedChanges[setting] = value;
     } else if (SERVICE_SETTING_BOOLEANS.has(setting)) {
@@ -592,6 +619,15 @@ export function loadConfig() {
   try { user = migrateLegacyWatchKeys(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
   const cfg = merge(DEFAULTS, user);
   Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
+  if (!cfg.quotaPlan || typeof cfg.quotaPlan !== 'object' || Array.isArray(cfg.quotaPlan)) cfg.quotaPlan = { ...DEFAULTS.quotaPlan };
+  for (const setting of Object.keys(DEFAULTS.quotaPlan)) {
+    const value = cfg.quotaPlan?.[setting];
+    try { validateServiceSettingValues({ [`quotaPlan.${setting}`]: value }); }
+    catch {
+      process.stderr.write(`herdr-boss: config.json quotaPlan.${setting} is invalid. Using the default.\n`);
+      cfg.quotaPlan[setting] = DEFAULTS.quotaPlan[setting];
+    }
+  }
   // A stored legacy tokenFile names the data directory. Report the private default in memory. Only
   // migrateAccessFiles() writes the new setting.
   if (cfg.access.tokenFile === path.join(DATA_DIR, 'access-token')) cfg.access.tokenFile = DEFAULT_TOKEN_FILE;

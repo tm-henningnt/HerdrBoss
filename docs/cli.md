@@ -58,6 +58,20 @@ A preview collects and evaluates, so it writes `state.json`, `rules.json`, `bull
 
 When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configured live directory, the Engine disables prompts, notifications, process reaping, handovers, and push prompts. Set `HERDR_BOSS_ALLOW_ACTIONS=1` only when you intentionally need these actions outside the live service.
 
+## Quota reset plan
+
+Use `herdr-boss quota plan codex` to calculate Codex reset credit guidance. The command prints the current use, reset time, history p90, planned credit times, total use by the horizon, gain against a plan without credits, five burst rates, and fast and slow scenarios. Add `--json` to print the full plan.
+
+Set `--burst-pace N` to compare another burst pace. Use `--what-if TIME` to set the calculation horizon. Use `--announce TIME[:full|partial]` to include a hypothetical reset in this calculation. These options do not save a plan or an event. The default horizon is the last available credit expiry. Herdr Boss supports only `codex` for this command.
+
+Use `herdr-boss quota announce codex --at TIME [--kind full|partial] [--refund N]` to save a known reset and re-plan. The time must be in the future and within 30 days. A partial reset needs a refund from 0 to 100 points. List saved events with `herdr-boss quota announce --list`. Remove one with `herdr-boss quota announce --remove ID`.
+
+Use `herdr-boss quota credit used ID` after the Owner confirms that they applied a credit. Herdr Boss never applies a reset credit. A plan is guidance only. It does not change worker admission or dispatch.
+
+The service refreshes the plan after each good quota reading. It skips a write when the inputs have not changed. It reads the current Codex quota, the sanitized reset credit fields, and the last 14 days of `quota-history.jsonl`. It stores events, used credit IDs, and up to 50 plan records in `quota-plan.json` in the data directory. The service writes this file atomically.
+
+`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets. `POST /api/quota-plan/codex/announce` accepts an announced reset with the same time and refund rules. Only the Owner can use this route. `/api/state` includes a small `quotaPlanSummary` object for dashboard use.
+
 ## Resources and policy
 
 | Command | Action |
@@ -873,6 +887,22 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Allowed hosts | `allowedHosts` | Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, *.localhost for each name below localhost, or *.example.test for each name below example.test. A wildcard needs two labels after *., except *.localhost. A port, an address, and a bare * are not allowed. | Empty list | List of host names | Up to 50 names | A request that names a listed host passes the host check. A request from another machine still needs the access token. | Remove a name to refuse requests that use it. | Select Save in the group. The change takes effect at once. |
 | Log size limit | `log.maxMegabytes` | The size at which the server log file service.log rotates. The server also writes the log to standard output. | 10 | Megabytes | 1 to 1000 | The log file holds more history and uses more disk space. | The log file rotates sooner and holds less history. | Select Save in the group. The change takes effect at once. |
 | Old log files | `log.keepFiles` | The number of rotated log files that Herdr Boss keeps, as service.log.1 and service.log.2. | 2 | Files | 1 to 2 | More history stays on disk. | Herdr Boss deletes the older file at the next rotation. | Select Save in the group. The change takes effect at once. |
+
+#### Quota plan (Advanced)
+
+- Controls: The Codex reset credit plan and the usage curve that guides it.
+- Effect: Quota plan guidance only. It does not change worker starts or apply a credit.
+- Safe to change: Safe to change. Herdr Boss shows estimates and never applies a reset credit.
+- Restart: No restart. Select Save in Quota plan settings.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Burst pace | `quotaPlan.burstPace` | The points per hour that a burst may use before the plan schedules a reset credit. | 1 | Percentage points per hour | 0.1 to 10 | A higher pace reaches the apply threshold sooner when demand stays the same. | A lower pace reaches the apply threshold later. | Select Save in the group. The change takes effect at once. |
+| Credit apply threshold | `quotaPlan.applyThreshold` | The used percent at which the plan may schedule a reset credit. | 95 | Percent used | 50 to 100 | A higher threshold saves more quota before the planned reset. | A lower threshold schedules the reset sooner. | Select Save in the group. The change takes effect at once. |
+| Reserve margin | `quotaPlan.margin` | The percent points that the plan keeps below full quota use. | 0 | Percentage points | 0 to 50 | A higher margin lowers the effective credit apply threshold. | A lower margin permits a higher apply threshold. | Select Save in the group. The change takes effect at once. |
+| Planning horizon | `quotaPlan.horizon` | The time at which the plan stops. Use the last credit expiry or enter an ISO time. | last-expiry | End time | last-expiry or an ISO time | A later time includes more planned quota use. | An earlier time limits the plan to a shorter period. | Select Save in the group. The change takes effect at once. |
+| Plan guidance tolerance | `quotaPlan.tolerance` | The points below or above the planned curve that keep actual use in the normal state. | 5 | Percentage points | 0 to 50 | A higher tolerance keeps guidance normal across a wider gap. | A lower tolerance changes guidance after a smaller gap. | Select Save in the group. The change takes effect at once. |
+| Slow scenario factor | `quotaPlan.slowFactor` | The fraction of the burst pace that the slow scenario uses. | 0.5 | Factor | 0.1 to 1 | A higher factor makes the slow scenario closer to the fast scenario. | A lower factor gives the slow scenario a smaller burst pace. | Select Save in the group. The change takes effect at once. |
 
 #### Analytics (Advanced)
 

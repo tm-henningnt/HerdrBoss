@@ -858,6 +858,16 @@ The lane is closed when it leaves out a model and no unmetered model remains. Th
 
 When every metered provider is ahead of pace, `worker start` allows the least-over provider. A refusal or warning names the current project's unmetered alternatives first, then the least-over metered provider. A window whose reset time has passed shows "reset, not yet measured" until the next reading.
 
+## Quota reset plan
+
+The Codex quota reset plan estimates when to apply available reset credits. It uses the longest measured Codex quota window, the last 14 days of quota history, and the credit status and expiry times. The plan shows a burst table, planned credit times, and fast and slow scenarios. Its guidance does not change worker starts or dispatch.
+
+Herdr Boss refreshes the plan after a good quota reading. It saves announcements, observed usage drops, used credit IDs, and the last 50 plans in `quota-plan.json`. The service detects a possible reset when usage drops by more than 30 points between readings. A digest of the inputs lets the service skip a write when nothing changed.
+
+Use `herdr-boss quota plan codex` to view the plan. Use `--what-if TIME` to change the horizon for one calculation. Use `--announce TIME[:full|partial]` to examine a possible reset without saving it. Use `herdr-boss quota announce codex --at TIME` to save a known reset. A saved reset must be in the next 30 days. Only the Owner can save one through the dashboard API.
+
+Herdr Boss never applies a reset credit. The Owner applies it in the Codex app. Use `herdr-boss quota credit used ID` only after the Owner confirms the application. Read [Quota reset planner](quota-plan.md) for the calculation and API details.
+
 ## Settings and allocation
 
 ### Setting help and page order
@@ -866,13 +876,13 @@ Each setting on the Settings page and on the Allocation page has an **i** button
 
 The Help panel of the Settings page has a guide to each group of settings: what the group controls, what it affects, which changes are safe, and if a restart is needed. The text of the popups, the guide, and the settings reference in `docs/cli.md` comes from one file, `public/setting-help.js`. A test fails when a setting has no explanation.
 
-The Settings page lists the most used groups first: Harnesses, Provider quotas, Machine, Watch routines, and Resource pools. The **Advanced** section holds Avatars, Token prices, Service settings, and Harness readiness. It is closed at first. The page remembers in this browser if you opened it.
+The Settings page lists the most used groups first: Harnesses, Provider quotas, Machine, Watch routines, and Resource pools. The **Advanced** section holds Avatars, Token prices, Service settings, Quota plan, Analytics, and Harness readiness. It is closed at first. The page remembers in this browser if you opened it.
 
 The Advanced section opens by itself while a harness readiness row is not `ok` or a service settings save shows an error. Its header then shows how many items need attention.
 
 The Settings page has one section for each harness. A harness section holds the harness availability, the preferred model, and one row for each model. Provider quota modes, quota pacing goals, and machine limits are below the harness sections. Settings shows the warning and critical quota percentages from `config.json`. The dashboard uses these values to color quota levels.
 
-The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Paths, Machine, Quota, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. After a save, each field of the group shows the value that the server stored. When a stored value differs from the typed value, the status line next to **Save** names the setting, the stored value, and the typed value. The `tickSeconds` and `quotaSeconds` rows apply at once. The `tickSeconds` range is 5 to 300 seconds. The `quotaSeconds` range is 30 to 3600 seconds. The `alertCooldownSeconds` row is read-only. It is an unused legacy value. Set the notice cooldown in the Machine group. The `push` row is a switch. Herdr Boss reads `push` at service start, so the row shows `restart required`. The environment variable `HERDR_BOSS_PUSH=0` overrides the saved value. The `port`, `host`, `providerKinds`, and `orchestratorLabel` rows stay read-only. A wrong port or host can lock the Owner out of the dashboard. Provider kinds and the orchestrator label are structural. Change them in `config.json` and restart the service. The table does not show access or Roamgate settings.
+The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Paths, Machine, Quota, Quota plan, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. After a save, each field of the group shows the value that the server stored. When a stored value differs from the typed value, the status line next to **Save** names the setting, the stored value, and the typed value. The `tickSeconds` and `quotaSeconds` rows apply at once. The `tickSeconds` range is 5 to 300 seconds. The `quotaSeconds` range is 30 to 3600 seconds. The `alertCooldownSeconds` row is read-only. It is an unused legacy value. Set the notice cooldown in the Machine group. The `push` row is a switch. Herdr Boss reads `push` at service start, so the row shows `restart required`. The environment variable `HERDR_BOSS_PUSH=0` overrides the saved value. The `port`, `host`, `providerKinds`, and `orchestratorLabel` rows stay read-only. A wrong port or host can lock the Owner out of the dashboard. Provider kinds and the orchestrator label are structural. Change them in `config.json` and restart the service. The table does not show access or Roamgate settings.
 
 ### Resource pools on the Settings page
 

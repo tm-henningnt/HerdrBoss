@@ -45,6 +45,7 @@ import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-sa
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
+import { createQuotaPlanService } from './quota-plan-service.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
@@ -603,6 +604,7 @@ export class Engine extends EventEmitter {
     // Claude probe back-off: consecutive timeouts, and the earliest next probe.
     this.claudeProbe = { timeouts: 0, nextAt: 0 };
     this.quotaTimeoutIndexes = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, 0]));
+    this.quotaPlanService = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan, now: () => this.clock() });
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
     this.orphanedWorktreeProcesses = [];
@@ -1156,6 +1158,7 @@ export class Engine extends EventEmitter {
         lockStats: null,
         errors,
         modelScorecard: buildModelScorecard(readUsage(), now),
+        quotaPlanSummary: this.quotaPlanService.summary({ now }),
       };
       let queue = [];
       try {
@@ -1757,6 +1760,11 @@ export class Engine extends EventEmitter {
     if (claude && !claude.error) delete this.memory.claudeQuotaProbeFailure;
     else this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
     recordQuotaSnapshot(this.quotas, new Date(result.at).toISOString());
+    try {
+      this.quotaPlanService.replan({ provider: 'codex', quotas: this.quotas, now: result.at });
+    } catch (error) {
+      this.log('quota-plan', `Quota plan update failed: ${error.message}`);
+    }
   }
 
   // The sweep runs beside the tick, because deleting many clones can take longer than one tick.
