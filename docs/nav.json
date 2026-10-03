@@ -1,0 +1,8 @@
+{
+  "sections": [
+    { "title": "Start", "pages": ["", "start-here", "concepts", "glossary"] },
+    { "title": "User guide", "pages": ["user-guide", "guide/see", "guide/answer", "guide/review", "guide/cost", "guide/phone", "guide/project", "guide/factory", "guide/trouble"] },
+    { "title": "Reference", "pages": ["reference/*", "cli", "harness-setup", "windows-host", "factory-host-runbook"] },
+    { "title": "Page help", "pages": ["help/*"] }
+  ]
+}

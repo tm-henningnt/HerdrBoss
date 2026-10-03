@@ -272,8 +272,7 @@ test('browser guidance keeps credentials out of every output mode', () => {
     assert.match(text, /JWT/);
     assert.match(text, /<redacted>/);
   }
-  const app = fs.readFileSync(path.resolve('public/app.js'), 'utf8');
-  assert.match(app.slice(app.indexOf("browsers: ['Browsers'")), /query strings and fragments/);
+  assert.match(fs.readFileSync(path.resolve('docs/help/browsers.md'), 'utf8'), /query strings and fragments/);
 });
 
 test('the brief template has the leased resources line and the kit names the lease rule', () => {

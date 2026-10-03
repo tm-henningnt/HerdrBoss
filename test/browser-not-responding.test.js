@@ -112,9 +112,12 @@ test('the card block shows only for a verified browser that Herdr Boss started',
 });
 
 test('the Browsers help describes the state and the restart rule', () => {
-  assert.match(app, /<b>not responding<\/b>[^`]*two checks in a row failed[^`]*<b>Restart<\/b>[^`]*never restarts a browser by itself/);
-  assert.match(app, /drops query strings and fragments[^`]*page that needs them reopens at its path[^`]*skips login and callback pages/);
-  assert.match(app, /drops path parameters[^`]*sign-in hosts/);
+  // The help text is the Markdown file docs/help/browsers.md. The Help panel and the Docs section show it.
+  const help = fs.readFileSync(path.join(repo, 'docs/help/browsers.md'), 'utf8');
+  assert.match(help, /\*\*not responding\*\*[\s\S]*two checks in a row failed[\s\S]*\*\*Restart\*\*[\s\S]*never restarts a browser by itself/);
+  assert.match(help, /drops query strings and fragments[\s\S]*page that needs them reopens at its path[\s\S]*skips login and callback pages/);
+  assert.match(help, /drops path parameters[\s\S]*sign-in hosts/);
+  assert.doesNotMatch(app, /not responding<\/b>/);
 });
 
 // ----- the engine -----

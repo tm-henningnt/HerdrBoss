@@ -3,6 +3,7 @@ import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js'
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
 import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
+import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
 import { installTableHints } from './table-hint.js';
 import { orchestratorFocus, workerListHtml } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
@@ -37,7 +38,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', settings: 'Settings', docs: 'Docs' };
 let fleetData = null, fleetSettings = null, fleetLoading = false, fleetMessage = '';
 async function refreshFleet() {
   if (fleetLoading) return;
@@ -101,6 +102,11 @@ settingsLink.dataset.nav = 'settings';
 settingsLink.textContent = 'Settings';
 // Settings goes after Logs and before Roamgate. Roamgate stays the last entry when it is shown.
 $nav.insertBefore(settingsLink, $roamgate);
+const docsLink = document.createElement('a');
+docsLink.href = '/docs';
+docsLink.dataset.nav = 'docs';
+docsLink.textContent = 'Docs';
+$nav.insertBefore(docsLink, $roamgate);
 function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   $navMenu.setAttribute('aria-expanded', String(open));
@@ -121,6 +127,40 @@ let analyticsData = null;
 let quotaPlanData = null;
 const quotaPlanUi = { at: null, kind: 'full', refundPercent: 0, busy: false, message: '' };
 let pendingHash = location.pathname === '/analytics' && location.hash ? location.hash.slice(1) : null;
+// The Docs section. The service renders the pages from Markdown. The page keeps the tree and each page it has read.
+const docs = { tree: null, pages: new Map(), at: new Map(), errors: new Map(), loading: new Set() };
+const DOCS_REFRESH_MS = 30000;
+async function docsLoad(key, url, store, jump = false) {
+  if (docs.loading.has(key)) return;
+  docs.loading.add(key);
+  try {
+    const response = await fetch(url);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'The page did not load.');
+    store(body);
+  } catch (error) {
+    docs.errors.set(key, error.message || 'The page did not load.');
+    if (key.startsWith('page:')) docs.at.set(key.slice(5), Date.now());
+  } finally {
+    docs.loading.delete(key);
+    if (docsPageName(location.pathname) !== null) {
+      // The first load of a page moves to the heading that the address names. A refresh keeps the scroll position.
+      if (jump && location.hash) pendingHash = location.hash.slice(1);
+      render();
+    }
+  }
+}
+function docsView() {
+  const name = docsPageName(location.pathname) ?? '';
+  if (!docs.tree && !docs.errors.has('tree')) void docsLoad('tree', '/api/docs/tree', (body) => { docs.tree = body; });
+  const key = `page:${name}`;
+  const stale = docs.pages.has(name) && Date.now() - (docs.at.get(name) || 0) > DOCS_REFRESH_MS;
+  if ((!docs.pages.has(name) && !docs.errors.has(key)) || stale) void docsLoad(key, `/api/docs/page?path=${encodeURIComponent(name)}`, (body) => { docs.pages.set(name, body); docs.at.set(name, Date.now()); }, !docs.pages.has(name));
+  const page = docs.pages.get(name);
+  document.title = docsPageTitle(page);
+  return docsViewHtml({ tree: docs.tree, name, page, error: page ? '' : docs.errors.get(key) || '' });
+}
+// Docs text changes when a file changes. A reload of the page reads it again.
 const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
 function loadDenialRange() {
   try { return denialRange(localStorage.getItem(DENIAL_RANGE_KEY)); } catch { return DEFAULT_DENIAL_RANGE; }
@@ -6341,7 +6381,6 @@ function project(s, slug) {
 // Short notes for each page. They say what the page shows and how to use it; the CLI and setup are in docs/.
 
 const HELP = {
-  fleet: ['Fleet', '<p>The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. The health cell becomes red and shows the reason. Last seen shows the last successful poll. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. Spend shows USD by day, role, and harness.</p><p>Use factory connect NAME on the host tool machine to connect a registered container factory. Run it again to resume. Use factory connect --check NAME for one check with name, state, and age only. The command reuses a matching Tailscale Serve forward. If Serve needs Owner rights, it prints the masked error and two Owner command choices, then exits 3. Run one choice in the WSL Owner terminal. The dashboard access rule stays in force.</p><p>Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.</p>'],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p><p>When quota history or a reset credit is available, the Codex lane compares current use with its planned curve. The lane says <b>Use now</b>, <b>on pace</b>, or <b>hold</b>, and shows how many points use is ahead of or behind the plan. The plan changes guidance only.</p><p>At 80 percent weekly use with more than 12 hours to the weekly reset, the Claude lane says <b>hold new Claude work</b> and leaves the Use now list. It shows the time at which the recent burn reaches 100 percent. Without a positive burn or with fewer than two readings, it shows no time. The hold changes guidance only. A worker start follows the lane state.</p>
@@ -6352,17 +6391,6 @@ const HELP = {
     <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss mark, the menu button with the page name, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all quota windows, or the processes and load history. After a restart, "Quotas from HH:MM" shows saved quotas until the first new quota read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the quota window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
-  board: ['Board', `
-    <p>The Board shows the tasks of all projects on one kanban. It uses the same task states as the board on each project page.</p>
-    <h3>Columns</h3><p><b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker; the longest-running worker comes first. <b>Stuck</b> shows only while a card is stuck: a Doing card with no live worker and no commit for 3 hours. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. <b>Done · 24 h</b> holds the tasks done in the last 24 hours, newest first. A done task without an update time does not show.</p>
-    <h3>Cards</h3><p>A card shows the project, the task ID, the title, and the worker with its model. A Doing card also shows the elapsed time. A Blocked card shows what it waits on: the ID and title of each open blocker task, or the Owner, the Boss, or an external item with the ask. When the status names no blocker, the card says so. A <b>path</b> mark shows a task on the critical path of its project.</p>
-    <p>An <b>auto</b> badge shows that Herdr Boss computed the state of the card from a fact. The badge has the fact: the short commit ID, the worker name, or the issue number. When the published state differs from the computed state, the card shows both states and the fact. A Stuck card shows the reason and the time of its last activity. In the swimlane view, a project with cards that differ from git shows a mark with the count.</p>
-    <p>Select a card to open the project page with the task selected. The page shows the task card on the project board and its chain in the dependency graph. Select a blocker to open that task. Select the project name to open the project page.</p>
-    <h3>Summary</h3><p>The counts show the tasks in each column after the project, who, and search filters. Select a count to show only that column. Select it again to show all columns. <b>Needs the Owner</b> counts the open Mailbox items that need you and opens the Mailbox. Each project bar shows the tasks of that project in each state, on one scale for all projects. Select a bar to show only that project.</p>
-    <h3>Filters</h3><p><b>Project</b> shows one project. <b>Kind</b> shows the tasks that wait for the Owner, the tasks with a worker, or the tasks of one worker harness or one model. <b>State</b> shows one column. The search matches the project, the task ID, the title, the ask, and the worker name and model. Each word must match. Press <kbd>/</kbd> to go to the search. <b>Clear filters</b> removes all filters.</p>
-    <h3>Grouping</h3><p><b>By project</b> shows one swimlane for each project. Select a swimlane title to close or open it. <b>One board</b> shows all projects in one set of columns. The page remembers the grouping, the filters, and the closed swimlanes in this browser. It does not remember the search.</p>
-    <h3>Refresh</h3><p>The page updates in place. It keeps the scroll position, the focus, and the search text.</p>
-    <h3>Phone</h3><p>On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select <b>All</b> to show all projects. The project name on a card is not a link on a phone.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the orchestrator published and what runs now.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
@@ -6559,17 +6587,6 @@ const HELP = {
     <p>The filter above the table selects one project and one state: <b>Working</b>, <b>Waiting</b> (idle or blocked), or <b>Finished</b>. The filter applies to this tab only. An orchestrator row shows its focus: the phase and the cards on Doing from the published status.</p>
     <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>
     <p>An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status <b>todo</b>, <b>doing</b>, or <b>review</b> with every task in its <b>blocked by</b> list done. The project must be in <b>auto</b> or <b>active</b> mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.</p>`],
-  browsers: ['Browsers', `
-    <p>Addresses, tab titles, and bookmark names mask outside hosts. Output removes query strings and fragments, bearer values, tokens, and JWT strings. A command error also masks an outside host inside a URL and an app UUID. Enter a complete address to navigate or change a start page. Bookmarks open through their stored index.</p>
-    <p>One persistent Chrome per project. Agents drive it; you can watch and help.</p>
-    <p>Each card shows the leased port and the CDP address <code>http://127.0.0.1:PORT</code> of the project, with a link to its row on the Allocation page.</p>
-    <h3>Start and manage</h3><p><b>Open visible</b> or <b>Open headless</b> starts the browser. <b>Manage</b> restarts it in the other mode, closes it, or sets the window size for the next launch.</p>
-    <h3>States</h3><p><b>ready</b>: Chrome runs with the project profile and answers on its debugging port. <b>not responding</b>: Chrome runs with the project profile, but its debugging port does not answer within 2 seconds, or two checks in a row failed during a quiet period. A responsive debugging endpoint suppresses the notice. A failed check does not count while a browser command runs, or during the next 20 seconds. A check opens a blank background tab, runs <code>1+1</code> in it, and closes it, at most once a minute. A connected CDP client doubles the step limit to 6 seconds and the total limit to 16 seconds. The card shows the reason and a <b>Restart</b> button. Restart keeps the current mode. It reopens saved web pages and blank tabs in a separate window for each tab. Restore drops query strings and fragments. A page that needs them reopens at its path. It also drops path parameters. It skips login and callback pages and sign-in hosts. Tab IDs change. A saved address can be older than the current page. It waits up to 30 seconds for a browser command to finish. It also waits for other CDP clients to disconnect. It refuses if a command or a client remains, or if the client count is unknown. An idle client can prevent a restart. It blocks new browser commands during the restart. For one week after the first health notice, the event log records the probe reason and the browser process state. These records contain no page URLs or titles. Herdr Boss never restarts a browser by itself. The preview is not available. Use <b>Manage</b> to restart or close it. If Chrome does not accept the close command, Herdr Boss sends SIGTERM to that Chrome process only. <b>closed</b>: you used <b>Close browser</b>. A new browser request clears this state. <b>offline</b>: no Chrome runs with the project profile and it was not deliberately closed. <b>port conflict</b>: another process uses the port.</p>
-    <h3>Preview</h3><p><b>One tab</b> shows the selected tab with its address bar. <b>All tabs</b> shows every tab in one grid, without controls; select a tile to focus it. <b>Live</b> refreshes at the chosen interval. Without <b>Live</b>, the preview shows the last capture; <b>Refresh</b> takes a new one.</p>
-    <h3>Tabs</h3><p><b>Agent</b> marks a tab an agent uses. Screenshots never change a page. Navigation and input on an agent tab ask for confirmation first. <b>Hidden</b> marks a tab that is not visible; some web apps do not draw there. <b>New tab</b> opens a page of your own. Each tab row has a <b>Close tab</b> control. Before it closes a tab that an agent holds, the page asks you to confirm. It also warns you before it closes the last tab. A close never stops the browser.</p>
-    <h3>Address box</h3><p>The first focus of the address box selects all its text. A second click places a cursor where you select it.</p>
-    <h3>Bookmarks</h3><p>A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters. A bookmark URL must use http or https and must not hold a user name or a password. <b>Add current page</b> saves the selected tab. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in a new tab. <b>Rename</b>, the arrows, and <b>Delete</b> change the list; Delete asks you to confirm. <b>Start page</b> opens in the first tab of the next launch. <b>Save</b> stores the start page; a blank value clears it.</p>
-    <h3>Control</h3><p>Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on <b>Control browser</b> or <b>Live</b> to refresh it at the chosen interval. Turn on <b>Control browser</b>, then click the image and type. Paste long text or a password into the masked field. To sign in to a web app, enter its address in the sign-in field and select <b>Open sign-in tab</b>. Click the image, then type or paste the password and the one-time code. The sign-in route accepts the dashboard page on this computer or a page with a login session. On this computer, any local process counts as the owner for this route. Input without the sign-in flag stays open to project agents. The login stays in the project browser profile. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while <b>Control browser</b> is on.</p>`],
   analytics: ['Analytics', `
     <p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes, agent messages, notices, and policy changes.</p>
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
@@ -6597,17 +6614,51 @@ const HELP = {
     <h3>Activity log</h3><p>The log lists prompts sent to orchestrators, notifications, handovers, and stopped processes, newest first. Filter by kind, project, level, and time, or type in the search box. The first line tells whether Herdr Boss sends notices to orchestrators. Herdr Boss sends the <code>info</code> notices of a pane as one digest, at most once in 2 hours. It normally waits until the pane is idle or done. A digest item that has been due for more than 3 hours can send while the pane works. Stale-status and no-report reminders join this digest. <code>warn</code> and <code>critical</code> notices arrive at once. <b>Details</b> holds the raw log without filters. The old <code>/logs</code> address opens this section.</p>`],
 };
 
+// The text of these topics is in docs/help/<topic>.md. The service renders the file, and the Docs section shows the same file.
+const HELP_FILES = ['board', 'browsers', 'docs', 'fleet'];
+const helpFiles = new Map();
+const helpLoading = new Set();
+
 function currentRoute() {
+  if (docsPageName(location.pathname) !== null) return 'docs';
   if (/^\/(projects|p)(\/|$)/.test(location.pathname)) return 'projects';
   if (parseReviewPath(location.pathname)) return 'reviews';
   const name = location.pathname.slice(1);
-  return HELP[name] ? name : 'overview';
+  return HELP[name] || HELP_FILES.includes(name) ? name : 'overview';
+}
+
+async function helpLoad(topic) {
+  if (helpLoading.has(topic)) return;
+  helpLoading.add(topic);
+  try {
+    const response = await fetch(`/api/docs/help/${topic}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error);
+    helpFiles.set(topic, { title: body.title, html: body.html });
+  } catch {
+    helpFiles.set(topic, { title: 'Help', html: '<p>The help text did not load. Open the <a href="/docs">Docs</a> to read it.</p>' });
+  } finally {
+    helpLoading.delete(topic);
+    if (!document.getElementById('help-panel').hidden) fillHelp();
+  }
 }
 
 function fillHelp() {
-  const [title, body] = HELP[currentRoute()] || HELP.overview;
-  document.getElementById('help-title').textContent = `${title} help`;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. The Mailbox and the Chat have no menu entry: use the top-bar icons. On the Mailbox, the Reviews, and the Chat the menu button opens a drawer. Commands and setup: <code>docs/cli.md</code> and <code>docs/user-guide.md</code> in the Herdr Boss repository.</p>`;
+  const topic = currentRoute();
+  let title;
+  let body;
+  if (HELP_FILES.includes(topic)) {
+    const file = helpFiles.get(topic);
+    if (!file) void helpLoad(topic);
+    title = file ? file.title : 'Help';
+    body = file ? file.html : '<p>Loading…</p>';
+  } else {
+    const [name, text] = HELP[topic] || HELP.overview;
+    title = `${name} help`;
+    body = text;
+  }
+  document.getElementById('help-title').textContent = title;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">On a screen up to 760 px wide, use the menu button at the top to change pages. The Mailbox and the Chat have no menu entry: use the top-bar icons. On the Mailbox, the Reviews, and the Chat the menu button opens a drawer. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
 }
 
 function setHelp(open) {
@@ -7567,11 +7618,11 @@ function render(force = false) {
     history.replaceState(null, '', location.pathname + location.hash);
     requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
   }
-  const route = m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const route = docsPageName(location.pathname) !== null ? 'docs' : m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
   const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
   const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
-  const page = route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const page = route === 'docs' ? docsView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -7580,6 +7631,7 @@ function render(force = false) {
   if (!chatPhoneOpen) document.body.classList.remove('chat-keyboard-open');
   chatViewportDebug?.setVisible(chatPhoneOpen);
   if (!APP_VIEW_ROUTES.includes(route)) appDrawerOpen = false;
+  if (route !== 'docs') document.title = 'Herdr Boss';
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
     if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
@@ -8997,9 +9049,17 @@ function revealHash() {
 }
 
 document.addEventListener('click', (e) => {
+  const toggle = e.target.closest?.('[data-docs-nav-toggle]');
+  if (toggle) {
+    const open = toggle.getAttribute('aria-expanded') !== 'true';
+    toggle.setAttribute('aria-expanded', String(open));
+    document.getElementById('docs-nav')?.classList.toggle('open', open);
+    return;
+  }
   const a = e.target.closest('a[href^="/"]');
-  if (!a || a.target || e.metaKey || e.ctrlKey || /\.md$/.test(a.getAttribute('href'))) return;
+  if (!a || a.target || e.metaKey || e.ctrlKey || /\.md$/.test(a.getAttribute('href')) || /^\/docs\/.*\.(png|jpe?g|webp|gif|svg)$/i.test(a.getAttribute('href'))) return;
   e.preventDefault();
+  if (a.closest('#help-panel')) setHelp(false);
   history.pushState(null, '', a.getAttribute('href'));
   lastRender = '';
   render();
