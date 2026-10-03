@@ -1467,6 +1467,32 @@ Herdr Boss derives a Herdr-safe agent name from each handoff record ID. Use the 
 
 If a `needs-inspection` record still has a pane in the current Herdr pane list, repeat `handoff prepare` for the same source pane, target kind, and mode. It waits for readiness and starts the successor in that pane. It keeps the existing handoff record and pane. If the pane does not become ready, the record stays `needs-inspection` and the command reports the readiness error. If a successful current pane list proves that the pane is absent, the record expires and prepare can create a new successor.
 
+## Factory hosts
+
+Warning: the registry holds the address, the user, and the key file path of each host. Do not paste them into a chat, a report, or a commit.
+
+### Commands
+
+```
+herdr-boss factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]
+herdr-boss factory host list
+herdr-boss factory host remove NAME
+herdr-boss factory ssh HOST -- COMMAND...
+herdr-boss factory docker HOST -- ARGS...
+```
+
+`factory host add` stores the name, the address, the user, and the key file path in `registry.json`. The folder is `~/.herdr-factories`. Set `HERDR_FACTORIES_DIR` to use another folder. Herdr Boss creates the folder with mode 700 and the file with mode 600. The key file path is a path only. Herdr Boss never reads the key file. Only `ssh -i` reads it.
+
+To keep the address out of the shell history, give the fields as JSON with `--from-file FILE`, with `--from-file -`, or on stdin. The fields are `address`, `user`, and `keyFile`. A flag overrides the same field in the JSON. The name uses lower case letters, digits, and hyphens.
+
+`factory host list` prints the name and the user of each host. It never prints the address or the key file path. `factory host remove NAME` deletes the host.
+
+`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. The masking also covers the warning lines of ssh.
+
+`factory docker HOST -- ARGS...` runs `docker ARGS...` on the host through the same ssh transport. It quotes each argument for the remote shell. It has no terminal, so `docker run -it` and `docker exec -it` do not work.
+
+A Docker context over SSH stores the address in the Docker context store, and `docker context ls` shows it. `factory docker` is the supported route.
+
 ## Set the goal of an orchestrator
 
 ### Command
