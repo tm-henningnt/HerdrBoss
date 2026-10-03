@@ -16,7 +16,7 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 
 | Command | Action |
 |---|---|
-| `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Read only. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
+| `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
@@ -64,9 +64,13 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 Run `bin/herdr-boss doctor` from the downloaded Herdr Boss folder.
 Use `herdr-boss doctor` when the command is on `PATH`.
 The command checks the items in [Onboarding](onboarding.md#the-shared-step-names).
-It reads only.
-It creates no data folder and changes no setting.
+It writes no Herdr Boss data, project file, or setting.
+It creates no data folder.
 It starts no agent session and runs no installation command.
+It runs checks through the installed tools.
+`opencode auth list`, `pi --list-models`, `claude auth status`, and `codexbar usage` can update their own state or refresh a token.
+The other tool commands can also update their own state.
+The command does not prevent those tool updates.
 
 You should see one line for each item.
 Each line starts with `green:` or `red:`.
@@ -110,16 +114,29 @@ The computer must have at least 8 GiB of memory.
 Each check has a five-second time limit.
 A check that times out gives a red item.
 The remaining checks continue.
+The checks run one after another.
+Allow up to 125 seconds for the 25 checks.
+With `--factory-host`, allow up to 135 seconds for the 27 checks.
+Command startup and report output add time to these limits.
+On macOS and Linux, a timeout stops the process group of that probe.
+This includes helpers that stay in the same group.
+The CLI flushes the report and exits with its result code.
 
 Add `--factory-host` only on a host that runs factories.
 This option adds `docker` and `docker-contexts` under the `tools` step.
-The first check asks the Docker service for its version.
-The second check reads the context list.
-It sends no request to a remote context.
+The first check runs `docker context inspect`.
+The second check runs `docker context ls`.
+Both checks read saved context metadata.
+They send no request to a Docker service, including a remote context.
+They do not check whether a Docker service is running or reachable.
 
 The data folder check reads directory metadata and access rights.
 It reads no file in `~/.herdr-boss` or `~/.config/herdr-boss`.
 The settings checks read only the named Claude, Codex, and OpenCode settings files.
+The checks accept a symbolic link to a regular file or directory, such as one in a dotfiles folder.
+The settings checks refuse links into Herdr Boss data and access folders.
+They also refuse links into the protected credential and session folders of other tools.
+The data folder check accepts a directory link outside those other protected folders.
 OpenCode accepts `opencode.json` or `opencode.jsonc`.
 `XDG_CONFIG_HOME` selects the OpenCode settings folder when set.
 The service check reads its local health reply.
@@ -127,6 +144,11 @@ The service check reads its local health reply.
 `HERDR_BOSS_DIR` selects the data folder to check.
 Output shows the home folder as `~`.
 It includes no tool output, setting values, host name, address, key, or private path.
+
+Run `doctor` as your normal user.
+Do not run it with `sudo`.
+On macOS, `sudo` makes the service check target `gui/0`, the root user's service domain.
+The service fix tells you to run the command without `sudo`.
 
 On Linux, the service check uses the systemd user service.
 CodexBar and its usage reading stay red when CodexBar is absent.

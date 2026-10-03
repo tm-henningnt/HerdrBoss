@@ -113,7 +113,7 @@ const USAGE = `herdr-boss <command>
   serve [--read-only-preview [--host <address>]] Run the collector loop and the dashboard server.
                               The preview binds 127.0.0.1 unless --host names another address.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
-  doctor [--json] [--factory-host]  Check onboarding items without changes. Exit 4 when an item needs a fix.
+  doctor [--json] [--factory-host]  Check onboarding items. Exit 4 when an item needs a fix.
   publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.
   install               Install and start the launchd agent.
@@ -464,8 +464,10 @@ async function main() {
   // Doctor must run before loadConfig(), which creates and migrates data files.
   if (cmd === 'doctor') {
     const { doctorCommand } = await import('./doctor.js');
-    process.exitCode = await doctorCommand(args);
-    return;
+    const code = await doctorCommand(args);
+    // Flush queued report writes before leaving any tool-created handles behind.
+    await new Promise((resolve, reject) => process.stdout.write('', (error) => error ? reject(error) : resolve()));
+    process.exit(code);
   }
   if (cmd === 'kit-path') {
     const { KIT_ROOT } = await import('./kit/config.js');

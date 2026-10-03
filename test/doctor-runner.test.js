@@ -37,7 +37,7 @@ test('the settings runner refuses unknown files and links to private data', asyn
   fs.symlinkSync(privateFile, file);
   const runner = createDoctorRunner({ home, env: { HOME: home } });
   await assert.rejects(runner({ kind: 'read', file: privateFile }, options()), /outside the doctor scope/);
-  await assert.rejects(runner({ kind: 'read', file }, options()), /settings link/);
+  await assert.rejects(runner({ kind: 'read', file }, options()), /private Herdr Boss data/);
 });
 
 test('the settings runner refuses an XDG folder that points into private data', async (t) => {
@@ -66,4 +66,33 @@ test('the settings runner refuses a canonical path to a linked private data fold
   fs.symlinkSync(storage, path.join(home, '.herdr-boss'));
   const runner = createDoctorRunner({ home, env: { HOME: home, XDG_CONFIG_HOME: storage } });
   await assert.rejects(runner({ kind: 'opencode-settings' }, options()), /private Herdr Boss data/);
+});
+
+test('doctor accepts settings and data-folder links into a dotfiles folder', async (t) => {
+  const home = fixture(t);
+  const settings = path.join(home, 'dotfiles', 'claude-settings.json');
+  const data = path.join(home, 'dotfiles', 'boss-data');
+  write(settings, '{"autoMode":{}}');
+  fs.mkdirSync(data);
+  const file = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(file));
+  fs.symlinkSync(settings, file);
+  fs.symlinkSync(data, path.join(home, '.herdr-boss'));
+  const runner = createDoctorRunner({ home, env: { HOME: home } });
+  assert.equal(await runner({ kind: 'read', file }, options()), '{"autoMode":{}}');
+  assert.equal(await runner({ kind: 'directory', file: path.join(home, '.herdr-boss') }, options()), true);
+});
+
+test('doctor refuses a settings link into another tool credential folder', async (t) => {
+  const home = fixture(t);
+  const credentials = path.join(home, '.pi', 'agent', 'auth.json');
+  write(credentials, '{"inventedSecret":"do-not-read"}');
+  const file = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(file));
+  fs.symlinkSync(credentials, file);
+  const runner = createDoctorRunner({ home, env: { HOME: home } });
+  await assert.rejects(runner({ kind: 'read', file }, options()), /private tool data/);
+  const data = path.join(home, '.herdr-boss');
+  fs.symlinkSync(path.dirname(credentials), data);
+  assert.equal(await runner({ kind: 'directory', file: data }, options()), false);
 });

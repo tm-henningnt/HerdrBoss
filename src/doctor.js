@@ -1,10 +1,10 @@
-// Read-only onboarding checks. Raw probe output never reaches a report.
+// Onboarding checks. Raw probe output never reaches a report.
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCodexRoots } from './harness.js';
 
@@ -29,6 +29,10 @@ const text = (value) => typeof value === 'string' ? value.trim() : '';
 function json(value) { try { return JSON.parse(value); } catch { return null; } }
 const nonempty = (value) => Boolean(text(value));
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const inside = (file, dir) => {
+  const relative = path.relative(dir, file);
+  return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+};
 
 function jsonc(value) {
   // Keep strings intact. Comments and trailing commas are legal in OpenCode JSONC.
@@ -93,7 +97,7 @@ function checks({ home, env, factoryHost }) {
     }),
     command('gh', 'tools', 'GitHub command', 'gh', ['--version'], null, (value) => /^gh version \d/.test(text(value))),
     command('codexbar', 'tools', 'CodexBar', 'codexbar', ['--version'], null),
-    { id: 'service', stepId: 'service', name: 'Herdr Boss service', fix: 'Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.', pass: (value) => /\bstate = running\b/.test(text(value)) || text(value) === 'active', request: { kind: 'service' } },
+    { id: 'service', stepId: 'service', name: 'Herdr Boss service', fix: 'Run doctor as your normal user, without sudo. On macOS, sudo checks gui/0. Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.', pass: (value) => /\bstate = running\b/.test(text(value)) || text(value) === 'active', request: { kind: 'service' } },
     { id: 'data-folder', stepId: 'service', name: 'Data folder', fix: 'Run bin/herdr-boss install. Give your user read, write, and search access to the data folder.', pass: (value) => value === true, request: { kind: 'directory', file: env.HERDR_BOSS_DIR || path.join(home, '.herdr-boss') } },
     read('claude-settings', 'Claude autoMode', '.claude/settings.json', 'Only you: run herdr-boss harness sync. Back up ~/.claude/settings.json. Add the missing autoMode lines in your editor.', (value) => {
       const mode = json(value)?.autoMode;
@@ -129,7 +133,10 @@ function checks({ home, env, factoryHost }) {
     { id: 'service-answers', stepId: 'dashboard', name: 'Service answers', fix: 'Run bin/herdr-boss install from the Herdr Boss folder. Run doctor again after the service starts.', pass: (value) => value?.status === 200 && value.body?.schema === 1 && value.body?.contractVersion === '1.0.0' && typeof value.body?.version === 'string' && /^[a-f0-9]{12,64}$/.test(value.body?.kitRevision), request: { kind: 'health' } },
   ];
   if (factoryHost) rows.push(
-    command('docker', 'tools', 'Docker', 'docker', ['info', '--format', '{{.ServerVersion}}'], 'Install and start Docker on this factory host. Give your user access to Docker.'),
+    command('docker', 'tools', 'Docker', 'docker', ['context', 'inspect'], 'Install Docker on this factory host. Run docker context inspect to check its saved context.', (value) => {
+      const contexts = json(value);
+      return Array.isArray(contexts) && contexts.some((context) => nonempty(context?.Name) && nonempty(context?.Endpoints?.docker?.Host));
+    }),
     command('docker-contexts', 'tools', 'Docker contexts', 'docker', ['context', 'ls', '--format', '{{json .}}'], 'Create one Docker context for each host with herdr-boss factory host add NAME --docker-context CONTEXT.', (value) => text(value).split('\n').some((line) => nonempty(json(line)?.Name))),
   );
   return rows;
@@ -137,11 +144,56 @@ function checks({ home, env, factoryHost }) {
 
 function exec(command, args, options) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { ...options, encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    const { signal, timeout, ...spawnOptions } = options;
+    if (signal?.aborted) { reject(signal.reason); return; }
+    // A new POSIX process group belongs only to this probe and its helpers.
+    const grouped = process.platform !== 'win32';
+    const child = spawn(command, args, { ...spawnOptions, detached: grouped, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let bytes = 0;
+    let finished = false;
+    let timer;
+    const stop = () => {
+      if (!child.pid) return;
+      try {
+        if (grouped) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') { try { child.kill('SIGKILL'); } catch {} }
+      }
+    };
+    const finish = (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      if (error) stop();
+      // Do not retain a pipe or a child handle if a helper escapes the group.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
       if (error) reject(error);
-      // Codex login status can use stderr. JSON probes use stdout; keep warnings out.
+      // Codex login status can use stderr. Keep warnings out of JSON probes.
       else resolve(stdout.trim() || stderr.trim());
-    });
+    };
+    const abort = () => finish(signal.reason ?? new Error('Command aborted.'));
+    const capture = (chunk, stream) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 1024 * 1024) { finish(new Error('Command output is too large.')); return; }
+      if (stream === 'stdout') stdout += chunk;
+      else stderr += chunk;
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => capture(chunk, 'stdout'));
+    child.stderr.on('data', (chunk) => capture(chunk, 'stderr'));
+    child.once('error', finish);
+    child.once('exit', () => { if (!finished) stop(); });
+    child.once('close', (code) => finish(code === 0 ? null : new Error('Command did not pass.')));
+    signal?.addEventListener('abort', abort, { once: true });
+    timer = setTimeout(() => finish(new Error('Command timed out.')), timeout);
+    if (signal?.aborted) abort();
   });
 }
 
@@ -151,20 +203,25 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
   const openCodeDir = path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode');
   const openCodeFiles = ['opencode.json', 'opencode.jsonc'].map((file) => path.join(openCodeDir, file));
   const allowed = ['.claude/settings.json', '.codex/config.toml', '.codex/rules/herdr.rules'].map((file) => path.join(home, file)).concat(openCodeFiles);
+  const accessDir = path.join(home, '.config', 'herdr-boss');
+  const bossData = [path.join(home, '.herdr-boss'), accessDir, env.HERDR_BOSS_DIR].filter(Boolean);
+  const otherPrivate = ['.claude/.credentials.json', '.claude.json', '.claude/projects', '.codex/auth.json', '.codex/sessions', '.codex/history.jsonl', '.pi/agent', '.config/gh', '.config/opencode/auth.json', '.ssh', '.aws', '.gnupg'].map((file) => path.join(home, file));
+  otherPrivate.push(path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode'));
+  const inPrivateData = async (realFile, entries) => {
+    for (const entry of entries) {
+      // Resolve metadata only, so aliases cannot turn private data into settings.
+      let canonical;
+      try { canonical = await fs.realpath(entry); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; canonical = path.resolve(entry); }
+      if (inside(realFile, canonical)) return true;
+    }
+    return false;
+  };
   const readSettings = async (file, signal) => {
     if (!allowed.includes(file)) throw new Error('This settings file is outside the doctor scope.');
     const realFile = await fs.realpath(file);
-    const expectedDir = openCodeFiles.includes(file) ? await fs.realpath(env.XDG_CONFIG_HOME || path.join(home, '.config')) : await fs.realpath(home);
-    const relative = path.relative(openCodeFiles.includes(file) ? (env.XDG_CONFIG_HOME || path.join(home, '.config')) : home, file);
-    if (realFile !== path.join(expectedDir, relative)) throw new Error('Do not read a settings link outside its expected folder.');
-    for (const privateDir of [path.join(home, '.herdr-boss'), path.join(home, '.config', 'herdr-boss'), env.HERDR_BOSS_DIR].filter(Boolean)) {
-      // Resolve metadata only, so aliases cannot turn private data into settings.
-      let canonical;
-      try { canonical = await fs.realpath(privateDir); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; canonical = path.resolve(privateDir); }
-      const relative = path.relative(canonical, realFile);
-      if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new Error('Do not read private Herdr Boss data.');
-    }
+    if (await inPrivateData(realFile, bossData)) throw new Error('Do not read private Herdr Boss data.');
+    if (await inPrivateData(realFile, otherPrivate)) throw new Error('Do not read private tool data.');
     const stat = await fs.stat(realFile);
     if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('The settings file is not a small regular file.');
     return fs.readFile(realFile, { encoding: 'utf8', signal });
@@ -179,9 +236,11 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
         ? exec('launchctl', ['print', `gui/${uid}/${LABEL}`], { signal, timeout, env })
         : exec('systemctl', ['--user', 'is-active', 'herdr-boss.service'], { signal, timeout, env });
       case 'directory': {
-        const stat = await fs.lstat(request.file);
+        const realDir = await fs.realpath(request.file);
+        if (await inPrivateData(realDir, [accessDir, ...otherPrivate])) return false;
+        const stat = await fs.stat(realDir);
         if (!stat.isDirectory()) return false;
-        await fs.access(request.file, constants.R_OK | constants.W_OK | constants.X_OK);
+        await fs.access(realDir, constants.R_OK | constants.W_OK | constants.X_OK);
         return true;
       }
       case 'disk': return fs.statfs(request.file);

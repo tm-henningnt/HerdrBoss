@@ -18,7 +18,7 @@ const GREEN = {
   disk: { bavail: 20 * 1024 ** 3, bsize: 1 }, memory: 16 * 1024 ** 3,
   'usage-reading': '[{"provider":"claude","usage":{"primary":{"usedPercent":10}}}]',
   'service-answers': { status: 200, body: { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef123456', herdrReachable: true } },
-  docker: '27.0', 'docker-contexts': '{"Name":"default"}',
+  docker: '[{"Name":"default","Endpoints":{"docker":{"Host":"unix:///var/run/docker.sock"}}}]', 'docker-contexts': '{"Name":"default"}',
 };
 const IDS = ['os', 'node', 'git', 'git-name', 'herdr', 'claude-installed', 'claude-signed-in', 'codex-installed', 'codex-signed-in', 'opencode-installed', 'opencode-signed-in', 'pi-installed', 'pi-signed-in', 'gh', 'codexbar', 'service', 'data-folder', 'claude-settings', 'codex-settings', 'codex-rules', 'opencode-settings', 'disk', 'memory', 'usage-reading', 'service-answers'];
 function fake(overrides = {}) {
@@ -63,7 +63,7 @@ const FIXES = {
   'pi-signed-in': 'Only you: open pi in your terminal. Run /login and sign in to your provider.',
   gh: 'Run brew install gh. Put gh on PATH.',
   codexbar: 'Run brew install --cask codexbar. Put codexbar on PATH.',
-  service: 'Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.',
+  service: 'Run doctor as your normal user, without sudo. On macOS, sudo checks gui/0. Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.',
   'data-folder': 'Run bin/herdr-boss install. Give your user read, write, and search access to the data folder.',
   'claude-settings': 'Only you: run herdr-boss harness sync. Back up ~/.claude/settings.json. Add the missing autoMode lines in your editor.',
   'codex-settings': 'Run herdr-boss harness sync --codex-only. Keep ~/.config/herdr-boss and its parent folders outside writable_roots.',
@@ -73,7 +73,7 @@ const FIXES = {
   memory: 'Use a computer with at least 8 GiB of memory. For a factory, give it at least 8 GiB.',
   'usage-reading': 'Only you: sign in to Claude Code. Set the Claude usage source in CodexBar to Auto. Run doctor again.',
   'service-answers': 'Run bin/herdr-boss install from the Herdr Boss folder. Run doctor again after the service starts.',
-  docker: 'Install and start Docker on this factory host. Give your user access to Docker.',
+  docker: 'Install Docker on this factory host. Run docker context inspect to check its saved context.',
   'docker-contexts': 'Create one Docker context for each host with herdr-boss factory host add NAME --docker-context CONTEXT.',
 };
 const BAD = {
@@ -193,4 +193,20 @@ test('Linux install fixes use the Pi command and vendor instructions without Mac
     assert.ok(!row.fix.includes('brew install'));
     if (row.id !== 'pi-installed') assert.ok(!row.fix.includes('npm install'));
   }
+});
+
+test('factory host checks inspect saved Docker metadata without a daemon request', async () => {
+  const calls = [];
+  const runner = async (request) => {
+    if (request.command === 'docker') {
+      calls.push(request.args);
+      assert.equal(request.args[0], 'context');
+      assert.ok(['inspect', 'ls'].includes(request.args[1]));
+    }
+    return fake({ docker: '[{"Name":"remote","Endpoints":{"docker":{"Host":"ssh://invented.example.test"}}}]' })(request);
+  };
+  const report = await runDoctor({ home: HOME, runner, factoryHost: true });
+  assert.equal(report.items.find((item) => item.id === 'docker').status, 'green');
+  assert.deepEqual(calls, [['context', 'inspect'], ['context', 'ls', '--format', '{{json .}}']]);
+  assert.ok(!JSON.stringify(report).includes('invented.example.test'));
 });
