@@ -17,6 +17,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
   '       factory connect [--check|--undo] NAME',
+  '       factory attach NAME [--undo]',
   '       factory login NAME claude|codex',
   '       factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]',
   '       factory update NAME --tier service|image [--dry-run] [--accept-data-loss] [--allow-boss-restart]',
@@ -130,6 +131,9 @@ export function maskLine(line, host, docker = false) {
     return text;
   };
   let text = maskHosts(line);
+  // The SSH user and the SSH port of a host record (`sshPort`) never reach a terminal.
+  if (host.user) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.user)}(?![A-Za-z0-9_-])`, 'g'), '<user>');
+  if (host.sshPort) text = text.replace(new RegExp(`(?<![0-9])${escapeRegExp(String(host.sshPort))}(?![0-9])`, 'g'), '<port>');
   if (docker) text = text.replace(NAME_LINE, '$1<host>').replace(ENDPOINT, '<endpoint>').replace(TAILNET, MASK_HOST);
   const replace = (value, mask) => {
     if (typeof value === 'string' && value) text = text.split(value).join(mask);
@@ -336,6 +340,10 @@ export async function factoryCommand(args, io = {}) {
   if (sub === 'connect') {
     const { factoryConnectCommand } = await import('./factory-connect.js');
     return factoryConnectCommand(rest, context);
+  }
+  if (sub === 'attach') {
+    const { factoryAttachCommand } = await import('./factory-attach.js');
+    return factoryAttachCommand(rest, context);
   }
   if (sub === 'update') {
     const { factoryUpdateCommand } = await import('./factory-update.js');

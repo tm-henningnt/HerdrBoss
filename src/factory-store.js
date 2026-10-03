@@ -33,6 +33,10 @@ export function factoryFile(env, name, file = 'factory.json') {
   return path.join(factoriesDir(env), name, file);
 }
 
+export function attachState(env, name) {
+  try { return readPrivate(factoryFile(env, name, 'attach.json'), null)?.state === 'attached' ? 'attached' : 'not-attached'; } catch { return 'not-attached'; }
+}
+
 const fieldsOnly = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every((key) => fields.includes(key));
 const validName = (value) => typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/.test(value);
 const validAddress = (value) => typeof value === 'string' && value.length <= 253 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(value);

@@ -43,6 +43,7 @@ import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
 import { createRawRoute } from './review-raw.js';
 import * as reviewStore from './review-store.js';
+import { attachState } from './factory-store.js';
 import { createDocsSite, IMAGE_TYPES as DOC_IMAGE_TYPES } from './docs-site.js';
 import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
 
@@ -452,7 +453,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (p === '/api/fleet' && req.method === 'GET') {
         // An empty view starts a poll at most once in 30 seconds.
         if (!fleetPoller.view().factories.length && (fleetClock() - lastRoutePoll >= FLEET_ROUTE_POLL_MS || lastRoutePoll === 0)) { lastRoutePoll = fleetClock(); await fleetPoller.poll(); }
-        return send(res, 200, fleetPoller.view());
+        const view = fleetPoller.view();
+        return send(res, 200, { ...view, factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
       }
       if (p === '/api/health' && req.method === 'GET') {
         const body = await health(engine);

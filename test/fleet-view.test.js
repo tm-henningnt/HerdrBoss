@@ -76,3 +76,19 @@ test('a fleet refresh and submission keep the Owner draft including checkbox and
   assert.equal(draft.accounts[0].accountKey, saved.accounts[0].accountKey);
   assert.equal(draft.factoryId, undefined, 'the immutable identity is not sent as a setting');
 });
+
+test('a remote factory row shows the Attach state and a copy button for the attach command, with no host detail', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const rows = [
+    { name: 'win1', remote: true, status: 'healthy', ageSeconds: 0, attach: 'attached', summary: { ...fixture, name: 'win1', factoryId: 'win1' } },
+    { name: 'win2', remote: true, status: 'offline', ageSeconds: null, attach: 'not-attached' },
+    { name: 'factory-zero', remote: false, status: 'healthy', ageSeconds: 0, summary: fixture },
+  ];
+  const html = fleetView({ factories: rows, pollSeconds: 30 });
+  assert.match(html, /Attach: attached/);
+  assert.match(html, /Attach: not attached/);
+  assert.match(html, /data-copy-text="herdr-boss factory attach win1"/);
+  assert.match(html, /data-copy-text="herdr-boss factory attach win2"/);
+  assert.equal(html.match(/Attach:/g).length, 2);
+  assert.doesNotMatch(html, /ssh|hf-win/i);
+});
