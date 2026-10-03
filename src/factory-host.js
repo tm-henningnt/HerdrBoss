@@ -16,6 +16,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
   '       factory connect [--check|--undo] NAME',
+  '       factory update NAME --tier service|image [--dry-run] [--accept-data-loss] [--allow-boss-restart]',
   '       factory backup NAME [--file FILE] [--include-home]',
   '       factory restore FILE [--host HOST]',
   '       factory destroy NAME',
@@ -307,6 +308,10 @@ export async function factoryCommand(args, io = {}) {
   if (sub === 'connect') {
     const { factoryConnectCommand } = await import('./factory-connect.js');
     return factoryConnectCommand(rest, context);
+  }
+  if (sub === 'update') {
+    const { factoryUpdateCommand } = await import('./factory-update.js');
+    return factoryUpdateCommand(rest, context);
   }
   if (['new', 'build', 'start', 'stop', 'status', 'list', 'configure', 'login'].includes(sub)) {
     const { factoryCoreCommand } = await import('./factory-core.js');

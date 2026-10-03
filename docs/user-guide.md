@@ -1116,6 +1116,18 @@ Use `factory start`, `factory stop`, `factory status`, and `factory list` to con
 
 The service health check uses container loopback. A request with the factory hostname still needs a login. Its response of 401 confirms that the host rule accepts that name.
 
+Update code with `factory update NAME --tier service`. This fast-forwards the code volume and restarts the Herdr Boss service. Existing panes stay available.
+
+Update harnesses and tools with `factory build NAME`, then `factory update NAME --tier image`. This replaces the container and keeps the four volumes. It starts fresh sessions only for active project orchestrators. A paused project stays paused.
+
+The image update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+
+An update stops when a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. Use `--dry-run` to check the factory and print the selected tier without changing Docker resources. The tool makes a private backup before it changes the factory.
+
+After the backup, it takes a fresh work snapshot before it merges code or replaces the container. A snapshot must be no more than 15 seconds old. The tool checks for new work again. The image tier also checks for a live Boss pane. If a check fails, it resumes the factory and prints `herdr-boss factory configure NAME --resume` as the check and retry path.
+
+It checks `/api/state` and one clean service tick within 30 seconds. It restores the previous code or image when the check fails. If the schema increased or cannot be read after the new container starts, review the failure and rerun the same update with `--accept-data-loss` to restore the backup. This can discard data written after the backup. If the new container never starts, rollback does not restore data or need this flag. See the [factory host runbook](factory-host-runbook.md#factory-updates) for the update and rollback procedure.
+
 Back up a factory with `factory backup NAME`.
 The command stops a running factory.
 It removes its labeled archive helper before it restarts the source.

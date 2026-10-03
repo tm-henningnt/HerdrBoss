@@ -49,6 +49,24 @@ After the service check, run `claude --version` and `opencode --version` in the 
 
 Check `/api/health` through container loopback. It must return 200. Check the factory hostname separately. Without a login, that name must return 401. A response of 403 means the host rule rejected the name. Do not remove authentication to pass this check.
 
+## Factory updates
+
+Run `herdr-boss factory update NAME --tier service` for a Herdr Boss code update. This fast-forwards the `code` volume and restarts only the service. Existing panes stay available.
+
+Run `herdr-boss factory build NAME` to build the new pinned image. Then run `herdr-boss factory update NAME --tier image` for a harness or tool update. This makes a private backup, replaces the labeled container, and keeps its four labeled volumes. It starts fresh sessions only for active project orchestrators. It leaves paused projects stopped. It never starts a Boss session. If a Boss pane is live, the update refuses unless you add `--allow-boss-restart`.
+
+When the flag allows replacement, the command prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+
+The update refuses a working worker, a live suite or push lock, or a prepared handover. Use `--dry-run` to check the selected tier first.
+
+After the backup, the tool checks a fresh work snapshot before it merges code or replaces the container. It refuses a snapshot older than 15 seconds. It checks for new work again. The image tier also checks for a live Boss pane. If a check fails, it resumes the factory. Run `herdr-boss factory configure NAME --resume` to check it, then retry the update.
+
+After restart, the tool checks `/api/state` and one clean service tick within 30 seconds. It rolls back automatically when the schema has not increased. If the schema increased or cannot be read after the new container starts, it keeps a private pending rollback record.
+
+Review the error, then repeat the same tier command with `--accept-data-loss`. The tool restores the private backup and the previous code or image. This can discard data written after the backup. Do not remove the pending record by hand. If the new container never starts, rollback does not restore data or require this flag.
+
+Do not update while a worker, suite, push, or handover is active. Do not use a live test factory for an update unless the worker brief permits it. The update command checks labels before it changes a container.
+
 ## Backup and repair
 
 Run `factory backup NAME --include-home` before planned removal.

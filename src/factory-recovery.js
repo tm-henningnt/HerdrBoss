@@ -75,10 +75,10 @@ async function hashFile(file) {
 }
 function helperArgs(name, imageTag, owner, kinds, action, manifest) {
   const roots = Object.fromEntries(kinds.map((kind) => [kind, `/volumes/${kind}`]));
-  const args = ['run', '--rm', '--name', `hf-${name}-${action}-${randomBytes(6).toString('hex')}`, '--label', `${FACTORY_LABEL}=${name}`, '--label', `${OWNER_LABEL}=${owner}`, '--user', '0:0', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=2g', ...(action === 'restore' ? ['--interactive'] : [])];
+  const args = ['run', '--rm', '--name', `hf-${name}-${action}-${randomBytes(6).toString('hex')}`, '--label', `${FACTORY_LABEL}=${name}`, '--label', `${OWNER_LABEL}=${owner}`, '--user', '0:0', '--network', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=2g', ...(['restore', 'replace'].includes(action) ? ['--interactive'] : [])];
   // Run as root only to read and restore volume ownership. No host path is mounted.
   args.push('--cap-add', 'DAC_OVERRIDE');
-  if (action === 'restore') args.push('--cap-add', 'CHOWN', '--cap-add', 'FOWNER');
+  if (action === 'restore' || action === 'replace') args.push('--cap-add', 'CHOWN', '--cap-add', 'FOWNER');
   for (const kind of kinds) args.push('--mount', `type=volume,source=hf-${name}-${kind},target=/volumes/${kind}${action === 'backup' ? ',readonly' : ''}`);
   args.push('--entrypoint', 'node', imageTag, '--input-type=module', '-e', archiveScript, action, JSON.stringify(roots), ...(manifest ? [JSON.stringify(manifest)] : []));
   return args;
@@ -121,11 +121,16 @@ async function backup(args, io) {
   const partial = `${file}.${randomBytes(6).toString('hex')}.partial`;
   const paused = container.State?.Paused === true;
   const running = container.State?.Running === true;
+  const updateQuiesced = io.updateQuiescedBackup === true;
   let stopped = false;
   let helperCleaned = true;
   try {
-    if (paused) await dockerCall(docker, ['unpause', record.containerName]);
-    if (running) { await dockerCall(docker, ['stop', '--time', '30', record.containerName], { timeout: 45_000 }); stopped = true; }
+    if (updateQuiesced) {
+      if (!running || !paused) throw new Error('The factory must be paused before its update backup.');
+    } else {
+      if (paused) await dockerCall(docker, ['unpause', record.containerName]);
+      if (running) { await dockerCall(docker, ['stop', '--time', '30', record.containerName], { timeout: 45_000 }); stopped = true; }
+    }
     helperCleaned = false;
     await runArchiveHelper(docker, helperArgs(name, local.imageTag, owner, manifest.volumes, 'backup', manifest), { outputFile: partial, timeout: 3600_000 }, name, owner, () => { helperCleaned = true; });
     const verified = await readBackup(partial);
@@ -136,12 +141,27 @@ async function backup(args, io) {
     writePrivate(factoryFile(io.env, name, 'backup.json'), { schema: 1, name, file, createdAt: manifest.createdAt, sha256: await hashFile(file) });
   } finally {
     fs.rmSync(partial, { force: true });
-    if (stopped && helperCleaned) await dockerCall(docker, ['start', record.containerName]);
-    if (paused && helperCleaned) await dockerCall(docker, ['pause', record.containerName]);
+    if (!updateQuiesced && stopped && helperCleaned) await dockerCall(docker, ['start', record.containerName]);
+    if (!updateQuiesced && paused && helperCleaned) await dockerCall(docker, ['pause', record.containerName]);
   }
   io.stdout.write(`Backed up factory ${name}.\n`);
   return 0;
 }
+
+// Restore the factory volumes from the private update backup after a failed migration.
+// The caller must stop the service and pause the container before it calls this function.
+export async function restoreBackupInPlace(name, file, io) {
+  const manifest = await readBackup(file);
+  if (manifest.name !== name || !manifest.volumes.includes('home')) throw new Error('The update backup does not include this factory and its home volume.');
+  const receipt = readPrivate(factoryFile(io.env, name, 'backup.json'), null);
+  if (!receipt || receipt.name !== name || receipt.file !== file || receipt.createdAt !== manifest.createdAt || await hashFile(file) !== receipt.sha256) throw new Error('The update backup identity or checksum does not match.');
+  const fleet = readFleet(io.env);
+  const record = fleet.factories.find((item) => item.name === name);
+  const { local, docker, owner } = await resources(name, io, true, manifest.resourceOwner);
+  if (local.name !== name || manifest.factoryId !== record?.factoryId || owner !== manifest.resourceOwner) throw new Error('The update backup is for another factory.');
+  await runArchiveHelper(docker, helperArgs(name, local.imageTag, owner, manifest.volumes, 'replace', manifest), { inputFile: file, timeout: 3600_000 }, name, owner, () => {});
+}
+
 async function destroy(args, io) {
   const { positional } = parse(args);
   if (positional.length !== 1) throw new Error('Give exactly one factory name.');
