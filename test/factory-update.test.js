@@ -74,6 +74,7 @@ function updateFixture() {
   let currentCommit = oldCommit, schema = 1, failUpdated = false, migrateOnUpdate = false, failNewImageCreate = false, failNewImageStart = false, failSchemaReadAfterStart = false, schemaUnreadableAfterStart = false;
   const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
   let remoteUrl = expectedOrigin, failFetch = false, failMerge = false;
+  const dirty = new Set();
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
   const ok = (value = '') => ({ code: 0, stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
@@ -106,6 +107,9 @@ function updateFixture() {
       if (args.includes('remote') && args.includes('add')) { remoteUrl = args.at(-1); return ok(); }
       if (args.includes('fetch')) return failFetch ? { code: 128, stdout: '', stderr: 'fatal: unable to access https://user:secret@example.invalid/' } : ok();
       if (args.includes('merge-base')) return ok();
+      if (args.includes('status')) return ok([...dirty].map((file) => ` M ${file}\n`).join(''));
+      if (args.includes('checkout')) { for (const file of args.slice(args.indexOf('--') + 1)) dirty.delete(file); return ok(); }
+      if (args.includes('merge') && dirty.size) return { code: 128, stdout: '', stderr: `error: Your local changes would be overwritten by merge: ${[...dirty].join(' ')}` };
       if (args.includes('merge') && failMerge) return { code: 128, stdout: '', stderr: 'fatal' };
       if (args.includes('merge')) { currentCommit = newCommit; if (migrateOnUpdate) schema = 2; if (failSnapshotAfterMerge > 0) failNextSnapshots = failSnapshotAfterMerge; return ok(); }
       if (args.includes('reset')) { currentCommit = oldCommit; return ok(); }
@@ -152,7 +156,7 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, dirty, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
@@ -275,6 +279,30 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.match(f.output.join(''), /updated factory demo service/i);
     assert.doesNotMatch(f.output.join(''), /Boss pane is gone/i);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update restores a locally changed generated kit file and regenerates it after the merge', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/orchestration/herdr-boss.md');
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const names = f.calls.map(({ args }) => args).filter((args) => args[0] === 'exec');
+    const checkout = names.findIndex((args) => args.includes('checkout'));
+    const merge = names.findIndex((args) => args.includes('merge') && args.includes('--ff-only'));
+    const install = names.findIndex((args) => args.includes('kit') && args.includes('install'));
+    assert.ok(checkout >= 0 && checkout < merge && merge < install, `order ${checkout} ${merge} ${install}`);
+    assert.deepEqual(names[checkout].slice(names[checkout].indexOf('--') + 1), ['docs/orchestration/herdr-boss.md']);
+  } finally { f.cleanup(); }
+});
+
+test('service update still stops on a local change in another file and names the file', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/orchestration/herdr-boss.md');
+    f.dirty.add('src/local-edit.js');
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge step.*src\/local-edit\.js/s);
+    assert.equal(f.calls.some(({ args }) => args.includes('checkout') && args.includes('src/local-edit.js')), false);
   } finally { f.cleanup(); }
 });
 

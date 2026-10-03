@@ -1739,6 +1739,8 @@ Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker 
 
 Use the service tier to fast-forward the `code` volume. It restarts only the Herdr Boss service. Existing panes stay available.
 
+Before the merge, the service tier restores the generated kit files in the factory checkout: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. It then runs `herdr-boss kit install` in the checkout after the merge. A local change in any other tracked file stops the update at the git merge step. The error names the changed files.
+
 Use the image tier to replace the labeled container on the same four volumes. Build the pinned image first with `herdr-boss factory build NAME`. The update backs up data, work, and home.
 
 It starts fresh sessions only for active project orchestrators. A paused project stays paused. The update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory boss start NAME' to start the Boss in the factory.
