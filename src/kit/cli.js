@@ -368,13 +368,19 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'], repeat: ['--allow'] });
       if (positional.length !== 1) fail('Usage: worker collect <name> [options]');
-      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason']);
+      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'reason']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
+      if (flags.reason != null && flags.acceptscope == null) fail('--reason needs --accept-scope FILE[,FILE].');
+      if (flags.acceptscope != null && !flags.reason?.trim()) fail('--accept-scope needs --reason TEXT.');
+      const acceptScope = flags.acceptscope == null ? undefined : flags.acceptscope.split(',').map((item) => item.trim()).filter(Boolean);
+      if (acceptScope && !acceptScope.length) fail('--accept-scope needs at least one repository-relative path.');
       const serviceConfig = injectedServiceConfig ?? loadConfig();
       return collectWorker(positional[0], {
         record: flags.record,
         noRecord: flags.norecord,
         allow: flags.allow ?? [],
+        acceptScope,
+        acceptScopeReason: flags.reason,
         keepPane: flags.keeppane,
         paneCloseDelayMinutes: serviceConfig.workers?.paneCloseDelayMinutes ?? 2,
         outcome: flags.outcome,
