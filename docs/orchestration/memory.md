@@ -322,3 +322,5 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - 2026-10-03: `factory update --tier service` failed at the git merge step on win1 and win2, because the factory checkout had a local change in `docs/orchestration/herdr-boss.md` (a generated kit file). I restored that file with `git checkout` in each factory and the update passed. Follow-up FT15b: the update must handle the generated kit file itself.
 - 2026-10-03: Owner decision through the Boss (Codex plan guidance hold): start no new Codex task until the Boss lifts it. Use free models, opencodego and Sonnet first. Keep Opus for design and hard debugging.
 - 2026-10-03: Next: browser recheck of the host guide page and the Fleet sliders (one browser, swap is high), FT15b, ticket 12 live project run once logins exist, then DOC1 content, tickets 19 to 21.
+
+- 2026-10-03: Owner decision through the Boss: open a ticket for each flaky test and fix them after FT15b (FL1 to FL3 in the status), so a failing suite always means a real fault. After FT15b, run `factory update --tier service` on win1 and win2 again to prove it works without a manual restore. Then ticket 12: a project run on win1 and win2.
