@@ -101,18 +101,20 @@ test('Quota plan settings render editable values with decimal steps and save as 
   assert.match(html, /min="0\.1" max="10" step="0\.1" value="1"[^>]*data-service-setting="quotaPlan\.burstPace"[^>]*data-service-group="Quota plan"/);
   assert.match(html, /type="text"[^>]*value="last-expiry" placeholder="last-expiry or an ISO time"[^>]*data-service-setting="quotaPlan\.horizon"[^>]*data-service-group="Quota plan"/);
   assert.match(html, /data-save-service-settings="Quota plan"/);
+  assert.match(html, /<select data-service-setting="quotaPlan\.planMode" data-service-group="Quota plan"[^>]*><option value="paced" selected>[^<]*<\/option><option value="burst">[^<]*<\/option><\/select>/);
   let sent;
   app.context.document = {
     querySelectorAll: () => [
       { type: 'number', dataset: { serviceSetting: 'quotaPlan.burstPace' }, value: '1.5' },
       { type: 'number', dataset: { serviceSetting: 'quotaPlan.applyThreshold' }, value: '95' },
       { type: 'text', dataset: { serviceSetting: 'quotaPlan.horizon' }, value: 'last-expiry' },
+      { type: 'select-one', dataset: { serviceSetting: 'quotaPlan.planMode' }, value: 'burst' },
     ],
     querySelector: () => ({ textContent: '' }),
   };
   app.context.fetch = async (_url, request) => { sent = JSON.parse(request.body); return { ok: true, json: async () => ({ settings: [] }) }; };
   await app.saveServiceSettings('Quota plan', { disabled: false });
-  assert.deepEqual(sent.changes, { 'quotaPlan.burstPace': 1.5, 'quotaPlan.applyThreshold': 95, 'quotaPlan.horizon': 'last-expiry' });
+  assert.deepEqual(sent.changes, { 'quotaPlan.burstPace': 1.5, 'quotaPlan.applyThreshold': 95, 'quotaPlan.horizon': 'last-expiry', 'quotaPlan.planMode': 'burst' });
 });
 
 test('a Quota save shows the value that the server stored and notes a difference from the typed value', async () => {

@@ -9,6 +9,7 @@ import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } f
 import { loadProjectConfig } from './kit/config.js';
 import { TRIAL_RESULT_TARGET, untilText } from './kit/model-unavailable.js';
 import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from './browser-url-mask.js';
+import { planDeviationText, projectionText } from './quota-plan.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'no.tallmaker.herdr-boss';
@@ -349,7 +350,13 @@ function quotaPlainText(view) {
     `Codex quota plan at ${view.now}`,
     `Used: ${view.usedPercent}% · weekly reset: ${view.resetsAt}`,
     `Historical p90 burn: ${view.historicalP90.toFixed(2)} points per hour`,
+    `Plan mode: ${view.planMode || 'paced'}`,
   ];
+  if (Number.isFinite(view.plannedUsageNow)) {
+    lines.push(`Planned now: ${Number(view.plannedUsageNow.toFixed(1))}% · ${planDeviationText(view.guidance?.difference)}`);
+  }
+  const projected = projectionText(view.projection);
+  if (projected) lines.push(`Recent burn: ${Number(view.projection.ratePerHour.toFixed(1))} points per hour over the last 24 hours; ${projected}`);
   if (plan.credits.length) {
     lines.push('Credits:');
     for (const credit of plan.credits) {

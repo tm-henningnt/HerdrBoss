@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DATA_DIR } from './config.js';
-import { burstTable, detectedReset, dropExplainsCreditUse, hourlyBurnP90, planQuota, plannedUsageAt, usageGuidance } from './quota-plan.js';
+import { burstTable, detectedReset, dropExplainsCreditUse, formatLocalTime, hourlyBurnP90, planDeviationText, planQuota, plannedUsageAt, projectedReach, projectionText, recentBurn, usageGuidance } from './quota-plan.js';
 import { newId } from './message-store.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -10,7 +10,7 @@ const DAY = 24 * HOUR;
 const HISTORY_DAYS = 14;
 const PLAN_HISTORY_LIMIT = 50;
 const EVENT_HISTORY_LIMIT = 250;
-const DEFAULT_SETTINGS = Object.freeze({ burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5 });
+const DEFAULT_SETTINGS = Object.freeze({ burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5, planMode: 'paced' });
 
 function time(value, label = 'time') {
   const result = typeof value === 'number' ? value : Date.parse(value);
@@ -143,6 +143,25 @@ function signedPoints(value) {
   return `${points > 0 ? '+' : ''}${points}`;
 }
 
+function standingLines({ view, waitingAt }) {
+  const guidance = view.guidance;
+  const lines = [];
+  if (guidance && Number.isFinite(view.plannedUsageNow)) {
+    lines.push(`Plan: ${Math.round(view.usedPercent * 10) / 10}% used, ${Math.round(view.plannedUsageNow * 10) / 10}% planned, ${planDeviationText(guidance.difference)}.`);
+  }
+  if (view.projection) {
+    const burn = Math.round(view.projection.ratePerHour * 10) / 10;
+    const text = projectionText(view.projection);
+    if (text) lines.push(`Recent burn: ${burn} points per hour over the last 24 hours; ${text}.`);
+    const planned = Date.parse(waitingAt);
+    if (view.projection.status === 'projected' && Number.isFinite(planned)) {
+      const hours = Math.round(Math.abs(Date.parse(view.projection.at) - planned) / HOUR * 10) / 10;
+      lines.push(`That is ${hours} hours ${Date.parse(view.projection.at) <= planned ? 'earlier' : 'later'} than the planned apply time ${waitingAt}.`);
+    }
+  }
+  return lines;
+}
+
 function creditPromptText({ credit, built, view, now }) {
   const creditInput = { ...built.input, credits: [built.input.credits.find((item) => item.id === credit.id)], horizon: view.horizon };
   const waitingPlan = planQuota(creditInput);
@@ -155,6 +174,7 @@ function creditPromptText({ credit, built, view, now }) {
   return [
     `Codex reset credit ${credit.id} is ready at ${built.window.usedPercent}% usage.`,
     `Time: ${new Date(now).toISOString()}.`,
+    ...standingLines({ view, waitingAt }),
     `Value of applying now against waiting for ${waitingAt}: ${signedPoints(fastValue)} quota points in the fast plan and ${signedPoints(slowValue)} in the slow plan by ${view.horizon}.`,
     `Exact expiry: ${credit.expiresAt}.`,
     'Apply the credit in the Codex app. Herdr Boss does not apply credits.',
@@ -213,6 +233,7 @@ function validSettings(settings) {
       throw new Error(`quotaPlan.${key} must be a number from ${min} to ${max}.`);
     }
   }
+  if (!['paced', 'burst'].includes(result.planMode)) throw new Error('quotaPlan.planMode must be paced or burst.');
   if (result.applyThreshold % 1 !== 0) throw new Error('quotaPlan.applyThreshold must be a whole number from 50 to 100.');
   if (result.horizon !== 'last-expiry') {
     if (typeof result.horizon !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(result.horizon) || !Number.isFinite(Date.parse(result.horizon))) {
@@ -220,6 +241,18 @@ function validSettings(settings) {
     }
   }
   return result;
+}
+
+// The anchor of the planned curve is a fixed point. A new reading never moves it.
+// It moves when the burst pace changes, when the reset time moves by more than 10 minutes,
+// when use drops more than 1 point below the anchor (a credit or a manual reset), or when no anchor exists.
+function resolveAnchor(stored, { provider, window, pace, now }) {
+  const resetsAt = Date.parse(window.resetsAt);
+  const keep = stored && stored.provider === provider && stored.windowKey === window.key && stored.burstPace === pace
+    && Number.isFinite(Date.parse(stored.at)) && Date.parse(stored.at) <= now
+    && !(window.usedPercent < stored.usedPercent - 1)
+    && Math.abs(Date.parse(stored.resetsAt) - resetsAt) <= 10 * 60000;
+  return keep ? stored : { provider, windowKey: window.key, at: new Date(now).toISOString(), usedPercent: window.usedPercent, resetsAt: window.resetsAt, burstPace: pace };
 }
 
 function buildInput({ provider, quotas, now, settings, state, burstPace, horizon, whatIf }) {
@@ -238,6 +271,7 @@ function buildInput({ provider, quotas, now, settings, state, burstPace, horizon
   if (typeof effectivePace !== 'number' || !Number.isFinite(effectivePace) || effectivePace < 0.1 || effectivePace > 10) {
     throw new Error('--burst-pace must be a number from 0.1 to 10.');
   }
+  const anchor = resolveAnchor(state.anchor, { provider, window, pace: effectivePace, now: currentTime });
   const input = {
     now: currentTime,
     usedPercent: window.usedPercent,
@@ -257,10 +291,10 @@ function buildInput({ provider, quotas, now, settings, state, burstPace, horizon
     credits: input.credits, historicalP90, burstPace: input.burstPace, slowBurnRate: input.slowBurnRate,
     applyThreshold: input.applyThreshold, margin: input.margin, horizon: input.horizon ?? 'last-expiry',
     announcedResets: input.announcedResets, whatIf: input.whatIf ?? null,
-    usedCredits: state.usedCredits, settings: { tolerance: settings.tolerance },
+    usedCredits: state.usedCredits, settings: { tolerance: settings.tolerance }, anchor,
   };
   const inputsDigest = createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
-  return { input, inputsDigest, historicalP90, historyAvailable: readings.length > 0, availableCredits, row, window, currentTime };
+  return { input, inputsDigest, historicalP90, historyAvailable: readings.length > 0, availableCredits, row, window, currentTime, anchor, readings };
 }
 
 function addPlan(state, view) {
@@ -273,15 +307,32 @@ function addPlan(state, view) {
   state.current = view;
 }
 
+const curveSource = (view) => (view.anchorCurve?.length ? { curve: view.anchorCurve } : view.plan);
+
+// Read the planned curve at the anchor, the guidance, and the projection at the recent real burn.
+function standing(view, { now, tolerance, applyThreshold, readings }) {
+  const source = curveSource(view);
+  const burn = recentBurn(readings, { now });
+  return {
+    plannedUsageNow: plannedUsageAt(source, now),
+    guidance: { ...usageGuidance(source, now, view.usedPercent, tolerance), difference: view.usedPercent - plannedUsageAt(source, now) },
+    projection: projectedReach(burn, applyThreshold, view.resetsAt),
+  };
+}
+
 function calculate(options, built = buildInput(options)) {
   const existing = options.state.current;
-  if (existing?.inputsDigest === built.inputsDigest && !options.force && typeof existing.historyAvailable === 'boolean') {
-    const plannedUsageNow = plannedUsageAt(existing.plan, built.currentTime);
-    return { ...existing, now: new Date(built.currentTime).toISOString(), plannedUsageNow, skipped: true };
+  const settings = options.settings;
+  if (existing?.inputsDigest === built.inputsDigest && !options.force && typeof existing.historyAvailable === 'boolean' && existing.anchorCurve) {
+    return { ...existing, now: new Date(built.currentTime).toISOString(), ...standing(existing, { now: built.currentTime, tolerance: settings.tolerance, applyThreshold: settings.applyThreshold, readings: built.readings }),
+      planMode: settings.planMode, skipped: true };
   }
   const plan = planQuota(built.input);
   const table = burstTable(built.input);
   const atNow = new Date(built.currentTime).toISOString();
+  const anchorTime = Date.parse(built.anchor.at);
+  const anchored = anchorTime === built.currentTime ? plan
+    : planQuota({ ...built.input, now: anchorTime, usedPercent: built.anchor.usedPercent });
   const view = {
     provider: options.provider,
     windowKey: built.window.key,
@@ -294,8 +345,9 @@ function calculate(options, built = buildInput(options)) {
     inputsDigest: built.inputsDigest,
     historicalP90: built.historicalP90,
     historyAvailable: built.historyAvailable,
-    plannedUsageNow: plannedUsageAt(plan, built.currentTime),
-    guidance: usageGuidance(plan, built.currentTime, built.window.usedPercent, options.settings.tolerance),
+    anchor: built.anchor,
+    anchorCurve: anchored.curve.map(({ at, usedPercent }) => ({ at, usedPercent })),
+    planMode: settings.planMode,
     credits: plan.credits,
     plan,
     burstTable: table,
@@ -303,7 +355,7 @@ function calculate(options, built = buildInput(options)) {
     observedResets: options.state.observedResets.filter((item) => item.provider === options.provider),
     usedCredits: options.state.usedCredits.filter((item) => item.provider === options.provider),
   };
-  return view;
+  return { ...view, ...standing(view, { now: built.currentTime, tolerance: settings.tolerance, applyThreshold: settings.applyThreshold, readings: built.readings }) };
 }
 
 function observeReset(state, { provider, row, window, currentTime, dataDir }) {
@@ -363,6 +415,7 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
       state: { ...state, dataDir: directory }, burstPace, horizon, whatIf, force: force || changedByObservation };
     const built = buildInput(calculationOptions);
     const view = calculate(calculationOptions, built);
+    if (save) state.anchor = built.anchor;
     if (!view.skipped) addPlan(state, view);
     else if (changedByObservation) state.current = { ...view, skipped: undefined };
     if (save && (!view.skipped || changedByObservation || nextState)) writeState(file, state);
@@ -391,7 +444,7 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
       assertProvider(provider);
       const state = loadState();
       const current = state.current?.provider === provider ? state.current : null;
-      if (!current) return { provider, windowKey: null, history: [], at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, historyAvailable: false, plannedUsageNow: null, guidance: null, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
+      if (!current) return { provider, windowKey: null, history: [], at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, historyAvailable: false, plannedUsageNow: null, guidance: null, projection: null, anchor: null, planMode: normalizedSettings.planMode, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
       const currentTime = time(now, 'now');
       const history = current.windowKey ? readHistory(path.join(dataDir, 'quota-history.jsonl'), currentTime)
         .filter((row) => row.provider === provider && row.window === current.windowKey && Number.isFinite(row.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100)
@@ -401,8 +454,8 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
         ...current,
         now: iso(currentTime),
         history,
-        plannedUsageNow: plannedUsageAt(current.plan, currentTime),
-        guidance: usageGuidance(current.plan, currentTime, current.usedPercent, normalizedSettings.tolerance),
+        planMode: normalizedSettings.planMode,
+        ...standing(current, { now: currentTime, tolerance: normalizedSettings.tolerance, applyThreshold: normalizedSettings.applyThreshold, readings: history }),
       };
     },
     expiryNotices({ now = clock() } = {}) {

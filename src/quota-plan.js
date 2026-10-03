@@ -492,3 +492,64 @@ function timingBounds(config, prefix, credit) {
   }
   return { earliestAt: earliest == null ? null : iso(config, earliest), latestAt: latest == null ? null : iso(config, latest) };
 }
+
+const rowTime = (row) => (typeof row.at === 'number' ? row.at : Date.parse(row.at));
+
+// Measure the recent real burn from the readings of the last hours. A reset or a new reset time starts a new run.
+// Return null with fewer than two readings in the run or without a positive rate.
+export function recentBurn(readings, { now, hours = 24 } = {}) {
+  const end = time(now, 'now'), start = end - hours * HOUR;
+  const rows = (readings || []).map((row) => ({ ...row, time: rowTime(row) }))
+    .filter((row) => Number.isFinite(row.time) && row.time >= start && row.time <= end && Number.isFinite(row.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100)
+    .sort((a, b) => a.time - b.time);
+  let first = 0;
+  for (let index = 1; index < rows.length; index++) {
+    const before = rows[index - 1], after = rows[index];
+    const dropped = detectedReset({ ...before, at: before.time }, { ...after, at: after.time });
+    const moved = before.resetsAt != null && after.resetsAt != null && Math.abs(Date.parse(before.resetsAt) - Date.parse(after.resetsAt)) > 10 * 60000;
+    if (dropped || moved) first = index;
+  }
+  const run = rows.slice(first);
+  if (run.length < 2) return null;
+  const head = run[0], tail = run.at(-1);
+  const elapsed = (tail.time - head.time) / HOUR;
+  const ratePerHour = elapsed > 0 ? (tail.usedPercent - head.usedPercent) / elapsed : 0;
+  if (!(ratePerHour > EPSILON)) return null;
+  return { ratePerHour, readings: run.length, from: new Date(head.time).toISOString(), to: new Date(tail.time).toISOString(), usedPercent: tail.usedPercent };
+}
+
+// Project the time at which the recent burn reaches the target percent.
+// Status `reached`: the last reading is at or above the target. No time is given.
+// Status `after-reset`: the projected time follows the window reset. Status `projected`: the time is before the reset.
+export function projectedReach(burn, targetPercent, resetsAt) {
+  if (!burn || !(burn.ratePerHour > 0)) return null;
+  const base = { ratePerHour: burn.ratePerHour, readings: burn.readings, targetPercent };
+  if (burn.usedPercent >= targetPercent) return { ...base, status: 'reached' };
+  const reading = time(burn.to, 'reading time');
+  const at = reading + (targetPercent - burn.usedPercent) / burn.ratePerHour * HOUR;
+  const reset = resetsAt == null ? NaN : Date.parse(resetsAt);
+  return { ...base, status: Number.isFinite(reset) && at > reset ? 'after-reset' : 'projected', at: new Date(at).toISOString() };
+}
+
+// Format a time as weekday, day, month and local time, for example "Sun 4 Oct 03:00".
+export function formatLocalTime(value) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(time(value, 'time'))).map((part) => [part.type, part.value]));
+  return `${parts.weekday} ${parts.day} ${parts.month} ${parts.hour}:${parts.minute}`;
+}
+
+// Describe the distance of the actual use from the planned curve in points.
+export function planDeviationText(difference) {
+  if (!Number.isFinite(difference)) return '';
+  const points = Math.round(Math.abs(difference) * 10) / 10;
+  if (points === 0) return 'on plan';
+  return `${difference > 0 ? 'ahead of plan' : 'behind plan'} by ${points} points`;
+}
+
+export function projectionText(projection) {
+  if (!projection || !Number.isFinite(projection.targetPercent) || !Number.isFinite(projection.ratePerHour)) return '';
+  if (projection.status === 'reached') return `already at or above ${projection.targetPercent} percent`;
+  if (!Number.isFinite(Date.parse(projection.at))) return '';
+  if (projection.status === 'after-reset') return `at this rate: ${projection.targetPercent} percent not before the window reset`;
+  return `at this rate: ${projection.targetPercent} percent about ${formatLocalTime(projection.at)}`;
+}
