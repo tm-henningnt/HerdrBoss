@@ -29,6 +29,11 @@ import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
 import { createRotatingLog } from './server-log.js';
 import { createHealth } from './health.js';
+import { createFleetPoller } from './fleet-poller.js';
+import { readFleetFile } from './fleet-store.js';
+import { createFleetReadAccess } from './fleet-access.js';
+import { createFleetSettings } from './fleet-settings.js';
+import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
@@ -202,7 +207,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth() } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {} } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -213,6 +218,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   if (previewHost !== undefined && !readOnlyPreview) throw new Error('previewHost (--host) is valid only together with --read-only-preview.');
   // The preview has no login. It binds loopback unless the caller names another address. The main service keeps cfg.host.
   const bindHost = readOnlyPreview ? (previewHost === undefined ? PREVIEW_DEFAULT_HOST : assertPreviewHost(previewHost)) : cfg.host;
+  const fleetSettings = createFleetSettings({ dir: DATA_DIR, cfg });
+  const fleetReadAccess = createFleetReadAccess({ privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, now: fleet.now });
   assertSqliteAvailable();
   openMessageStore({ dir: DATA_DIR, backend: cfg.store?.messages });
   const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
@@ -254,6 +261,16 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const reviewApi = createReviewApi({ dataDir: DATA_DIR, onChange: (event) => broadcast('review', event) });
   // The raw route serves legacy HTML pages to a sandboxed frame. Its tokens stay in memory. See src/review-raw.js.
   const reviewRaw = createRawRoute({ dataDir: DATA_DIR, hostAllowed: (req) => allowedHost(req, cfg.allowedHosts), tokens: rawTokens });
+  const localFleetSummary = async () => {
+    const healthBody = await health(engine);
+    if (healthBody.error) throw new Error('Factory health is unavailable.');
+    return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody,
+      ownerItems: mailboxView(readMessages()).needsYou, spend: fleetSpend(spendSummary({ days: 7 })),
+      reviewPacks: (reviewStore.packHeads({ dir: DATA_DIR }).length ? reviewStore.listPacks({ dir: DATA_DIR }) : []).map((pack) => ({ id: `${pack.slug}-${pack.pack}`.slice(0, 64), waitingItems: pack.counts.open || 0 })) });
+  };
+  const fleetPoller = createFleetPoller({ dir: DATA_DIR, localSummary: localFleetSummary,
+    enabled: () => !readOnlyPreview && fleetSettings.read().headOffice,
+    credentials: () => readFleetFile(path.join(fleet.privateDir || PRIVATE_ACCESS_DIR, 'fleet-remotes.json'), {}), ...fleet });
   let closed = false;
   let timer;
   let tickPromise;
@@ -346,6 +363,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     res.browserOutput = p === '/api/browser-sessions' || p.startsWith('/api/browser-sessions/');
     try {
       if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
+      const fleetRead = fleetReadAccess.check(req);
+      if (fleetRead.present && (!fleetRead.authorized || req.method !== 'GET' || !['/api/fleet/summary', '/api/health'].includes(p))) {
+        return send(res, 403, { error: 'The fleetRead credential permits only GET summary and health.' });
+      }
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
@@ -364,7 +385,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         res.writeHead(303, { location: '/', 'set-cookie': result.cookie, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
         return res.end();
       }
-      if (!readOnlyPreview && !access.authorized(req, res)) {
+      if (!readOnlyPreview && !fleetRead.authorized && !access.authorized(req, res)) {
         if (req.method === 'GET' && !p.startsWith('/api/') && (req.headers.accept || '').includes('text/html')) {
           res.writeHead(303, { location: '/login', 'cache-control': 'no-store' });
           return res.end();
@@ -417,6 +438,16 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
+      if (p === '/api/fleet/settings' && req.method === 'GET') return send(res, 200, fleetSettings.read());
+      if (p === '/api/fleet/settings' && req.method === 'PUT') {
+        try { fleetSettings.write(await jsonBody(req)); return send(res, 200, fleetSettings.read()); }
+        catch { return send(res, 400, { error: 'The fleet settings are invalid.' }); }
+      }
+      if (p === '/api/fleet/summary' && req.method === 'GET') return send(res, 200, await localFleetSummary());
+      if (p === '/api/fleet' && req.method === 'GET') {
+        if (!fleetPoller.view().factories.length) await fleetPoller.poll();
+        return send(res, 200, fleetPoller.view());
+      }
       if (p === '/api/health' && req.method === 'GET') {
         const body = await health(engine);
         return send(res, body.error ? 503 : 200, body);
@@ -1163,6 +1194,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
 
   server.on('close', () => {
     closed = true;
+    void fleetPoller.stop();
     clearTimeout(timer);
     clearTimeout(debounce);
     projectsWatcher.close();
@@ -1178,7 +1210,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };
   loop();
+  fleetPoller.start();
   const close = async () => {
+    await fleetPoller.stop();
     for (const client of clients) client.end();
     if (server.listening) {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

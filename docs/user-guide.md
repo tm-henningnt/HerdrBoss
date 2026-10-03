@@ -2407,3 +2407,48 @@ The dashboard uses these routes. A request from another host needs the access to
 | `POST /api/tick` | Collect now. |
 | `GET`, `POST`, `DELETE /api/avatars/SLUG` | Read, store, or remove the image of one avatar. The slug is `boss` or a project slug. `POST` takes the image as the body, at most 512 KB, and accepts only a PNG, JPEG, or WebP file. It returns 415 for any other format and 413 for a larger body. A read-only preview refuses the two write routes. |
 | `GET /bulletin.md` | The current bulletin. |
+
+## Fleet
+
+Factory zero can hold the head office role.
+Open **Fleet** to see the available factory summaries.
+Turn on **Poll registered factories** in **Fleet settings**.
+The head office reads the registered factories every 30 seconds.
+A factory outage keeps the last good summary.
+The page shows the age and marks that factory offline.
+A duplicate factory ID gets a warning.
+The head office refuses the duplicate summary.
+
+The factory table shows projects, the highest quota reading, spend today, Owner items, and software and kit revisions.
+A different software version or kit revision gets a drift label.
+The quota view groups readings by account digest and lane.
+It shows the highest reading of each group.
+It does not add repeated readings of a shared quota pool.
+An unavailable reading stays unknown.
+The spend view shows USD by factory, day, role, and harness.
+These amounts are API-price equivalents.
+An unpriced amount stays unknown.
+
+The **Fleet Mailbox** lists Owner items from the available summaries.
+Each item has a factory tag.
+Open its link to answer in the factory that owns the item.
+The ordinary Mailbox has the same combined list in a collapsed section when remote factory data is available.
+Message text stays in its factory.
+On a phone, each comparison table scrolls inside its own region.
+
+Each personal factory shares item titles by default.
+Turn off **Share item titles** to export only item IDs and kinds.
+The setting affects new summaries.
+A previously accepted title can remain in the head office's last good data during an outage.
+Set each account scope to the factory IDs that may use that account.
+Provision an account digest through the private `fleet account` command first.
+The data file holds the digest and scope only.
+It holds no account identity or HMAC key.
+Account scopes in this slice control which quota rows leave a factory.
+They do not enforce a factory share.
+
+The head office gets no local path, token, transcript, command output, or message text from a summary.
+The fleet read credential has separate storage and permissions from Owner access.
+It can read summary and health only.
+Private provisioning commands are in `docs/cli.md`.
+This slice has no guidance, policy push, or message routing.

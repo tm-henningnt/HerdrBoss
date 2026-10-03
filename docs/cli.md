@@ -1577,3 +1577,52 @@ The routes need the dashboard login and a same-origin request, as the project-ne
 Each `artifactChecks` rule has `artifacts` and `sources` repository-relative POSIX globs. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
 
 `checkAgents` is an object with one key, `exclude`. `exclude` is a list of repository-relative POSIX globs, for example `{ "checkAgents": { "exclude": [".orchestration/tenant-*.md"] } }`. The globs have the same rules as `artifactChecks`.
+
+## Read-only fleet
+
+Run `herdr-boss fleet settings` to read the local factory ID and fleet settings.
+Open **Fleet** in the dashboard to change the factory name, dashboard base URL, title sharing, polling, and account scopes.
+A change applies to the next poll.
+The poll interval is 30 seconds.
+The head office reads factory records from `fleet.json` in `HERDR_FACTORIES_DIR`.
+The default directory is `~/.herdr-factories`.
+It does not read the private host connection file `registry.json`.
+
+Before the first service start, run `herdr-boss fleet init --from-file FILE` with a JSON object.
+Use `factoryId`, `name`, `dashboardUrl`, `headOffice`, `shareItemTitles`, and `accounts`.
+Use the same `factoryId` as the factory registry record.
+Set `headOffice` to `true` on factory zero.
+Set it to `false` on a container factory.
+A factory keeps its ID in `factory-identity.json` in its data directory.
+The command refuses a different ID after initialization.
+Do not copy that identity file to another factory.
+
+Run private provisioning at an Owner terminal.
+Do not put an identity or a credential in a command argument, pane, report, or repository.
+The `--from-file -` option reads JSON from standard input.
+
+- `herdr-boss fleet account --from-file FILE`: Read `harness`, `identity`, `hmacKey`, and `scope`. Use at least 32 bytes for `hmacKey`. Use the same identity spelling and HMAC key on factories that share an account. `scope` is a list of factory IDs. The command stores only the HMAC digest and scope. It does not store the identity or HMAC key.
+- `herdr-boss fleet read-token rotate --out-file FILE`: Create a read credential. Save it as a JSON string in a new file inside the private Herdr Boss configuration folder. The file has mode 0600. The command prints no credential. The previous credential stays valid for 10 minutes.
+- `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel.
+
+The read credential permits only `GET /api/fleet/summary` and `GET /api/health`.
+It returns 403 for every other route or method.
+This restriction also applies on loopback.
+Use the `Authorization: Bearer` header.
+Do not put a credential in a URL.
+Credentials have no dashboard field because they are secrets.
+
+`GET /api/fleet/summary` returns contract 1.0.0 from the local factory.
+`GET /api/fleet` returns the head office's last good summaries and their ages.
+`GET /api/fleet/settings` reads the local settings and account digests.
+`PUT /api/fleet/settings` replaces `name`, `dashboardUrl`, `headOffice`, `shareItemTitles`, and `accounts`.
+Each account has `harness`, `accountKey`, and `scope`.
+These three dashboard routes use normal Owner access.
+A read-only preview refuses changes and makes no remote fleet requests.
+
+The summary uses the existing local quota collector.
+CodexBar uses the same JSON interface on Linux.
+An absent reader or partial reading gives `null` and `unknown`.
+An account without a provisioned identity has no quota row.
+Pi has no confirmed Linux quota reader in this slice.
+No factory share, policy push, or message routing is enabled.
