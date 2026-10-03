@@ -1539,6 +1539,7 @@ herdr-boss factory new NAME [--host HOST] [--profile personal] [--image TAG] [--
 herdr-boss factory build NAME [--host HOST] [--image TAG]
 herdr-boss factory start NAME
 herdr-boss factory stop NAME [--now]
+herdr-boss factory update NAME --tier service|image [--dry-run] [--accept-data-loss] [--allow-boss-restart]
 herdr-boss factory backup NAME [--file FILE] [--include-home]
 herdr-boss factory restore FILE [--host HOST]
 herdr-boss factory destroy NAME
@@ -1599,6 +1600,27 @@ A Docker context over SSH stores the address in the Docker context store. To lis
 An IPv6 token must have `::` or eight hex groups. Clock times remain visible.
 
 Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker Engine, key login, Tailscale, and the Windows boot task. The image spike uses an approved Docker context. List only its name with `docker context ls --format '{{.Name}}'`. Keep the real name outside reports and the repository.
+
+### Update a factory
+
+Use the service tier to fast-forward the `code` volume. It restarts only the Herdr Boss service. Existing panes stay available.
+
+Use the image tier to replace the labeled container on the same four volumes. Build the pinned image first with `herdr-boss factory build NAME`. The update backs up data, work, and home.
+
+It starts fresh sessions only for active project orchestrators. A paused project stays paused. The update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+
+```sh
+herdr-boss factory update NAME --tier service [--dry-run]
+herdr-boss factory update NAME --tier image [--dry-run] [--allow-boss-restart]
+```
+
+An update is refused while a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. `--dry-run` checks the factory and prints the selected tier without changing Docker resources.
+
+After the backup, the tool takes a fresh work snapshot before it merges code or replaces the container. A snapshot must be no more than 15 seconds old. The tool checks for new work again. The image tier also checks for a live Boss pane. If a check fails, it resumes the factory and prints `herdr-boss factory configure NAME --resume` as the check and retry path.
+
+The tool checks that `/api/state` returns 200 and that one clean service tick passes within 30 seconds. It rolls back a failed update when the schema has not increased.
+
+If the schema increased or cannot be read after the new container starts, the tool keeps a private pending record. Review the failure, then repeat the same command with `--accept-data-loss` to restore the backup and the previous code or image. This rollback can discard data written after the backup. If the new container never starts, the tool rolls back without restoring data or asking for this flag.
 
 ### Backup and recovery
 

@@ -69,7 +69,7 @@ export async function archiveWorker(args) {
     finally { fs.rmSync(temporary, { recursive: true, force: true }); }
     return;
   }
-  if (!['check', 'restore'].includes(action)) fail();
+  if (!['check', 'restore', 'replace'].includes(action)) fail();
   const source = action === 'check' ? fs.createReadStream(value) : process.stdin;
   const gunzip = zlib.createGunzip();
   const finished = pipeline(source, gunzip);
@@ -111,6 +111,13 @@ export async function archiveWorker(args) {
     if (action === 'restore') for (const kind of manifest.volumes) {
       if (!roots[kind] || fs.readdirSync(roots[kind]).length) throw new Error('Restore needs empty factory volumes.');
     }
+    if (action === 'replace' && JSON.stringify(manifest) !== JSON.stringify(JSON.parse(value))) fail();
+    // The host verifies the private backup and its checksum before it requests an in-place rollback.
+    // Clear only the named mounted volumes; fs.rmSync does not follow symbolic links.
+    if (action === 'replace') for (const kind of manifest.volumes) {
+      if (!roots[kind]) fail();
+      for (const child of fs.readdirSync(roots[kind])) fs.rmSync(path.join(roots[kind], child), { recursive: true, force: true });
+    }
     for (;;) {
       const entry = await line();
       if (entry?.type === 'end') { if (!fields(entry, ['type'])) fail(); break; }
@@ -119,7 +126,7 @@ export async function archiveWorker(args) {
       if (!manifest.volumes.includes(parts[0]) || parts.some((part) => !part || part === '.' || part === '..') || seen.has(entry.path) || (parts.length === 1 && entry.type !== 'directory')) fail();
       for (let index = 1; index < parts.length; index += 1) if (!directories.has(parts.slice(0, index).join('/'))) fail();
       seen.add(entry.path);
-      const destination = action === 'restore' ? path.join(roots[parts[0]], ...parts.slice(1)) : null;
+      const destination = action === 'restore' || action === 'replace' ? path.join(roots[parts[0]], ...parts.slice(1)) : null;
       if (entry.type === 'directory') {
         directories.add(entry.path);
         if (destination) { fs.mkdirSync(destination, { recursive: true, mode: 0o700 }); modes.push([destination, entry.mode]); }
