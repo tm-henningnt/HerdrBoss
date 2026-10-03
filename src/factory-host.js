@@ -25,6 +25,7 @@ const MASK_HOST = '<host>';
 const MASK_KEY = '<key>';
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const IPV6 = /(?<![0-9A-Za-z:])(?=[0-9A-Fa-f:]*:[0-9A-Fa-f:]*:)(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])/g;
+const TAILNET = /(?<![^\s'"`])[^\s'"`]+\.ts\.net\b/gi;
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const usageError = (message) => new Error(`${message}\n${FACTORY_HOST_USAGE}`);
@@ -66,15 +67,22 @@ function findHost(env, name) {
 
 // Mask the address, the host name, the key path, and any IP address in one line of ssh output.
 export function maskLine(line, host) {
-  let text = line;
+  const maskHosts = (value) => {
+    let text = value;
+    if (host.address) text = text.replace(new RegExp(escapeRegExp(host.address), 'gi'), MASK_HOST);
+    if (host.name) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.name)}(?![A-Za-z0-9_-])`, 'gi'), MASK_HOST);
+    return text;
+  };
+  let text = maskHosts(line);
   const replace = (value, mask) => {
     if (typeof value === 'string' && value) text = text.split(value).join(mask);
   };
-  replace(host.keyFile, MASK_KEY);
+  // A host name can also occur in the key path. Match the path after the same host masking.
+  if (host.keyFile) replace(maskHosts(host.keyFile), MASK_KEY);
   if (host.keyFile) replace(path.basename(host.keyFile), MASK_KEY);
-  if (host.address) text = text.replace(new RegExp(escapeRegExp(host.address), 'gi'), MASK_HOST);
-  if (host.name) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.name)}(?![A-Za-z0-9_-])`, 'gi'), MASK_HOST);
-  return text.replace(IPV4, MASK_HOST).replace(IPV6, MASK_HOST);
+  return text.replace(TAILNET, MASK_HOST).replace(IPV4, MASK_HOST).replace(IPV6, (value) => (
+    value.includes('::') || value.split(':').length === 8 ? MASK_HOST : value
+  ));
 }
 
 // Quote one argument for the remote shell. ssh joins the arguments with spaces and the remote shell splits them again.

@@ -1487,11 +1487,15 @@ To keep the address out of the shell history, give the fields as JSON with `--fr
 
 `factory host list` prints the name and the user of each host. It never prints the address or the key file path. `factory host remove NAME` deletes the host.
 
-`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. The masking also covers the warning lines of ssh.
+`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. It masks the full address before the key file name. It also masks each token that ends in `.ts.net`. The masking covers the warning lines of ssh.
 
 `factory docker HOST -- ARGS...` runs `docker ARGS...` on the host through the same ssh transport. It quotes each argument for the remote shell. It has no terminal, so `docker run -it` and `docker exec -it` do not work.
 
 A Docker context over SSH stores the address in the Docker context store, and `docker context ls` shows it. `factory docker` is the supported route.
+
+An IPv6 token must have `::` or eight hex groups. Clock times remain visible.
+
+Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker Engine, key login, Tailscale, and the Windows boot task. The image spike uses an approved Docker context. List only its name with `docker context ls --format '{{.Name}}'`. Keep the real name outside reports and the repository.
 
 ## Set the goal of an orchestrator
 
