@@ -18,6 +18,21 @@
 .fleet-settings input[type="checkbox"] { width: auto; }
 .fleet-settings fieldset { display: grid; gap: 12px; border: 1px solid var(--line); min-width: 0; }
 .fleet-settings button { justify-self: start; }
+.fleet-shares form { display: grid; gap: 14px; max-width: 680px; margin-top: 16px; }
+.fleet-shares fieldset { min-width: 0; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.fleet-share-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
+.fleet-share-row span { overflow-wrap: anywhere; }
+.fleet-share-row output { font-variant-numeric: tabular-nums; }
+.fleet-share-row input { grid-column: 1 / -1; width: 100%; min-width: 0; min-height: 44px; accent-color: var(--accent); }
+.fleet-share-invalid { color: var(--crit); }
+.fleet-shares label { min-width: 0; }
+.fleet-shares [data-fleet-nudge-form] label { display: grid; gap: 6px; }
+.fleet-shares textarea, .fleet-shares select { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.fleet-shares button, .fleet-shares summary { min-height: 44px; }
+.fleet-shares button { justify-self: start; }
+.fleet-shares summary { display: flex; align-items: center; cursor: pointer; }
+.fleet-shares input:focus-visible, .fleet-shares summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.fleet-deliveries { padding-left: 20px; overflow-wrap: anywhere; }
 .fleet-mailbox-details { padding: 12px; border-top: 1px solid var(--line); }
 .fleet-mailbox-details summary { cursor: pointer; font-weight: 600; }
 .fleet-mailbox-details .fleet-mail { margin-top: 12px; }

@@ -11,7 +11,7 @@ export const FLEET_POLL_MS = 30000;
 const MAX_SUMMARY_BYTES = 128 * 1024;
 const schemaFile = fileURLToPath(new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url));
 const registrySchema = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
-function factoryRecords(file) {
+export function factoryRecords(file) {
   const body = readFleetFile(file, { schema: 1, contractVersion: '1.0.0', factories: [] });
   if (body.schema !== 1 || body.contractVersion !== '1.0.0' || validate(body.factories, registrySchema.properties.factories, { schemaFile }).length) throw new Error('registry-invalid');
   if (new Set(body.factories.map((row) => row.name)).size !== body.factories.length) throw new Error('registry-invalid');
@@ -52,7 +52,7 @@ export async function pollFleetSummary(record, token, { fetchImpl = fetch, signa
   return accepted;
 }
 
-export function createFleetPoller({ dir, registryFile = path.join(process.env.HERDR_FACTORIES_DIR || path.join(process.env.HOME || os.homedir(), '.herdr-factories'), 'fleet.json'), localSummary, enabled = () => true, credentials = () => ({}), now = () => Date.now(), fetchImpl = fetch, schedule = setTimeout, cancel = clearTimeout, timeoutMs = 5000 } = {}) {
+export function createFleetPoller({ dir, registryFile = path.join(process.env.HERDR_FACTORIES_DIR || path.join(process.env.HOME || os.homedir(), '.herdr-factories'), 'fleet.json'), localSummary, enabled = () => true, credentials = () => ({}), onSummary = async () => {}, now = () => Date.now(), fetchImpl = fetch, schedule = setTimeout, cancel = clearTimeout, timeoutMs = 5000 } = {}) {
   const cacheFile = path.join(dir, 'fleet-cache.json');
   const dailyFile = path.join(dir, 'fleet-daily.json');
   const cache = new Map();
@@ -127,6 +127,8 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
         if (Date.parse(summary.generatedAt) > now() + 60000) throw new Error('summary-time-invalid');
         identities.set(summary.factoryId, record.name);
         cache.set(record.name, { ...record, summary, drift, lastSeenAt: new Date(now()).toISOString(), remote: true, status: summary.health.status, error: null });
+        // Guidance has separate permissions and availability. Its failure cannot invalidate a good summary.
+        try { await onSummary(record); } catch { /* Keep the accepted read-only summary. */ }
       } catch (error) {
         const allowed = ['duplicate-factory-id', 'factory-id-mismatch', 'read-credential-missing', 'summary-too-large', 'summary-time-invalid'];
         cache.set(record.name, { ...base, status: 'offline', error: allowed.includes(error.message) ? error.message : fleetPollError(error) });

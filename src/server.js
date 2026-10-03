@@ -31,7 +31,9 @@ import { createRotatingLog } from './server-log.js';
 import { createHealth } from './health.js';
 import { createFleetPoller } from './fleet-poller.js';
 import { readFleetFile } from './fleet-store.js';
-import { createFleetReadAccess } from './fleet-access.js';
+import { createFleetReadAccess, createFleetGuideAccess } from './fleet-access.js';
+import { createFleetGuidance } from './fleet-guidance.js';
+import { createFleetShares } from './fleet-shares.js';
 import { createFleetSettings } from './fleet-settings.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
@@ -222,6 +224,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const bindHost = readOnlyPreview ? (previewHost === undefined ? PREVIEW_DEFAULT_HOST : assertPreviewHost(previewHost)) : cfg.host;
   const fleetSettings = createFleetSettings({ dir: DATA_DIR, cfg });
   const fleetReadAccess = createFleetReadAccess({ privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, now: fleet.now });
+  const fleetGuideAccess = createFleetGuideAccess({ privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, dir: DATA_DIR, now: fleet.now });
   assertSqliteAvailable();
   openMessageStore({ dir: DATA_DIR, backend: cfg.store?.messages });
   const access = readOnlyPreview ? null : createAccessControl(cfg.access.tokenFile, {
@@ -230,6 +233,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
+  const fleetGuidance = createFleetGuidance({ dir: DATA_DIR, settings: fleetSettings.read, now: fleet.now,
+    deliver: async (text) => {
+      const herdr = engine.state?.herdr;
+      const boss = herdr?.panes?.find((pane) => pane.label === 'boss' && pane.agent);
+      if (!boss || typeof engine.promptService !== 'function') throw new Error('boss-unavailable');
+      await engine.promptService(boss.id, text, { herdr, messages: [{ text, kind: 'nudge' }] });
+    } });
+  const fleetShares = createFleetShares({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR,
+    settings: fleetSettings.read, receiver: fleetGuidance, registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, now: fleet.now });
   // The tool check runs beside the first tick. Its warnings are logged when they arrive.
   if (!readOnlyPreview) {
     checkMachineTools(machineTools).then((warnings) => {
@@ -272,6 +284,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   };
   const fleetPoller = createFleetPoller({ dir: DATA_DIR, localSummary: localFleetSummary,
     enabled: () => !readOnlyPreview && fleetSettings.read().headOffice,
+    onSummary: (record) => fleetShares.retry(record),
     credentials: () => readFleetFile(path.join(fleet.privateDir || PRIVATE_ACCESS_DIR, 'fleet-remotes.json'), {}), ...fleet });
   const fleetClock = fleet.now || Date.now;
   const FLEET_ROUTE_POLL_MS = 30000;
@@ -372,6 +385,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (fleetRead.present && (!fleetRead.authorized || req.method !== 'GET' || !['/api/fleet/summary', '/api/health'].includes(p))) {
         return send(res, 403, { error: 'The fleetRead credential permits only GET summary and health.' });
       }
+      const fleetGuide = fleetGuideAccess.check(req);
+      if (fleetGuide.present && (!fleetGuide.authorized || req.method !== 'POST' || p !== '/api/fleet/guidance')) {
+        return send(res, 403, { error: 'The fleetGuide credential permits only POST guidance.' });
+      }
+      if (p === '/api/fleet/guidance' && !fleetGuide.authorized) return send(res, 401, { error: 'A fleetGuide credential is required.' });
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
@@ -390,7 +408,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         res.writeHead(303, { location: '/', 'set-cookie': result.cookie, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
         return res.end();
       }
-      if (!readOnlyPreview && !fleetRead.authorized && !access.authorized(req, res)) {
+      if (!readOnlyPreview && !fleetRead.authorized && !fleetGuide.authorized && !access.authorized(req, res)) {
         if (req.method === 'GET' && !p.startsWith('/api/') && (req.headers.accept || '').includes('text/html')) {
           res.writeHead(303, { location: '/login', 'cache-control': 'no-store' });
           return res.end();
@@ -444,6 +462,18 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
       if (p === '/api/fleet/settings' && req.method === 'GET') return send(res, 200, fleetSettings.view());
+      if (p === '/api/fleet/guidance' && req.method === 'POST') {
+        try { return send(res, 200, await fleetGuidance.accept(await jsonBody(req))); }
+        catch (error) { return send(res, error.status || 400, { error: error.status ? error.message : 'The guidance could not be accepted.' }); }
+      }
+      if (p === '/api/fleet/shares' && req.method === 'GET') {
+        try { return send(res, 200, fleetShares.view()); }
+        catch { return send(res, 200, { accounts: [], deliveries: [], error: 'The factory shares could not be read.' }); }
+      }
+      if ((p === '/api/fleet/shares' && req.method === 'PUT') || (p === '/api/fleet/nudge' && req.method === 'POST')) {
+        try { return send(res, 200, await (p.endsWith('/shares') ? fleetShares.save(await jsonBody(req)) : fleetShares.nudge(await jsonBody(req)))); }
+        catch (error) { return send(res, error.status || 400, { error: error.status ? error.message : 'The fleet guidance could not be sent.' }); }
+      }
       if (p === '/api/fleet/settings' && req.method === 'PUT') {
         try { fleetSettings.write(await jsonBody(req)); return send(res, 200, fleetSettings.view()); }
         catch { return send(res, 400, { error: 'The fleet settings are invalid.' }); }

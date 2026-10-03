@@ -2,6 +2,7 @@ import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { createDocument, find } from './fake-dom.js';
 import { patchHtml } from '../public/keyed.js';
 const fixture = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/fleet-summary.valid.personal.json', import.meta.url)));
@@ -75,4 +76,61 @@ test('a fleet refresh and submission keep the Owner draft including checkbox and
   assert.deepEqual(draft.accounts[0].scope, ['factory-a', 'factory-b']);
   assert.equal(draft.accounts[0].accountKey, saved.accounts[0].accountKey);
   assert.equal(draft.factoryId, undefined, 'the immutable identity is not sent as a setting');
+});
+
+test('factory shares show one slider per scoped factory, whole percentages, totals, and a nudge form', async () => {
+  const { fleetSharesView } = await import('../public/fleet.js');
+  const data = { accounts: [{ harness: 'codex', accountKey: 'a'.repeat(64), scope: ['factory-a', 'factory-b'], shares: [{ factoryId: 'factory-a', share: 40 }, { factoryId: 'factory-b', share: 60 }] }], deliveries: [{ factoryId: 'factory-b', status: 'pending', error: 'auth' }] };
+  const html = fleetSharesView(data, { headOffice: true });
+  assert.equal((html.match(/type="range"/g) || []).length, 2);
+  assert.match(html, /factory-a/); assert.match(html, /factory-b/);
+  assert.match(html, /min="0" max="100" step="1"/);
+  assert.match(html, /Total: 100%/);
+  assert.match(html, /data-fleet-nudge-form/);
+  assert.match(html, /pending/);
+  assert.doesNotMatch(fleetSharesView(data, { headOffice: false }), /type="range"/);
+});
+
+test('client refuses totals above 100 and an account refresh preserves a slider draft', async () => {
+  const { fleetSharesView, fleetSharesFromForm } = await import('../public/fleet.js');
+  globalThis.document = createDocument();
+  const saved = { accounts: [{ harness: 'codex', accountKey: 'a'.repeat(64), scope: ['factory-a', 'factory-b'], shares: [{ factoryId: 'factory-a', share: 50 }, { factoryId: 'factory-b', share: 50 }] }] };
+  const root = document.html(fleetSharesView(saved, { headOffice: true }));
+  const sliders = ['factory-a', 'factory-b'].map((id) => find(root, (node) => node.getAttribute('data-fleet-share-factory') === id));
+  const form = { querySelector: (selector) => sliders.find((node) => selector.includes(node.getAttribute('data-fleet-share-factory'))) };
+  sliders[0].value = '60';
+  assert.throws(() => fleetSharesFromForm(form, saved), /at most 100/);
+  sliders[1].value = '40';
+  const draft = fleetSharesFromForm(form, saved);
+  patchHtml(root, fleetSharesView({ ...saved, accounts: saved.accounts.map((row, index) => ({ ...row, shares: draft.accounts[index].shares })) }, { headOffice: true }));
+  assert.equal(sliders[0].value, '60'); assert.equal(sliders[1].value, '40');
+  assert.deepEqual(draft.accounts[0].shares, [{ factoryId: 'factory-a', share: 60 }, { factoryId: 'factory-b', share: 40 }]);
+  sliders[0].value = '0'; sliders[1].value = '0';
+  assert.equal(fleetSharesFromForm(form, saved).accounts[0].shares[0].share, 0);
+});
+
+test('a refresh keeps nudge text, delivery feedback, and pending form controls', async () => {
+  const { fleetSharesView } = await import('../public/fleet.js');
+  globalThis.document = createDocument();
+  const account = { harness: 'codex', accountKey: 'a'.repeat(64), scope: ['factory-a'], shares: [{ factoryId: 'factory-a', share: 100 }] };
+  const data = { accounts: [account], feedback: 'Shares saved. Delivery pending.', nudge: { factoryId: 'factory-a', text: 'Please finish sample work.' }, nudgeFeedback: 'Nudge pending.', nudgeSaving: true };
+  const root = document.html(fleetSharesView(data, { headOffice: true }));
+  patchHtml(root, fleetSharesView({ ...data, deliveries: [{ factoryId: 'factory-a', status: 'pending' }] }, { headOffice: true }));
+  const html = fleetSharesView(data, { headOffice: true });
+  assert.match(html, /Please finish sample work\./);
+  assert.match(html, /Shares saved\. Delivery pending\./);
+  assert.match(html, /Nudge pending\./);
+  assert.match(html, /textarea[^>]*disabled/);
+});
+
+
+test('the pacing view displays a factory share read problem without private details', () => {
+  const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function laneLine(');
+  const end = source.indexOf('\n}\n', start) + 2;
+  const context = { PROVIDERS: { codex: 'Codex' }, esc: (value) => String(value).replaceAll('<', '&lt;'), validPlan: () => null };
+  vm.runInNewContext(`${source.slice(start, end)}; this.render = laneLine;`, context);
+  const html = context.render('codex', { state: 'open', factoryShareError: 'Factory shares could not be read. Repair the fleet files.' });
+  assert.match(html, /Factory shares could not be read/);
+  assert.match(html, /Repair the fleet files/);
 });

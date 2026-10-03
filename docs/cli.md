@@ -1930,6 +1930,8 @@ The `--from-file -` option reads JSON from standard input.
 - `herdr-boss fleet account --from-file FILE`: Read `harness`, `identity`, `hmacKey`, and `scope`. Use at least 32 bytes for `hmacKey`. Use the same identity spelling and HMAC key on factories that share an account. `scope` is a list of factory IDs. The command stores only the HMAC digest and scope. It does not store the identity or HMAC key.
 - `herdr-boss fleet read-token rotate --out-file FILE`: Create a read credential. Save it as a JSON string in a new file inside the private Herdr Boss configuration folder. The file has mode 0600. The command prints no credential. The previous credential stays valid for 10 minutes.
 - `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel. Delete the export file on the source factory after the transfer. When `FILE` is inside the private Herdr Boss configuration folder, the command deletes `FILE` after the import. The command never deletes a file outside that folder.
+- `herdr-boss fleet guide-token rotate --out-file FILE`: Create a separate guidance credential. Use a new file in the private configuration folder. The file has mode 0600. The previous credential stays valid for 10 minutes. Rotation resets the stored guidance epoch and head office holder. It clears the nudge IDs of the old term and keeps the last accepted shares. The command prints no credential.
+- `herdr-boss fleet guide-token set FACTORY --from-file FILE`: Import the guidance credential at the head office. Use the same private transfer procedure as for the read credential. The command removes an export file only when that file is in the private configuration folder.
 
 The read credential permits only `GET /api/fleet/summary` and `GET /api/health`.
 It returns 403 for every other route or method.
@@ -1951,4 +1953,68 @@ CodexBar uses the same JSON interface on Linux.
 An absent reader or partial reading gives `null` and `unknown`.
 An account without a provisioned identity has no quota row.
 Pi has no confirmed Linux quota reader in this slice.
-No factory share, policy push, or message routing is enabled.
+### Factory shares and guidance
+
+Open **Fleet** at the head office.
+Set one factory share for each factory in an account scope.
+Use whole percentages from 0 to 100.
+The shares of one account must total at most 100.
+The page and the server refuse a higher total.
+Select **Save factory shares** to save the plan and send it to each factory.
+A pending factory keeps its last accepted share.
+The next successful summary poll retries its share delivery.
+New account plans divide 100 equally across the scope.
+Until the first guidance arrives, the local profile ceiling is 100.
+A factory outside the account scope has a ceiling of zero.
+
+The local pacing goal cannot exceed the factory share.
+Project shares still divide the local project allocation.
+Guidance does not replace project policy.
+At the factory ceiling, new workers for that account stop.
+Ignore quota mode, the least-over allowance, and `--force` cannot bypass this ceiling.
+The factory stores its accepted shares in `fleet-guidance.json`.
+It keeps them through a restart or a head office outage.
+If a fleet share file is invalid, the pacing view shows the problem and the service logs one warning.
+The local policy still loads with factory shares unset.
+A metered worker start refuses a failed share check.
+Unmetered worker starts do not read factory shares.
+Repair the fleet files to clear the problem.
+Quota readings are account readings.
+They do not measure the use of one factory or project.
+
+- `GET /api/fleet/shares`: Read the account scopes, share plan, and delivery state with Owner access.
+- `PUT /api/fleet/shares`: Replace the complete plan with Owner access. Send an `accounts` array. Each row has `accountKey` and `shares`. Each share has `factoryId` and `share`. Include each account and each factory in its scope once.
+- `POST /api/fleet/nudge`: Send a nudge with Owner access at the head office. Use `factoryId`, `nudgeId`, and `text`. Use 1 to 500 characters. The factory must be in an account scope. Reuse the same ID and text when you retry.
+- `POST /api/fleet/guidance`: Accept only the `fleetGuide` bearer credential, also on loopback. Use contract 1.0.0: `schema`, `contractVersion`, `headOfficeFactoryId`, `senderEpoch`, `sentAt`, `shares`, and `nudges`. Each share has `accountKey` and `share`. Each nudge has `nudgeId` and `text`. Use a UTC `sentAt` without fractional seconds. Both arrays are required.
+
+Send the guidance credential only over HTTPS.
+HTTP is permitted only for a loopback target.
+The sender refuses other HTTP targets before it sends the credential.
+
+The factory refuses a lower sender epoch with 409.
+It also refuses an epoch more than 1000 above the highest stored guidance or role epoch.
+It refuses a different head office holder at the same accepted epoch.
+The current role record also sets the minimum epoch.
+The first head office term uses epoch 1.
+To recover from an incorrect stored epoch or holder, rotate the guide credential at the receiving factory.
+Rotation resets both stored epochs and holders.
+It clears the nudge IDs of the old term and keeps the last accepted shares.
+Import the new credential at the head office through the private provisioning procedure.
+The factory checks each account against its own scope.
+A nudge uses the existing service agent message path to the pane labeled `boss`.
+The message and the stored text use the existing secret masking.
+A repeated nudge ID at the same epoch does not send twice.
+Each guidance body has at most 100 shares and 100 nudges.
+One head office term accepts at most 2000 nudge IDs.
+The factory refuses an additional ID when it reaches this limit.
+A failed Boss delivery stays pending and retries when guidance arrives again.
+If the remote request fails, select **Send nudge** again with the same text.
+
+The guidance credential permits only `POST /api/fleet/guidance`.
+It gets 403 for policy changes, worker start or stop, message reads, and every other route or method.
+The read credential gets 403 on the guidance route.
+A missing guidance credential gets 401.
+An invalid guidance credential gets 403.
+Owner access cannot submit directly to the guidance route.
+Use the head office share and nudge routes instead.
+A read-only preview refuses all three write routes.

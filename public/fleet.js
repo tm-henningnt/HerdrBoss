@@ -32,7 +32,7 @@ export function fleetMailbox(data) {
   }));
   return `<section class="fleet-mail"><h2>Fleet Mailbox</h2>${rows.length ? `<ul class="fleet-item-list">${rows.join('')}</ul>` : '<p class="muted">No Owner items in the available summaries.</p>'}</section>`;
 }
-export function fleetView(data, settings, message = '') {
+export function fleetView(data, settings, message = '', shares) {
   if (!data) return '<header class="page-head"><h1>Fleet</h1></header><p role="status">Loading the fleet…</p>';
   const factories = data.factories || [];
   const reference = factories.find((factory) => factory.remote === false)?.summary || factories[0]?.summary;
@@ -52,8 +52,41 @@ export function fleetView(data, settings, message = '') {
   return `<header class="page-head"><h1>Fleet</h1><p class="muted">${factories.length} factories · poll every ${data.pollSeconds || 30} seconds</p></header>${data.registryError ? `<p role="alert">Fleet data unavailable: ${esc(data.registryError)}. Check the fleet registry.</p>` : ''}
     <section class="panel"><h2>Factories</h2>${table(['Factory', 'Health', 'Last seen', 'Projects', 'Worst quota', 'Spend today', 'Owner items', 'Version and kit'], rows, 'No factory summary is available.')}</section>
     <section class="panel"><h2>Shared account quota</h2>${table(['Account and lane', 'Use', 'Factories'], quotaRows(factories), 'No account is provisioned. Add an account digest and scope.')}<p class="muted">A shared account shows its highest reading. Repeated readings are not added.</p></section>
+    ${settings && shares ? fleetSharesView(shares, settings) : ''}
     <section class="panel"><h2>Spend</h2>${table(['Factory', 'Day', 'Role', 'Harness', 'USD'], spends, 'No spend reading is available.')}</section>
     <div class="panel">${fleetMailbox(data)}</div>${settings ? fleetSettingsView(settings, message) : ''}`;
+}
+
+export function fleetSharesFromForm(form, data, validate = true) {
+  const accounts = (data?.accounts || []).map((account) => ({ accountKey: account.accountKey,
+    shares: account.scope.map((factoryId) => {
+      const field = form.querySelector(`[data-fleet-share-account="${account.accountKey}"][data-fleet-share-factory="${factoryId}"]`);
+      const share = field ? Number(field.value) : account.shares.find((row) => row.factoryId === factoryId)?.share ?? 0;
+      if (validate && (!Number.isInteger(share) || share < 0 || share > 100)) throw new Error('Use whole shares from 0 to 100.');
+      return { factoryId, share };
+    }) }));
+  if (validate && accounts.some((account) => account.shares.reduce((sum, row) => sum + row.share, 0) > 100)) throw new Error('The shares of each account must total at most 100.');
+  return { accounts };
+}
+
+export function fleetSharesView(data, settings) {
+  if (!settings.headOffice) return `<section class="panel"><h2>Factory shares</h2><p class="muted">Set factory shares at the head office. This factory keeps its last accepted share.</p><ul>${(data.local?.shares || []).map((row) => `<li>${esc(row.harness)} · ${row.share}% ceiling</li>`).join('')}</ul></section>`;
+  const accounts = data.accounts || [];
+  const deliveries = (data.deliveries || []).map((row) => `<li>${esc(row.factoryId)} · ${esc(row.status)}${row.error ? ` · ${esc(row.error)}` : ''}</li>`).join('');
+  const targets = [...new Set(accounts.flatMap((account) => account.scope))];
+  return `<section class="panel fleet-shares"><h2>Factory shares</h2><p>Set the ceiling for each shared account. The shares of one account must total at most 100%.</p>
+    ${data.error ? `<p role="alert">${esc(data.error)}</p>` : ''}
+    ${accounts.length ? `<form data-fleet-shares-form>${accounts.map((account) => {
+      const total = account.shares.reduce((sum, row) => sum + row.share, 0);
+      return `<fieldset data-fleet-share-group="${esc(account.accountKey)}"><legend>${esc(account.harness)}</legend><code class="fleet-key">${esc(account.accountKey)}</code>
+        ${account.shares.map((row) => `<label class="fleet-share-row" data-key="fleet-share:${esc(account.accountKey)}:${esc(row.factoryId)}"><span>${esc(row.factoryId)}</span><output>${row.share}%</output>
+          <input type="range" min="0" max="100" step="1" value="${row.share}"${data.saving ? ' disabled' : ''} aria-label="${esc(account.harness)} share for ${esc(row.factoryId)}" data-fleet-share-account="${esc(account.accountKey)}" data-fleet-share-factory="${esc(row.factoryId)}"></label>`).join('')}
+        <p data-fleet-share-total${total > 100 ? ' class="fleet-share-invalid"' : ''}>Total: ${total}%${total > 100 ? ' · reduce the shares before saving' : ''}</p></fieldset>`;
+    }).join('')}<button type="submit"${data.saving || accounts.some((account) => account.shares.reduce((sum, row) => sum + row.share, 0) > 100) ? ' disabled' : ''}>Save factory shares</button><p role="status" data-fleet-shares-feedback>${esc(data.feedback)}</p></form>` : '<p class="muted">Provision an account digest and scope before setting shares.</p>'}
+    ${deliveries ? `<ul class="fleet-deliveries">${deliveries}</ul>` : ''}
+    ${targets.length ? `<details data-key="fleet-nudge" data-keep-attrs="open"><summary>Nudge a factory Boss</summary><form data-fleet-nudge-form>
+      <label>Factory<select name="factoryId"${data.nudgeSaving ? ' disabled' : ''}>${targets.map((id) => `<option value="${esc(id)}"${data.nudge?.factoryId === id ? ' selected' : ''}>${esc(id)}</option>`).join('')}</select></label>
+      <label>Nudge<textarea name="text" required maxlength="500" rows="3"${data.nudgeSaving ? ' disabled' : ''}>${esc(data.nudge?.text)}</textarea></label><button type="submit"${data.nudgeSaving ? ' disabled' : ''}>Send nudge</button><p role="status" data-fleet-nudge-feedback>${esc(data.nudgeFeedback)}</p></form></details>` : ''}</section>`;
 }
 export function fleetSettingsFromForm(form, settings) {
   return { name: form.elements.name.value, dashboardUrl: form.elements.dashboardUrl.value,
