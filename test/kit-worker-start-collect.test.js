@@ -13,6 +13,8 @@ import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
 import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { enableModel, markModelUnavailable } from '../src/kit/model-unavailable.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
+import { withMutationLock } from '../src/kit/locks.js';
+import { withOpenCodeStartLock } from '../src/kit/opencode-start.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { DATA_DIR } from '../src/config.js';
 import { readAgentMessages, workerRunId } from '../src/agent-messages.js';
@@ -58,7 +60,8 @@ test('worker collect --record uses the provider recorded at start, including nul
       continue;
     }
     collect();
-    const agentReport = readAgentMessages({ dir: DATA_DIR }).find((item) => item.runId === workerRunId(run, f.config.slug));
+    // npm test shares one data directory between test files. Other files add newer messages, and the default limit of 100 hides this older report.
+    const agentReport = readAgentMessages({ dir: DATA_DIR, limit: Infinity }).find((item) => item.runId === workerRunId(run, f.config.slug));
     assert.equal(agentReport?.agentKind, 'report', 'worker collect records one agent report');
     assert.equal(agentReport?.status, 'recorded');
     assert.equal(agentReport?.text, 'Done.\n');
@@ -1620,6 +1623,25 @@ test('OpenCode startup retries a stalled idle TUI twice and gives a clear final 
   assert.equal(f.starts, 3);
   assert.equal(f.commands.filter((args) => args[0] === 'agent' && args[1] === 'close').length, 2);
   assert.equal(f.commands.filter((args) => args[0] === 'pane' && args[1] === 'close').length, 1, 'final failure closes the failed pane');
+});
+
+test('OpenCode start lock release retries a busy mutation guard', (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-opencode-release-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const file = path.join(dataDir, 'opencode-start', 'owner.json');
+  let calls = 0;
+  // Call 1 acquires the lock. The guard is busy for the next two calls, as when a waiting process claims it again and again.
+  const mutationLock = (directory, operation, options) => {
+    if (++calls === 2 || calls === 3) {
+      const busy = new Error('A project lock operation is already in progress.');
+      busy.code = 'ELOCKBUSY';
+      throw busy;
+    }
+    return withMutationLock(directory, operation, options);
+  };
+  assert.equal(withOpenCodeStartLock(dataDir, () => 'started', { timeoutMs: 5000, output: () => {}, wait: () => {}, mutationLock }), 'started');
+  assert.equal(calls, 4);
+  assert.equal(fs.existsSync(file), false, 'the release removes the owner record');
 });
 
 test('OpenCode starts in separate processes share a lock through brief delivery', { timeout: 20000 }, async (t) => {

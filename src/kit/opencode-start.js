@@ -5,6 +5,8 @@ import { performance } from 'node:perf_hooks';
 import { withMutationLock } from './locks.js';
 import { processStartIdentity } from './process-info.js';
 
+const RELEASE_WAIT_MS = 60_000;
+
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
 function readOwner(file) {
@@ -71,9 +73,20 @@ export function withOpenCodeStartLock(dataDir, operation, {
   }
   try { return operation(); }
   finally {
-    withMutationLock(directory, () => {
-      if (readOwner(file)?.token === token) fs.unlinkSync(file);
-    });
+    // A waiting process can claim the guard again and again. A busy guard must not fail a start that already ran.
+    // Retry until the owner record is released or the guard wait ends.
+    const releaseDeadline = now() + RELEASE_WAIT_MS;
+    for (;;) {
+      try {
+        mutationLock(directory, () => {
+          if (readOwner(file)?.token === token) fs.unlinkSync(file);
+        });
+        break;
+      } catch (error) {
+        if (error.code !== 'ELOCKBUSY' || now() >= releaseDeadline) throw error;
+        wait(Math.min(50, Math.max(0, releaseDeadline - now())));
+      }
+    }
   }
 }
 
