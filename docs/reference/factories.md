@@ -131,3 +131,7 @@ The fleet read credential has separate storage and permissions from Owner access
 It can read summary and health only.
 Private provisioning commands are in `docs/cli.md`.
 This slice has no guidance, policy push, or message routing.
+
+## Attach Herdr on the Mac
+
+`factory attach NAME [--undo]` connects Herdr on the Mac to a container factory over SSH. See `docs/cli.md`, section Container factories, for the steps, the exit codes, and the files. Attach state is a private record `attach.json` in the factory folder of `~/.herdr-factories`. The record holds the alias, the Herdr machine ID, and the state `pending` or `attached`. `GET /api/fleet` adds the field `attach` (`attached` or `not-attached`) to each remote factory row. The field holds no host detail.

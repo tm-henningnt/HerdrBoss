@@ -94,6 +94,7 @@ export const STEPS = [
     'A host is a computer that runs one or more factories.',
     'Each factory has its own service, Boss, projects, and data.',
     'The Fleet page shows all factories that you manage. A transfer moves one project to another factory.',
+    'Herdr on your Mac connects to a factory over SSH. The command herdr-boss factory attach sets this up, and the factory then shows in the Herdr sidebar.',
   ] },
   { id: 'together', title: 'How the parts work together', parts: ['owner', 'dashboard', 'service', 'boss', 'lead', 'workers', 'quota', 'policy', 'locks', 'mailbox'], text: [
     'You set the goals and the policy in the dashboard.',

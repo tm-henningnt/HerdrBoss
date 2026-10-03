@@ -118,7 +118,7 @@ What you do:
 2. Run `herdr-boss factory login <name> codex` if you use Codex.
 3. Run `herdr-boss factory boss start <name>`.
 
-What you should see: each login prints `ok`. The Boss starts in a pane labeled `boss`. The command never starts a second Boss.
+What you should see: each login prints `ok`. The Boss starts in a pane labeled `boss`. The command never starts a second Boss. Both commands first prepare the first-run state of the agent app in the factory, so no setup dialog waits for a key. If a dialog still shows, the error names the dialog and the pane.
 
 If you do not see it: the command exits with code 3 and adds one Mailbox item when a login is missing. Sign in, then run `factory boss start <name> --resume`.
 
@@ -138,6 +138,34 @@ If you do not see it:
 
 - If the command exits with code 3, run one of the two printed commands in the host terminal. Then run `factory connect <name>` again. This also fixes a read credential that is missing at first.
 - If you see `dashboard-unreachable`, add the port named in the message next to port 22 in the access rule. Then run the command again.
+
+## Attach Herdr on the Mac to a factory
+
+The Herdr server of a factory runs in its container. The container runs an SSH server. The container publishes that SSH port only on the loopback address of the factory host. A tailnet rule does not open it.
+
+Herdr on the Mac connects over SSH, not over a published port. `herdr machine add` takes an SSH target and needs plain OpenSSH. An SSH connection uses the key of the Mac user. It needs no new open port and no new password. FT22 can reuse these steps in the host guide.
+
+Do these steps on the Mac. Run each check before the next step.
+
+1. Run `herdr-boss factory attach NAME`.
+   - Check: the output says `SSH alias hf-NAME is ready.`
+2. Read the line that the command prints for `~/.ssh/config`. The command saves the old file as `~/.ssh/config.herdr-boss.bak` first (`.bak.1`, `.bak.2` when a backup exists). It follows a symlink. It adds the line once, at the top of the file.
+   - Check: `ssh -G hf-NAME` prints the user `factory` and `proxyjump hfj-NAME`.
+3. Wait for the key message. The command adds the Mac key to the factory only when it is missing. The key file must have no passphrase.
+   - Check: the output says `Added the Mac key to the factory.` or `The Mac key is already authorized in the factory.`
+4. Wait for the machine step. The command makes the first SSH contact itself. It then reuses a machine that has the target `hf-NAME`. Otherwise it runs `herdr machine add --label NAME hf-NAME`.
+   - Check: `herdr machine list` shows the label `NAME` once.
+5. Wait for the last checks. The command runs `herdr machine status ID --json` and `herdr --machine ID workspace list`.
+   - Check: the exit code is 0 and the last lines show the alias, the sidebar label, and the detach command.
+6. Optional: outside a Herdr pane, the command also runs `herdr --remote hf-NAME` with an 8-second limit. Inside a Herdr pane it skips this check, because a nested Herdr is off by default. A run that reaches the limit is inconclusive. A failure of this check does not fail attach.
+
+Each factory has its own host key line in `~/.ssh/known_hosts`, named `hf-NAME` (`HostKeyAlias`). This stops a warning when two factories use the same loopback port behind the jump host. Attach never edits `known_hosts`. If you rebuild a factory, its host key changes. Then the message says: `The host key of hf-NAME changed. If you rebuilt the factory, remove the old line with: ssh-keygen -R hf-NAME`. Run that command and attach again.
+
+If a step fails, the message names the step (ssh check, machine list, add, status, api check, or remove) and shows the masked output of the failing command. It shows no address, host name, user, port, or key path. Fix the cause and run the same command again. The command keeps one include file and one machine.
+
+The Herdr sidebar shows the factory under the label `NAME`. Select it to work in the factory. The Fleet page shows `Attach: attached` for the factory.
+
+To detach, run `herdr-boss factory attach NAME --undo`. The command removes the Herdr machine only when attach created it. It removes the Mac key line only when attach added it. It removes the include file `~/.ssh/herdr-boss.d/hf-NAME.conf`. It removes the Include line when attach added it and no other factory is attached. It removes an empty `~/.ssh/config` only when attach created it. It never changes another entry. Run the command again to see `nothing is left to undo`.
 
 ## Update a factory
 
