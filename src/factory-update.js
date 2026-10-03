@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultFactoryImage, FACTORY_LABEL, managedFactory, transportFor, inspect, dockerCall, readHealth, imageBuildMeta, configSafetyError } from './factory-core.js';
 import { assertName, factoryFile, readPrivate, writePrivate, updateFleet, VOLUMES } from './factory-store.js';
 import { restoreBackupInPlace } from './factory-recovery.js';
+import { KIT_MANAGED_PATHS } from './kit/workers.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const OWNER_NAME = /^(?=.{1,31}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/;
@@ -458,6 +459,16 @@ async function recreate(docker, name, record, host, owner, imageTag, onStartAtte
   await dockerCall(docker, ['start', record.containerName]);
 }
 
+// `kit install` generates the kit files in the factory checkout. A local change in them blocks the fast-forward.
+// Restore only those files. Return the other changed tracked files so the merge error can name them.
+async function restoreGeneratedKitFiles(docker, name) {
+  const status = await gitText(docker, name, ['status', '--porcelain', '--untracked-files=no']);
+  const changed = status.split('\n').filter(Boolean).map((line) => line.slice(3).replace(/^"|"$/g, ''));
+  const generated = changed.filter((file) => KIT_MANAGED_PATHS.includes(file));
+  if (generated.length) await gitText(docker, name, ['checkout', 'HEAD', '--', ...generated]);
+  return changed.filter((file) => !KIT_MANAGED_PATHS.includes(file));
+}
+
 async function updateService(name, factory, docker, owner, flags, initial) {
   const expectedOrigin = expectedOriginUrl(factory.io);
   const commit = (await runStep('git rev-parse', '', () => gitText(docker, name, ['rev-parse', 'HEAD']))).trim();
@@ -475,7 +486,9 @@ async function updateService(name, factory, docker, owner, flags, initial) {
   try {
     await assertUpdateStillSafe(docker, name, 'service', false);
     mergeStarted = true;
-    await runStep('git merge', '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
+    const localChanges = await runStep('git status', '', () => restoreGeneratedKitFiles(docker, name));
+    await runStep('git merge', localChanges.length ? `Local changes in: ${localChanges.join(', ')}.` : '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
+    await runStep('kit install', '', () => dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', '--workdir', '/home/factory/herdr-boss', `hf-${name}`, 'herdr-boss', 'kit', 'install']));
     await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']));
     const health = await waitForCleanTick(docker, name, initial, factory.io.updateTimeoutMs ?? 30_000);
     updateRecord(name, factory, health);
