@@ -14,7 +14,7 @@ import { maskLine } from './factory-host.js';
 
 const CREATED_FILE = 'connect-created.json';
 const REMOTE_CLI = '/home/factory/herdr-boss/src/cli.js';
-const failure = (code) => Object.assign(new Error(code), { code });
+const failure = (code, extra = {}) => Object.assign(new Error(code), { code }, extra);
 const privateDir = (env) => path.join(env.HOME || os.homedir(), '.config', 'herdr-boss');
 const parse = (raw) => { try { return JSON.parse(raw); } catch { throw failure('contract-mismatch'); } };
 const remoteCli = (record, args) => ['exec', '-i', '--user', 'factory', '-e', 'HOME=/home/factory', record.containerName, 'node', REMOTE_CLI, 'fleet', ...args];
@@ -233,7 +233,12 @@ export async function factoryConnectCommand(args, io) {
       await readHealth(docker, record.name);
     }
     stage = 'access';
-    const access = await (io.fetchImpl || fetch)(`${dashboardUrl}/api/health`, { redirect: 'error', signal: AbortSignal.timeout(5000) });
+    let access;
+    try { access = await (io.fetchImpl || fetch)(`${dashboardUrl}/api/health`, { redirect: 'error', signal: AbortSignal.timeout(5000) }); }
+    catch (error) {
+      // The host answered the Docker calls, so SSH works. A silent dashboard port points to the tailnet access rules.
+      throw failure('dashboard-unreachable', { port: Number(new URL(dashboardUrl).port) || (new URL(dashboardUrl).protocol === 'https:' ? 443 : 80) });
+    }
     await access.body?.cancel();
     if (access.status !== 401) throw failure('dashboard-auth-required');
     stage = 'credential';
@@ -268,11 +273,11 @@ export async function factoryConnectCommand(args, io) {
       io.stderr.write(`${record.name} waiting for the Owner.\n${error.publicError?.trim() || 'Tailscale Serve is unavailable.'}\nRun one command in the WSL Owner terminal:\n  sudo tailscale set --operator=${host.user}\n  sudo tailscale serve --bg ${record.ports.dashboard}\nThen retry factory connect ${record.name}.\n`);
       return 3;
     }
-    const allowed = ['serve-failed', 'tailnet-unavailable', 'unsafe-dashboard-binding', 'serve-route-conflict', 'dashboard-auth-required', 'contract-mismatch', 'container-stopped', 'credential-invalid', 'duplicate-factory-id', 'registration-changed', 'head-office-unavailable'];
+    const allowed = ['serve-failed', 'tailnet-unavailable', 'unsafe-dashboard-binding', 'serve-route-conflict', 'dashboard-auth-required', 'dashboard-unreachable', 'contract-mismatch', 'container-stopped', 'credential-invalid', 'duplicate-factory-id', 'registration-changed', 'head-office-unavailable'];
     const reason = isHostUnreachable(error) ? 'unreachable' : allowed.includes(error.code) ? error.code : 'connect-failed';
     try { writePrivate(journal, { schema: 1, name: record.name, stage, state: 'failed', error: reason }); }
     catch { io.stderr.write(`${record.name} connect failed: private-store-unavailable.\n`); return 1; }
-    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}.${reason === 'serve-failed' && error.publicError?.trim() ? `\n${error.publicError.trim()}` : ''} Retry factory connect.\n`);
+    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}.${reason === 'serve-failed' && error.publicError?.trim() ? `\n${error.publicError.trim()}` : ''}${reason === 'dashboard-unreachable' ? `\nThe tailnet access rules may not allow port ${error.port}; add it next to port 22.` : ''} Retry factory connect.\n`);
     return 1;
   }
 }

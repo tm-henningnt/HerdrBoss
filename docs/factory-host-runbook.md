@@ -66,6 +66,8 @@ Connect each registered container factory with `herdr-boss factory connect NAME`
 
 `factory connect` needs the Tailscale operator right or an existing Serve forward for the dashboard port. Run `sudo tailscale set --operator=USER` in the WSL Owner terminal. Replace `USER` with the registered host user. Alternatively, run `sudo tailscale serve --bg PORT` there once. Replace `PORT` with the registered loopback dashboard port. Then retry `factory connect NAME`. If Serve refuses the change with an access denied message, the command prints the masked error and both Owner choices. It exits 3 and keeps the connection at the Owner step. Any other Serve failure exits 1 with the code `serve-failed`. Keep passwords out of the host tool output.
 
+If the dashboard port does not answer, `factory connect` stops at the access step and prints `dashboard-unreachable`. SSH to the host works at that point. The tailnet access rules probably allow port 22 but not the dashboard port. Add the port that the message names next to port 22 in the access rule for the factory, then run `factory connect NAME` again.
+
 Undo a connection with `herdr-boss factory connect --undo NAME`. See `cli.md`, section Container factories.
 
 A remote Docker timeout reports `host-unreachable`. Do not call a container stopped or unhealthy when the host cannot answer. Continue work on another reachable host. Recheck the missing host when it returns. Do not restart an unrelated service.

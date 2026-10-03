@@ -140,6 +140,16 @@ test('connect refuses a dashboard proxy that bypasses Owner access', async (t) =
   assert.equal(fs.existsSync(path.join(f.root, '.config', 'herdr-boss', 'fleet-remotes.json')), false);
 });
 
+test('connect names the tailnet access rules when the dashboard port does not answer', async (t) => {
+  const f = fixture(t);
+  f.io.fetchImpl = async () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); };
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 1);
+  const text = f.output.join('');
+  assert.match(text, /dashboard-unreachable/);
+  assert.match(text, /The tailnet access rules may not allow port \d+; add it next to port 22\./);
+  assert.equal(fs.existsSync(path.join(f.root, '.config', 'herdr-boss', 'fleet-remotes.json')), false);
+});
+
 test('the actual factory export script keeps its current credential across a retry', async (t) => {
   const f = fixture(t);
   const original = f.io.transportFactory();
