@@ -26,6 +26,9 @@ const CLASSIFIER = /^Permission for this action was denied by the Claude Code au
 const CLASSIFIER_ANY = /denied by the Claude Code auto mode classifier\. Reason: \[([^\]\n]{1,80})\]/;
 const REASON = /^[A-Za-z][A-Za-z ()-]{0,59}$/;
 const ESCALATION = /sandbox_permissions\\?["']?\s*[:=]\s*\\?["']?require_escalated/;
+// A command that reads the session logs is a scan of the reader itself. Its body can quote the escalation text.
+const SELF_SCAN = /\.codex\/sessions|\.claude\/projects|denials\.json|parseCodexLine|scanDenialLogs/;
+const MAX_SEEN = 20000;
 const MACH_PORT = /(?:bootstrap_look_up|mach-lookup|mach port)/i;
 const MACH_PORT_DENIAL = /\b(?:denied|not permitted|failed|1100)\b/i;
 const SANDBOX = [
@@ -165,7 +168,7 @@ export function parseCodexLine(line, ctx = {}) {
   }
   if (record.type !== 'response_item') return [];
   const at = timeOf(record.timestamp, null);
-  const event = (cause) => ({ at, cause, cwd: ctx.cwd, model: ctx.model || UNKNOWN_MODEL });
+  const event = (cause) => ({ at, cause, cwd: ctx.cwd, model: ctx.model || UNKNOWN_MODEL, ...(typeof payload.call_id === 'string' ? { id: payload.call_id } : {}) });
   if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
     // Count one cause per output. Each part of a batch carries its own exit code and its own keywords.
     for (const part of codexOutputParts(payload.output, payload)) {
@@ -175,13 +178,18 @@ export function parseCodexLine(line, ctx = {}) {
     }
     return [];
   }
-  // Count a function_call row, and a custom_tool_call row only when it is not an apply_patch. An apply_patch body
-  // can quote the escalation text, for example a patch to test/denials.test.js. A code-mode exec body with
-  // sandbox_permissions: require_escalated is a real escalation.
+  // Count a function_call row (shell, exec_command), and a custom_tool_call row only when it is not an apply_patch. An
+  // apply_patch body can quote the escalation text, for example a patch to test/denials.test.js. A code-mode exec body with
+  // sandbox_permissions: require_escalated is a real escalation. A function_call counts only when its arguments set
+  // sandbox_permissions to require_escalated, so a command that quotes the text is not an escalation.
   if (payload.type === 'function_call' || (payload.type === 'custom_tool_call' && payload.name !== 'apply_patch')) {
     const args = payload.arguments ?? payload.input;
+    const parsed = typeof args === 'string' ? parseJson(args) : args;
+    if (payload.type === 'function_call' && parsed && typeof parsed === 'object') {
+      return parsed.sandbox_permissions === 'require_escalated' ? [event('escalation:request')] : [];
+    }
     const text = typeof args === 'string' ? args : JSON.stringify(args ?? '');
-    return ESCALATION.test(text) ? [event('escalation:request')] : [];
+    return ESCALATION.test(text) && !SELF_SCAN.test(text) ? [event('escalation:request')] : [];
   }
   return [];
 }
@@ -276,7 +284,12 @@ function jsonlIn(dir) {
 function logFiles(home, now) {
   const files = [];
   const claude = path.join(home, '.claude', 'projects');
-  for (const folder of listDir(claude).filter((e) => e.isDirectory())) for (const file of jsonlIn(path.join(claude, folder.name))) files.push({ harness: 'claude', file });
+  for (const folder of listDir(claude).filter((e) => e.isDirectory())) {
+    const base = path.join(claude, folder.name);
+    for (const file of jsonlIn(base)) files.push({ harness: 'claude', file });
+    // A subagent session is a log in <session>/subagents.
+    for (const session of listDir(base).filter((e) => e.isDirectory())) for (const file of jsonlIn(path.join(base, session.name, 'subagents'))) files.push({ harness: 'claude', file });
+  }
   const codex = path.join(home, '.codex', 'sessions');
   const oldest = dayOf(now - (RETAIN_DAYS + 1) * DAY_MS);
   for (const y of listDir(codex).filter((e) => e.isDirectory() && /^\d{4}$/.test(e.name))) {
@@ -321,6 +334,15 @@ function readLines(file, offset, size, budget, fullBudget) {
 // Scan the four log sources from the saved offsets. Returns new counts, the next state, and the bytes read.
 export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now(), repos = readProjectRepos(), budgetBytes = SCAN_BUDGET_BYTES } = {}) {
   const counts = new Map();
+  // Ids of counted calls. A forked or resumed session repeats the call rows of its parent.
+  const seen = { ...(state.seen || {}) };
+  const firstSight = (harness, e) => {
+    if (!e.id) return true;
+    const key = `${harness}|${e.id}|${e.at}|${e.cause}`;
+    if (seen[key]) return false;
+    seen[key] = 1;
+    return true;
+  };
   const add = (harness, cause, project, at, model) => {
     const key = `${dayOf(Number.isFinite(at) ? at : now)}|${harness}|${cause}|${project}|${safeModel(model)}`;
     counts.set(key, (counts.get(key) || 0) + 1);
@@ -371,7 +393,7 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
         for (const e of parseClaudeLine(line, ctx)) add('claude', e.cause, projectFor(e.cwd, repos, home), e.at, e.model);
         entry.model = ctx.model || UNKNOWN_MODEL;
       } else if (harness === 'codex') {
-        for (const e of parseCodexLine(line, ctx)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos, home) : entry.project || 'other', e.at, e.model);
+        for (const e of parseCodexLine(line, ctx)) if (firstSight('codex', e)) add('codex', e.cause, e.cwd ? projectFor(e.cwd, repos, home) : entry.project || 'other', e.at, e.model);
         if (ctx.cwd) entry.project = projectFor(ctx.cwd, repos, home);
         entry.model = ctx.model || UNKNOWN_MODEL;
       } else if (harness === 'pi') {
@@ -414,7 +436,9 @@ export function scanDenialLogs({ home = os.homedir(), state = {}, now = Date.now
     return { day, harness, cause, project, model, count };
   });
   for (const [key] of Object.entries(opencode.contexts).slice(0, Math.max(0, Object.keys(opencode.contexts).length - MAX_RUNS * 2))) delete opencode.contexts[key];
-  return { records, bytes: used, consumed, state: { files, opencode, pendingBytes } };
+  const seenKeys = Object.keys(seen);
+  for (const key of seenKeys.slice(0, Math.max(0, seenKeys.length - MAX_SEEN))) delete seen[key];
+  return { records, bytes: used, consumed, state: { files, opencode, pendingBytes, seen } };
 }
 
 // Add new counts to the stored counts and keep the last 30 days.

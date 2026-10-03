@@ -482,3 +482,15 @@ test('agent prompt timeout has a 25-second default and an integer range from 1 t
     assert.equal(validatePolicy(policy, loadModels()).length, 0);
   }
 });
+
+test('the Opus policy validates its switch and its limit', async () => {
+  const { POLICY_DEFAULTS, validatePolicy } = await import('../src/control.js');
+  const { loadModels } = await import('../src/kit/config.js');
+  const valid = structuredClone(POLICY_DEFAULTS);
+  assert.equal(validatePolicy(valid, loadModels()).length, 0);
+  for (const [opus, message] of [
+    [{ allowWithoutForce: 'yes', maxConcurrent: 2 }, 'opus.allowWithoutForce must be boolean.'],
+    [{ allowWithoutForce: true, maxConcurrent: 0 }, 'opus.maxConcurrent must be an integer from 1 to 8.'],
+    [{ allowWithoutForce: true, maxConcurrent: 9 }, 'opus.maxConcurrent must be an integer from 1 to 8.'],
+  ]) assert.ok(validatePolicy({ ...valid, opus }, loadModels()).includes(message), message);
+});

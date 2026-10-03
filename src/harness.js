@@ -12,6 +12,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
 const MODELS_FILE = path.join(ROOT, 'kit', 'models.json');
 const SECTION = '[sandbox_workspace_write]';
+const KILL_RULE = 'prefix_rule(pattern=["kill"], decision="allow")';
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
 const PROJECTS_LABEL = 'Herdr Boss projects';
 const PROJECTS_LINE = `**${PROJECTS_LABEL}**`;
@@ -452,6 +453,10 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     for (const command of ['pkill', 'killall']) {
       const has = rules.split('\n').some((line) => new RegExp(`^\\s*prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${command}"\\s*\\]\\s*,\\s*decision\\s*=\\s*"forbidden"\\s*\\)`).test(line));
       add(has ? 'ok' : 'missing', 'codex rules', `Forbidden ${command} rule`, has ? `${command} is forbidden` : `${command} is not forbidden in ${rulesFile}`);
+    }
+    // The Boss can add this line so that a worker stops its own process by pid without an escalation. The check never adds it.
+    if (!rules.split('\n').some((line) => /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"kill"\s*\]/.test(line))) {
+      add('ok', 'codex rules', 'Stop by pid rule', `optional rule for a stop by pid, not added: ${KILL_RULE}`);
     }
     for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
   }

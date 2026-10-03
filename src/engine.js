@@ -145,6 +145,10 @@ const QUOTA_CACHE_MS = 15 * 60 * 1000;
 
 // Count each working pane on the provider recorded when its worker started. Herdr panes do not expose a model, so
 // use the project run records to distinguish metered and unmetered OpenCode workers.
+// Working worker panes that run an Opus model. The kit worker start compares it with opus.maxConcurrent.
+function runningOpusCount(herdr) {
+  return (herdr?.panes || []).filter((pane) => pane.agent && !pane.orch && pane.label !== 'boss' && pane.status === 'working' && isOpusModel(pane.model)).length;
+}
 function runningWorkerCountsByLane(herdr, policy, models) {
   const active = new Map((herdr?.panes || [])
     .filter((pane) => pane.agent && !pane.orch && pane.label !== 'boss' && pane.status === 'working')
@@ -1447,7 +1451,7 @@ export class Engine extends EventEmitter {
         trialModels: snap.trialModels,
         policy,
         night: { active: snap.night?.active === true, maxWorkersByLane: nightConfig.maxWorkersByLane || {} },
-        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, projects: control.projects, workspaces: control.workspaces },
+        control: { runningWorkers: control.runningWorkers, maxWorkers: control.maxWorkers, runningByLane, runningOpus: runningOpusCount(snap.herdr), projects: control.projects, workspaces: control.workspaces },
       });
       snap.paneSince = this.memory.paneSince;
       snap.history = this.memory.history || [];

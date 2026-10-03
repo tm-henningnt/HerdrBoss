@@ -11,7 +11,7 @@ import { runKitCommand } from '../src/kit/cli.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
 
 const models = loadModels();
-const OPUS_REFUSAL = { message: "claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force." };
+const OPUS_REFUSAL = { message: "claude-opus-5-5 needs the Owner's approval. Ask the Owner, then start with --force. The Owner can allow Opus starts without --force with the setting opus.allowWithoutForce." };
 
 function fixture(t, { rules = {}, kitModels = models } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-model-')));
@@ -330,4 +330,30 @@ test('the kit lists both trial models for the opencode harness only', () => {
     assert.ok(models.kinds.opencode.allowedModels.includes(model));
     assert.equal(models.kinds.pi.allowedModels.includes(model), false);
   }
+});
+
+test('opus.allowWithoutForce lets an Opus start pass without --force', (t) => {
+  const f = fixture(t, { rules: withPolicy({ opus: { allowWithoutForce: true, maxConcurrent: 2 } }) });
+  const plan = f.start('wmallow', { kind: 'claude', model: 'claude-opus-5-5', dryRun: true });
+  assert.equal(plan.model, 'claude-opus-5-5');
+  assert.equal(plan.force, true);
+});
+
+test('opus.allowWithoutForce false keeps the refusal and names the setting', (t) => {
+  const f = fixture(t, { rules: withPolicy({ opus: { allowWithoutForce: false, maxConcurrent: 2 } }) });
+  assert.throws(() => f.start('wmdeny', { kind: 'claude', model: 'claude-opus-5-5' }), /opus\.allowWithoutForce/);
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
+});
+
+test('opus.maxConcurrent refuses an allowed Opus start at the limit and names the setting', (t) => {
+  const f = fixture(t, { rules: { ...withPolicy({ opus: { allowWithoutForce: true, maxConcurrent: 2 } }), control: { runningOpus: 2 } } });
+  assert.throws(() => f.start('wmcap', { kind: 'claude', model: 'claude-opus-5-5' }), /limit of 2 running Opus workers \(setting opus\.maxConcurrent\)/);
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
+  const below = fixture(t, { rules: { ...withPolicy({ opus: { allowWithoutForce: true, maxConcurrent: 2 } }), control: { runningOpus: 1 } } });
+  assert.equal(below.start('wmcap', { kind: 'claude', model: 'claude-opus-5-5', dryRun: true }).model, 'claude-opus-5-5');
+});
+
+test('--force still starts Opus at the opus.maxConcurrent limit', (t) => {
+  const f = fixture(t, { rules: { ...withPolicy({ opus: { allowWithoutForce: true, maxConcurrent: 1 } }), control: { runningOpus: 3 } } });
+  assert.equal(f.start('wmforce', { kind: 'claude', model: 'claude-opus-5-5', force: true, dryRun: true }).force, true);
 });
