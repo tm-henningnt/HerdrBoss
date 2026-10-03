@@ -11,7 +11,7 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
-import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
+import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
@@ -1206,6 +1206,9 @@ export class Engine extends EventEmitter {
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
       snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse, readingAt: this.quotasAt });
+      const quotaPlan = this.quotaPlanService.get({ provider: 'codex', now });
+      const planGuidance = codexPlanGuidance(quotaPlan, this.cfg.quotaPlan.tolerance);
+      if (planGuidance && snap.lanes.codex) snap.lanes.codex.planGuidance = planGuidance;
       const nightConfig = this.cfg.watch || {};
       const laneCapsActive = snap.night?.active === true &&
         Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
