@@ -7338,7 +7338,7 @@ function restoreScroll(route, scroll) {
 }
 
 // These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['fleet', 'projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews'];
+const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews', 'fleet'];
 
 function render(force = false) {
   if (!state) return;

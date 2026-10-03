@@ -16,7 +16,7 @@ const drawerPages = /const pages = (\[\[[^\n]*\]\]);/.exec(app)?.[1] || '';
 const icons = [...html.matchAll(/<a class="top-icon[^"]*" data-top-icon="([^"]+)"[^>]*href="([^"]+)" aria-label="([^"]+)"/g)].map((m) => ({ name: m[1], href: m[2], label: m[3] }));
 
 test('the desktop menu has no Mailbox and no Chat entry and keeps the other entries in order', () => {
-  assert.deepEqual(navKeys, ['overview', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.deepEqual(navKeys, ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
   assert.doesNotMatch(nav, /href="\/mailbox"|href="\/chat"|data-chat-badge/);
 });
 
