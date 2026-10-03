@@ -1,4 +1,4 @@
-import { fleetView, fleetMailbox, fleetSettingsFromForm } from './fleet.js';
+import { fleetView, fleetMailbox, fleetSettingsFromForm, fleetSharesFromForm } from './fleet.js';
 import { HOST_GUIDE_PATH } from './host-guide-view.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
@@ -40,14 +40,16 @@ const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
 const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', 'add-host': 'Add a host', settings: 'Settings', docs: 'Docs' };
-let fleetData = null, fleetSettings = null, fleetLoading = false, fleetMessage = '';
+let fleetData = null, fleetSettings = null, fleetShares = null, fleetLoading = false, fleetMessage = '';
+let fleetNudgeId = null;
+let fleetSharesFeedback = '', fleetNudgeFeedback = '', fleetSharesSaving = false, fleetNudgeSaving = false;
 async function refreshFleet() {
   if (fleetLoading) return;
   fleetLoading = true;
   try {
-    const responses = await Promise.all(['/api/fleet', '/api/fleet/settings'].map((url) => fetch(url)));
+    const responses = await Promise.all(['/api/fleet', '/api/fleet/settings', '/api/fleet/shares'].map((url) => fetch(url)));
     if (responses.some((response) => !response.ok)) throw new Error('Fleet data could not be read.');
-    [fleetData, fleetSettings] = await Promise.all(responses.map((response) => response.json()));
+    [fleetData, fleetSettings, fleetShares] = await Promise.all(responses.map((response) => response.json()));
   } catch { fleetData = { factories: [], registryError: 'Fleet data could not be read.' }; }
   finally { fleetLoading = false; lastRender = ''; autoRender(); }
 }
@@ -64,6 +66,53 @@ document.addEventListener('submit', async (event) => {
     form.querySelector('[data-fleet-feedback]').textContent = fleetMessage;
   } catch (error) { form.querySelector('[data-fleet-feedback]').textContent = error.message; }
   finally { button.disabled = false; }
+});
+document.addEventListener('input', (event) => {
+  if (event.target.closest?.('[data-fleet-nudge-form]') && !fleetNudgeSaving) fleetNudgeId = null;
+  const slider = event.target.closest?.('[data-fleet-share-factory]');
+  if (!slider || !fleetShares) return;
+  slider.closest('label').querySelector('output').textContent = `${slider.value}%`;
+  const form = slider.closest('form');
+  const draft = fleetSharesFromForm(form, fleetShares, false);
+  for (const account of draft.accounts) {
+    const total = account.shares.reduce((sum, row) => sum + row.share, 0);
+    const label = form.querySelector(`[data-fleet-share-group="${account.accountKey}"] [data-fleet-share-total]`);
+    label.textContent = `Total: ${total}%${total > 100 ? ' · reduce the shares before saving' : ''}`;
+    label.classList.toggle('fleet-share-invalid', total > 100);
+  }
+  form.querySelector('button[type="submit"]').disabled = draft.accounts.some((account) => account.shares.reduce((sum, row) => sum + row.share, 0) > 100);
+});
+document.addEventListener('submit', async (event) => {
+  const form = event.target.closest?.('[data-fleet-shares-form], [data-fleet-nudge-form]');
+  if (!form || !fleetShares) return;
+  event.preventDefault();
+  const shares = form.hasAttribute('data-fleet-shares-form');
+  if (shares ? fleetSharesSaving : fleetNudgeSaving) return;
+  if (shares) fleetSharesSaving = true; else fleetNudgeSaving = true;
+  const feedback = form.querySelector(shares ? '[data-fleet-shares-feedback]' : '[data-fleet-nudge-feedback]');
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = true;
+  try {
+    if (!shares && !fleetNudgeId) fleetNudgeId = `nudge-${crypto.randomUUID()}`;
+    const body = shares ? fleetSharesFromForm(form, fleetShares) : { factoryId: form.elements.factoryId.value, text: form.elements.text.value, nudgeId: fleetNudgeId };
+    const response = await fetch(shares ? '/api/fleet/shares' : '/api/fleet/nudge', { method: shares ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The guidance could not be saved.');
+    if (shares) {
+      fleetShares = result;
+      fleetSharesFeedback = result.deliveries.some((row) => row.status === 'pending') ? 'Shares saved. Some factories are pending. The next successful poll retries delivery.' : 'Shares saved and delivered.';
+      feedback.textContent = fleetSharesFeedback;
+    } else {
+      fleetNudgeFeedback = result.status === 'delivered' ? 'Nudge delivered to the factory Boss.' : 'Nudge pending. Retry with Send nudge.';
+      feedback.textContent = fleetNudgeFeedback;
+      if (result.status === 'delivered') { form.elements.text.value = ''; fleetNudgeId = null; }
+    }
+  } catch (error) { feedback.textContent = error.message; if (shares) fleetSharesFeedback = error.message; else fleetNudgeFeedback = error.message; }
+  finally {
+    if (shares) fleetSharesSaving = false; else fleetNudgeSaving = false;
+    for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = false;
+    button.disabled = shares && fleetSharesFromForm(form, fleetShares, false).accounts.some((account) => account.shares.reduce((sum, row) => sum + row.share, 0) > 100);
+  }
 });
 document.addEventListener('submit', async (event) => {
   const form = event.target.closest?.('[data-quota-reset-form]');
@@ -1630,7 +1679,8 @@ function laneLine(provider, lane) {
     : ({ open: 'open', pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted', trickle: 'trickle', closed: 'closed', unknown: 'no quota data' })[lane.state] || lane.state;
   const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : hold ? 'warn' : planReplacesPace ? plan.laneState === 'Use now' ? 'ok' : 'warn' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
   const planAside = plan && !planReplacesPace ? ` · plan ${plan.laneState}` : '';
-  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}</span></li>`;
+  const shareError = lane.factoryShareError ? ` · ${esc(lane.factoryShareError)}` : '';
+  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}${shareError}</span></li>`;
 }
 
 // The current guidance on the Overview: the same rules as the bulletin, collapsed by default under a one-line summary.
@@ -7642,7 +7692,13 @@ function render(force = false) {
   if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
   const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
   const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
-  const page = route === 'docs' ? docsView() : route === 'add-host' ? hostGuideView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const sharesForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-shares-form]');
+  const sharesDraft = sharesForm && fleetShares ? fleetSharesFromForm(sharesForm, fleetShares, false) : null;
+  const nudgeForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-nudge-form]');
+  const nudgeDraft = nudgeForm ? { factoryId: nudgeForm.elements.factoryId.value, text: nudgeForm.elements.text.value } : null;
+  const sharesView = fleetShares ? { ...fleetShares, accounts: sharesDraft ? fleetShares.accounts.map((account) => ({ ...account, shares: sharesDraft.accounts.find((row) => row.accountKey === account.accountKey).shares })) : fleetShares.accounts,
+    feedback: fleetSharesFeedback, nudgeFeedback: fleetNudgeFeedback, saving: fleetSharesSaving, nudgeSaving: fleetNudgeSaving, nudge: nudgeDraft } : null;
+  const page = route === 'docs' ? docsView() : route === 'add-host' ? hostGuideView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage, sharesView) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));

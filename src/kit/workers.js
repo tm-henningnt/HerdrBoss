@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readFactoryShares, FACTORY_SHARE_ERROR } from '../fleet-pacing.js';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -431,7 +432,7 @@ export function describeLane(provider, lane, now = Date.now()) {
   const planText = provider === 'codex' ? quotaPlanLaneText(lane?.planGuidance) : '';
   const planReplacesPace = planText && !lane?.ignored && lane?.state === 'open';
   const holdText = claudePaceHoldText(lane?.paceHold);
-  const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}${holdText && lane?.state !== 'open' ? `; pace guidance: ${holdText}` : ''}`;
+  const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}${holdText && lane?.state !== 'open' ? `; pace guidance: ${holdText}` : ''}${lane?.factoryShareError ? `; ${lane.factoryShareError}` : ''}`;
   if (holdText && lane.state === 'open' && !lane.ignored) return `${provider} ${holdText}${suffix}`;
   if (planReplacesPace) return `${provider} ${planText}${suffix}`;
   if (lane?.state === 'open' && lane.onPace) {
@@ -484,9 +485,13 @@ function unmeteredAlternatives(rules, project, allowedModels) {
 }
 
 // Decide whether a worker on this provider may start. Returns { error } or { warning } or {}.
-export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null } = {}) {
+export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null, factoryShare } = {}) {
   if (!provider) return {};
   const lane = rules.lanes?.[provider];
+  if (factoryShare !== undefined && (factoryShare === 0 || Math.max(lane?.factoryShareUsedPercent ?? 0, lane?.usedPercent ?? 0, lane?.reading?.usedPercent ?? 0) >= factoryShare)) {
+    return { error: `${provider} has reached its factory share ceiling (${factoryShare}%). Change the share at the head office before starting new workers.` };
+  }
+  if (lane?.factoryShareBlocked) return { error: `${provider} has reached its factory share ceiling (${lane.factoryShare}%). Change the share at the head office before starting new workers.` };
   if (lane?.state === 'trickle') {
     const usedToday = lane.usedTodayPercent || 0;
     if (usedToday < lane.allowancePercent) return {};
@@ -1292,7 +1297,12 @@ function startWorkerOnce(name, options, {
   }
   const freeGate = unmeteredGate(options.kind, model, rules);
   if (freeGate.error) throw new Error(freeGate.error);
-  const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels });
+  let factoryShare;
+  if (provider) {
+    try { factoryShare = readFactoryShares(bossDir)[provider]; }
+    catch { throw new Error(`Factory share check failed. ${FACTORY_SHARE_ERROR}`); }
+  }
+  const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels, factoryShare });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);
   if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);

@@ -1,24 +1,34 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { DATA_DIR } from './config.js';
 import { readFleetFile, writeFleetFile } from './fleet-store.js';
 
 export const FLEET_READ_TOKEN = /^hf_read_[a-f0-9]{64}$/;
+export const FLEET_GUIDE_TOKEN = /^hf_guide_[a-f0-9]{64}$/;
 const digest = (value) => createHash('sha256').update(value).digest('hex');
-export function createFleetReadAccess({ privateDir, now = () => Date.now() }) {
-  const file = path.join(privateDir, 'fleet-read.json');
+function createFleetAccess({ privateDir, dir = DATA_DIR, now = () => Date.now() }, kind, pattern) {
+  const file = path.join(privateDir, `fleet-${kind}.json`);
   const read = () => readFleetFile(file, {});
   return {
     rotate() {
-      const token = `hf_read_${randomBytes(32).toString('hex')}`;
+      if (kind === 'guide') {
+        const guidanceFile = path.join(dir, 'fleet-guidance.json');
+        const guidance = readFleetFile(guidanceFile, null);
+        if (guidance) writeFleetFile(guidanceFile, { senderEpoch: 0, headOfficeFactoryId: null, shares: guidance.shares, nudges: [] });
+        fs.rmSync(path.join(dir, 'head-office-role.json'), { force: true });
+      }
+      const token = `hf_${kind}_${randomBytes(32).toString('hex')}`;
       const current = read().current;
       writeFleetFile(file, { current: digest(token), ...(current ? { previous: current, previousValidUntil: now() + 600000 } : {}) });
       return token;
     },
     check(req) {
       const header = String(req.headers.authorization || '');
-      const presented = /^Bearer\s+(hf_read_\S*)\s*$/i.exec(header)?.[1];
-      if (!presented) return { present: /^Bearer\s+hf_read_/i.test(header), authorized: false };
-      if (!FLEET_READ_TOKEN.test(presented)) return { present: true, authorized: false };
+      const prefix = new RegExp(`^Bearer\\s+hf_${kind}_`, 'i');
+      const presented = new RegExp(`^Bearer\\s+(hf_${kind}_\\S*)\\s*$`, 'i').exec(header)?.[1];
+      if (!presented) return { present: prefix.test(header), authorized: false };
+      if (!pattern.test(presented)) return { present: true, authorized: false };
       const hashes = read();
       const candidate = Buffer.from(digest(presented), 'hex');
       const equal = (hash) => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash) && timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
@@ -26,3 +36,5 @@ export function createFleetReadAccess({ privateDir, now = () => Date.now() }) {
     },
   };
 }
+export const createFleetReadAccess = (options) => createFleetAccess(options, 'read', FLEET_READ_TOKEN);
+export const createFleetGuideAccess = (options) => createFleetAccess(options, 'guide', FLEET_GUIDE_TOKEN);

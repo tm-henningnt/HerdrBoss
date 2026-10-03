@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
+import { readFactoryShares, FACTORY_SHARE_ERROR } from './fleet-pacing.js';
 import { loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
 import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
@@ -102,6 +103,7 @@ export function legacyRouteConflicts(policy, models, kinds = ['codex', 'claude']
 }
 
 const warnedRoutes = new Set();
+const warnedFactoryShares = new Set();
 
 // A saved policy always loads. An incompatible legacy route is kept in modelProviders for Settings,
 // and ignoredRoutes makes providerFor treat it as unmetered for that harness. Each conflict warns once per process.
@@ -109,7 +111,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
-  const { ignoredRoutes: _derived, ...stored } = saved;
+  const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...stored } = saved;
   const savedMachine = isObject(stored.machine) ? stored.machine : {};
   const machine = { ...POLICY_DEFAULTS.machine, ...savedMachine };
   // A saved warning value above the default clear value keeps the saved policy valid.
@@ -130,6 +132,17 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   }
   const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
+  try {
+    const factoryShares = readFactoryShares(path.dirname(file));
+    if (Object.keys(factoryShares).length) policy.factoryShares = factoryShares;
+    warnedFactoryShares.delete(file);
+  } catch {
+    policy.factoryShareError = FACTORY_SHARE_ERROR;
+    if (!warnedFactoryShares.has(file)) {
+      warnedFactoryShares.add(file);
+      warn(`herdr-boss: ${FACTORY_SHARE_ERROR}`);
+    }
+  }
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
     if (warnedRoutes.has(key)) continue;
@@ -308,7 +321,7 @@ export function validatePolicy(value, models) {
 export function writePolicy(value, { caller = 'unknown', dir = null, file = null } = {}) {
   const target = file || path.join(dir || DATA_DIR, 'policy.json');
   const logDir = dir || path.dirname(target);
-  const { ignoredRoutes: _derived, ...stored } = value;
+  const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...stored } = value;
   let before = {};
   try { before = JSON.parse(fs.readFileSync(target, 'utf8')); } catch {}
   const tmp = `${target}.${process.pid}.tmp`;
@@ -456,7 +469,7 @@ export function prunePolicy(value, models) {
 // Pass a notes array to receive a note for each automatic prune of stale model references.
 export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null, caller = 'unknown', dryRun = false } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
-  const { ignoredRoutes: _derived, ...draft } = value || {};
+  const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...draft } = value || {};
   const { policy: stored, note } = prunePolicy(draft, models);
   const savedLocks = stored.locks;
   const locks = savedLocks === undefined
@@ -612,7 +625,7 @@ function quotaExhaustion(q, now = Date.now()) {
 export function pacingGoal(policy, provider, key) {
   const value = policy?.pacingGoals?.[provider]?.[key];
   const percent = isObject(value) ? value.percent : value;
-  return Number.isInteger(percent) ? percent : 100;
+  return Math.min(Number.isInteger(percent) ? percent : 100, policy?.factoryShares?.[provider] ?? 100);
 }
 
 export function pacingGoalEnd(policy, provider, window) {
@@ -792,6 +805,13 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, re
   for (const source of quotas || []) {
     const lane = lanes[source.provider];
     if (!lane) continue;
+    const factoryShare = policy.factoryShares?.[source.provider];
+    if (factoryShare !== undefined) {
+      lane.factoryShare = factoryShare;
+      lane.factoryShareUsedPercent = Math.max(0, ...(source.windows || []).filter((window) => liveWindow(window, now)).map((window) => window.usedPercent));
+      lane.factoryShareBlocked = factoryShare === 0 || lane.factoryShareUsedPercent >= factoryShare;
+      if (lane.factoryShareBlocked && lane.state !== 'exhausted') lane.state = 'reserve';
+    }
     const hold = source.provider === 'claude' ? claudePaceHold(source, lane, readings, now) : null;
     if (hold) lane.paceHold = hold;
     const window = (source.windows || []).find((item) => item.key === 'primary' && !item.extra)
@@ -806,6 +826,14 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, re
       probeFailed: !!source.error,
       observedAt: Number.isFinite(measuredAt) ? new Date(measuredAt).toISOString() : null,
     } : null;
+  }
+  for (const [provider, share] of Object.entries(policy.factoryShares || {})) if (!lanes[provider]) {
+    lanes[provider] = { state: share === 0 ? 'reserve' : 'unknown', factoryShare: share, factoryShareBlocked: share === 0,
+      reason: 'No quota reading is available.', resetWindows: [], goals: [] };
+  }
+  if (policy.factoryShareError) for (const provider of ['codex', 'claude', 'opencodego']) {
+    lanes[provider] ||= { state: 'unknown', reason: 'No quota reading is available.', resetWindows: [], goals: [] };
+    lanes[provider].factoryShareError = policy.factoryShareError;
   }
   return lanes;
 }
@@ -941,7 +969,7 @@ export function quotaPlanLaneText(guidance) {
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.
 // The unmetered lane is not a metered provider, so it never changes this choice.
 export function leastOverProvider(lanes) {
-  const metered = Object.entries(lanes).filter(([, lane]) => !lane.unmetered && lane.state !== 'unknown' && lane.state !== 'exhausted');
+  const metered = Object.entries(lanes).filter(([, lane]) => !lane.unmetered && !lane.factoryShareBlocked && lane.state !== 'unknown' && lane.state !== 'exhausted');
   const usable = (lane) => lane.state === 'open'
     || (lane.state === 'trickle' && lane.usedTodayPercent < lane.allowancePercent);
   if (!metered.length || metered.some(([, lane]) => usable(lane))) return null;

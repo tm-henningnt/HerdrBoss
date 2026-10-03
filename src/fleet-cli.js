@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, PRIVATE_ACCESS_DIR, loadConfig, resolveAlias } from './config.js';
-import { createFleetReadAccess, FLEET_READ_TOKEN } from './fleet-access.js';
+import { createFleetReadAccess, createFleetGuideAccess, FLEET_READ_TOKEN, FLEET_GUIDE_TOKEN } from './fleet-access.js';
 import { createFleetSettings, validateFleetSettings } from './fleet-settings.js';
 import { provisionAccount, validateAccounts } from './fleet-quotas.js';
 import { readFleetFile, writeFleetFile } from './fleet-store.js';
 
-const USAGE = 'Usage: fleet settings | fleet init --from-file FILE|- | fleet account --from-file FILE|- | fleet read-token rotate --out-file FILE | fleet read-token set FACTORY --from-file FILE|-';
+const USAGE = 'Usage: fleet settings | fleet init --from-file FILE|- | fleet account --from-file FILE|- | fleet read-token|guide-token rotate --out-file FILE | fleet read-token|guide-token set FACTORY --from-file FILE|-';
 async function input(file, stdin) {
   let bytes = 0, text = '';
   const stream = file === '-' ? stdin : fs.createReadStream(file);
@@ -47,20 +47,25 @@ export async function fleetCommand(args, { dir = DATA_DIR, privateDir = PRIVATE_
     stdout.write('Account digest and scope saved.\n');
     return 0;
   }
-  if (command === 'read-token' && rest[0] === 'rotate' && rest.length === 3 && rest[1] === '--out-file') {
+  const guide = command === 'guide-token';
+  const credentialCommand = command === 'read-token' || guide;
+  const access = guide ? createFleetGuideAccess : createFleetReadAccess;
+  const pattern = guide ? FLEET_GUIDE_TOKEN : FLEET_READ_TOKEN;
+  const label = guide ? 'Guide' : 'Read';
+  if (credentialCommand && rest[0] === 'rotate' && rest.length === 3 && rest[1] === '--out-file') {
     const file = path.resolve(rest[2]);
     const relative = path.relative(resolveAlias(privateDir), resolveAlias(file));
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(file)) throw new Error('Use a new export file inside the private Herdr Boss configuration folder.');
-    const token = createFleetReadAccess({ privateDir }).rotate();
+    const token = access({ privateDir, dir }).rotate();
     writeFleetFile(file, token);
-    stdout.write('Read credential rotated and saved to the private export file.\n');
+    stdout.write(`${label} credential rotated and saved to the private export file.\n`);
     return 0;
   }
-  if (command === 'read-token' && rest[0] === 'set' && rest.length === 4 && rest[2] === '--from-file') {
+  if (credentialCommand && rest[0] === 'set' && rest.length === 4 && rest[2] === '--from-file') {
     const factoryId = rest[1];
     const token = await input(rest[3], stdin);
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(factoryId) || typeof token !== 'string' || !FLEET_READ_TOKEN.test(token)) throw new Error('The factory identity or read credential is invalid.');
-    const file = path.join(privateDir, 'fleet-remotes.json');
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(factoryId) || typeof token !== 'string' || !pattern.test(token)) throw new Error(`The factory identity or ${label.toLowerCase()} credential is invalid.`);
+    const file = path.join(privateDir, guide ? 'fleet-guide-remotes.json' : 'fleet-remotes.json');
     const records = readFleetFile(file, {});
     records[factoryId] = token;
     writeFleetFile(file, records);
@@ -68,7 +73,7 @@ export async function fleetCommand(args, { dir = DATA_DIR, privateDir = PRIVATE_
     const source = rest[3] === '-' ? null : path.resolve(rest[3]);
     const inside = source && (() => { const relative = path.relative(resolveAlias(privateDir), resolveAlias(source)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); })();
     if (inside) fs.rmSync(source, { force: true });
-    stdout.write(inside ? 'Factory read credential saved. The export file is deleted.\n' : 'Factory read credential saved.\n');
+    stdout.write(`Factory ${label.toLowerCase()} credential saved.${inside ? ' The export file is deleted.' : ''}\n`);
     return 0;
   }
   throw new Error(USAGE);

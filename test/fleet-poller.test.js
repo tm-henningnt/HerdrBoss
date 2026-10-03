@@ -12,6 +12,23 @@ process.env.HERDR_FACTORIES_DIR = path.join(root, 'factories');
 const factory = (id, url) => ({ factoryId: id, name: id, hostId: 'example-host', kind: 'native', profile: 'personal', dashboardUrl: url, version: '0.1.0', kitRevision: 'abcdef012345' });
 function registry(file, factories) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId: 'example-host', runtime: 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: 'local' }], factories })); }
 
+test('a guidance retry failure cannot turn a successful read-only summary poll into an outage', async (t) => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'guidance-retry-registry.json');
+  registry(registryFile, [factory('factory-b', 'https://example.invalid')]);
+  const poller = createFleetPoller({ dir: path.join(root, 'guidance-retry-cache'), registryFile,
+    localSummary: async () => ({ ...fixture, name: 'factory-zero', factoryId: 'factory-zero' }),
+    credentials: () => ({ 'factory-b': 'hf_read_' + 'a'.repeat(64) }), now: () => Date.parse(fixture.generatedAt),
+    fetchImpl: async () => new Response(JSON.stringify({ ...fixture, name: 'factory-b', factoryId: 'factory-b', dashboardUrl: 'https://example.invalid' }), { headers: { 'content-type': 'application/json' } }),
+    onSummary: async () => { throw new Error('PRIVATE guidance transport detail'); } });
+  t.after(() => poller.stop());
+  await poller.poll();
+  const row = poller.view().factories.find((item) => item.remote);
+  assert.equal(row.status, 'healthy');
+  assert.equal(row.error, null);
+  assert.equal(row.summary.factoryId, 'factory-b');
+});
+
 test('the poller classifies private failures and retains the last successful sighting across an outage', async (t) => {
   const { createFleetPoller } = await import('../src/fleet-poller.js');
   const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'failure-codes.json');
