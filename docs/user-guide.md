@@ -1752,7 +1752,7 @@ The Chart view shows the organization as a chart. The chart has four levels:
 1. The **Owner** node shows **At the Mac** or **Away**. The value comes from the machine idle time.
 2. The **Boss** node shows the pane labeled `boss`, its harness, state, quota use, and handover state. It also shows the avatar of the Boss. The workers in the Boss workspace are below it.
 3. Each **project** node shows the orchestrator pane, harness, and state. It also shows the avatar of the project, the current task, the worker slots in use against the slots and share, and the handover state. The nodes use the project order.
-4. Each **worker** node shows the agent name, harness, state, and task ID.
+4. Each **worker** node shows the title of its work, the agent name, harness, the **Doing now** line, and the task ID. See [Workers in the List view](#workers-in-the-list-view).
 
 Select **Details** on a node to show its recorded values. Select **Messages** on the Boss node or on a project node to open its thread. The page cannot change resources. See [Owner messages](#owner-messages).
 
@@ -1786,11 +1786,64 @@ The page uses only the state that the dashboard already loads. These limits appl
 - Quota use shows only for a Codex or Claude harness, because each of these harnesses uses only its own subscription.
 - A **reserve** node shows a prepared successor only when a prepared handoff record names the current orchestrator or Boss pane as its source and the successor pane is live. A recommended successor does not show as a reserve.
 - A workspace marked not a project has no project node. The Boss workspace shows as the Boss node.
-- The chart shows no pane output and no secrets. Message text shows only in the Messages panel.
+- The chart shows no secrets. The only pane text on the page is the masked **Doing now** line of a worker. Message text shows only in the Messages panel.
 
 ### List view
 
-The List view shows every Herdr workspace with its orchestrator and workers, live from Herdr.
+The List view has two parts. The **Workers** table comes first. Below it, one section for each Herdr workspace shows the orchestrator of the workspace, live from Herdr.
+
+### Workers in the List view
+
+The **Workers** table has one row for each worker. A worker that has no run record, for example a pane that the Owner started by hand, also has a row. On a desktop, the rows form a dense table. On a phone, each row is one card. Select a row to open it.
+
+A row shows these values:
+
+- **Work**: the title of the work. The title is the first line of the task text that the orchestrator gave to `worker start`. A worker without task text uses the first heading of its `.worker/brief.md`. When the worker has a task ID, the row also shows the title of that card from the published status.
+- **Project**, **Agent**, and **Runs**: the project, the harness and model, and how long the worker runs. A finished worker shows the time between its start and its end.
+- **State**: Working, Blocked, Idle, or for a finished worker Collected, Merged, Failed, or Abandoned.
+- **Doing now**: one plain line. See [The Doing now line](#the-doing-now-line).
+
+The **Project** list and the state buttons above the table filter the rows. The state buttons are **All**, **Working**, **Waiting** (idle or blocked), and **Finished**. The filter applies to the open tab only. A reload clears it.
+
+#### The Doing now line
+
+Herdr Boss reads the visible screen of each working or blocked worker pane in the background. The read runs every 30 seconds for all panes together. A request from the browser never starts a read. Herdr Boss removes the terminal codes and finds the last action that the agent took. Examples:
+
+- `Running tests in test/factory`
+- `Editing src/render.ts`
+- `Waiting for the lock`
+- `Writing the report`
+
+When the screen shows no action, the line reads `Working (no output for N minutes)`. N counts from the last change of the screen. An idle worker shows `Idle for N minutes`.
+
+Herdr Boss masks secrets in the line before it goes into the dashboard state. The line holds no more than 140 characters.
+
+A finished worker shows the result and the report summary instead. The result is one of these values:
+
+| Result | Meaning |
+|---|---|
+| Merged | The branch is in the base branch. |
+| Collected, not merged | The worker passed `worker collect` with outcome `done`. The branch is not merged. |
+| Needs rework | The run ended with outcome `partial` or `failed`, or the report says that the worker stopped early. |
+| Abandoned | The agent is gone and the run has no usable report. |
+
+The report summary is the first paragraph of `.worker/report.md`. `worker collect` saves it as `reportSummary` in the run record, so it stays readable after the worktree is removed.
+
+#### The brief panel
+
+An open row shows the scope (the allowed paths), the report path, and the brief of the worker. The panel renders the brief as read-only Markdown. It shows the first 25 lines. Select **Show all** to see the rest, and select the button again to go back to 25 lines.
+
+`worker start` saves a copy of the brief in the run record as `briefCopy`, with the SHA-256 hash of the original text. The copy keeps its text for 30 days after the run ends. Then Herdr Boss removes the text and keeps the hash. While the copy exists, the panel shows the copy. Without a copy, the panel reads `.worker/brief.md` from the worktree. After the worktree and the copy are gone, the panel says that the brief is no longer available.
+
+Herdr Boss masks secrets and the home folder path in the brief before it stores or shows the brief. The page loads the brief with `GET /api/worker-brief?project=<slug>&name=<worker>` when the row opens. The dashboard state holds no brief text. The same access rules apply as for the rest of the API.
+
+#### Orchestrator focus
+
+The orchestrator section of each workspace shows a **Focus** line. The line holds the phase and the cards on **Doing** from the published status of the project. When no card is on Doing, the line says `No card on Doing`.
+
+### Workspaces in the List view
+
+Each workspace section shows the orchestrator of the workspace, its mode, and its goal, live from Herdr. The workers of the workspace are in the **Workers** table.
 
 A status dot shows working, blocked, failed, idle, or done. Failed means that the last visible worker output matched a known provider error, including **Free usage exceeded**. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the **orch** or **boss** label are orchestrators.
 

@@ -47,9 +47,14 @@ import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
+import { ACTION_REFRESH_MS, cleanScreen, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
+const PANE_ACTION_MAX = 16;
+const PANE_ACTION_PARALLEL = 3;
+const BRIEF_PRUNE_INTERVAL_MS = 3_600_000;
+const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const LEASE_PROBE_PARALLEL = 8;
 const LEASE_PROBES_PER_TICK = 25;
 const LEASE_LISTENER_TTL_MS = 5 * 60_000;
@@ -643,6 +648,12 @@ export class Engine extends EventEmitter {
     this.taskWorkers = {};
     this.taskWorkersAt = 0;
     this.mergedCache = new Map();
+    this.workerView = { at: 0, rows: [] };
+    this.workerViewAt = 0;
+    this.paneActions = new Map();
+    this.paneActionsAt = 0;
+    this.paneActionRead = null;
+    this.briefPruneAt = 0;
     this.gitCounts = {};
     this.gitCountsAt = 0;
     this.boardFactsCache = new BoardFactsCache();
@@ -1280,6 +1291,8 @@ export class Engine extends EventEmitter {
       snap.workerConfig = this.workerConfig;
       snap.statusActivity = this.statusActivity();
       snap.taskWorkers = this.readTaskWorkers(now, herdr);
+      this.refreshPaneActions(now, herdr);
+      snap.workerView = this.readWorkerView(now, herdr);
       snap.staleStatus = staleStatuses(snap, this.cfg, now, this.memory.staleStatus);
       this.memory.staleStatus = snap.staleStatus;
       snap.projects = applyTaskState(snap.projects, snap.taskWorkers, {
@@ -1605,6 +1618,70 @@ export class Engine extends EventEmitter {
     }
     this.gitCounts = next;
     return next;
+  }
+
+  // Read the screens of the working worker panes in the background, at most every 30 seconds. The tick never waits for it.
+  // A request from the browser never starts a read. The cache holds the last action line and the time the screen last changed.
+  refreshPaneActions(now, herdr) {
+    const workers = (herdr?.panes || []).filter((pane) => pane.agent && !pane.orch && pane.label !== 'boss');
+    const live = new Set(workers.map((pane) => pane.id));
+    for (const id of [...this.paneActions.keys()]) if (!live.has(id)) this.paneActions.delete(id);
+    if (!this.act || this.paneActionRead || now - this.paneActionsAt < ACTION_REFRESH_MS) return;
+    const targets = workers.filter((pane) => pane.status === 'working' || pane.status === 'blocked').slice(0, PANE_ACTION_MAX);
+    if (!targets.length) return;
+    this.paneActionsAt = now;
+    const readOne = async (pane) => {
+      try {
+        const text = paneText(await this.herdrRunner('herdr', ['pane', 'read', pane.id, '--source', 'visible', '--lines', '60', '--format', 'text'], { timeout: 5000 }));
+        const hash = createHash('sha1').update(cleanScreen(text)).digest('hex');
+        const previous = this.paneActions.get(pane.id);
+        this.paneActions.set(pane.id, { text: paneAction(text), hash, at: now, changedAt: previous?.hash === hash ? previous.changedAt : now });
+      } catch { /* The cache keeps the last good read. */ }
+    };
+    this.paneActionRead = (async () => {
+      for (let index = 0; index < targets.length; index += PANE_ACTION_PARALLEL) await Promise.all(targets.slice(index, index + PANE_ACTION_PARALLEL).map(readOne));
+    })().finally(() => { this.paneActionRead = null; });
+  }
+
+  // The rows of the Agents page for workers. The read runs at most every 15 seconds and uses the cached pane lines.
+  readWorkerView(now, herdr) {
+    if (now - this.workerViewAt < TASK_WORKERS_INTERVAL_MS) return this.workerView;
+    this.workerViewAt = now;
+    const panes = herdr?.panes ? new Map(herdr.panes.map((pane) => [pane.id, { status: pane.status ?? null }])) : null;
+    const budget = { left: TASK_MERGE_CHECKS };
+    const prune = now - this.briefPruneAt >= BRIEF_PRUNE_INTERVAL_MS;
+    if (prune) this.briefPruneAt = now;
+    const rows = [];
+    for (const { slug, repo } of readProjectRepos(DATA_DIR)) {
+      try {
+        const config = loadProjectConfig({ cwd: repo });
+        if (prune) pruneBriefCopies(config.runsPath, now);
+        rows.push(...readWorkerRows(config.runsPath, {
+          project: slug, now, panes, actions: this.paneActions, paneSince: this.memory.paneSince,
+          isMerged: gitIsMerged(config.root, { cache: this.mergedCache, budget, now }),
+        }));
+      } catch (error) {
+        this.log('status', `Worker rows for ${slug} failed (${error.code || 'error'}).`, { project: slug });
+      }
+    }
+    this.workerView = { at: now, rows };
+    return this.workerView;
+  }
+
+  // The masked brief of one worker, for the panel on the Agents page. Returns null when the run or the brief is unknown.
+  readWorkerBrief(project, name, now = Date.now()) {
+    if (!WORKER_NAME.test(String(name))) return null;
+    const entry = readProjectRepos(DATA_DIR).find((item) => item.slug === project);
+    if (!entry) return null;
+    try {
+      const config = loadProjectConfig({ cwd: entry.repo });
+      const file = path.join(config.runsPath, `${name}.json`);
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) return null;
+      const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const brief = workerBrief(record, now);
+      return brief ? { project, name, title: record.title || null, scope: Array.isArray(record.allowedPaths) ? record.allowedPaths : [], reportPath: `${record.workerDir || '.worker'}/report.md`, ...brief } : null;
+    } catch { return null; }
   }
 
   // The commit and issue facts of each registered project. The cache reads git at most once a minute and the issue
