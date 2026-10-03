@@ -1100,9 +1100,9 @@ The Settings page has the same pools editor. See [Resource pools](#resource-pool
 
 ## Factory hosts
 
-A factory host is a machine that runs factories. The host registry lists the hosts that `herdr-boss factory` can reach. Each entry has a name, an address, a user, and the path of an SSH key file. The registry is in `~/.herdr-factories/registry.json` and holds no key content.
+A factory host is a machine that runs factories. The host registry lists the hosts that `herdr-boss factory` can reach. Each entry has a name, an address, a user, and the path of an SSH key file. It also stores the runtime, the personal-only flag, and the Codex sandbox setting. The registry is in `~/.herdr-factories/registry.json` and holds no key content.
 
-Add a host with `herdr-boss factory host add`. Give the fields as JSON on stdin so that the address stays out of the shell history. List the hosts with `herdr-boss factory host list`. The list shows the name and the user only.
+Add a host with `herdr-boss factory host add`. Give the connection fields as JSON on stdin so that the address stays out of the shell history. Set `runtime`, `personalOnly`, and `codexSandbox` in the same JSON, or use `--runtime`, `--personal-only`, and `--codex-sandbox`. The Codex setting `user-namespaces` uses the tested custom seccomp profile and `systempaths=unconfined`. The setting `unavailable` keeps the Docker default and excludes Codex from the factory. A remote host with no Codex setting defaults to `unavailable`. List the hosts with `herdr-boss factory host list`. The list shows the name and the user only.
 
 Run a command on a host with `herdr-boss factory ssh HOST -- COMMAND...`. Run Docker on a host with `herdr-boss factory docker HOST -- ARGS...`. Herdr Boss masks the full address before the key file name. It masks the host name, every IP address, the key file path, and tokens that end in `.ts.net`. See `docs/cli.md`, section Factory hosts.
 
@@ -1110,7 +1110,7 @@ Use [the Windows host runbook](windows-host.md) to set up a Windows factory host
 
 ## Container factories
 
-Create a personal factory with `herdr-boss factory new NAME`. Use `--host HOST` for a remote host connection. Add its Docker context with `factory host add HOST --docker-context CONTEXT`. The tool stores this name in the private connection file. The fleet file refers to that connection by name only.
+Create a personal factory with `herdr-boss factory new NAME`. Use `--host HOST` for a remote host connection. Add its Docker context with `factory host add HOST --docker-context CONTEXT`. The tool stores this name in the private connection file. The fleet file refers to that connection by name only. `factory new` prints the Tailscale tag and policy lines for the factory, then prints a `tailscale up` command for the host. The command does not change the tailnet. Port 443 is the HTTPS port of Tailscale Serve. The tool omits the client-factory grant on a personal-only host.
 
 Each factory has four labeled volumes, its own hostname, and loopback ports. The image holds tools and a public seed checkout. The volumes hold the service data, home, work, and code. The host tool does not mount the Mac home or the Docker socket.
 

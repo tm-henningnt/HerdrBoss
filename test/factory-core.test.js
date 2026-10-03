@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { factoryCommand } from '../src/factory-host.js';
+import { configSafetyError } from '../src/factory-core.js';
 import { updateFleet } from '../src/factory-store.js';
 import { createDockerTransport } from '../src/factory-transport.js';
 import { validateFile } from './factory/schema-check.js';
@@ -46,13 +47,16 @@ function fixture(name = 'demo') {
     if (args[0] === 'volume' && args[1] === 'create') { const volumeName = args.at(-1); volumes.set(volumeName, { Name: volumeName, Labels: factoryLabels }); return json(volumeName); }
     if (args[0] === 'container' && args[1] === 'inspect') return args[2].startsWith('herdr-factory-buildkit-') ? missing('container') : container ? json([container]) : missing('container');
     if (args[0] === 'container' && args[1] === 'create') {
-      container = { Config: { Labels: factoryLabels }, HostConfig: { Privileged: false, CapAdd: null, SecurityOpt: ['seccomp=example-profile', 'systempaths=unconfined'] }, Mounts: factoryMounts, State: { Status: 'created', Running: false } };
+      const securityOpt = [];
+      for (let index = 0; index < args.length; index += 1) if (args[index] === '--security-opt') securityOpt.push(args[index + 1]);
+      container = { Config: { Labels: factoryLabels }, HostConfig: { Privileged: false, CapAdd: null, SecurityOpt: securityOpt }, Mounts: factoryMounts, State: { Status: 'created', Running: false } };
       return json('example-container-id');
     }
     if (args[0] === 'start') { container.State = { Status: 'running', Running: true, Health: { Status: 'healthy' } }; return json('hf-demo'); }
     if (args[0] === 'stop') { container.State = { Status: 'exited', Running: false }; return json('hf-demo'); }
     if (args[0] === 'exec' && args.includes('curl')) return args.includes('%{http_code}') ? { code: 0, stdout: '200', stderr: '' } : json(health);
     if (args[0] === 'exec' && args.includes('herdr')) return json({ result: { panes: [] } });
+    if (args[0] === 'exec' && args.includes('node') && args.some((word) => word.includes('allowedKinds'))) return json({ codexWasAllowed: true });
     if (args[0] === 'exec' && args.includes('node')) return json({ workers: 0 });
     if (args[0] === 'exec' && args.includes('df')) return { code: 0, stdout: 'Filesystem 1024-blocks Used Available Capacity Mounted on\nvolume 10000 1000 9000 10% /home/factory\n', stderr: '' };
     return json({});
@@ -154,9 +158,96 @@ test('a remote factory uses a private context through a public connection refere
     const fleet = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
     assert.deepEqual(validateFile(fleet, new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url).pathname), []);
     assert.equal(fleet.hosts[0].connectionRef, 'host-a');
+    assert.equal(fleet.hosts[0].runtime, 'docker-engine-wsl2');
+    assert.equal(fleet.hosts[0].personalOnly, false);
+    assert.equal(fleet.hosts[0].codexSandbox, 'unavailable');
     assert.equal(JSON.stringify(fleet).includes('example-context'), false);
     assert.equal(JSON.stringify(fleet).includes('address'), false);
     assert.equal(f.output.join('').includes('example-context'), false);
+  } finally { f.cleanup(); }
+});
+
+test('factory new uses the host Codex setting and prints the tailnet policy for a personal-use factory', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context', '--runtime', 'docker-engine-wsl2', '--personal-only', 'true', '--codex-sandbox', 'unavailable'], f.io);
+    assert.equal(await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io), 0);
+    const create = f.calls.find(({ args }) => args[0] === 'container' && args[1] === 'create').args;
+    assert.equal(create.includes('--security-opt'), false);
+    const fleet = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
+    assert.equal(fleet.hosts[0].runtime, 'docker-engine-wsl2');
+    assert.equal(fleet.hosts[0].personalOnly, true);
+    assert.equal(fleet.hosts[0].codexSandbox, 'unavailable');
+    const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+    assert.equal(flow.codexEnabled, false);
+    assert.equal(flow.codexDisabledByWizard, true);
+    const output = f.output.join('');
+    assert.match(output, /Tag: tag:hf-demo/);
+    assert.match(output, /Paste these lines into the tailnet policy file\. Then approve the tag when the factory joins\./);
+    assert.match(output, /"tagOwners": \{/);
+    assert.match(output, /"tag:hf-demo": \["autogroup:admin"\]/);
+    assert.match(output, /\{"src": \["autogroup:member"\], "dst": \["tag:hf-demo"\], "ip": \["tcp:443"\]\}/);
+    assert.match(output, /\{"src": \["tag:hf-head-office"\], "dst": \["tag:hf-demo"\], "ip": \["tcp:443"\]\}/);
+    assert.equal(output.includes('{"src": ["tag:hf-demo"], "dst": ["tag:hf-head-office"], "ip": ["tcp:443"]}'), false);
+    assert.match(output, /tailscale up --advertise-tags=tag:hf-demo/);
+    assert.equal(output.includes('example-context'), false);
+    assert.equal(f.calls.some(({ args }) => args[0] === 'tailscale'), false);
+    const policyBlock = output.slice(output.indexOf('Tag: '), output.indexOf('Created factory'));
+    assert.equal(policyBlock, [
+      'Tag: tag:hf-demo',
+      'Head office tag: tag:hf-head-office',
+      'Host tag: tag:hf-host',
+      '// Paste these lines into the tailnet policy file. Then approve the tag when the factory joins.',
+      '// tag:hf-head-office and tag:hf-host need existing tagOwners entries in the policy.',
+      '"tagOwners": {',
+      '  "tag:hf-demo": ["autogroup:admin"]',
+      '},',
+      '"grants": [',
+      '  {"src": ["autogroup:member"], "dst": ["tag:hf-demo"], "ip": ["tcp:443"]},',
+      '  {"src": ["tag:hf-head-office"], "dst": ["tag:hf-demo"], "ip": ["tcp:443"]}',
+      ']',
+      'tailscale up --advertise-tags=tag:hf-demo',
+      '',
+    ].join('\n'));
+  } finally { f.cleanup(); }
+});
+
+test('factory new applies the tested Codex sandbox and prints the client grant for a non-personal-use host', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context', '--runtime', 'docker-engine-wsl2', '--codex-sandbox', 'user-namespaces'], f.io);
+    assert.equal(await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io), 0);
+    const create = f.calls.find(({ args }) => args[0] === 'container' && args[1] === 'create').args;
+    assert.deepEqual(create.slice(create.indexOf('--security-opt'), create.indexOf('--security-opt') + 4), [
+      '--security-opt', 'seccomp=' + path.join(path.dirname(new URL('../factory/seccomp-codex.json', import.meta.url).pathname), 'seccomp-codex.json'),
+      '--security-opt', 'systempaths=unconfined',
+    ]);
+    const output = f.output.join('');
+    assert.match(output, /\{"src": \["tag:hf-demo"\], "dst": \["tag:hf-head-office"\], "ip": \["tcp:443"\]\}/);
+    const policyBlock = output.slice(output.indexOf('Tag: '), output.indexOf('Created factory'));
+    assert.equal(policyBlock.includes('  {"src": ["tag:hf-demo"], "dst": ["tag:hf-head-office"], "ip": ["tcp:443"]}'), true);
+    const fleet = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
+    assert.equal(fleet.hosts[0].personalOnly, false);
+    assert.equal(fleet.hosts[0].codexSandbox, 'user-namespaces');
+  } finally { f.cleanup(); }
+});
+
+test('configure disables Codex and rejects a relaxed container after its host becomes unavailable', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context', '--codex-sandbox', 'user-namespaces'], f.io);
+    await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    await factoryCommand(['host', 'add', 'host-a', '--codex-sandbox', 'unavailable'], f.io);
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['configure', 'demo', '--step', 'container'], f.io), 1);
+    const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+    assert.equal(flow.codexEnabled, false);
+    assert.equal(flow.codexDisabledByWizard, true);
+    assert.match(f.output.join(''), /no approved Codex security profile/);
+    const gate = f.calls.filter(({ args }) => args.some((word) => word.includes('allowedKinds'))).at(-1);
+    assert.ok(gate.args.find((word) => word.includes('allowedKinds')).includes('p.allowedKinds.filter(k=>k!=="codex")'));
+    await factoryCommand(['list', '--json'], f.io);
+    assert.equal(JSON.parse(f.output.at(-1)).hosts[0].codexSandbox, 'unavailable');
   } finally { f.cleanup(); }
 });
 
@@ -277,6 +368,23 @@ test('the wizard accepts Docker effective systempaths fields when the option is 
     f.container.HostConfig.MaskedPaths = ['/proc/kcore'];
     assert.equal(await factoryCommand(['configure', 'demo', '--step', 'container'], f.io), 1);
   } finally { f.cleanup(); }
+});
+
+test('an unavailable Codex sandbox accepts Docker defaults and rejects relaxed security options', () => {
+  const container = { HostConfig: { Privileged: false, SecurityOpt: null }, Mounts: mounts };
+  assert.equal(configSafetyError(container, 'demo', 'unavailable'), null);
+  const error = 'The factory container has no approved Codex security profile.';
+  const results = [
+    ['systempaths=unconfined'],
+    ['seccomp=example-profile'],
+    ['seccomp=example-profile', 'systempaths=unconfined'],
+  ].map((SecurityOpt) => {
+    container.HostConfig.SecurityOpt = SecurityOpt;
+    return configSafetyError(container, 'demo', 'unavailable');
+  });
+  assert.deepEqual(results, [error, error, error]);
+  container.HostConfig.SecurityOpt = 'invalid';
+  assert.equal(configSafetyError(container, 'demo', 'unavailable'), error);
 });
 
 test('resume reloads stored host settings when the live service still rejects the factory hostname', async () => {

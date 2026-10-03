@@ -1514,25 +1514,30 @@ Warning: the registry holds the address, the user, and the key file path of each
 ### Commands
 
 ```
-herdr-boss factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]
-herdr-boss factory host add NAME --docker-context CONTEXT
+herdr-boss factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-] [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]
+herdr-boss factory host add NAME --docker-context CONTEXT [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]
+herdr-boss factory host add NAME [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]
 herdr-boss factory host list
 herdr-boss factory host remove NAME
 herdr-boss factory ssh HOST -- COMMAND...
 herdr-boss factory docker HOST -- ARGS...
 ```
 
-`factory host add` stores the name, the address, the user, and the key file path in `registry.json`. The folder is `~/.herdr-factories`. Set `HERDR_FACTORIES_DIR` to use another folder. Herdr Boss creates the folder with mode 700 and the file with mode 600. The key file path is a path only. Herdr Boss never reads the key file. Only `ssh -i` reads it.
+`factory host add` stores the name, the address, the user, and the key file path in `registry.json`. It also stores the host runtime, the personal-only flag, and the Codex sandbox setting. The folder is `~/.herdr-factories`. Set `HERDR_FACTORIES_DIR` to use another folder. Herdr Boss creates the folder with mode 700 and the file with mode 600. The key file path is a path only. Herdr Boss never reads the key file. Only `ssh -i` reads it.
 
-To keep the address out of the shell history, give the fields as JSON with `--from-file FILE`, with `--from-file -`, or on stdin. The fields are `address`, `user`, and `keyFile`. A flag overrides the same field in the JSON. The name uses lower case letters, digits, and hyphens.
+To keep the address out of the shell history, give the fields as JSON with `--from-file FILE`, with `--from-file -`, or on stdin. The connection fields are `address`, `user`, and `keyFile`. The optional settings are `runtime`, `personalOnly`, and `codexSandbox`. A flag overrides the same field in the JSON. The name uses lower case letters, digits, and hyphens.
 
 `factory host list` prints the name and the user of each host. It never prints the address or the key file path. It does not list the `local` entry that holds the local builder name. The registry commands change `registry.json` under a lock file. A lock is stale when its owner process is gone or the file is older than 60 seconds. The tool removes a stale lock. `factory host remove NAME` deletes the host.
 
-`--docker-context` stores a Docker context name in the private connection record. With this option alone, `host add` updates an existing record and keeps its SSH fields. A new context record needs no key path. `factory docker` uses `docker --context` when this field exists. It keeps the earlier SSH method when the field is absent. The first word after `--` must not start with `-`. The command refuses `--context other` and similar options. A command has a 30-minute limit. Output masks the context name, `ts.net` names, endpoint URLs, and the `Name:` line. Docker runs with `--context`, and the tool removes `DOCKER_HOST` and `DOCKER_CONTEXT` from the child environment. The local host uses `--context orbstack`.
+`--docker-context` stores a Docker context name in the private connection record. With this option, `host add` updates an existing record and keeps its SSH fields. Runtime, personal-only, and Codex sandbox settings can also be updated on an existing host. A new context record needs no key path. `factory docker` uses `docker --context` when this field exists. It keeps the earlier SSH method when the field is absent. The first word after `--` must not start with `-`. The command refuses `--context other` and similar options. A command has a 30-minute limit. Output masks the context name, `ts.net` names, endpoint URLs, and the `Name:` line. Docker runs with `--context`, and the tool removes `DOCKER_HOST` and `DOCKER_CONTEXT` from the child environment. The local host uses `--context orbstack`.
 
 ## Container factories
 
 Run the host tool outside a container. The minimum factory version is `0.1.0`. The fleet value `minimumFactoryVersion` can raise this floor. It cannot lower it. The first release creates personal factories only. It refuses client factories on a personal-use runtime.
+
+Each host stores its Codex sandbox setting. `user-namespaces` selects the tested custom seccomp profile with `systempaths=unconfined`. `unavailable` keeps Docker's default seccomp profile and excludes Codex from that factory. A remote host with no setting defaults to `unavailable`. Set `user-namespaces` only after a sandbox check passes on that host.
+
+After it creates a factory, `factory new` prints a Tailscale tag, policy lines, and a command for the host. Paste the lines into the tailnet policy file. Run the printed command on the host and approve the tag when the factory joins. The command does not change the tailnet. Port 443 is the HTTPS port of Tailscale Serve. A personal-only host has no client-factory grant.
 
 ```sh
 herdr-boss factory new NAME [--host HOST] [--profile personal] [--image TAG] [--dashboard-port PORT] [--ssh-port PORT]

@@ -111,6 +111,17 @@ test('host add refuses bad input without echoing the values', async () => {
   } finally { f.cleanup(); }
 });
 
+test('host add refuses the reserved local name before writing host settings', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(factoryCommand([
+      'host', 'add', 'local', '--docker-context', 'example-context', '--runtime', 'docker-engine-wsl2',
+      '--personal-only', 'false', '--codex-sandbox', 'unavailable',
+    ], f.io(fakeSpawn(f.calls))), /host name local is reserved/i);
+    assert.equal(fs.existsSync(path.join(f.dir, 'registry.json')), false);
+  } finally { f.cleanup(); }
+});
+
 test('host list prints the name and the user only', async () => {
   const f = fixture();
   try {
@@ -313,6 +324,19 @@ test('host add accepts a context name without reading a key or printing the cont
     assert.equal(f.text().includes('example-context'), false);
     await assert.rejects(factoryCommand(['host', 'add', 'bad', '--docker-context', '-bad'], f.io(fakeSpawn(f.calls))), /context/i);
     assert.equal(fs.statSync(path.join(f.dir, 'registry.json')).mode & 0o777, 0o600);
+  } finally { f.cleanup(); }
+});
+
+test('host add stores runtime, personal-use and Codex sandbox settings', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['host', 'add', 'box', '--address', ADDRESS, '--user', 'builder', '--key-file', f.keyFile, '--runtime', 'docker-engine-wsl2', '--personal-only', 'true', '--codex-sandbox', 'user-namespaces'], f.io(fakeSpawn(f.calls))), 0);
+    const record = JSON.parse(fs.readFileSync(path.join(f.dir, 'registry.json'), 'utf8')).hosts.box;
+    assert.deepEqual(record, {
+      address: ADDRESS, user: 'builder', keyFile: f.keyFile, transport: 'ssh', runtime: 'docker-engine-wsl2',
+      personalOnly: true, codexSandbox: 'user-namespaces',
+    });
+    for (const value of [ADDRESS, f.keyFile, 'KEY-CONTENT-MARKER']) assert.equal(f.text().includes(value), false);
   } finally { f.cleanup(); }
 });
 

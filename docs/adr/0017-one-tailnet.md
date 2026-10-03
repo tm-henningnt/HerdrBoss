@@ -10,6 +10,7 @@ All hosts, factories, the head office, and the Owner's devices join one tailnet.
 
 - One Tailscale account to manage.
 - Each new factory needs a tag and a rule change. The host tool prints the rule lines.
+- Use `tag:hf-<factory slug>` for a factory, `tag:hf-head-office` for the head office, and `tag:hf-host` for a Windows host. Tailscale Serve publishes the factory dashboard on TCP port 443.
 
 ## Alternatives rejected
 

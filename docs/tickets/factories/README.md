@@ -29,6 +29,4 @@ Tickets for the spec [`docs/specs/factories.md`](../../specs/factories.md). One 
 
 ## Docker safety
 
-Never run `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. The exception is a resource that carries the label `herdr-factory-spike=<worker>`.
-
-Give every Docker resource that you create this label. Use a dedicated buildx builder or Docker context for factory work, and remove only that one.
+Create and use only Docker resources that have both labels: `herdr-factory=<factory name>` and `herdr-factory-spike=<worker name>`. Do not prune a shared daemon or remove a shared or unrelated resource. Destroy only the named factory's container and volumes when both labels match. Ask the user to type the exact factory name before destroy. Keep private host names, addresses, tailnet names, key paths, and Docker context names out of the repository.
