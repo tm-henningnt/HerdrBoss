@@ -92,6 +92,7 @@ test('a remote factory row shows the Attach state and a copy button for the atta
   assert.match(html, /data-copy-text="herdr-boss factory attach win2"/);
   assert.equal(html.match(/Attach:/g).length, 2);
   assert.doesNotMatch(html, /ssh|hf-win/i);
+});
 
 test('factory shares show one slider per scoped factory, whole percentages, totals, and a nudge form', async () => {
   const { fleetSharesView } = await import('../public/fleet.js');
