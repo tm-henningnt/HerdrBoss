@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -343,14 +344,20 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
     for (const x of u.extraRateWindows || []) {
       windows.push({ key: x.id, label: x.title, usedPercent: x.window.usedPercent, resetsAt: x.window.resetsAt, windowMinutes: x.window.windowMinutes, extra: true });
     }
+    const seenCreditKeys = new Map();
     const resetCredits = Array.isArray(u.codexResetCredits?.credits)
-      ? u.codexResetCredits.credits.slice(0, 100).flatMap((credit, index) => {
+      ? u.codexResetCredits.credits.slice(0, 100).flatMap((credit) => {
         if (!credit || typeof credit !== 'object' || Array.isArray(credit)) return [];
         const providerId = [credit.id, credit.credit_id, credit.creditId].find((value) => typeof value === 'string' && value.trim() && value.length <= 128);
         const granted = Date.parse(credit.granted_at);
         const expires = Date.parse(credit.expires_at);
+        // Without a provider id, derive a stable id from the grant and expiry times, so a changed list does not rename a credit.
+        const timeKey = `${credit.granted_at}|${credit.expires_at}`;
+        const occurrence = seenCreditKeys.get(timeKey) || 0;
+        seenCreditKeys.set(timeKey, occurrence + 1);
+        const fallbackId = `credit-${createHash('sha1').update(timeKey).digest('hex').slice(0, 10)}${occurrence ? `-${occurrence + 1}` : ''}`;
         return [{
-          id: providerId || `credit-${index + 1}`,
+          id: providerId || fallbackId,
           status: typeof credit.status === 'string' && credit.status.length <= 40 ? credit.status : 'unknown',
           grantedAt: Number.isFinite(granted) ? new Date(granted).toISOString() : null,
           expiresAt: Number.isFinite(expires) ? new Date(expires).toISOString() : null,

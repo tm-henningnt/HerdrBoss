@@ -619,6 +619,7 @@ export function loadConfig() {
   try { user = migrateLegacyWatchKeys(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
   const cfg = merge(DEFAULTS, user);
   Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
+  if (!cfg.quotaPlan || typeof cfg.quotaPlan !== 'object' || Array.isArray(cfg.quotaPlan)) cfg.quotaPlan = { ...DEFAULTS.quotaPlan };
   for (const setting of Object.keys(DEFAULTS.quotaPlan)) {
     const value = cfg.quotaPlan?.[setting];
     try { validateServiceSettingValues({ [`quotaPlan.${setting}`]: value }); }

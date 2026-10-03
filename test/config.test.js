@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { writeServiceSettings, serviceSettingsView } from '../src/config.js';
 
 function configDir(t, config = {}) {
@@ -155,4 +156,19 @@ test('service settings update only selected keys, retain key order, and keep the
   assert.deepEqual(Object.keys(saved), Object.keys(initial));
   assert.deepEqual(Object.keys(saved.quota), Object.keys(initial.quota));
   assert.equal(fs.statSync(configFile).mode & 0o7777, 0o640);
+});
+
+test('loadConfig uses the quota plan defaults when the stored value is not an object', (t) => {
+  for (const stored of [null, 5, 'x', []]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-quotaplan-load-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ quotaPlan: stored }));
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', "import { loadConfig } from './src/config.js'; console.log(loadConfig().quotaPlan.burstPace)"], {
+      cwd: path.resolve(import.meta.dirname, '..'),
+      env: { ...process.env, HOME: root, HERDR_BOSS_DIR: root },
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), '1');
+  }
 });

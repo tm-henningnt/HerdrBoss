@@ -104,7 +104,21 @@ test('collectQuotas keeps only safe Codex reset credit fields', async () => {
   assert.equal(row.resetCredits, 2);
   assert.deepEqual(row.codexResetCredits, [
     { id: 'credit-a', status: 'available', grantedAt: '2032-04-01T00:00:00.000Z', expiresAt: '2032-04-10T00:00:00.000Z' },
-    { id: 'credit-2', status: 'used', grantedAt: '2032-03-01T00:00:00.000Z', expiresAt: '2032-03-10T00:00:00.000Z' },
+    { id: row.codexResetCredits[1].id, status: 'used', grantedAt: '2032-03-01T00:00:00.000Z', expiresAt: '2032-03-10T00:00:00.000Z' },
   ]);
+  assert.match(row.codexResetCredits[1].id, /^credit-[0-9a-f]{10}$/);
   assert.doesNotMatch(JSON.stringify(row), /private-account|owner@example|private-token|drop/);
+});
+
+test('a credit without a provider id keeps its id when the list changes', async () => {
+  const credit = (grant, expiry) => ({ status: 'available', granted_at: grant, expires_at: expiry });
+  const a = credit('2032-04-01T00:00:00Z', '2032-04-10T00:00:00Z');
+  const b = credit('2032-04-02T00:00:00Z', '2032-04-17T00:00:00Z');
+  const rowFor = async (credits) => {
+    const runner = async () => JSON.stringify([{ provider: 'codex', usage: { primary: { usedPercent: 12, resetsAt: '2032-04-08T00:00:00.000Z', windowMinutes: 10080 }, codexResetCredits: { credits } } }]);
+    return (await collectQuotas({ runner }))[0];
+  };
+  const both = await rowFor([a, b]);
+  const onlyB = await rowFor([b]);
+  assert.equal(onlyB.codexResetCredits[0].id, both.codexResetCredits[1].id);
 });
