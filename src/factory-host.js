@@ -24,7 +24,7 @@ const SSH_FAILED = 255;
 const MASK_HOST = '<host>';
 const MASK_KEY = '<key>';
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
-const IPV6 = /(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{1,4}:){4,}[0-9A-Fa-f:]*/g;
+const IPV6 = /(?<![0-9A-Za-z:])(?=[0-9A-Fa-f:]*:[0-9A-Fa-f:]*:)(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])/g;
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const usageError = (message) => new Error(`${message}\n${FACTORY_HOST_USAGE}`);
@@ -194,7 +194,9 @@ function maskedPipe(stream, sink, host) {
 }
 
 export function sshArguments(host, command) {
-  return ['-i', host.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', `${host.user}@${host.address}`, ...command];
+  // ssh keeps parsing options after the destination, so a command word that starts with `-` would run as a local ssh option.
+  if (command[0]?.startsWith('-')) throw usageError('The remote command must not start with "-".');
+  return ['-i', host.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', '--', `${host.user}@${host.address}`, ...command];
 }
 
 // Run ssh with an args array and no shell. The exit code of the remote command is the result; ssh failure is 255.

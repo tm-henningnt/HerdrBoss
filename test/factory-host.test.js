@@ -151,7 +151,7 @@ test('ssh spawns ssh with an args array, no shell, and passes the exit code', as
     assert.equal(f.calls.length, 1);
     const [call] = f.calls;
     assert.equal(call.command, 'ssh');
-    assert.deepEqual(call.args, ['-i', f.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', `builder@${ADDRESS}`, 'uptime', '-p']);
+    assert.deepEqual(call.args, ['-i', f.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', '--', `builder@${ADDRESS}`, 'uptime', '-p']);
     assert.notEqual(call.options?.shell, true);
     assert.equal(f.text(), 'up 3 days\n');
   } finally { f.cleanup(); }
@@ -242,4 +242,20 @@ test('an unknown subcommand prints usage', async () => {
     await assert.rejects(factoryCommand(['nope'], f.io(fakeSpawn(f.calls))), /Usage/);
     await assert.rejects(factoryCommand([], f.io(fakeSpawn(f.calls))), /Usage/);
   } finally { f.cleanup(); }
+});
+
+test('ssh refuses a remote command that starts with a dash', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    await assert.rejects(factoryCommand(['ssh', 'box', '--', '-oProxyCommand=touch /tmp/x', 'id'], f.io(fakeSpawn(f.calls))), /must not start with/);
+    assert.equal(f.calls.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('maskLine masks compressed IPv6 addresses', () => {
+  for (const ip of ['2606:4700::6810:84e5', 'fe80::1', '2001:db8::1']) {
+    const out = maskLine(`Connection to ${ip} port 22 timed out`, { address: 'example.invalid', keyFile: '/k' });
+    assert.ok(!out.includes(ip), out);
+  }
 });
