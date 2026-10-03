@@ -19,6 +19,7 @@ import { describeHarness, harnessStep } from './project-new-check.js';
 import { describeLabels, labelsStep } from './project-new-labels.js';
 import { ORG_NAME, RemoteError, checkDecision, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 import { CI_WORKFLOW_TEMPLATES, copyWorkflowTemplates } from './ci-workflows.js';
+import { FACTORY_PROJECT_GROUP, isFactoryRole } from './factory-role.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
 export const NOT_BUILT = new Set(['check']);
@@ -39,15 +40,20 @@ function inside(child, parent) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+// options.factory (tests and the dashboard) overrides the detection of the factory role.
+export function factoryRole(options) { return options.factory ?? isFactoryRole(options.env ?? process.env); }
+
 // Turn the options into the resolved inputs that the state file records.
 export function resolveInputs(options) {
   const slug = typeof options.slug === 'string' ? options.slug : '';
   if (!SLUG.test(slug)) refuse('The slug must match [a-z0-9][a-z0-9-]{0,63}.');
   if (options.group && options.path) refuse('Give only one of --group and --path.');
-  if (!options.group && !options.path) refuse('Give --group DIR or --path DIR. There is no default folder.');
+  // A factory has a default project folder. A normal install has none.
+  const group = options.group || (!options.path && factoryRole(options) ? options.factoryGroup || FACTORY_PROJECT_GROUP : undefined);
+  if (!group && !options.path) refuse('Give --group DIR or --path DIR. There is no default folder.');
   const name = String(options.name || slug).trim() || slug;
-  if (options.group && (/[\\/\0]/.test(name) || name === '..' || name.startsWith('.'))) refuse('With --group the name must be one folder name: no slash, no "..", no leading dot.');
-  const dir = options.path ? path.resolve(options.path) : path.join(path.resolve(options.group), name);
+  if (group && (/[\\/\0]/.test(name) || name === '..' || name.startsWith('.'))) refuse('With --group the name must be one folder name: no slash, no "..", no leading dot.');
+  const dir = options.path ? path.resolve(options.path) : path.join(path.resolve(group), name);
   const goal = String(options.goal || '').trim().slice(0, 1000);
   return { slug, name, path: dir, goal };
 }
@@ -328,7 +334,7 @@ const RUN = {
 // The context of the step functions. ceiling (tests): the nested-repository walk stops at this folder.
 // home and reserveBrowser belong to the step harness. persist false keeps the ids in memory only.
 function makeContext(options, { dataDir, state, stateFile, persist }) {
-  return { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [],
+  return { dataDir, repoRoot: path.resolve(options.repoRoot || KIT_ROOT), group: options.group ? path.resolve(options.group) : null, factory: factoryRole(options), ceiling: options.ceiling, allowUnscanned: options.allowUnscanned || [],
     remote: options.remote ?? 'none', visibility: options.visibility ?? 'private', decision: options.decision, org: options.org, start: Boolean(options.start), kind: options.kind, herdr: options.herdr, hooks: options.hooks, env: options.env, home: options.home, reserveBrowser: options.reserveBrowser, ids: state.ids,
     remember(patch) { Object.assign(state.ids, patch); if (!persist) return; state.updatedAt = new Date().toISOString(); writeState(stateFile, state); } };
 }

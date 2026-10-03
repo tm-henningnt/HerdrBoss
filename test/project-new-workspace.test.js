@@ -581,3 +581,30 @@ test('the API runs the flow in a child process, so the synchronous trust wait ne
   assert.match(api, /runFlow = runFlowInChild/);
   assert.match(api, /execFile\(process\.execPath, \[RUNNER\]/);
 });
+
+test('in a factory the step marks the project folder trusted for Claude and Codex before the agent starts', () => {
+  const f = fixture();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-trust-'));
+  try {
+    const herdr = fakeHerdr();
+    const result = start(f, herdr, { factory: true, home, env: { HERDR_SOCKET_PATH: '/tmp/herdr.sock', HOME: home } });
+    assert.equal(result.ok, true, result.error);
+    const folder = fs.realpathSync(result.path);
+    const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
+    assert.equal(claude.projects[folder].hasTrustDialogAccepted, true);
+    const codex = fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8');
+    assert.ok(codex.includes(`[projects."${folder}"]`), codex);
+    assert.match(codex, /trust_level = "trusted"/);
+  } finally { f.cleanup(); fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('outside a factory the step writes no harness trust state', () => {
+  const f = fixture();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-new-trust-'));
+  try {
+    const herdr = fakeHerdr();
+    const result = start(f, herdr, { factory: false, home, env: { HERDR_SOCKET_PATH: '/tmp/herdr.sock', HOME: home } });
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(fs.readdirSync(home), []);
+  } finally { f.cleanup(); fs.rmSync(home, { recursive: true, force: true }); }
+});

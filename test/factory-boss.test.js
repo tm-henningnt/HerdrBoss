@@ -37,6 +37,7 @@ function fixture({
   containerHostname = 'fixture-node',
   paneReadCode = 0,
   detectionReadCode = paneReadCode,
+  gitConfig = {},
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-boss-'));
   const env = {
@@ -68,6 +69,7 @@ function fixture({
     State: { Status: running ? 'running' : 'exited', Running: running },
   };
   const installedPaths = new Set();
+  const git = { ...gitConfig };
   let currentResumePromptProbe = resumePromptProbe;
   let workspaces = workspaceRows;
   let panes = paneRows;
@@ -83,6 +85,14 @@ function fixture({
           encoding: 'utf8', env: { ...process.env, HOME: root },
         });
         return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      }
+      const gitAt = args.indexOf('git');
+      if (gitAt >= 0 && args[gitAt + 1] === 'config') {
+        const rest = args.slice(gitAt + 2);
+        if (!rest.includes('--global')) return { code: 2, stdout: '', stderr: 'unexpected git scope' };
+        if (rest.includes('--get')) return git[rest.at(-1)] ? { code: 0, stdout: `${git[rest.at(-1)]}\n`, stderr: '' } : { code: 1, stdout: '', stderr: '' };
+        git[rest.at(-2)] = rest.at(-1);
+        return { code: 0, stdout: '', stderr: '' };
       }
       if (args.includes('auth') && args.at(-1) === 'login') return { code: interactiveCode, stdout: 'private login output', stderr: '' };
       if ((args.includes('auth') || args.includes('login')) && args.at(-1) === 'status') return { code: verifierCode, stdout: 'private verifier output', stderr: '' };
@@ -149,7 +159,7 @@ function fixture({
     stdout: { write: (text) => output.push(text) },
     stderr: { write: (text) => output.push(text) },
   };
-  return { root, io, output, dockerCalls, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, io, output, dockerCalls, git, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function hasBossPromptScript({ args }) {
@@ -763,4 +773,22 @@ test('interactive Docker calls inherit all terminal streams and return no captur
   assert.deepEqual(await transport.run(['exec', '-it', 'hf-demo', 'claude', 'auth', 'login'], { interactive: true }),
     { code: 0, stdout: '', stderr: '' });
   assert.equal(calls[0].options.stdio, 'inherit');
+});
+
+test('factory boss start sets a neutral Git identity for the factory user when none exists', async () => {
+  const f = fixture({ projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.deepEqual(f.git, { 'user.name': 'Herdr Factory', 'user.email': 'factory@localhost.invalid' });
+    const writes = f.dockerCalls.filter(({ args }) => args.includes('git') && !args.includes('--get'));
+    for (const { args } of writes) assert.deepEqual(args.slice(0, 5), ['exec', '--user', 'factory', '--env', 'HOME=/home/factory']);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start keeps a Git identity that exists', async () => {
+  const f = fixture({ gitConfig: { 'user.name': 'Existing Name' }, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.deepEqual(f.git, { 'user.name': 'Existing Name', 'user.email': 'factory@localhost.invalid' });
+  } finally { f.cleanup(); }
 });

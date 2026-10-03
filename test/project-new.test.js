@@ -616,3 +616,15 @@ test('addProjectPolicy scales to the previous total when it was below 100 and th
   assert.equal(total(small.policy.projects), 100);
   assert.ok(small.after.a >= 1 && small.after.b >= 1);
 });
+
+test('in a factory the project folder defaults to the factory work folder, and a Mac install keeps the refusal', () => {
+  const f = fixture();
+  try {
+    const factoryGroup = path.join(f.root, 'factory-work');
+    const result = runProjectNew({ slug: 'demo', factory: true, factoryGroup, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(fs.realpathSync(result.path), fs.realpathSync(path.join(factoryGroup, 'demo')));
+    assert.ok(fs.existsSync(path.join(result.path, '.git')));
+    assert.throws(() => runProjectNew({ slug: 'other', factory: false, dataDir: f.dataDir, repoRoot: f.repoRoot, ceiling: f.ceiling }), /--group|--path/);
+  } finally { f.cleanup(); }
+});
