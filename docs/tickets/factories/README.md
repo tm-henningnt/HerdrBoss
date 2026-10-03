@@ -15,6 +15,7 @@ Tickets for the spec [`docs/specs/factories.md`](../../specs/factories.md). One 
 | 09 | [Host tool core with the local transport](09-host-tool-core.md) | 08 |
 | 10 | [Factory wizard and harness login](10-wizard.md) | 09 |
 | 11 | [The ssh transport and the Windows host runbook](11-ssh-transport.md) | 03, 09 |
+| 22 | [Interactive host setup guide in the dashboard](22-host-setup-guide.md) | 09, 10, 11 |
 | 12 | [The first personal factory on the Windows home server](12-first-windows-factory.md) | 07, 10, 11 |
 | 13 | [Quota reads and account keys in a container factory](13-quota-in-containers.md) | 02, 08 |
 | 14 | [Backup, restore, destroy, and break glass](14-backup-restore.md) | 09 |
