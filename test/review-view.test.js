@@ -1,6 +1,7 @@
 // The reviewer pages: the pack list, the section list, the progress bar, and the Mailbox entry.
 // public/review.js has no DOM use, so the tests import it directly.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createDocument, find, byKey } from './fake-dom.js';
@@ -18,7 +19,7 @@ const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const sourceCss = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 const css = sourceCss.replace(/\/\*[\s\S]*?\*\//g, '');
-const userGuide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const userGuide = readUserGuide();
 // Exact narrow item-viewer block from main before RV1.
 const mainNarrowItemRules = `@media (max-width: 899px) {
   .review-page.item-open .review-head, .review-page.item-open .review-sections { display: none; }

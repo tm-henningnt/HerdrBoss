@@ -1,5 +1,6 @@
 import './helpers/test-env.js';
 import assert from 'node:assert/strict';
+import { readUserGuide } from './helpers/user-guide.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -188,7 +189,7 @@ test('the worker brief template uses absolute worker paths and the kit names no 
   assert.match(projectKit, /Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone\. Do not join it to other commands with `&&`, `;`, or a pipe\./);
   assert.ok(projectKit.includes('The full-suite lock serves waiters in order. Start your suite once, and wait; do not restart it to jump the queue.'));
   assert.ok(projectKit.includes('Exit code 75 means the lock was busy and no test ran.'));
-  const userGuide = fs.readFileSync(path.resolve('docs/user-guide.md'), 'utf8');
+  const userGuide = readUserGuide();
   assert.match(userGuide, fullSuiteLockRule);
   assert.match(userGuide, /Run a full test suite with `herdr-boss suite -- <command>`/);
   const cli = fs.readFileSync(path.resolve('docs/cli.md'), 'utf8');
@@ -282,7 +283,8 @@ test('the brief template has the leased resources line and the kit names the lea
   assert.equal(rendered, 'Leased resources: `HERDR_SERVE_PORT=47100` (pool `serve-ports`). Use only these.');
   assert.equal(renderBrief('Leased resources: {{leases}}', {}), 'Leased resources: (none)');
   const rule = 'Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand.';
-  for (const file of ['kit/skills/herdr-orchestrator/SKILL.md', 'docs/user-guide.md']) assert.ok(fs.readFileSync(path.resolve(file), 'utf8').includes(rule), file);
+  assert.ok(fs.readFileSync(path.resolve('kit/skills/herdr-orchestrator/SKILL.md'), 'utf8').includes(rule), 'SKILL.md');
+  assert.ok(readUserGuide().includes(rule), 'user docs');
 });
 
 test('worker start dry-run names each lease pool and takes no lease', () => {

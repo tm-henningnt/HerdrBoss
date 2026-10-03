@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +18,7 @@ test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));

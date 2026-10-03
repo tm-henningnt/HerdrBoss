@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -120,7 +121,7 @@ test('the list has a filter bar and an empty message', () => {
 test('the page wires the worker list, the HELP text, the docs, and the phone layout', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   assert.match(app, /import \{ orchestratorFocus, workerListHtml \} from '\.\/worker-rows\.js'/);
   assert.match(app, /workerListHtml\(s, \{ \.\.\.workerUi, now: Date\.now\(\) \}/);
   assert.match(app, /\/api\/worker-brief\?project=/);

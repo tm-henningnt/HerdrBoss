@@ -1,5 +1,6 @@
 // The answer area of a review item: option cards, the order of the controls, and the resizable width on a desktop.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { answerBarHtml } from '../public/review-viewer.js';
@@ -10,7 +11,7 @@ import {
 
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const helpers = () => ({ esc, text: () => undefined, avatar: () => '', projectLabel: (s) => s, time: () => '08:12', menuButton: '' });
 

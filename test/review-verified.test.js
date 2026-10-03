@@ -1,6 +1,7 @@
 // The summary header, the verified badges, the item anatomy, the evidence images, the Needs you filter,
 // and the narrow section row of the review pages (RV3b). The modules have no DOM use, so the tests import them directly.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -8,7 +9,7 @@ const { packPageHtml, summaryHeaderHtml } = await import('../public/review.js');
 const { itemViewerHtml, verifiedBadgeHtml } = await import('../public/review-viewer.js');
 const { visibleItems, needsYouCount, loadFilter, saveFilter } = await import('../public/review-filter.js');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -1,11 +1,12 @@
 // The project page order (actionable first, then the plan, then history, then details) and the Overview guidance section.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 
 // Load top-level functions of the dashboard script into one context, with the helpers they read.
 function load(names, context = {}) {

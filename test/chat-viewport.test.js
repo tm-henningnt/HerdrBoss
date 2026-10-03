@@ -1,5 +1,6 @@
 // iOS Safari can scroll the visual viewport without shrinking the layout viewport.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -8,7 +9,7 @@ import * as appView from '../public/app-view.js';
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 
 test('the Chat viewport uses the visual viewport and applies safe area only while the keyboard is closed', () => {
   assert.equal(typeof appView.chatViewportLayout, 'function');

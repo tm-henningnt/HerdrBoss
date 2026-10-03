@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -750,7 +751,7 @@ test('POST /api/watch/start and /api/watch/stop write and clear the watch state,
 test('the dashboard shows a watch symbol with a confirmed Stop, and the Agents page has a Watch box', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The top bar has a watch symbol and a popover. The page has no banner.
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="watch-toggle"/);
@@ -1534,7 +1535,7 @@ test('organization cards show an unavailable or stale quota bar, and the header 
 test('the dependency graph draws every task, with fit, zoom, pan, and a full-size overlay', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // Every task in the filter is a node, including tasks without links. The 90-task cut and the empty-edge bail-out are gone.
   assert.doesNotMatch(app, /if \(!edges\.length\) return ''/);
   assert.doesNotMatch(app, /first 90/);
@@ -1582,7 +1583,7 @@ test('the dependency graph draws every task, with fit, zoom, pan, and a full-siz
 test('the project page shows a Needs your decision group, wait labels, and an Overview count', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The group lists each open task that waits on the Owner, with its ask and a Mailbox conversation link.
   assert.match(app, /function decisionsBlock\(p, m, slug\)/);
   assert.match(app, /t\.waitingOn === 'owner'/);
@@ -1755,7 +1756,7 @@ test('the bookmark API lists, adds, renames, moves, removes, sets the start page
 test('the Browsers page selects the whole address on first focus and offers one close control for each tab', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The first focus selects all text. A per-focus flag keeps the second click as a normal cursor.
   assert.match(app, /addEventListener\('focus', \(e\) => \{[\s\S]{0,400}\.browser-navigate input\[name="url"\]/);
   assert.match(app, /input\.select\(\)/);
@@ -1798,7 +1799,7 @@ test('Allocation shows machine locks without internal process or git fields', ()
 test('the Browsers page has a bookmark list, a start-page field, and phone-sized controls', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // Each card renders the section, and the page posts to the bookmark route.
   assert.match(app, /function browserBookmarkSection\(slug, b\)/);
   assert.match(app, /\$\{browserBookmarkSection\(p\.slug, b\)\}/);
@@ -1825,7 +1826,7 @@ test('the Browsers page has a bookmark list, a start-page field, and phone-sized
 
 test('Analytics and Mailbox show the scan and store limits from the state', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The two read-only lines take the fixed limits from the state.
   assert.match(app, /function denialLimitsLine\(s\)/);
   assert.match(app, /function messageLimitsLine\(s\)/);
@@ -1856,7 +1857,7 @@ test('Analytics shows the top ten denial counts by harness, model, and cause', (
 test('the project page shows the memory and kit file paths with a home-relative repository path', { timeout: 20000 }, async (t) => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const projects = fs.readFileSync(new URL('../src/projects.js', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The Files panel shows the project memory, the kit file, the kit revision, and the Boss memory.
   assert.match(app, /function filesBlock\(p, kit\)/);
   assert.match(app, /filesBlock\(p, s\.kit\)/);
@@ -1980,7 +1981,7 @@ process.stdout.write(JSON.stringify(state.workerConfig));
 
 test('the project page shows the worker config panel read-only', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   assert.match(app, /function workerConfigBlock\(s, slug\)/);
   assert.match(app, /s\.workerConfig\?\.\[slug\]/);
   assert.match(app, /Change these in <span class="mono">\.herdr-boss\.json<\/span> in the repository\./);
@@ -2060,7 +2061,7 @@ process.stdout.write(JSON.stringify({ harness: state.harness, findings }));
 test('Settings shows a read-only harness readiness table with the fixed sync line', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   assert.match(app, /<h2>Harness readiness\$\{helpButton\('harness\.readiness'\)\}<\/h2>/);
   assert.match(app, /s\?\.harness\?\.findings/);
   assert.doesNotMatch(app, /Run herdr-boss harness sync to see the changes to make\./, 'the readiness group text in the schema holds the sync hint');
@@ -2167,7 +2168,7 @@ test('the resource pool API creates, updates, and removes pools safely', { timeo
 test('Allocation manages config pools and documents the safe limits', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   assert.match(app, /data-pool-add/);
   assert.match(app, /const controls = pool\.builtIn \? '' :/);
   assert.match(app, /data-pool-edit=/);
@@ -2190,7 +2191,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The page and the route. Chat goes right after Mailbox.
   assert.match(app, /chat: \['Chat'/);
   assert.match(app, /chat: 'Chat'/);
@@ -2229,7 +2230,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
 test('the Chat page shows the Mailbox action cards, uses the Mailbox write route, and moves the focus', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // A card is a normal bubble. Only a real choice shows one.
   assert.match(app, /const isCard = !owner && !record\.closedAt && \(record\.action === 'answer' \|\| options\.length > 0\);/);
   assert.match(app, /const text = isCard \? chatQuestionText\(record\.text\) : record\.text;/);
@@ -2485,7 +2486,7 @@ test('one title gives one avatar, and the Chat, the Mailbox, the Agents cards, a
 test('the pages show the avatar, the Settings page manages the image, and the composer hides its scroll bar', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const guide = readUserGuide();
   // The Chat list, the Chat header, the first bubble of a run, the Mailbox rows, and the Agents chart cards.
   assert.match(app, /\$\{avatarSlot\(item\.thread, \{ title: avatarTitle\(item\.thread, item\.title\), size: 36 \}\)\}/);
   assert.match(app, /\$\{avatarSlot\(chat\.thread, \{ title: avatarTitle\(chat\.thread, title\), size: 28 \}\)\}/);

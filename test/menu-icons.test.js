@@ -1,5 +1,6 @@
 // The Mailbox and the Chat have no menu entry. The top-bar icons lead to them.
 import test from 'node:test';
+import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -8,7 +9,7 @@ const html = read('index.html');
 const app = read('app.js');
 const css = read('style.css').replace(/\/\*[\s\S]*?\*\//g, '');
 const review = read('review.js');
-const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+const guide = readUserGuide();
 
 const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
 const navKeys = [...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]);
