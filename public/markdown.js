@@ -42,6 +42,16 @@ export function safeUrl(raw) {
 
 export const safeImageUrl = (url) => /^\/attachments\/att_[0-9a-f]{32}$/.test(url) ? url : null;
 
+// Docs mode. The Docs section passes two hooks for one render. link(raw) and image(raw) return the URL to write, or null.
+// A link URL still passes safeUrl(). The image hook must return a local path.
+let DOCS = null;
+const linkUrl = (raw) => safeUrl(DOCS ? DOCS.link(raw) : raw);
+const imageUrl = (raw) => {
+  if (!DOCS) return safeImageUrl(raw);
+  const url = DOCS.image(raw);
+  return url && /^\/(?![/\\])/.test(url) ? url : null;
+};
+
 // ---------- Inline ----------
 
 const PUNCT = /[!-/:-@[-`{-~\u2000-\u206f\u2e00-\u2e7f\u3000-\u303f]/;
@@ -179,7 +189,7 @@ function inlineTokens(text, inLink) {
       if (imageTail) {
         flush();
         const alt = text.slice(i + 2, close).replace(/\\([!-/:-@[-`{-~])/g, '$1');
-        const url = safeImageUrl(imageTail.url);
+        const url = imageUrl(imageTail.url);
         push(url ? { type: 'image', url, alt } : { type: 'text', value: alt });
         i = imageTail.end;
         continue;
@@ -191,7 +201,7 @@ function inlineTokens(text, inLink) {
       if (tail) {
         flush();
         const children = inlineNodes(text.slice(i + 1, close), true);
-        const url = safeUrl(tail.url);
+        const url = linkUrl(tail.url);
         if (url) push(linkNode(url, tail.title, children));
         else push({ type: 'group', children });
         i = tail.end;
@@ -303,7 +313,7 @@ function renderInline(nodes) {
     frame.i += 1;
     if (node.type === 'text') { html += esc(node.value); continue; }
     if (node.type === 'br') { html += '<br>'; continue; }
-    if (node.type === 'image') { html += `<img src="${esc(node.url)}" alt="${esc(node.alt)}" loading="lazy" class="md-attachment">`; continue; }
+    if (node.type === 'image') { html += `<img src="${esc(node.url)}" alt="${esc(node.alt)}" loading="lazy" class="${DOCS ? 'md-image' : 'md-attachment'}">`; continue; }
     if (node.type === 'code') { html += `<code>${esc(node.value)}</code>`; continue; }
     const depth = node.type === 'group' ? frame.depth : frame.depth + 1;
     let open = '';
@@ -518,14 +528,30 @@ function parseList(lines, i, depth, blocks) {
 // The attribute holds the copy text only when the source has tabs, so the button does not repeat the code otherwise.
 const copyButton = (source, text) => `<button type="button" class="copy-btn" data-copy-code${source !== text ? `="${esc(source)}"` : ''} aria-label="Copy code"><span class="copy-icon" aria-hidden="true"></span><span class="copy-flash" aria-hidden="true">Copied</span></button>`;
 
+// The anchor of a heading follows the GitHub rule, so a link written for GitHub finds its heading. A repeated heading gets -1, -2, and so on.
+export function headingSlug(text) {
+  return String(text).replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_~]/g, '').trim().toLowerCase()
+    .replace(/[^\p{L}\p{N} _-]/gu, '').replace(/ /g, '-');
+}
+
+function headingId(options, text, level) {
+  const base = headingSlug(text) || 'section';
+  const count = options.seen.get(base) || 0;
+  options.seen.set(base, count + 1);
+  const id = options.headingIds + (count ? `${base}-${count}` : base);
+  options.onHeading?.({ level, text: text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*~]/g, ''), id });
+  return id;
+}
+
 function renderBlocks(blocks, options, tight = false) {
   return blocks.map((block) => {
     switch (block.type) {
       case 'para': return tight ? renderInlineMarkdown(block.text) : `<p>${renderInlineMarkdown(block.text)}</p>`;
       case 'raw': return `<p>${esc(block.text)}</p>`;
       case 'heading': {
-        const level = Math.min(6, Math.max(3, block.level + options.headingOffset));
-        return `<h${level}>${renderInlineMarkdown(block.text)}</h${level}>`;
+        const level = Math.min(6, Math.max(options.minHeading, block.level + options.headingOffset));
+        const id = options.headingIds ? headingId(options, block.text, level) : '';
+        return `<h${level}${id ? ` id="${esc(id)}"` : ''}>${renderInlineMarkdown(block.text)}</h${level}>`;
       }
       case 'rule': return '<hr>';
       case 'code': return `<div class="md-code">${copyButton(block.source, block.text)}<pre><code${block.lang ? ` class="language-${esc(block.lang)}"` : ''}>${esc(block.text)}</code></pre></div>`;
@@ -557,18 +583,21 @@ function renderBlocks(blocks, options, tight = false) {
 }
 
 // Renders Markdown source to safe HTML. A heading offset of 2 renders # as h3.
-export function renderMarkdown(source, { headingOffset = 2 } = {}) {
+// The Docs section also sets minHeading (the lowest heading level), maxInput, headingIds (an id prefix), onHeading, and docs (the URL hooks).
+export function renderMarkdown(source, { headingOffset = 2, minHeading = 3, maxInput = MAX_INPUT, headingIds = '', onHeading, docs = null } = {}) {
   let text = String(source ?? '');
   let cut = '';
-  if (text.length > MAX_INPUT) { text = text.slice(0, MAX_INPUT); cut = '<p>…</p>'; }
+  if (text.length > maxInput) { text = text.slice(0, maxInput); cut = '<p>…</p>'; }
   const raw = text.replace(/\r\n?/g, '\n').replace(/\u0000/g, '\ufffd').split('\n');
   const lines = raw.map((line) => line.replace(/\t/g, '    '));
   TAB_LINES = new Map();
   if (text.includes('\t')) raw.forEach((line, i) => { if (line !== lines[i] && TAB_LINES.size < MAX_TAB_LINES) TAB_LINES.set(lines[i], line); });
+  DOCS = docs;
   try {
-    return renderBlocks(parseBlocks(lines, 0), { headingOffset }) + cut;
+    return renderBlocks(parseBlocks(lines, 0), { headingOffset, minHeading, headingIds, onHeading, seen: new Map() }) + cut;
   } finally {
     TAB_LINES = new Map();
+    DOCS = null;
   }
 }
 

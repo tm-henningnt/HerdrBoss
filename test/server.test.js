@@ -1774,7 +1774,8 @@ test('the Browsers page selects the whole address on first focus and offers one 
   assert.match(app, /This is the last tab\. The browser keeps running with no page\./);
   assert.match(app, /\/api\/browser-sessions\/tab-close/);
   // The help text and the guide describe both behaviours.
-  assert.match(app, /<h3>Tabs<\/h3>[\s\S]*Close tab/);
+  // The Browsers help is the file docs/help/browsers.md.
+  assert.match(fs.readFileSync(new URL('../docs/help/browsers.md', import.meta.url), 'utf8'), /## Tabs[\s\S]*Close tab/);
   assert.match(guide, /Close tab/);
   assert.match(guide, /selects all its text/);
 });
@@ -1817,7 +1818,7 @@ test('the Browsers page has a bookmark list, a start-page field, and phone-sized
   assert.match(css, /\.browser-bookmarks\b/);
   assert.match(css, /@media \(max-width: 760px\) \{\s*\.browser-bookmark-actions button,[^}]*min-height: 44px/);
   // Help and guide describe the feature.
-  assert.match(app, /<h3>Bookmarks<\/h3>/);
+  assert.match(fs.readFileSync(new URL('../docs/help/browsers.md', import.meta.url), 'utf8'), /^## Bookmarks$/m);
   assert.match(guide, /Bookmarks and the start page/);
   assert.match(guide, /Bookmarks must not hold credentials/);
 });

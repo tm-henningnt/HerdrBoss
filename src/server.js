@@ -43,10 +43,12 @@ import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
 import { createRawRoute } from './review-raw.js';
 import * as reviewStore from './review-store.js';
+import { createDocsSite, IMAGE_TYPES as DOC_IMAGE_TYPES } from './docs-site.js';
 import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
+const defaultDocsSite = createDocsSite({ root: path.dirname(DOCS) });
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
 const execFileAsync = promisify(execFile);
 
@@ -207,7 +209,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {}, docsSite = defaultDocsSite } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -1217,6 +1219,23 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       }
       if (p === '/bulletin.md') return send(res, 200, fs.readFileSync(path.join(DATA_DIR, 'bulletin.md')), TYPES['.md']);
       if (p === '/docs/project-status.md') return send(res, 200, fs.readFileSync(path.join(DOCS, 'project-status.md')), TYPES['.md']);
+
+      // The Docs section. The routes read only README.md and docs/. The page itself is an app shell route.
+      if (req.method === 'GET' && (p === '/api/docs/tree' || p === '/api/docs/page' || p.startsWith('/api/docs/help/'))) {
+        let answer;
+        if (p === '/api/docs/tree') answer = docsSite.tree();
+        else if (p === '/api/docs/page') answer = docsSite.page(url.searchParams.get('path') ?? '');
+        else { try { answer = docsSite.help(decodeURIComponent(p.slice('/api/docs/help/'.length))); } catch { answer = docsSite.help(''); } }
+        return send(res, answer.status, answer.body);
+      }
+      if (req.method === 'GET' && p.startsWith('/docs/') && Object.hasOwn(DOC_IMAGE_TYPES, path.extname(p).toLowerCase())) {
+        let name = '';
+        try { name = decodeURIComponent(p.slice('/docs/'.length)); } catch { /* The name stays empty and the route answers 404. */ }
+        const image = docsSite.image(name);
+        if (image.status !== 200) return send(res, image.status, image.body);
+        res.writeHead(200, { 'content-type': image.type, 'content-length': image.bytes.length, 'x-content-type-options': 'nosniff', 'cache-control': 'private, max-age=300', 'content-security-policy': "default-src 'none'; sandbox" });
+        return res.end(image.bytes);
+      }
 
       // Static files. Unknown paths return the app shell for client routing.
       const file = path.join(PUBLIC, path.normalize(p === '/' ? '/index.html' : p).replace(/^(\.\.[/\\])+/, ''));
