@@ -47,7 +47,7 @@ import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
-import { ACTION_REFRESH_MS, cleanScreen, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
+import { ACTION_REFRESH_MS, capFinished, cleanScreen, maskText, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
 const TASK_MERGE_CHECKS = 5;
@@ -1649,7 +1649,7 @@ export class Engine extends EventEmitter {
     this.workerViewAt = now;
     const panes = herdr?.panes ? new Map(herdr.panes.map((pane) => [pane.id, { status: pane.status ?? null }])) : null;
     const budget = { left: TASK_MERGE_CHECKS };
-    const prune = now - this.briefPruneAt >= BRIEF_PRUNE_INTERVAL_MS;
+    const prune = this.act && now - this.briefPruneAt >= BRIEF_PRUNE_INTERVAL_MS;
     if (prune) this.briefPruneAt = now;
     const rows = [];
     for (const { slug, repo } of readProjectRepos(DATA_DIR)) {
@@ -1664,7 +1664,7 @@ export class Engine extends EventEmitter {
         this.log('status', `Worker rows for ${slug} failed (${error.code || 'error'}).`, { project: slug });
       }
     }
-    this.workerView = { at: now, rows };
+    this.workerView = { at: now, rows: capFinished(rows) };
     return this.workerView;
   }
 
@@ -1680,7 +1680,7 @@ export class Engine extends EventEmitter {
       if (!stat.isFile() || stat.isSymbolicLink()) return null;
       const record = JSON.parse(fs.readFileSync(file, 'utf8'));
       const brief = workerBrief(record, now);
-      return brief ? { project, name, title: record.title || null, scope: Array.isArray(record.allowedPaths) ? record.allowedPaths : [], reportPath: `${record.workerDir || '.worker'}/report.md`, ...brief } : null;
+      return brief ? { project, name, title: record.title || null, scope: Array.isArray(record.allowedPaths) ? record.allowedPaths.map((item) => maskText(item)) : [], reportPath: `${record.workerDir || '.worker'}/report.md`, ...brief } : null;
     } catch { return null; }
   }
 

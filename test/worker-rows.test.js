@@ -131,3 +131,16 @@ test('the page wires the worker list, the HELP text, the docs, and the phone lay
   assert.match(guide, /#### The brief panel/);
   assert.match(guide, /GET \/api\/worker-brief/);
 });
+
+test('an idle worker over 2 hours shows the stale badge, and a pane without a run record shows its label', () => {
+  const idle = { ...live, state: 'idle', group: 'waiting', now: 'Idle for 150 minutes' };
+  const since = { paneSince: { 'w1:p2': { since: NOW - 3 * 3600000 } } };
+  assert.match(workerRowHtml(idle, { state: { ...state, ...since }, open: new Set(), now: NOW }, deps), /Idle over 2h/);
+  const fresh = { paneSince: { 'w1:p2': { since: NOW - 3600000 } } };
+  assert.doesNotMatch(workerRowHtml(idle, { state: { ...state, ...fresh }, open: new Set(), now: NOW }, deps), /Idle over 2h/);
+  assert.doesNotMatch(workerRowHtml(live, { state: { ...state, ...since }, open: new Set(), now: NOW }, deps), /Idle over 2h/);
+  const withLabel = { ...state, herdr: { ...state.herdr, panes: [...state.herdr.panes, { id: 'w1:p8', workspace: 'w1', agent: 'claude', label: 'planner', status: 'idle' }] } };
+  const orphan = workerRows(withLabel).find((row) => row.pane === 'w1:p8');
+  assert.equal(orphan.paneLabel, 'planner');
+  assert.match(workerRowHtml(orphan, { state: withLabel, open: new Set(), now: NOW }, deps), /planner/);
+});

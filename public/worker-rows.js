@@ -8,6 +8,7 @@ const STATE_LABEL = {
   review: 'Collected', merged: 'Merged', finished: 'Finished', failed: 'Failed', abandoned: 'Abandoned',
 };
 const DOING_LIMIT = 2;
+const STALE_IDLE_MS = 7200000;
 
 const isWorkerPane = (pane) => pane.agent && !pane.orch && pane.label !== 'boss';
 
@@ -52,7 +53,7 @@ export function workerRows(state) {
     if (known.has(pane.id)) continue;
     const status = pane.status || 'unknown';
     rows.push({
-      key: `pane/${pane.id}`, project: projectOfWorkspace(state, pane.workspace) || workspaces.get(pane.workspace)?.label || '', name: pane.name || pane.agent,
+      key: `pane/${pane.id}`, project: projectOfWorkspace(state, pane.workspace) || workspaces.get(pane.workspace)?.label || '', name: pane.name || pane.agent, paneLabel: pane.label || null,
       kind: pane.agent, model: pane.model || null, pane: pane.id, taskId: null, title: pane.title || pane.name || 'Untitled worker',
       state: status, group: status === 'working' ? 'working' : 'waiting', startedAt: null, finishedAt: null,
       now: STATE_LABEL[status] || 'Unknown', summary: null, result: null, hasBrief: false, scope: [], reportPath: null,
@@ -118,11 +119,13 @@ export function workerRowHtml(row, context, deps) {
   const status = row.state in STATE_LABEL ? row.state : 'unknown';
   const stateClass = row.group === 'finished' ? (status === 'merged' ? 'done' : status === 'failed' || status === 'abandoned' ? 'failed' : 'idle') : status;
   const line = row.group === 'finished' ? [row.result, row.summary].filter(Boolean).join(' · ') : row.now;
+  const since = context.state?.paneSince?.[row.pane]?.since;
+  const stale = row.group === 'waiting' && (row.state === 'idle' || row.state === 'done') && since && context.now - since > STALE_IDLE_MS;
   const model = [row.kind, row.model].filter(Boolean).join(' · ');
   return `<li class="wrow${open ? ' open' : ''}" data-key="worker:${esc(row.key)}" data-group="${esc(row.group)}">`
     + `<button type="button" class="wrow-main" data-worker-toggle="${esc(row.key)}" aria-expanded="${open ? 'true' : 'false'}">`
     + `<span class="st ${esc(stateClass)}" aria-hidden="true"></span>`
-    + `<span class="wcell wtitle"><b>${esc(row.title)}</b>${card && !row.title.includes(card) ? `<small>${esc(row.taskId)} · ${esc(card)}</small>` : (row.taskId ? `<small>Task ${esc(row.taskId)}</small>` : '')}</span>`
+    + `<span class="wcell wtitle"><b>${esc(row.title)}</b>${stale ? '<small class="stale">Idle over 2h</small>' : ''}${row.paneLabel ? `<small>Pane label: ${esc(row.paneLabel)}</small>` : ''}${card && !row.title.includes(card) ? `<small>${esc(row.taskId)} · ${esc(card)}</small>` : (row.taskId ? `<small>Task ${esc(row.taskId)}</small>` : '')}</span>`
     + `<span class="wcell wproj" data-label="Project">${esc(row.project || '–')}</span>`
     + `<span class="wcell wmodel" data-label="Agent">${esc(model || '–')}</span>`
     + `<span class="wcell wstate" data-label="State">${esc(STATE_LABEL[status])}</span>`

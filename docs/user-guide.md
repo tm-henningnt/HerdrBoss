@@ -1805,6 +1805,8 @@ A row shows these values:
 
 The **Project** list and the state buttons above the table filter the rows. The state buttons are **All**, **Working**, **Waiting** (idle or blocked), and **Finished**. The filter applies to the open tab only. A reload clears it.
 
+The table shows every live worker and the 50 newest finished workers. Older finished workers are not listed. A finished row shows only values that `worker start` and `worker collect` saved in the run record, so the table reads no file for it. A worker pane without a run record shows its pane label. An idle worker whose state did not change for more than 2 hours shows the mark `Idle over 2h`.
+
 #### The Doing now line
 
 Herdr Boss reads the visible screen of each working or blocked worker pane in the background. The read runs every 30 seconds for all panes together. A request from the browser never starts a read. Herdr Boss removes the terminal codes and finds the last action that the agent took. Examples:
@@ -1833,7 +1835,7 @@ The report summary is the first paragraph of `.worker/report.md`. `worker collec
 
 An open row shows the scope (the allowed paths), the report path, and the brief of the worker. The panel renders the brief as read-only Markdown. It shows the first 25 lines. Select **Show all** to see the rest, and select the button again to go back to 25 lines.
 
-`worker start` saves a copy of the brief in the run record as `briefCopy`, with the SHA-256 hash of the original text. The copy keeps its text for 30 days after the run ends. Then Herdr Boss removes the text and keeps the hash. While the copy exists, the panel shows the copy. Without a copy, the panel reads `.worker/brief.md` from the worktree. After the worktree and the copy are gone, the panel says that the brief is no longer available.
+`worker start` saves a copy of the brief in the run record as `briefCopy`, with the SHA-256 hash of the masked text. The copy keeps its text for 30 days after the run ends. Then Herdr Boss removes the text and keeps the hash. While the copy exists, the panel shows the copy. Without a copy, the panel reads `.worker/brief.md` from the worktree. After the worktree and the copy are gone, the panel says that the brief is no longer available.
 
 Herdr Boss masks secrets and the home folder path in the brief before it stores or shows the brief. The page loads the brief with `GET /api/worker-brief?project=<slug>&name=<worker>` when the row opens. The dashboard state holds no brief text. The same access rules apply as for the rest of the API.
 

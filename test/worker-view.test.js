@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  BRIEF_KEEP_MS, briefCopy, briefCopyText, firstParagraph, noOutputMinutes, paneAction, pruneBriefCopies,
+  BRIEF_KEEP_MS, briefCopy, capFinished, briefCopyText, firstParagraph, noOutputMinutes, paneAction, pruneBriefCopies,
   readWorkerRows, titleFromBrief, titleFromTask, workerBrief,
 } from '../src/worker-view.js';
 
@@ -165,14 +166,6 @@ test('a failed or abandoned run reads as needs rework or abandoned', () => {
   assert.equal(readWorkerRows(second, { project: 'a', now: NOW, panes: new Map() })[0].result, 'Abandoned');
 });
 
-test('the report summary is read from the live report when the record has none', () => {
-  const { runs, worktree, record } = fixture({ live: false });
-  fs.writeFileSync(path.join(runs, 'av1.json'), JSON.stringify({ ...record, reportSummary: undefined }));
-  fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), `# Report\n\nLive summary with ${FAKE_SECRET}.\n`);
-  const [row] = readWorkerRows(runs, { project: 'a', now: NOW, panes: new Map() });
-  assert.equal(row.summary, 'Live summary with [REDACTED].');
-});
-
 test('workerBrief prefers the copy, then the worktree, and masks secrets', () => {
   const { record } = fixture();
   const fromCopy = workerBrief(record, NOW);
@@ -194,4 +187,65 @@ test('pruneBriefCopies removes the text of an old copy and keeps the hash', () =
   assert.equal(after.briefCopy.text, undefined);
   assert.equal(after.briefCopy.hash, old.briefCopy.hash);
   assert.equal(pruneBriefCopies(runs, NOW), 0);
+});
+
+test('pruneBriefCopies skips a record that changed after it was read, and writes the temp file as 0o600', () => {
+  const { runs, record } = fixture({ live: false });
+  const old = { ...record, finishedAt: new Date(NOW - 31 * 86400000).toISOString(), briefCopy: briefCopy('# Old', NOW - 31 * 86400000) };
+  const file = path.join(runs, 'av1.json');
+  fs.writeFileSync(file, JSON.stringify(old));
+  let mode = null;
+  const beforeRename = () => {
+    mode = fs.statSync(`${file}.tmp`).mode & 0o777;
+    fs.writeFileSync(file, JSON.stringify({ ...old, reportSummary: 'Written by collect.' }));
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(file, later, later);
+  };
+  assert.equal(pruneBriefCopies(runs, NOW, { beforeRename }), 0);
+  assert.equal(mode, 0o600);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.reportSummary, 'Written by collect.');
+  assert.equal(fs.existsSync(`${file}.tmp`), false);
+});
+
+test('finished rows use stored values and read no file; live rows with a copy skip the brief file check', () => {
+  const { runs, worktree, record } = fixture({ live: false });
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), '# R\n\nFile summary.\n');
+  fs.writeFileSync(path.join(runs, 'av1.json'), JSON.stringify({ ...record, reportSummary: undefined }));
+  const [row] = readWorkerRows(runs, { project: 'a', now: NOW, panes: new Map() });
+  assert.equal(row.summary, null);
+  assert.equal(row.hasBrief, true);
+});
+
+test('capFinished keeps all live rows and the 50 newest finished rows', () => {
+  const rows = [
+    ...Array.from({ length: 60 }, (_, index) => ({ group: 'finished', finishedAt: new Date(NOW - index * 1000).toISOString(), name: `f${index}` })),
+    { group: 'working', name: 'live' },
+  ];
+  const capped = capFinished(rows, 50);
+  assert.equal(capped.filter((row) => row.group === 'finished').length, 50);
+  assert.equal(capped.some((row) => row.name === 'live'), true);
+  assert.equal(capped.some((row) => row.name === 'f59'), false);
+  assert.equal(capped.some((row) => row.name === 'f0'), true);
+});
+
+test('a brief file that is a symlink out of the worktree is not read', () => {
+  const { record, root } = fixture();
+  const outside = path.join(root, 'outside.md');
+  fs.writeFileSync(outside, '# Outside\n');
+  const link = path.join(record.worktree, '.worker', 'brief.md');
+  fs.rmSync(link);
+  fs.symlinkSync(outside, link);
+  assert.equal(workerBrief({ ...record, briefCopy: undefined }, NOW), null);
+});
+
+test('scope is masked and the hash covers the masked text', () => {
+  const { runs, record } = fixture();
+  fs.writeFileSync(path.join(runs, 'av1.json'), JSON.stringify({ ...record, allowedPaths: [`src/${FAKE_SECRET}`] }));
+  const [row] = readWorkerRows(runs, { project: 'a', now: NOW, panes: new Map([['w1:p2', { status: 'idle' }]]) });
+  assert.doesNotMatch(JSON.stringify(row), /FAKESECRET/);
+  const copy = briefCopy(`Key ${FAKE_SECRET}`, NOW);
+  assert.equal(copy.hash, crypto.createHash('sha256').update(copy.text).digest('hex'));
+  const live = workerBrief({ ...record, briefCopy: undefined }, NOW);
+  assert.equal(live.hash, crypto.createHash('sha256').update(live.text).digest('hex'));
 });

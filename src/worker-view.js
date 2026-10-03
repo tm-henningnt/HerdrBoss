@@ -143,14 +143,10 @@ export function firstParagraph(markdown) {
 
 // ---------- The brief copy in the run record ----------
 
-// The copy holds the masked text, bounded, and the hash of the original text.
+// The copy holds the masked text, bounded, and the hash of that masked text.
 export function briefCopy(text, now = Date.now()) {
-  const source = String(text ?? '');
-  return {
-    hash: crypto.createHash('sha256').update(source).digest('hex'),
-    savedAt: new Date(now).toISOString(),
-    text: maskText(source).slice(0, BRIEF_MAX_CHARS),
-  };
+  const masked = maskText(text).slice(0, BRIEF_MAX_CHARS);
+  return { hash: crypto.createHash('sha256').update(masked).digest('hex'), savedAt: new Date(now).toISOString(), text: masked };
 }
 
 const keepFrom = (record) => Date.parse(record?.finishedAt || record?.startedAt || '');
@@ -166,11 +162,18 @@ export function briefCopyText(record, now = Date.now()) {
   return copy.text;
 }
 
-function readBounded(file) {
+// Read a regular file. When root is given, the real path of the file must stay inside the real path of root.
+function readBounded(file, root = null) {
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
-    return fs.readFileSync(file, 'utf8').slice(0, BRIEF_MAX_CHARS);
+    let target = file;
+    if (root) {
+      target = fs.realpathSync(file);
+      const base = fs.realpathSync(root);
+      if (target !== base && !target.startsWith(`${base}${path.sep}`)) return null;
+    }
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) return null;
+    return fs.readFileSync(target, 'utf8').slice(0, BRIEF_MAX_CHARS);
   } catch { return null; }
 }
 
@@ -181,28 +184,43 @@ export function workerBrief(record, now = Date.now()) {
   const copy = briefCopyText(record, now);
   if (copy != null) return { source: 'copy', hash: record.briefCopy.hash || null, savedAt: record.briefCopy.savedAt || null, text: maskText(copy) };
   const file = workerFile(record, 'brief.md');
-  const live = file ? readBounded(file) : null;
+  const live = file ? readBounded(file, record.worktree) : null;
   if (live == null) return null;
-  return { source: 'worktree', hash: crypto.createHash('sha256').update(live).digest('hex'), savedAt: null, text: maskText(live) };
+  const text = maskText(live);
+  return { source: 'worktree', hash: crypto.createHash('sha256').update(text).digest('hex'), savedAt: null, text };
 }
 
 // Remove the text of every copy older than 30 days. The hash stays. Returns the number of records changed.
-export function pruneBriefCopies(runsPath, now = Date.now()) {
+// A record that changes between the read and the rename belongs to a concurrent writer (worker collect). The prune skips it.
+export function pruneBriefCopies(runsPath, now = Date.now(), { beforeRename = null } = {}) {
   let pruned = 0;
   let files = [];
   try { files = fs.readdirSync(runsPath).filter((name) => name.endsWith('.json')); } catch { return 0; }
   for (const name of files) {
     const file = path.join(runsPath, name);
+    const temp = `${file}.tmp`;
     try {
+      const before = fs.statSync(file).mtimeMs;
       const record = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (typeof record?.briefCopy?.text !== 'string' || !copyExpired(record, now)) continue;
       delete record.briefCopy.text;
-      fs.writeFileSync(`${file}.tmp`, JSON.stringify(record, null, 2));
-      fs.renameSync(`${file}.tmp`, file);
+      fs.writeFileSync(temp, JSON.stringify(record, null, 2), { mode: 0o600 });
+      if (beforeRename) beforeRename(file);
+      if (fs.statSync(file).mtimeMs !== before) { fs.rmSync(temp, { force: true }); continue; }
+      fs.renameSync(temp, file);
       pruned += 1;
-    } catch { /* an unreadable record stays as it is */ }
+    } catch { fs.rmSync(temp, { force: true }); }
   }
   return pruned;
+}
+
+export const FINISHED_ROW_LIMIT = 50;
+
+// Keep every live row and the newest finished rows.
+export function capFinished(rows, limit = FINISHED_ROW_LIMIT) {
+  const time = (row) => Date.parse(row.finishedAt || row.startedAt) || 0;
+  const finished = rows.filter((row) => row.group === 'finished').sort((a, b) => time(b) - time(a)).slice(0, limit);
+  return [...rows.filter((row) => row.group !== 'finished'), ...finished];
 }
 
 // ---------- Rows ----------
@@ -244,8 +262,9 @@ export function readWorkerRows(runsPath, { project, now = Date.now(), panes = nu
     const status = live ? (panes?.get(record.pane)?.status || 'unknown') : fact.phase;
     const briefFile = workerFile(record, 'brief.md');
     const copyText = briefCopyText(record, now);
+    // A finished row reads no file. A stored title and a stored copy also spare the read for a live row.
     const title = record.title
-      || titleFromBrief(copyText ?? (briefFile ? readBounded(briefFile) : null))
+      || titleFromBrief(copyText ?? (live && briefFile ? readBounded(briefFile, record.worktree) : null))
       || (fact.taskId ? `Task ${fact.taskId}` : record.name);
     const since = paneSince?.[record.pane]?.since;
     const row = {
@@ -257,14 +276,13 @@ export function readWorkerRows(runsPath, { project, now = Date.now(), panes = nu
       startedAt: record.startedAt ?? null, finishedAt: record.finishedAt ?? record.collectedAt ?? null,
       now: live ? liveNow(status, actions.get(record.pane), Number.isFinite(since) ? now - since : null, now) : null,
       summary: null, result: null,
-      hasBrief: copyText != null || !!(briefFile && fs.existsSync(briefFile)),
-      scope: Array.isArray(record.allowedPaths) ? record.allowedPaths.map(String) : [],
+      hasBrief: copyText != null || !!record.briefCopy?.hash || (live && !!briefFile && fs.existsSync(briefFile)),
+      scope: Array.isArray(record.allowedPaths) ? record.allowedPaths.map((item) => maskText(item)) : [],
       reportPath: `${record.workerDir || '.worker'}/report.md`,
     };
     if (!live) {
       row.result = RESULT[fact.phase] || null;
-      const reportFile = workerFile(record, 'report.md');
-      row.summary = record.reportSummary ? maskText(record.reportSummary) : (reportFile ? firstParagraph(readBounded(reportFile)) : null);
+      row.summary = record.reportSummary ? maskText(record.reportSummary) : null;
     }
     rows.push(row);
   }
