@@ -1554,6 +1554,8 @@ herdr-boss factory freeze NAME [--off]
 herdr-boss factory status NAME [--json]
 herdr-boss factory list [--json]
 herdr-boss factory configure NAME [--resume] [--step STEP]
+herdr-boss factory login NAME claude|codex
+herdr-boss factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]
 herdr-boss factory connect NAME
 herdr-boss factory connect --check NAME
 herdr-boss factory connect --undo NAME
@@ -1594,7 +1596,9 @@ The command checks that the tailnet health route requires Owner access before it
 
 `connect --undo NAME` reverses what `connect` created. It turns off the Serve forward for the registered dashboard port only, and only when `connect` created that forward. It never runs `serve reset`. It removes the allowed host entry that `connect` added, and restarts the remote supervised service. It removes the imported read credential of that factory. It turns off **Poll registered factories** when no other factory stays registered. It removes the registration from `fleet.json` as the last step. The private token export file in the factory stays. Run the command again after a failed step. A second run prints that nothing is left to undo.
 
-The harness, GitHub, and project steps are pending in this release. A normal `configure` exits 3 and writes one Owner instruction file. The Boss can post that file as one Mailbox item. Run login commands at an Owner terminal. Do not send a code or token to a pane or a Mailbox answer. `factory login` and login verification are not part of this slice.
+The `configure` wizard checks the container, volumes, Herdr server, and service. It exits 3 and writes one Owner instruction file when those checks pass. Run `herdr-boss factory login NAME claude` or `herdr-boss factory login NAME codex` in an Owner terminal to sign in. The command runs the harness login in the labeled factory container with the terminal attached. It then checks login with a harmless command. It prints only `ok` or `failed` after that check. It never captures a token.
+
+Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. For all other live Boss states, the command prints the state and exits 0. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
 
 `factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. It masks the full address before the key file name. It also masks each token that ends in `.ts.net`. The masking covers the warning lines of ssh.
 
@@ -1612,7 +1616,7 @@ Use the service tier to fast-forward the `code` volume. It restarts only the Her
 
 Use the image tier to replace the labeled container on the same four volumes. Build the pinned image first with `herdr-boss factory build NAME`. The update backs up data, work, and home.
 
-It starts fresh sessions only for active project orchestrators. A paused project stays paused. The update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+It starts fresh sessions only for active project orchestrators. A paused project stays paused. The update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory boss start NAME' to start the Boss in the factory.
 
 ```sh
 herdr-boss factory update NAME --tier service [--dry-run]

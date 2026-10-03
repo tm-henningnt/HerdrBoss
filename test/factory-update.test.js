@@ -299,7 +299,7 @@ test('image update replaces only the labeled container and keeps all four labele
     assert.ok(freshStart.args.at(-2).includes("['tab', 'create'"));
     assert.match(freshStart.args.at(-2), /fresh project orchestrator/);
     assert.doesNotMatch(freshStart.args.at(-2), /fresh Herdr Boss/);
-    assert.match(f.output.join(''), /The Boss pane is gone\. Run 'herdr-boss factory configure demo --resume' to check the factory, then start the Boss in the factory Boss pane yourself\./);
+    assert.match(f.output.join(''), /The Boss pane is gone\. Run 'herdr-boss factory boss start demo' to start the Boss in the factory\./);
   } finally { f.cleanup(); }
 });
 

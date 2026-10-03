@@ -6,6 +6,18 @@ import { isHostUnreachable } from './factory-transport.js';
 
 export const FACTORY_STEPS = Object.freeze(['container', 'volumes', 'herdr', 'service', 'harness-claude', 'harness-codex', 'harness-other', 'github', 'project']);
 
+export function harnessLoginVerifierArgs(harness) {
+  if (harness === 'claude') return ['claude', 'auth', 'status'];
+  if (harness === 'codex') return ['codex', 'login', 'status'];
+  throw new Error('Choose a Claude or Codex harness.');
+}
+
+// Check login state without starting a model session or printing any harness output.
+export async function verifyHarnessLogin(docker, name, harness) {
+  const result = await docker.run(['exec', '--user', 'factory', `hf-${name}`, ...harnessLoginVerifierArgs(harness)]);
+  return result.code === 0;
+}
+
 function safetyError(container, name, codexSandbox) {
   if (!container?.State?.Running) return 'The factory container is stopped.';
   return configSafetyError(container, name, codexSandbox);
@@ -60,7 +72,7 @@ async function serviceStep(docker, name, fleet, record) {
 
 function ownerText(name, remote) {
   const docker = remote ? 'docker --context <context from the private connection store>' : 'docker';
-  return `# Factory ${name}: Owner logins\n\nUse an Owner terminal. Run these commands on the host tool machine. Keep codes and tokens out of agent panes, reports, and the Mailbox.\n\n1. Run \`${docker} exec -it --user factory hf-${name} claude auth login\`.\n2. Run \`${docker} exec -it --user factory hf-${name} codex login --device-auth\`.\n3. Run \`${docker} exec -it --user factory hf-${name} opencode auth login\`.\n4. Run \`${docker} exec -it --user factory hf-${name} gh auth login\`.\n\nHarness verification and project setup are pending in this slice. The wizard checks the container, volumes, Herdr server, and service only. The Boss can post this file as one Mailbox item. Do not send a credential in an answer.\n`;
+  return `# Factory ${name}: Owner logins\n\nUse an Owner terminal. Run these commands on the host tool machine. Keep codes and tokens out of agent panes, reports, and the Mailbox.\n\n1. Run \`herdr-boss factory login ${name} claude\`.\n2. Run \`herdr-boss factory login ${name} codex\`.\n3. Run \`${docker} exec -it --user factory hf-${name} opencode auth login\`.\n4. Run \`${docker} exec -it --user factory hf-${name} gh auth login\`.\n\nThe Claude and Codex login commands attach the harness to this terminal and check login with a harmless command. The wizard checks the container, volumes, Herdr server, and service only. OpenCode, GitHub, and project setup remain pending. The Boss can post this file as one Mailbox item. Do not send a credential in an answer.\n`;
 }
 
 export async function configureFactory(args, io) {

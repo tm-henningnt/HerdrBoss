@@ -276,6 +276,9 @@ test('configure records checked steps, resumes a failed service and waits once f
     assert.equal(flow.steps[4].status, 'waiting');
     const instruction = fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'owner-instructions.md'), 'utf8');
     assert.match(instruction, /Owner terminal/);
+    assert.match(instruction, /herdr-boss factory login demo claude/);
+    assert.match(instruction, /herdr-boss factory login demo codex/);
+    assert.match(instruction, /check login with a harmless command/);
     assert.doesNotMatch(instruction, /example-context|token=/);
     assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);
     assert.equal(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'owner-instructions.md'), 'utf8'), instruction);

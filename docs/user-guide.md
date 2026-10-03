@@ -1116,7 +1116,11 @@ Each factory has four labeled volumes, its own hostname, and loopback ports. The
 
 Use `factory start`, `factory stop`, `factory status`, and `factory list` to control and check the factories. A host timeout shows `host-unreachable`. A stopped container and an unhealthy container have different states. Unknown readings stay unknown.
 
-`factory new` checks the container, volumes, Herdr server, and service. Use `factory configure NAME --resume` to check them again. The flow stops when a check fails. A container safety failure disables Codex for that factory. The next steps need Owner logins. Exit code 3 means the wizard waits for those logins. The Boss gets one instruction file for a Mailbox item. Use an Owner terminal for a login. Keep all codes and tokens out of agent panes.
+`factory new` checks the container, volumes, Herdr server, and service. Use `factory configure NAME --resume` to check them again. The flow stops when a check fails. A container safety failure disables Codex for that factory. When the checks pass, the wizard exits 3 and writes one Owner instruction file. Use an Owner terminal for a login. Keep all codes and tokens out of agent panes and Mailbox answers.
+
+Run `herdr-boss factory login NAME claude` or `herdr-boss factory login NAME codex` to sign in to that harness in the labeled factory container. The command attaches the terminal to the harness login, then checks login with a harmless command. It prints only `ok` or `failed` after the check.
+
+Run `herdr-boss factory boss start NAME` to start the factory Boss. Claude is the default harness. The command checks the harness login and installs the kit in the Boss and project folders when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory prompt and checks that the prompt is ready. Use `--harness codex` to choose Codex. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. For all other live Boss states, the command prints the state and exits 0. A missing login or an unsent prompt exits 3 and creates one Mailbox item with the command to continue. Use `--dry-run` to print the plan without changes. The factory keeps its project, message, and handover state in its own volumes.
 
 The service health check uses container loopback. A request with the factory hostname still needs a login. Its response of 401 confirms that the host rule accepts that name.
 
@@ -1124,7 +1128,7 @@ Update code with `factory update NAME --tier service`. This fast-forwards the co
 
 Update harnesses and tools with `factory build NAME`, then `factory update NAME --tier image`. This replaces the container and keeps the four volumes. It starts fresh sessions only for active project orchestrators. A paused project stays paused.
 
-The image update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory configure NAME --resume' to check the factory, then start the Boss in the factory Boss pane yourself.
+The image update refuses a live Boss pane unless you add `--allow-boss-restart`. The update never starts a Boss session. When the flag allows replacement, it prints: The Boss pane is gone. Run 'herdr-boss factory boss start NAME' to start the Boss in the factory.
 
 An update stops when a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. Use `--dry-run` to check the factory and print the selected tier without changing Docker resources. The tool makes a private backup before it changes the factory.
 
