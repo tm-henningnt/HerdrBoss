@@ -1452,6 +1452,11 @@ function rulesRows(s) {
 
 // The lanes that can take work now, in the order of the bulletin Use now line (useNowLanes() in src/control.js):
 // free models, then the lanes below pace with the most room first, then ignored lanes, trickle lanes, and open lanes.
+// A plan guidance object needs a laneState text. Without it the lane has no plan.
+function validPlan(plan) {
+  return plan && typeof plan === 'object' && typeof plan.laneState === 'string' && plan.laneState ? plan : null;
+}
+
 function useNowList(lanes) {
   const kind = (provider) => ({ opencodego: 'opencode' })[provider] || provider;
   const free = [], below = [], ignored = [], trickle = [], open = [];
@@ -1459,8 +1464,8 @@ function useNowList(lanes) {
     if (!lane) continue;
     if (lane.unmetered) { if (lane.state === 'open') free.push('free models'); continue; }
     if (lane.ignored) { if (lane.state === 'open') ignored.push(kind(provider)); continue; }
-    if (provider === 'codex' && lane.planGuidance && ['open', 'pace'].includes(lane.state)) {
-      if (lane.planGuidance.laneState === 'Use now') below.push([Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent), kind(provider)]);
+    if (provider === 'codex' && validPlan(lane.planGuidance) && lane.state === 'open') {
+      if (lane.planGuidance.laneState === 'Use now') below.push([Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent) || 0, kind(provider)]);
       continue;
     }
     if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) below.push([lane.roomPercent, kind(provider)]);
@@ -1479,10 +1484,10 @@ function guidanceSummary(s) {
   parts.push(`Use now: ${use.length ? use.join(', ') : 'no metered lane'}`);
   const held = { pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted' };
   const slow = Object.entries(s.lanes || {}).filter(([provider, lane]) => lane && !lane.unmetered && !lane.ignored
-    && held[lane.state] && !(provider === 'codex' && lane.planGuidance && !['reserve', 'exhausted'].includes(lane.state)));
+    && held[lane.state] && !(provider === 'codex' && validPlan(lane.planGuidance) && lane.state === 'open'));
   if (slow.length) parts.push(slow.map(([provider, lane]) => `${PROVIDERS[provider] || provider} ${held[lane.state]}`).join(', '));
   const codexPlan = s.lanes?.codex?.planGuidance;
-  if (codexPlan && !s.lanes.codex.ignored && !['reserve', 'exhausted', 'trickle'].includes(s.lanes.codex.state) && codexPlan.laneState !== 'Use now') {
+  if (validPlan(codexPlan) && !s.lanes.codex.ignored && s.lanes.codex.state === 'open' && codexPlan.laneState !== 'Use now') {
     parts.push(`Codex ${codexPlan.laneState}`);
   }
   const count = (severity) => (s.alerts || []).filter((a) => a.severity === severity).length;
@@ -1496,10 +1501,10 @@ function guidanceSummary(s) {
 // The state of each lane in plain words, for the body of the Overview guidance.
 function laneLine(provider, lane) {
   const name = provider === 'unmetered' ? 'Free models' : PROVIDERS[provider] || provider;
-  const plan = provider === 'codex' ? lane.planGuidance : null;
-  const planReplacesPace = plan && !lane.ignored && ['open', 'pace'].includes(lane.state);
+  const plan = provider === 'codex' ? validPlan(lane.planGuidance) : null;
+  const planReplacesPace = plan && !lane.ignored && lane.state === 'open';
   const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${planReplacesPace
-    ? ` of ${Number.isInteger(plan.plannedPercent) ? plan.plannedPercent : Number(plan.plannedPercent.toFixed(1))}% planned · tolerance ${plan.tolerancePoints} points`
+    ? `${Number.isFinite(plan.plannedPercent) ? ` of ${Number.isInteger(plan.plannedPercent) ? plan.plannedPercent : Number(plan.plannedPercent.toFixed(1))}% planned` : ''}${Number.isFinite(plan.tolerancePoints) ? ` · tolerance ${plan.tolerancePoints} points` : ''}`
     : Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
   const reading = lane.reading;
   const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';

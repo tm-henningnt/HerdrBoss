@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { createQuotaPlanService } from '../src/quota-plan-service.js';
 import { renderBulletin } from '../src/rules.js';
 import { describeLane, providerGate } from '../src/kit/workers.js';
-import { codexPlanGuidance, useNowLanes } from '../src/control.js';
+import { codexPlanGuidance, quotaPlanLaneText, useNowLanes } from '../src/control.js';
+import { codexPlanLine } from '../src/rules.js';
 
 const NOW = Date.parse('2032-04-01T00:00:00.000Z');
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
@@ -50,7 +51,7 @@ test('Codex lane guidance compares actual use with the planned curve and toleran
 
 test('the Use now list follows Codex plan guidance when the plan is available', () => {
   assert.deepEqual(useNowLanes({ codex: {
-    state: 'pace', planGuidance: { ...planGuidance, laneState: 'Use now', plannedPercent: 50, usedPercent: 40 },
+    state: 'open', planGuidance: { ...planGuidance, laneState: 'Use now', plannedPercent: 50, usedPercent: 40 },
   } }), [{ provider: 'codex', kind: 'codex', reason: 'below plan' }]);
   assert.deepEqual(useNowLanes({ codex: {
     state: 'open', roomPercent: 60, planGuidance: { ...planGuidance, laneState: 'hold' },
@@ -120,11 +121,14 @@ test('the Overview lane text shows the planned Codex state and planned percent',
   const start = source.indexOf('function laneLine(');
   assert.ok(start >= 0, 'laneLine exists in public/app.js');
   const code = source.slice(start, source.indexOf('\n}\n', start) + 2);
+  const validStart = source.indexOf('function validPlan(');
+  assert.ok(validStart >= 0, 'validPlan exists in public/app.js');
+  const validCode = source.slice(validStart, source.indexOf('\n}\n', validStart) + 2);
   const ctx = {
     PROVIDERS: { codex: 'Codex' },
     esc: (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])),
   };
-  vm.runInNewContext(`${code}\nthis.laneLine = laneLine;`, ctx);
+  vm.runInNewContext(`${validCode}\n${code}\nthis.laneLine = laneLine;`, ctx);
 
   const html = ctx.laneLine('codex', {
     state: 'open', usedPercent: 40, expectedPercent: 42, planGuidance,
@@ -179,4 +183,71 @@ test('history with a zero burn rate still activates plan guidance, including aft
   const current = upgraded.replan({ provider: 'codex', quotas, now: NOW });
   assert.equal(current.historyAvailable, true);
   assert.equal(upgraded.summary({ now: NOW }).state, 'normal');
+});
+
+const paceLane = {
+  state: 'pace',
+  usedPercent: 60,
+  expectedPercent: 40,
+  window: 'weekly',
+  tolerancePoints: 5,
+  backOnPaceAt: new Date(NOW + 3 * 3600000).toISOString(),
+  planGuidance: { laneState: 'Use now', usedPercent: 20, plannedPercent: 40, tolerancePoints: 5 },
+};
+
+test('a lane ahead of pace is not in Use now, and its text keeps the pace wording', () => {
+  assert.deepEqual(useNowLanes({ codex: paceLane }), []);
+
+  const gate = providerGate('codex', { lanes: { codex: paceLane }, avoidProviders: ['codex'] }, { now: NOW });
+  assert.ok(Object.keys(gate).length, 'worker start refuses the lane');
+  assert.doesNotMatch(JSON.stringify(gate), /codex Use now/);
+  assert.match(JSON.stringify(gate), /ahead of pace/);
+
+  const text = describeLane('codex', paceLane, NOW);
+  assert.match(text, /^codex ahead of pace/);
+  assert.match(text, /plan guidance: Use now \(20% used, 40% planned/);
+
+  const bulletin = renderBulletin({ updatedAt: new Date(NOW).toISOString(), quotas: [], lanes: { codex: paceLane } }, { alerts: [], advice: [] }, {});
+  assert.match(bulletin, /ahead of pace: 60% used/);
+  assert.match(bulletin, /Plan guidance: Use now/);
+});
+
+test('the idle nudge does not start work on a lane ahead of pace', () => {
+  assert.equal(useNowLanes({ codex: paceLane })[0], undefined);
+});
+
+test('plan helpers tolerate missing, null and NaN fields', () => {
+  assert.equal(quotaPlanLaneText({ laneState: 'hold' }), 'hold');
+  assert.equal(quotaPlanLaneText({ laneState: 'hold', usedPercent: NaN, plannedPercent: null, tolerancePoints: 5 }), 'hold (tolerance 5 points)');
+  assert.doesNotMatch(quotaPlanLaneText({ laneState: 'hold', usedPercent: NaN, plannedPercent: 50 }), /NaN|undefined|null/);
+  assert.equal(quotaPlanLaneText({ usedPercent: 10 }), '');
+  assert.equal(quotaPlanLaneText(null), '');
+
+  assert.equal(codexPlanLine(null), null);
+  const line = codexPlanLine({ usageGuidance: 'spend', nextCredit: { label: 'A', applyAt: '2032-04-05T16:00:00.000Z' } });
+  assert.match(line, /^Codex plan: spend, credit A due about/);
+  assert.doesNotMatch(line, /percent|NaN/);
+  assert.doesNotMatch(codexPlanLine({ usageGuidance: 'spend', nextCredit: { label: 'A', usedPercent: NaN } }), /NaN|\?/);
+});
+
+test('a guidance object without a laneState is no plan in Use now', () => {
+  assert.deepEqual(useNowLanes({ codex: { state: 'open', roomPercent: 30, planGuidance: { usedPercent: 10, plannedPercent: 50 } } }),
+    [{ provider: 'codex', kind: 'codex', reason: 'below pace' }]);
+  assert.deepEqual(useNowLanes({ codex: { state: 'open', planGuidance: { laneState: 'Use now', usedPercent: NaN } } }),
+    [{ provider: 'codex', kind: 'codex', reason: 'below plan' }]);
+});
+
+test('the Overview lane line keeps the pace text for a lane ahead of pace and tolerates a partial plan', () => {
+  const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const grab = (name) => { const i = source.indexOf(`function ${name}(`); return source.slice(i, source.indexOf('\n}\n', i) + 2); };
+  const ctx = { PROVIDERS: { codex: 'Codex' }, esc: (v) => String(v ?? '') };
+  vm.runInNewContext(`${grab('validPlan')}\n${grab('useNowList')}\n${grab('laneLine')}\nthis.laneLine = laneLine; this.useNowList = useNowList;`, ctx);
+
+  assert.deepEqual([...ctx.useNowList({ codex: paceLane })], []);
+  const html = ctx.laneLine('codex', paceLane);
+  assert.match(html, /ahead of pace/);
+  assert.match(html, /plan Use now/);
+  const partial = ctx.laneLine('codex', { state: 'open', usedPercent: 40, planGuidance: { laneState: 'hold' } });
+  assert.doesNotMatch(partial, /NaN|undefined/);
+  assert.deepEqual([...ctx.useNowList({ codex: { state: 'open', planGuidance: { usedPercent: 1 } } })], ['codex']);
 });
