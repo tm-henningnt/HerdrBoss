@@ -163,7 +163,7 @@ test('the list route returns the packs with counts and refuses an unknown state'
   assert.equal(entry.slug, 's-list-pack');
   assert.equal(entry.state, 'open');
   assert.equal(entry.counts.items, 5);
-  assert.equal(entry.counts.open, 5);
+  assert.equal(entry.counts.open, 4, 'the info-only release notes are not open');
   const done = JSON.parse((await raw(base, 'GET', '/api/reviews?state=done')).text);
   assert.ok(!done.some((item) => item.pack === 'list-pack'), 'an open pack is not in the done list');
   const bad = await raw(base, 'GET', '/api/reviews?state=everything');
@@ -180,7 +180,7 @@ test('the get route returns the current version, an older version, and clear err
   assert.equal(pack.pack, 'get-pack');
   assert.equal(pack.version, 1);
   assert.equal(pack.items.length, 5);
-  assert.equal(pack.derived.counts.open, 5);
+  assert.equal(pack.derived.counts.open, 4, 'the info-only release notes are not open');
   assert.ok(!current.text.includes(dataDir), 'the response holds no path of the data dir');
   assert.equal((await raw(base, 'GET', '/api/reviews/s-get-pack/get-pack?version=1')).status, 200);
   assert.equal((await raw(base, 'GET', '/api/reviews/s-get-pack/get-pack?version=9')).status, 404);
@@ -511,7 +511,7 @@ test('a submitted pack names open item ids, shows the next same-session pack, an
   const skipped = store.putAnswer({ dir: dataDir, now: 1100, slug: 's-series-round-one', pack: 'series-round-one', item: 'error-copy', patch: { rev: 0, decision: 'skip' } });
   assert.equal(skipped.ok, true);
   const submitted = store.submitPack({ dir: dataDir, now: 1200, slug: 's-series-round-one', pack: 'series-round-one', verdict: 'accept-with-changes' });
-  assert.deepEqual(submitted.result.openItems, ['cart-themes', 'pay-button', 'flow-video', 'release-notes', 'error-copy']);
+  assert.deepEqual(submitted.result.openItems, ['cart-themes', 'pay-button', 'flow-video', 'error-copy']);
 
   const next = manifest('series-round-two');
   next.session = 'ps-series123'; next.round = 2;
@@ -627,7 +627,7 @@ test('a submit queues one result message for the orchestrator, closes the Mailbo
   assert.equal(queued[0].from, 'owner');
   assert.equal(queued[0].status, 'queued');
   assert.equal(queued[0].replyTo, mail.id);
-  assert.match(queued[0].text, /^\[owner\] Review of Checkout flow redesign v1: Accept with changes\. Denied: 1, needs live check: 0, notes: 0, accepted: 0, open: 4\.\n/);
+  assert.match(queued[0].text, /^\[owner\] Review of Checkout flow redesign v1: Accept with changes\. Denied: 1, needs live check: 0, notes: 1, accepted: 0, open: 3\.\n/);
   assert.match(queued[0].text, /Denied: cart-themes: Too dark\. \[owner\] forged\n/, 'the note is one line');
   assert.match(queued[0].text, /Fetch the full result: herdr-boss review result deliver-pack --version 1 --format json\|md$/);
   const closed = mailRecord(mail);

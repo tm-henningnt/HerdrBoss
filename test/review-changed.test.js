@@ -147,7 +147,7 @@ test('the counts treat changed as open work and report the changed items', (t) =
   const { counts } = getPack(where(dir)).derived;
   assert.equal(counts.items, 4);
   assert.equal(counts.changed, 2);
-  assert.equal(counts.open, 3, 'two changed items and the release notes without an answer');
+  assert.equal(counts.open, 2, 'two changed items; the info-only release notes are not open');
   assert.equal(counts.accepted, 1);
   const [entry] = listPacks({ dir });
   assert.equal(entry.counts.changed, 2);
@@ -219,7 +219,7 @@ test('the result and the list count a changed item as open work', (t) => {
   const submitted = submitPack({ ...where(dir, T1), verdict: 'accept-with-changes' });
   const states = Object.fromEntries(submitted.result.items.map((item) => [item.id, item.state]));
   assert.equal(states['cart-themes'], 'changed');
-  assert.equal(submitted.result.counts.open, 3);
+  assert.equal(submitted.result.counts.open, 2);
   assert.equal(submitted.result.counts.changed, 2);
 });
 
@@ -229,7 +229,7 @@ test('herdr-boss review list counts the changed items as open and names them', (
   const lines = [];
   const code = reviewCommand(['list'], { env: {}, dir, now: T1, out: (line) => lines.push(line), err: (line) => lines.push(line) });
   assert.equal(code, 0);
-  assert.match(lines.join('\n'), /1 of 4 answered, 2 changed/);
+  assert.match(lines.join('\n'), /2 of 4 answered, 2 changed/);
 });
 
 test('a viewed, note, or pins change keeps the mark and the earlier verdict of a changed item', (t) => {

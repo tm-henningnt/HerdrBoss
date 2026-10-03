@@ -337,7 +337,7 @@ test('item, section, and pack states follow the answers', (t) => {
   const sectionState = (id) => derived().sections.find((section) => section.id === id).state;
 
   assert.equal(derived().pack, 'open');
-  assert.deepEqual(derived().counts, { items: 5, accepted: 0, denied: 0, live: 0, noteOnly: 0, open: 5, changed: 0 });
+  assert.deepEqual(derived().counts, { items: 5, accepted: 0, denied: 0, live: 0, noteOnly: 1, open: 4, changed: 0 });
   assert.equal(derived().proposedVerdict, 'accept-with-changes');
 
   answer(dir, 'cart-themes', { decision: 'accept' });
@@ -374,7 +374,7 @@ test('item, section, and pack states follow the answers', (t) => {
   assert.equal(sectionState('errors'), 'denied', 'denied wins over needs live check');
 
   answer(dir, 'release-notes', { note: '' });
-  assert.equal(stateOf(dir, 'release-notes'), 'open', 'an empty note leaves a note-only item open');
+  assert.equal(stateOf(dir, 'release-notes'), 'note', 'an info-only item is never open, also with an empty note');
 });
 
 test('a live check that is the only question is answered when it is done', (t) => {
@@ -417,7 +417,7 @@ test('a pack is submitted once, and a second submit after a new version is allow
   assert.equal(result.verdict, 'accept-with-changes');
   assert.equal(result.note, 'Fix the dark cart.');
   assert.equal(result.submittedAt, new Date(T0).toISOString());
-  assert.deepEqual(result.counts, { items: 5, accepted: 1, denied: 1, live: 0, noteOnly: 0, open: 3, changed: 0 });
+  assert.deepEqual(result.counts, { items: 5, accepted: 1, denied: 1, live: 0, noteOnly: 1, open: 2, changed: 0 });
   assert.deepEqual(result.sections, [{ id: 'cart', state: 'denied' }, { id: 'errors', state: 'open' }]);
   assert.equal(result.items.find((item) => item.id === 'cart-themes').decision, 'deny');
   assert.equal(result.items.find((item) => item.id === 'pay-button').choice, 'b');
@@ -628,7 +628,7 @@ test('list and get return metadata and no file content', (t) => {
   assert.equal(open[0].title, 'Checkout flow redesign');
   assert.equal(open[0].version, 1);
   assert.equal(open[0].state, 'open');
-  assert.deepEqual(open[0].counts, { items: 5, accepted: 1, denied: 0, live: 0, noteOnly: 0, open: 4, changed: 0 });
+  assert.deepEqual(open[0].counts, { items: 5, accepted: 1, denied: 0, live: 0, noteOnly: 1, open: 3, changed: 0 });
   const done = listPacks({ dir, state: 'done' });
   assert.deepEqual(done.map((entry) => [entry.pack, entry.verdict]), [['api-reference', 'accept']]);
   assert.equal(listPacks({ dir, state: 'all' }).length, 2);

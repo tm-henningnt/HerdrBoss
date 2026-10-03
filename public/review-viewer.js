@@ -10,6 +10,7 @@ import { markdownOrPlain, safeUrl } from './markdown.js';
 import { COPY_ICON_HTML } from './copy.js';
 import { syncStatusHtml, packStatusHtml } from './review-sync.js';
 import { visibleItems } from './review-filter.js';
+import { effectiveAsk } from './review-ask.js';
 
 export const PIN_MAX = 20;
 export const PIN_TEXT_MAX = 200;
@@ -597,7 +598,7 @@ export function itemViewerHtml(pack, item, ui, h) {
 export function answerBarHtml(pack, item, ui, h) {
   const { esc } = h;
   const spec = itemSpec(pack, item.id);
-  const ask = item.ask || [];
+  const ask = effectiveAsk(item);
   const answer = item.answer || {};
   const off = pack.state !== 'open' ? ' disabled' : '';
   const kbd = (key) => `<kbd class="rv-kbd">${key}</kbd>`;
