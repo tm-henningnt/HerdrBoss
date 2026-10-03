@@ -513,7 +513,9 @@ test('a claim publishes the guard with its owner record, and a release removes t
     '  }',
     '  if (seen.length >= wanted || Date.now() >= deadline) break;',
     '}',
-    "fs.writeFileSync(summaryFile, JSON.stringify({ seen }));",
+    // Write the summary in one step so the reader never sees an empty or partial file.
+    "fs.writeFileSync(summaryFile + '.tmp', JSON.stringify({ seen }));",
+    "fs.renameSync(summaryFile + '.tmp', summaryFile);",
   ].join('\n'));
 
   const child = spawn(process.execPath, [sampler], { stdio: ['ignore', 'ignore', 'inherit'] });
