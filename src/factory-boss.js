@@ -107,10 +107,13 @@ function maskBossDiagnostic(value, host = {}) {
 }
 
 async function readBossPane(docker, name, pane) {
-  try {
-    const result = await herdrCall(docker, name, ['pane', 'read', pane, '--source', 'detection', '--lines', '120', '--format', 'text']);
-    return typeof result === 'string' ? result : result?.text ?? result?.output ?? '';
-  } catch { return null; }
+  for (const source of [['--source', 'detection'], []]) {
+    try {
+      const result = await herdrCall(docker, name, ['pane', 'read', pane, ...source, '--lines', '120', '--format', 'text']);
+      return typeof result === 'string' ? result : result?.text ?? result?.output ?? '';
+    } catch { /* Try the plain read next. */ }
+  }
+  return null;
 }
 
 function bossStartError(pane, text, stderr, host, dialog = startupDialog(text) ?? 'unknown') {
@@ -389,7 +392,7 @@ async function startBossPrompt(docker, name, harness, { workspaceId: workspace, 
   ], { timeout: 300_000 });
   const text = await readBossPane(docker, name, pane);
   const dialog = startupDialog(text);
-  if (result.code !== 0 || text === null || dialog) throw bossStartError(pane, text, result.stderr, diagnosticHost, dialog ?? 'unknown');
+  if (result.code !== 0 || dialog) throw bossStartError(pane, text, result.stderr, diagnosticHost, dialog ?? 'unknown');
   let outcome;
   try { outcome = JSON.parse(result.stdout); }
   catch { throw bossStartError(pane, text, result.stderr, diagnosticHost); }
@@ -474,7 +477,7 @@ export async function factoryBossStart(args, io) {
   if (existing.live) {
     if (['blocked', 'unknown', 'idle'].includes(existing.state)) {
       const text = await readBossPane(docker, name, paneId(existing.pane));
-      if (text === null || startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
+      if (startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
     }
     if (resume && existing.pane?.agent === harness && existing.state === 'idle') {
       resumeExisting = await hasTypedUnsentBossPrompt(docker, name, existing);
