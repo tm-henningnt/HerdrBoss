@@ -16,7 +16,7 @@ function fixture(t, { authorized = '' } = {}) {
   const record = (name, port) => ({ factoryId: name, name, hostId: 'example-host', kind: 'container', containerName: `hf-${name}`, hostname: `${name}.localhost`, ports: { dashboard: port, ssh: port - 2256 }, profile: 'personal', dashboardUrl: `http://${name}.localhost:${port}`, version: '0.1.0', kitRevision: 'abcdef012345', image: { builtAt: '2026-10-03T00:00:00Z', pinsHash: 'a'.repeat(64) } });
   writeFleet(env, { schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId: 'example-host', transport: 'ssh', connectionRef: 'example-host', runtime: 'docker-engine-wsl2', personalOnly: true, codexSandbox: 'user-namespaces' }], factories: [record('win1', 4478), record('win2', 4479)] });
   for (const name of ['win1', 'win2']) writePrivate(factoryFile(env, name), { name, hostId: 'example-host', ports: { dashboard: 4478, ssh: 2222 } });
-  const state = { authorized, machines: [], failStatus: false, failRemote: false, failAdd: false, nextId: 1, remoteTimeout: false };
+  const state = { authorized, machines: [], failStatus: false, failRemote: false, failAdd: false, nextId: 1, remoteTimeout: false, failApi: false, nested: false };
   const calls = [], output = [];
   const docker = { async run(args, options) {
     calls.push({ type: 'docker', args, options });
@@ -30,14 +30,16 @@ function fixture(t, { authorized = '' } = {}) {
     if (command === 'ssh-keygen') return { code: 0, stdout: `${PUBLIC_KEY}\n`, stderr: '' };
     if (command !== 'herdr') throw new Error('Unexpected fake command.');
     const [group, action] = args;
-    if (group === '--remote') return state.failRemote ? { code: 1, stdout: '', stderr: 'PRIVATE example.invalid refused' } : { code: 0, stdout: '', stderr: '', timedOut: state.remoteTimeout };
+    if (group === '--machine') return state.failApi ? { code: 1, stdout: '', stderr: 'refused example.invalid api refused' } : { code: 0, stdout: '{"workspaces":[]}', stderr: '' };
+    if (group === '--remote' && state.nested) return { code: 1, stdout: '', stderr: 'nested herdr is disabled by default' };
+    if (group === '--remote') return state.failRemote ? { code: 1, stdout: '', stderr: 'refused example.invalid refused' } : { code: 0, stdout: '', stderr: '', timedOut: state.remoteTimeout };
     if (action === 'list') return { code: 0, stdout: JSON.stringify(state.machines), stderr: '' };
     if (action === 'add') {
-      if (state.failAdd) return { code: 1, stdout: '', stderr: 'PRIVATE example.invalid add failed' };
-      state.machines.push({ id: `m${state.nextId++}`, label: args[args.indexOf('--label') + 1], target: args.at(-1) });
+      if (state.failAdd) return { code: 1, stdout: '', stderr: 'refused example.invalid add failed' };
+      state.machines.push({ id: `m${state.nextId++}`, label: args[args.indexOf('--label') + 1], target: args.at(-1), enabled: true });
       return { code: 0, stdout: '', stderr: '' };
     }
-    if (action === 'status') return state.failStatus ? { code: 1, stdout: 'PRIVATE example.invalid down', stderr: '' } : { code: 0, stdout: '[]', stderr: '' };
+    if (action === 'status') return state.failStatus ? { code: 1, stdout: 'refused example.invalid down', stderr: '' } : { code: 0, stdout: '[]', stderr: '' };
     if (action === 'remove') { state.machines = state.machines.filter((machine) => machine.id !== args[2]); return { code: 0, stdout: '', stderr: '' }; }
     throw new Error('Unexpected fake herdr call.');
   };
@@ -109,26 +111,62 @@ test('attach runs herdr machine add with the label and the alias, once', async (
   assert.equal(adds.length, 1);
   assert.deepEqual(adds[0].args, ['machine', 'add', '--label', 'win1', 'hf-win1']);
   assert.ok(f.calls.some((call) => call.type === 'run' && call.args[0] === 'machine' && call.args[1] === 'status'));
-  const remote = f.calls.find((call) => call.type === 'run' && call.args[0] === '--remote');
-  assert.deepEqual(remote.args, ['--remote', 'hf-win1']);
-  assert.equal(remote.options.env.TERM, 'xterm-256color');
-  assert.ok(remote.options.timeout > 0);
 });
 
-test('attach exits 1 with a plain message and no private value when a check fails', async (t) => {
-  for (const [flag, pattern] of [['failAdd', /machine add failed/], ['failStatus', /machine status failed/], ['failRemote', /remote attach failed/]]) {
+test('attach exits 1, names the failed step, and shows the masked stderr of the failing command', async (t) => {
+  for (const [flag, pattern] of [['failAdd', /add step failed/], ['failStatus', /status step failed/], ['failApi', /api check step failed/]]) {
     const f = fixture(t);
     f.state[flag] = true;
     assert.equal(await factoryCommand(['attach', 'win1'], f.io), 1, flag);
     assert.match(text(f), pattern);
+    assert.match(text(f), /<host>/);
     assert.doesNotMatch(text(f), /example\.invalid|example-key|wsluser|PRIVATE/);
   }
 });
 
-test('the remote check passes when herdr still runs at the time limit', async (t) => {
+test('the required check is herdr --machine LABEL workspace list', async (t) => {
   const f = fixture(t);
-  f.state.remoteTimeout = true;
   assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  assert.ok(f.calls.some((call) => call.type === 'run' && call.args.join(' ') === '--machine win1 workspace list'));
+});
+
+test('herdr --remote is an optional extra: it runs outside a Herdr pane and never fails attach', async (t) => {
+  const f = fixture(t);
+  assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  const remote = f.calls.find((call) => call.type === 'run' && call.args[0] === '--remote');
+  assert.deepEqual(remote.args, ['--remote', 'hf-win1']);
+  assert.equal(remote.options.env.TERM, 'xterm-256color');
+  assert.ok(remote.options.timeout > 0);
+  const g = fixture(t);
+  g.state.failRemote = true;
+  assert.equal(await factoryCommand(['attach', 'win1'], g.io), 0);
+  assert.match(text(g), /optional/i);
+  const h = fixture(t);
+  h.io.env.HERDR_ENV = '1'; h.state.nested = true;
+  assert.equal(await factoryCommand(['attach', 'win1'], h.io), 0);
+  assert.equal(h.calls.some((call) => call.type === 'run' && call.args[0] === '--remote'), false);
+  assert.match(text(h), /skipped/i);
+  const i = fixture(t);
+  i.state.nested = true;
+  assert.equal(await factoryCommand(['attach', 'win1'], i.io), 0);
+  assert.match(text(i), /skipped/i);
+});
+
+test('attach reuses a machine that already has the same target, and refuses a label with another target', async (t) => {
+  const f = fixture(t);
+  f.state.machines.push({ id: 'manual', label: 'win1', target: 'hf-win1', enabled: true });
+  assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  assert.equal(f.calls.some((call) => call.type === 'run' && call.args[1] === 'add'), false);
+  assert.equal(f.state.machines.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(factoryFile(f.env, 'win1', 'attach.json'), 'utf8')).machineId, 'manual');
+  const g = fixture(t);
+  g.state.machines.push({ id: 'x', label: 'win1', target: 'other-target' });
+  assert.equal(await factoryCommand(['attach', 'win1'], g.io), 1);
+  assert.equal(g.state.machines.length, 1);
+  const h = fixture(t);
+  h.state.machines.push({ id: 'y', label: 'renamed', target: 'hf-win1' });
+  assert.equal(await factoryCommand(['attach', 'win1'], h.io), 0);
+  assert.equal(h.state.machines.length, 1);
 });
 
 test('attach refuses a factory on the local host and an unknown factory', async (t) => {
