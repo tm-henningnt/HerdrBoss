@@ -50,6 +50,24 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
+test('quota plan settings share the Quota plan help group and documented defaults', () => {
+  const group = SETTING_GROUPS.find((item) => item.id === 'quota-plan');
+  assert.equal(group?.title, 'Quota plan');
+  for (const [setting, value, range] of [
+    ['quotaPlan.burstPace', '1', '0.1 to 10'],
+    ['quotaPlan.applyThreshold', '95', '50 to 100'],
+    ['quotaPlan.margin', '0', '0 to 50'],
+    ['quotaPlan.horizon', 'last-expiry', 'last-expiry or an ISO time'],
+    ['quotaPlan.tolerance', '5', '0 to 50'],
+    ['quotaPlan.slowFactor', '0.5', '0.1 to 1'],
+  ]) {
+    assert.equal(SETTING_HELP[setting]?.group, 'quota-plan');
+    assert.equal(SETTING_HELP[setting]?.default, value);
+    assert.equal(SETTING_HELP[setting]?.range, range);
+  }
+  assert.match(app, /<h3>Quota plan<\/h3><p>Set the Codex burst pace/);
+});
+
 test('worker and browser maintenance settings have editable rows and help text', () => {
   const expected = {
     'workers.paneCloseDelayMinutes': { range: '0 to 60', default: '2' },
@@ -126,7 +144,7 @@ test('the popup and the guide come from the same text', () => {
 
 test('the Advanced group holds the rarely used groups', () => {
   const advanced = SETTING_GROUPS.filter((group) => group.advanced).map((group) => group.id);
-  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'analytics', 'readiness']);
+  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'quota-plan', 'analytics', 'readiness']);
   const first = SETTING_GROUPS.slice(0, 4).map((group) => group.id);
   assert.deepEqual(first, ['harnesses', 'quotas', 'machine', 'locks']);
 });

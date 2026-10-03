@@ -343,12 +343,27 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
     for (const x of u.extraRateWindows || []) {
       windows.push({ key: x.id, label: x.title, usedPercent: x.window.usedPercent, resetsAt: x.window.resetsAt, windowMinutes: x.window.windowMinutes, extra: true });
     }
+    const resetCredits = Array.isArray(u.codexResetCredits?.credits)
+      ? u.codexResetCredits.credits.slice(0, 100).flatMap((credit, index) => {
+        if (!credit || typeof credit !== 'object' || Array.isArray(credit)) return [];
+        const providerId = [credit.id, credit.credit_id, credit.creditId].find((value) => typeof value === 'string' && value.trim() && value.length <= 128);
+        const granted = Date.parse(credit.granted_at);
+        const expires = Date.parse(credit.expires_at);
+        return [{
+          id: providerId || `credit-${index + 1}`,
+          status: typeof credit.status === 'string' && credit.status.length <= 40 ? credit.status : 'unknown',
+          grantedAt: Number.isFinite(granted) ? new Date(granted).toISOString() : null,
+          expiresAt: Number.isFinite(expires) ? new Date(expires).toISOString() : null,
+        }];
+      })
+      : [];
     result.push({
       provider: r.provider,
       plan: u.loginMethod || u.identity?.loginMethod || null,
       windows,
       credits: r.credits ? { remaining: r.credits.remaining } : null,
       resetCredits: u.codexResetCredits?.availableCount ?? null,
+      ...(resetCredits.length ? { codexResetCredits: resetCredits } : {}),
       updatedAt: u.updatedAt || null,
       observedAt: new Date(finishedAt).toISOString(),
     });

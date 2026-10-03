@@ -118,6 +118,11 @@ const USAGE = `herdr-boss <command>
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
   lanes                 Print one line per quota provider and the unmetered models lane.
+  quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]
+                        Show the Codex quota plan. What-if options do not write the plan.
+  quota announce codex --at TIME [--kind full|partial] [--refund N]
+  quota announce --list | --remove ID
+  quota credit used ID  Mark a Codex reset credit used after Owner confirmation.
   project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME]
                         [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]
                         Create a project folder with the kit files and the first commit.
@@ -320,6 +325,122 @@ async function messageCommand(cmd, args) {
   console.log(`Report ${record.id} is in the boss thread for the Owner.`);
 }
 
+function quotaOptionValue(args, index, option) {
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`${option} needs a value.`);
+  return value;
+}
+
+function announcedResetOption(value) {
+  const match = /^(.*?)(?::(full|partial))?$/.exec(value);
+  const at = match?.[1];
+  if (!at || !Number.isFinite(Date.parse(at))) throw new Error('--announce needs an ISO time, with optional :full or :partial.');
+  return { at, kind: match[2] || 'full', refundPercent: 0 };
+}
+
+function quotaPlainText(view) {
+  const plan = view.plan;
+  const lines = [
+    `Codex quota plan at ${view.now}`,
+    `Used: ${view.usedPercent}% · weekly reset: ${view.resetsAt}`,
+    `Historical p90 burn: ${view.historicalP90.toFixed(2)} points per hour`,
+  ];
+  if (plan.credits.length) {
+    lines.push('Credits:');
+    for (const credit of plan.credits) {
+      lines.push(`  ${credit.id}: earliest ${credit.earliestAt || 'none'}, planned ${credit.applyAt || 'unused'}, latest ${credit.latestAt || 'none'}; expiry ${credit.expiresAt}`);
+    }
+  } else lines.push('Credits: none available');
+  lines.push(`By ${view.horizon}: ${plan.totalConsumed.toFixed(1)} points; gain over no credits ${plan.gain.toFixed(1)} points`);
+  lines.push('Burst pace | points by last expiry | gain');
+  for (const row of view.burstTable) {
+    lines.push(`  ${row.burstPace.toFixed(1)} / hour | ${row.totalConsumedByLastExpiry.toFixed(1)} | ${row.gainAgainstNoCredits.toFixed(1)}`);
+  }
+  lines.push(`Fast: ${plan.fast.totalConsumed.toFixed(1)} points, gain ${plan.fast.gain.toFixed(1)}; slow: ${plan.slow.totalConsumed.toFixed(1)} points, gain ${plan.slow.gain.toFixed(1)}.`);
+  return lines.join('\n');
+}
+
+async function quotaCommand(args, cfg) {
+  const { createQuotaPlanService } = await import('./quota-plan-service.js');
+  const service = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan });
+  const action = args[0];
+  const currentNow = Date.now();
+  const quotas = service.readQuotas();
+  if (action === 'plan') {
+    const provider = args[1];
+    if (!provider) throw new Error('Usage: quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]');
+    let burstPace, horizon, whatIf, json = false;
+    for (let index = 2; index < args.length; index += 1) {
+      const flag = args[index];
+      if (flag === '--json') { json = true; continue; }
+      if (flag === '--burst-pace') {
+        const value = Number(quotaOptionValue(args, index, flag));
+        if (!Number.isFinite(value)) throw new Error('--burst-pace must be a number from 0.1 to 10.');
+        burstPace = value; index += 1; continue;
+      }
+      if (flag === '--announce') {
+        whatIf = announcedResetOption(quotaOptionValue(args, index, flag));
+        index += 1; continue;
+      }
+      if (flag === '--what-if') {
+        horizon = quotaOptionValue(args, index, flag);
+        if (!Number.isFinite(Date.parse(horizon))) throw new Error('--what-if needs an ISO time.');
+        index += 1; continue;
+      }
+      throw new Error(`Unknown quota plan option: ${flag}`);
+    }
+    const options = { provider, quotas, now: currentNow, burstPace, horizon, whatIf };
+    const view = whatIf || horizon ? service.preview(options) : service.replan(options);
+    process.stdout.write(json ? `${JSON.stringify(view, null, 2)}\n` : `${quotaPlainText(view)}\n`);
+    return;
+  }
+  if (action === 'announce') {
+    if (args[1] === '--list' && args.length === 2) {
+      const rows = service.read().announcements.filter((item) => item.provider === 'codex');
+      process.stdout.write(rows.length ? `${rows.map((item) => `${item.id} ${item.kind} at ${item.at}${item.kind === 'partial' ? `; refund ${item.refundPercent}` : ''}`).join('\n')}\n` : 'No announced Codex resets.\n');
+      return;
+    }
+    if (args[1] === '--remove' && args.length === 3) {
+      await verifyQuotaMutationCaller();
+      service.removeAnnouncement({ provider: 'codex', id: args[2], quotas, now: currentNow });
+      console.log(`Removed announced reset ${args[2]}.`);
+      return;
+    }
+    if (args[1] !== 'codex') throw new Error('Usage: quota announce codex --at TIME [--kind full|partial] [--refund N] | quota announce --list | --remove ID');
+    let at, kind = 'full', refundPercent = 0;
+    for (let index = 2; index < args.length; index += 1) {
+      const flag = args[index];
+      if (flag === '--at') { at = quotaOptionValue(args, index, flag); index += 1; continue; }
+      if (flag === '--kind') { kind = quotaOptionValue(args, index, flag); index += 1; continue; }
+      if (flag === '--refund') {
+        refundPercent = Number(quotaOptionValue(args, index, flag));
+        if (!Number.isFinite(refundPercent)) throw new Error('--refund must be a number from 0 to 100.');
+        index += 1; continue;
+      }
+      throw new Error(`Unknown quota announce option: ${flag}`);
+    }
+    await verifyQuotaMutationCaller();
+    const result = service.announce({ provider: 'codex', at, kind, refundPercent, quotas, now: currentNow });
+    console.log(`Announcement ID: ${result.id}`);
+    return;
+  }
+  if (action === 'credit' && args[1] === 'used' && args.length === 3) {
+    await verifyQuotaMutationCaller();
+    service.markCreditUsed({ provider: 'codex', id: args[2], quotas, now: currentNow });
+    console.log(`Marked Codex credit ${args[2]} used.`);
+    return;
+  }
+  throw new Error('Usage: quota plan codex [options] | quota announce codex --at TIME [--kind full|partial] [--refund N] | quota announce --list | --remove ID | quota credit used ID');
+}
+
+async function verifyQuotaMutationCaller() {
+  if (process.env.HERDR_ENV !== '1' && !process.env.HERDR_PANE_ID && !process.env.HERDR_WORKSPACE_ID) return;
+  const { verifyMessageCaller } = await import('./messages.js');
+  const { createHerdrRunner } = await import('./kit/workers.js');
+  const caller = verifyMessageCaller(process.env, createHerdrRunner(), 'quota changes', { labels: ['boss', 'orch'] });
+  return caller;
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'kit-path') {
@@ -374,6 +495,11 @@ async function main() {
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = planCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'quota') {
+    const cfg = loadConfig();
+    await quotaCommand(args, cfg);
     return;
   }
   if (['say', 'messages', 'mail', 'tell'].includes(cmd)) {

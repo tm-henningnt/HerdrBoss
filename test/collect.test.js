@@ -85,3 +85,26 @@ test('collectQuotas parses the codexbar rows from the runner', async () => {
   assert.equal(row.provider, 'codex');
   assert.equal(row.windows[0].usedPercent, 12);
 });
+
+test('collectQuotas keeps only safe Codex reset credit fields', async () => {
+  const runner = async () => JSON.stringify([{
+    provider: 'codex',
+    usage: {
+      primary: { usedPercent: 12, resetsAt: '2032-04-08T00:00:00.000Z', windowMinutes: 10080 },
+      codexResetCredits: {
+        availableCount: 2,
+        credits: [
+          { id: 'credit-a', status: 'available', granted_at: '2032-04-01T00:00:00Z', expires_at: '2032-04-10T00:00:00Z', account_id: 'private-account', email: 'owner@example.invalid', token: 'private-token', extra: 'drop' },
+          { status: 'used', granted_at: '2032-03-01T00:00:00Z', expires_at: '2032-03-10T00:00:00Z', account_id: 'also-private' },
+        ],
+      },
+    },
+  }]);
+  const [row] = await collectQuotas({ runner });
+  assert.equal(row.resetCredits, 2);
+  assert.deepEqual(row.codexResetCredits, [
+    { id: 'credit-a', status: 'available', grantedAt: '2032-04-01T00:00:00.000Z', expiresAt: '2032-04-10T00:00:00.000Z' },
+    { id: 'credit-2', status: 'used', grantedAt: '2032-03-01T00:00:00.000Z', expiresAt: '2032-03-10T00:00:00.000Z' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(row), /private-account|owner@example|private-token|drop/);
+});

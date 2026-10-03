@@ -80,6 +80,39 @@ test('service settings accept each documented range and reject values outside it
   }
 });
 
+test('quota plan settings have defaults, documented ranges, and a bounded horizon form', (t) => {
+  const defaults = serviceSettingsView({});
+  const expected = {
+    'quotaPlan.burstPace': 1,
+    'quotaPlan.applyThreshold': 95,
+    'quotaPlan.margin': 0,
+    'quotaPlan.horizon': 'last-expiry',
+    'quotaPlan.tolerance': 5,
+    'quotaPlan.slowFactor': 0.5,
+  };
+  for (const [setting, value] of Object.entries(expected)) {
+    assert.deepEqual(defaults.find((item) => item.setting === setting), {
+      group: 'Quota plan', setting, value, source: 'default',
+    });
+  }
+  for (const [key, value] of [
+    ['quotaPlan.burstPace', 0.1], ['quotaPlan.burstPace', 10],
+    ['quotaPlan.applyThreshold', 50], ['quotaPlan.applyThreshold', 100],
+    ['quotaPlan.margin', 0], ['quotaPlan.margin', 50],
+    ['quotaPlan.tolerance', 0], ['quotaPlan.tolerance', 50],
+    ['quotaPlan.slowFactor', 0.1], ['quotaPlan.slowFactor', 1],
+    ['quotaPlan.horizon', 'last-expiry'], ['quotaPlan.horizon', '2032-04-01T00:00:00.000Z'],
+  ]) assertSetting(t, key, value);
+  for (const [key, value] of [
+    ['quotaPlan.burstPace', 0.09], ['quotaPlan.burstPace', 10.01],
+    ['quotaPlan.applyThreshold', 49], ['quotaPlan.applyThreshold', 100.1],
+    ['quotaPlan.margin', -0.1], ['quotaPlan.margin', 50.1],
+    ['quotaPlan.tolerance', -0.1], ['quotaPlan.tolerance', 50.1],
+    ['quotaPlan.slowFactor', 0.09], ['quotaPlan.slowFactor', 1.01],
+    ['quotaPlan.horizon', 'tomorrow'], ['quotaPlan.horizon', '2032-04-01'],
+  ]) assertRejectedSetting(t, key, value);
+});
+
 test('service settings require quota warning below critical and refuse non-allow-listed keys', (t) => {
   assertRejectedSetting(t, 'quota.warnPercent', 98, { quota: { warnPercent: 90, criticalPercent: 98 } });
   assertRejectedSetting(t, 'quota.criticalPercent', 90, { quota: { warnPercent: 90, criticalPercent: 98 } });

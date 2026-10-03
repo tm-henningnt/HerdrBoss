@@ -421,6 +421,33 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         const body = await health(engine);
         return send(res, body.error ? 503 : 200, body);
       }
+      if (p === '/api/quota-plan/codex' && req.method === 'GET') {
+        if (engine.state?.quotas?.some((row) => row.provider === 'codex' && !row.error)) {
+          try { engine.quotaPlanService.replan({ provider: 'codex', quotas: engine.state.quotas, now: Date.now() }); }
+          catch { /* Return the last saved plan when a current reading cannot make a new one. */ }
+        }
+        return send(res, 200, engine.quotaPlanService.get({ provider: 'codex', now: Date.now() }));
+      }
+      if (p === '/api/quota-plan/codex/announce' && req.method === 'POST') {
+        if (!access?.owner(req)) return send(res, 403, { error: 'Only the Owner can announce a Codex reset.' });
+        let body;
+        try { body = await jsonBody(req); }
+        catch (error) { return send(res, 400, { error: error.message }); }
+        const extra = Object.keys(body || {}).find((key) => !['at', 'kind', 'refund', 'refundPercent'].includes(key));
+        if (extra !== undefined) return send(res, 400, { error: `Unknown field: ${extra.slice(0, 40)}.` });
+        try {
+          const result = engine.quotaPlanService.announce({
+            provider: 'codex', at: body.at, kind: body.kind ?? 'full',
+            refundPercent: body.refundPercent ?? body.refund ?? 0,
+            quotas: engine.state?.quotas || [], now: Date.now(),
+          });
+          if (engine.state) {
+            engine.state.quotaPlanSummary = engine.quotaPlanService.summary({ now: Date.now() });
+            broadcast('state', engine.state);
+          }
+          return send(res, 200, { ok: true, announcement: { id: result.id, at: result.at, kind: result.kind, ...(result.kind === 'partial' ? { refundPercent: result.refundPercent } : {}) }, plan: result.plan });
+        } catch (error) { return send(res, 400, { error: error.message }); }
+      }
       if (p === '/api/state') {
         if (engine.state) {
           refreshMailbox();
@@ -635,6 +662,13 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         catch (error) { return send(res, error.code === 'DATA_NOT_WRITABLE' ? 500 : 400, { ok: false, error: error.message }); }
         applyServiceSettings(cfg, changes);
         if (engine.cfg !== cfg) applyServiceSettings(engine.cfg, changes);
+        if (Object.keys(changes).some((setting) => setting.startsWith('quotaPlan.')) && engine.quotaPlanService) {
+          engine.quotaPlanService.configure(engine.cfg.quotaPlan);
+          if (engine.state?.quotas?.some((row) => row.provider === 'codex' && !row.error)) {
+            try { engine.quotaPlanService.replan({ provider: 'codex', quotas: engine.state.quotas, now: Date.now(), force: true }); }
+            catch { /* The next quota tick can make a fresh plan. */ }
+          }
+        }
         analyticsCache = null;
         const settings = serviceSettingsView(engine.cfg);
         if (engine.state) {
@@ -643,6 +677,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
             warnPercent: engine.cfg.quota?.warnPercent ?? 90,
             criticalPercent: engine.cfg.quota?.criticalPercent ?? 98,
           };
+          if (engine.quotaPlanService) engine.state.quotaPlanSummary = engine.quotaPlanService.summary({ now: Date.now() });
           broadcast('state', engine.state);
         }
         return send(res, 200, { ok: true, settings });

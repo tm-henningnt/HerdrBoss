@@ -93,6 +93,13 @@ export const SETTING_GROUPS = [
     restart: 'The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.',
   },
   {
+    id: 'quota-plan', title: 'Quota plan', advanced: true,
+    controls: 'The Codex reset credit plan and the usage curve that guides it.',
+    affects: 'Quota plan guidance only. It does not change worker starts or apply a credit.',
+    safe: 'Safe to change. Herdr Boss shows estimates and never applies a reset credit.',
+    restart: 'No restart. Select Save in Quota plan settings.',
+  },
+  {
     id: 'analytics', title: 'Analytics', advanced: true,
     controls: 'Whether the service reads GitHub Actions minutes for registered repositories.',
     affects: 'Only the GitHub Actions minutes card on the Analytics page.',
@@ -770,6 +777,50 @@ export const SETTING_HELP = Object.fromEntries([
     default: '2', unit: 'Files', range: '1 to 2',
     raise: 'More history stays on disk.',
     lower: 'Herdr Boss deletes the older file at the next rotation.',
+    apply: 'service',
+  }),
+
+  // Quota plan
+  S('quota-plan', 'quotaPlan.burstPace', 'Burst pace', {
+    what: 'The points per hour that a burst may use before the plan schedules a reset credit.',
+    default: '1', unit: 'Percentage points per hour', range: '0.1 to 10',
+    raise: 'A higher pace reaches the apply threshold sooner when demand stays the same.',
+    lower: 'A lower pace reaches the apply threshold later.',
+    apply: 'service',
+  }),
+  S('quota-plan', 'quotaPlan.applyThreshold', 'Credit apply threshold', {
+    what: 'The used percent at which the plan may schedule a reset credit.',
+    default: '95', unit: 'Percent used', range: '50 to 100',
+    raise: 'A higher threshold saves more quota before the planned reset.',
+    lower: 'A lower threshold schedules the reset sooner.',
+    apply: 'service',
+  }),
+  S('quota-plan', 'quotaPlan.margin', 'Reserve margin', {
+    what: 'The percent points that the plan keeps below full quota use.',
+    default: '0', unit: 'Percentage points', range: '0 to 50',
+    raise: 'A higher margin lowers the effective credit apply threshold.',
+    lower: 'A lower margin permits a higher apply threshold.',
+    apply: 'service',
+  }),
+  S('quota-plan', 'quotaPlan.horizon', 'Planning horizon', {
+    what: 'The time at which the plan stops. Use the last credit expiry or enter an ISO time.',
+    default: 'last-expiry', unit: 'End time', range: 'last-expiry or an ISO time',
+    raise: 'A later time includes more planned quota use.',
+    lower: 'An earlier time limits the plan to a shorter period.',
+    apply: 'service',
+  }),
+  S('quota-plan', 'quotaPlan.tolerance', 'Plan guidance tolerance', {
+    what: 'The points below or above the planned curve that keep actual use in the normal state.',
+    default: '5', unit: 'Percentage points', range: '0 to 50',
+    raise: 'A higher tolerance keeps guidance normal across a wider gap.',
+    lower: 'A lower tolerance changes guidance after a smaller gap.',
+    apply: 'service',
+  }),
+  S('quota-plan', 'quotaPlan.slowFactor', 'Slow scenario factor', {
+    what: 'The fraction of the burst pace that the slow scenario uses.',
+    default: '0.5', unit: 'Factor', range: '0.1 to 1',
+    raise: 'A higher factor makes the slow scenario closer to the fast scenario.',
+    lower: 'A lower factor gives the slow scenario a smaller burst pace.',
     apply: 'service',
   }),
 
