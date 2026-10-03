@@ -2676,7 +2676,7 @@ test('GET /api/analytics returns memoryByClass from the memory samples in the da
 
 test('the Analytics page serves and its script fetches and draws the machine hours', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /'\/api\/machine-hours'\]\.map/);
+  assert.match(app, /'\/api\/machine-hours'\];\n\s*if \(location\.pathname === '\/analytics'\) urls\.push\('\/api\/quota-plan\/codex'\);\n\s*const results = await Promise\.allSettled\(urls\.map/);
   assert.match(app, /function machineHoursBlock/);
   assert.match(app, /<details class="mh-details" data-mh-detail/);
   assert.match(app, /machineHoursOpen = e\.target\.open/);
