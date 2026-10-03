@@ -189,10 +189,15 @@ test('update refuses unknown and stale work state before changing Docker resourc
   } finally { f.cleanup(); }
 });
 
-test('update rejects a work snapshot older than 15 seconds', async () => {
+test('update accepts a work snapshot up to one minute old and rejects an older one', async () => {
+  const fresh = updateFixture();
+  try {
+    fresh.state = { ...fresh.state, updatedAt: new Date(Date.now() - 40_000).toISOString() };
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], fresh.io), 0);
+  } finally { fresh.cleanup(); }
   const f = updateFixture();
   try {
-    f.state = { ...f.state, updatedAt: new Date(Date.now() - 16_000).toISOString() };
+    f.state = { ...f.state, updatedAt: new Date(Date.now() - 61_000).toISOString() };
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /cannot prove.*idle/i);
     assert.equal(f.calls.some(({ args }) => ['stop', 'pause', 'unpause', 'start'].includes(args[0]) || args[1] === 'rm' || args[1] === 'create'), false);
   } finally { f.cleanup(); }

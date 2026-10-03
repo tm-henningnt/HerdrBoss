@@ -150,12 +150,17 @@ async function updateResources(factory, docker, name, { allowStopped = false, mi
   return { container, owner };
 }
 
+// The service writes the state file about every 30 seconds. A stopped service writes nothing,
+// so a snapshot after the stop is measured against the stop time.
+const STATE_MAX_AGE_MS = 60_000;
+const stoppedAt = new Map();
+
 async function snapshot(docker, name) {
   const raw = await dockerCall(docker, ['exec', '--user', 'factory', `hf-${name}`, 'node', '-e', STATE_SCRIPT]);
   let state;
   try { state = JSON.parse(raw); } catch { throw new Error('The factory work state is not valid.'); }
   const updated = Date.parse(state.updatedAt);
-  if (!Number.isFinite(updated) || updated > Date.now() + 30_000 || Date.now() - updated > 15_000
+  if (!Number.isFinite(updated) || updated > Date.now() + 30_000 || (stoppedAt.get(name) ?? Date.now()) - updated > STATE_MAX_AGE_MS
     || !Number.isInteger(state.workers) || state.workers < 0 || !Array.isArray(state.locks) || !Array.isArray(state.handoffs) || !Array.isArray(state.errors) || !Array.isArray(state.orchestrators) || typeof state.bossPane !== 'boolean') {
     throw new Error('The factory cannot prove that work is idle.');
   }
@@ -324,12 +329,14 @@ async function waitFor(docker, name, predicate, message, timeoutMs = 10_000) {
 }
 
 async function quiesce(docker, name) {
+  stoppedAt.set(name, Date.now());
   await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-d', '/run/service/herdr-boss-serve']);
   await waitFor(docker, name, async () => (await serviceState(docker, name)) === 'false', 'The factory service did not stop.');
   await dockerCall(docker, ['pause', `hf-${name}`]);
 }
 
 async function resume(docker, name) {
+  stoppedAt.delete(name);
   const container = await inspect(docker, 'container', `hf-${name}`);
   if (container?.State?.Paused) await dockerCall(docker, ['unpause', `hf-${name}`]);
   await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']);
