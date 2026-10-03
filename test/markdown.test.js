@@ -8,6 +8,7 @@ import { renderMarkdown, renderInlineMarkdown, markdownOrPlain, safeUrl, sanitiz
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = (name) => fs.readFileSync(path.join(root, 'test', 'fixtures', name), 'utf8');
 const md = (source) => renderMarkdown(source);
+const code = (inner) => `<div class="md-code"><button type="button" class="copy-btn" data-copy-code aria-label="Copy code"><span class="copy-icon" aria-hidden="true"></span><span class="copy-flash" aria-hidden="true">Copied</span></button><pre>${inner}</pre></div>`;
 
 // A small tag and attribute scanner. The renderer writes attribute values only in double quotes, and esc() removes each quote and angle bracket from a value.
 function scan(html) {
@@ -83,16 +84,16 @@ test('task list items render as disabled check boxes with a label', () => {
 
 test('tables render with alignment in a scroll region', () => {
   const html = md('| a | b | c |\n| :-- | :-: | --: |\n| x | y | 1 |\n| \\| | `q` | 22 |');
-  assert.equal(html, '<div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr><th style="text-align:left">a</th><th style="text-align:center">b</th><th style="text-align:right">c</th></tr></thead><tbody><tr><td style="text-align:left">x</td><td style="text-align:center">y</td><td class="n" style="text-align:right">1</td></tr><tr><td style="text-align:left">|</td><td style="text-align:center"><code>q</code></td><td class="n" style="text-align:right">22</td></tr></tbody></table></div>');
+  assert.equal(html, '<div class="md-table-wrap"><div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr><th style="text-align:left">a</th><th style="text-align:center">b</th><th style="text-align:right">c</th></tr></thead><tbody><tr><td style="text-align:left">x</td><td style="text-align:center">y</td><td class="n" style="text-align:right">1</td></tr><tr><td style="text-align:left">|</td><td style="text-align:center"><code>q</code></td><td class="n" style="text-align:right">22</td></tr></tbody></table></div></div>');
   assert.match(md('a | b\n--|--\n1 | 2'), /<table><thead><tr><th>a<\/th><th>b<\/th><\/tr><\/thead><tbody><tr><td class="n">1<\/td>/);
   assert.equal(md('| a | b |\n| - |'), '<p>| a | b | | - |</p>', 'a delimiter row with the wrong cell count is text');
 });
 
 test('fenced code blocks keep text and take a checked language class', () => {
-  assert.equal(md('```js\nconst a = 1 < 2;\n```'), '<pre><code class="language-js">const a = 1 &lt; 2;</code></pre>');
-  assert.equal(md('~~~\n# not a heading\n~~~'), '<pre><code># not a heading</code></pre>');
-  assert.equal(md('```x"onload=1\nx\n```'), '<pre><code>x</code></pre>');
-  assert.equal(md('````\n```\n````'), '<pre><code>```</code></pre>');
+  assert.equal(md('```js\nconst a = 1 < 2;\n```'), code('<code class="language-js">const a = 1 &lt; 2;</code>'));
+  assert.equal(md('~~~\n# not a heading\n~~~'), code('<code># not a heading</code>'));
+  assert.equal(md('```x"onload=1\nx\n```'), code('<code>x</code>'));
+  assert.equal(md('````\n```\n````'), code('<code>```</code>'));
 });
 
 test('block quotes nest and hold lists', () => {
@@ -233,9 +234,9 @@ test('a quote in a URL or a title stays inside the attribute', () => {
 test('unclosed constructs render as text', () => {
   assert.equal(md('**bold'), '<p>**bold</p>');
   assert.equal(md('[text](https://a.test'), '<p>[text](<a href="https://a.test" target="_blank" rel="noopener noreferrer">https://a.test</a></p>');
-  assert.equal(md('```\nopen fence'), '<pre><code>open fence</code></pre>');
+  assert.equal(md('```\nopen fence'), code('<code>open fence</code>'));
   assert.equal(md('<https://a.test'), '<p>&lt;<a href="https://a.test" target="_blank" rel="noopener noreferrer">https://a.test</a></p>');
-  assert.equal(md('| a | b |\n| --- | --- |'), '<div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr><th>a</th><th>b</th></tr></thead></table></div>');
+  assert.equal(md('| a | b |\n| --- | --- |'), '<div class="md-table-wrap"><div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr><th>a</th><th>b</th></tr></thead></table></div></div>');
 });
 
 test('nesting deeper than the limit renders as text', () => {
@@ -406,4 +407,50 @@ test('the sanitizer keeps attachment images and removes other image sources and 
   assert.equal(tree.childNodes.length, 2);
   assert.deepEqual(tree.childNodes[0].attrs, { src: url, alt: 'Photo', loading: 'lazy', class: 'md-attachment' });
   assert.deepEqual(tree.childNodes[1].attrs, { src: url });
+});
+
+test('a fenced code block has a copy button and the code text stays exact', () => {
+  const source = 'a  <b> & "q"\n\n  indented\n# x';
+  const html = md('```sh\n' + source + '\n```');
+  assert.match(html, /^<div class="md-code"><button type="button" class="copy-btn" data-copy-code aria-label="Copy code">/);
+  const inner = /<code class="language-sh">([^]*)<\/code><\/pre>/.exec(html)[1];
+  assert.equal(inner, 'a  &lt;b&gt; &amp; &quot;q&quot;\n\n  indented\n# x');
+  assert.ok(!/```|<span class="rv-ln"/.test(inner));
+  assertAllowed(html, 'copy button');
+  assert.equal(sanitizeRendered(parseTree(html)), 0);
+});
+
+test('every fenced block in a message gets its own button', () => {
+  const html = md('```\none\n```\n\ntext\n\n~~~\ntwo\n~~~');
+  assert.equal(html.match(/data-copy-code/g).length, 2);
+});
+
+test('inline code gets no copy button', () => {
+  assert.ok(!/copy-btn/.test(md('use `npm test` now')));
+});
+
+test('a code block with tabs copies the source and shows four spaces', () => {
+  const html = md('```make\nall:\n\techo ok\n```');
+  assert.match(html, /data-copy-code="all:\n\techo ok"/);
+  assert.match(html, /<code class="language-make">all:\n    echo ok<\/code>/);
+  assert.ok(!/\t/.test(html.replace(/data-copy-code="[^"]*"/, '')));
+});
+
+test('a code block in a list or a quote keeps its tabs for the copy', () => {
+  assert.match(md('- item\n\n  ```\n  a\tb\n  ```'), /data-copy-code="a\tb"/);
+  assert.match(md('> ```\n> x\ty\n> ```'), /data-copy-code="x\ty"/);
+});
+
+test('a code block without a tab has a bare copy attribute and a tab elsewhere does not leak', () => {
+  assert.match(md('```\nplain\n```'), /data-copy-code aria-label/);
+  const html = md('a\tb\n\n```\nplain\n```');
+  assert.match(html, /data-copy-code aria-label/);
+  assert.equal(md('```\nplain\n```'), md('```\nplain\n```'));
+});
+
+test('a copy source with quotes and angle brackets stays inside the attribute', () => {
+  const html = md('```\n"x"\t<b>&\n```');
+  assert.match(html, /data-copy-code="&quot;x&quot;\t&lt;b&gt;&amp;"/);
+  assertAllowed(html, 'tab source');
+  assert.equal(sanitizeRendered(parseTree(html)), 0);
 });

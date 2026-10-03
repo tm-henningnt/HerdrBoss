@@ -7,6 +7,7 @@
 // Markdown goes through h.markdown(): the page passes a renderer that escapes all source text and then removes each tag and
 // attribute outside the allowlist, before the string reaches the DOM. Without it, markdownOrPlain() renders the text.
 import { markdownOrPlain, safeUrl } from './markdown.js';
+import { COPY_ICON_HTML } from './copy.js';
 import { syncStatusHtml, packStatusHtml } from './review-sync.js';
 import { visibleItems } from './review-filter.js';
 
@@ -353,13 +354,19 @@ function cutNote(total) {
   return total > CODE_LINES_MAX ? `<p class="rv-cut">The file shows ${CODE_LINES_MAX} of ${total} lines.</p>` : '';
 }
 
+// Copies the text of the lines in the code box below it, without the line numbers.
+const copyLinesButton = `<button type="button" class="copy-btn copy-inline" data-copy-lines aria-label="Copy the text">${COPY_ICON_HTML}</button>`;
+
+// The first character of each diff line in the source. A copy of the diff keeps it and drops the line numbers.
+const DIFF_PREFIX = { add: '+', del: '-', same: ' ', hunk: '', meta: '' };
+
 function diffEvidence(pack, item, spec, h) {
   const { esc } = h;
   return textFile(pack, spec.src || '', h, (text) => {
     const lines = diffLines(text);
     const mark = { add: '+', del: '−', same: '', hunk: '', meta: '' };
-    const rows = lines.slice(0, CODE_LINES_MAX).map((line) => `<div class="rv-line rv-${line.kind}"><span class="rv-ln">${line.old ?? ''}</span><span class="rv-ln">${line.new ?? ''}</span><span class="rv-mark">${mark[line.kind]}</span><code>${esc(line.text)}</code></div>`).join('');
-    return `<p class="rv-file-name"><span class="mono">${esc(spec.src || '')}</span></p><div class="rv-code rv-diff" role="region" aria-label="${esc(`Diff: ${item.title || item.id}`)}" tabindex="0">${rows}</div>${cutNote(lines.length)}`;
+    const rows = lines.slice(0, CODE_LINES_MAX).map((line) => `<div class="rv-line rv-${line.kind}" data-copy-prefix="${DIFF_PREFIX[line.kind]}"><span class="rv-ln">${line.old ?? ''}</span><span class="rv-ln">${line.new ?? ''}</span><span class="rv-mark">${mark[line.kind]}</span><code>${esc(line.text)}</code></div>`).join('');
+    return `<div data-copy-scope><p class="rv-file-name"><span class="mono">${esc(spec.src || '')}</span>${copyLinesButton}</p><div class="rv-code rv-diff" role="region" aria-label="${esc(`Diff: ${item.title || item.id}`)}" tabindex="0">${rows}</div></div>${cutNote(lines.length)}`;
   });
 }
 
@@ -369,7 +376,7 @@ function fileEvidence(pack, item, spec, h) {
     const lines = fileLines(text);
     const rows = lines.slice(0, CODE_LINES_MAX).map((line, i) => `<div class="rv-line"><span class="rv-ln">${i + 1}</span><code>${esc(line)}</code></div>`).join('');
     const name = [spec.src, spec.language].filter(Boolean).join(' · ');
-    return `<p class="rv-file-name"><span class="mono">${esc(name)}</span></p><div class="rv-code rv-file" role="region" aria-label="${esc(`File: ${item.title || item.id}`)}" tabindex="0">${rows}</div>${cutNote(lines.length)}`;
+    return `<div data-copy-scope><p class="rv-file-name"><span class="mono">${esc(name)}</span>${copyLinesButton}</p><div class="rv-code rv-file" role="region" aria-label="${esc(`File: ${item.title || item.id}`)}" tabindex="0">${rows}</div></div>${cutNote(lines.length)}`;
   });
 }
 

@@ -8,8 +8,8 @@ export const MAX_TABLE_COLUMNS = 30;
 const MAX_URL = 2048;
 const MAX_TITLE = 512;
 
-export const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'input', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'a', 'span', 'svg', 'use', 'img']);
-export const ALLOWED_ATTRS = new Set(['href', 'target', 'rel', 'title', 'class', 'role', 'tabindex', 'aria-label', 'type', 'disabled', 'checked', 'start', 'style', 'src', 'alt', 'loading']);
+export const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'input', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'a', 'span', 'svg', 'use', 'img', 'button']);
+export const ALLOWED_ATTRS = new Set(['href', 'target', 'rel', 'title', 'class', 'role', 'tabindex', 'aria-label', 'aria-hidden', 'type', 'disabled', 'checked', 'start', 'style', 'src', 'alt', 'loading', 'data-copy-code']);
 const CELL_STYLE = /^text-align:(left|center|right)$/;
 
 export function esc(value) {
@@ -372,6 +372,26 @@ function interrupts(lines, i) {
   return FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || LIST.test(line) && !blank(line.replace(LIST, '$4')) || tableStart(lines, i);
 }
 
+// A tab in the source is four spaces while the parser reads the lines. The copy button of a code block still needs the tabs.
+// TAB_LINES maps each expanded line that held a tab to its source line for the render in progress. It holds at most 500 lines.
+let TAB_LINES = new Map();
+const MAX_TAB_LINES = 500;
+
+// The source of a code line. The line is a suffix of an expanded line, because a list or a quote removes a prefix.
+function rawLine(line) {
+  const exact = TAB_LINES.get(line);
+  if (exact !== undefined) return exact;
+  if (!line) return line;
+  for (const [expanded, raw] of TAB_LINES) {
+    if (expanded.length <= line.length || !expanded.endsWith(line)) continue;
+    let rest = line.length;
+    let at = raw.length;
+    while (at > 0 && rest > 0) { at -= 1; rest -= raw[at] === '\t' ? 4 : 1; }
+    if (rest === 0) return raw.slice(at);
+  }
+  return line;
+}
+
 function parseBlocks(lines, depth) {
   const blocks = [];
   if (depth > MAX_DEPTH) {
@@ -397,7 +417,8 @@ function parseBlocks(lines, depth) {
         i += 1;
       }
       const lang = /^[a-z0-9-]{1,32}$/i.test(fence[2]) ? fence[2].toLowerCase() : '';
-      blocks.push({ type: 'code', lang, text: body.join('\n') });
+      const text = body.join('\n');
+      blocks.push({ type: 'code', lang, text, source: TAB_LINES.size ? body.map(rawLine).join('\n') : text });
       continue;
     }
 
@@ -493,6 +514,10 @@ function parseList(lines, i, depth, blocks) {
   return i;
 }
 
+// The copy button of a code block. The click handler in public/copy.js reads the text of the code element.
+// The attribute holds the copy text only when the source has tabs, so the button does not repeat the code otherwise.
+const copyButton = (source, text) => `<button type="button" class="copy-btn" data-copy-code${source !== text ? `="${esc(source)}"` : ''} aria-label="Copy code"><span class="copy-icon" aria-hidden="true"></span><span class="copy-flash" aria-hidden="true">Copied</span></button>`;
+
 function renderBlocks(blocks, options, tight = false) {
   return blocks.map((block) => {
     switch (block.type) {
@@ -503,7 +528,7 @@ function renderBlocks(blocks, options, tight = false) {
         return `<h${level}>${renderInlineMarkdown(block.text)}</h${level}>`;
       }
       case 'rule': return '<hr>';
-      case 'code': return `<pre><code${block.lang ? ` class="language-${esc(block.lang)}"` : ''}>${esc(block.text)}</code></pre>`;
+      case 'code': return `<div class="md-code">${copyButton(block.source, block.text)}<pre><code${block.lang ? ` class="language-${esc(block.lang)}"` : ''}>${esc(block.text)}</code></pre></div>`;
       case 'quote': return `<blockquote>${renderBlocks(block.children, options)}</blockquote>`;
       case 'table': {
         const cellAttr = (c) => {
@@ -513,7 +538,7 @@ function renderBlocks(blocks, options, tight = false) {
         };
         const head = block.head.map((cell, c) => `<th${block.align[c] ? ` style="text-align:${block.align[c]}"` : ''}>${renderInlineMarkdown(cell)}</th>`).join('');
         const rows = block.rows.map((row) => `<tr>${row.map((cell, c) => `<td${cellAttr(c)}>${renderInlineMarkdown(cell)}</td>`).join('')}</tr>`).join('');
-        return `<div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr>${head}</tr></thead>${rows ? `<tbody>${rows}</tbody>` : ''}</table></div>`;
+        return `<div class="md-table-wrap"><div class="md-table" role="region" tabindex="0" aria-label="Table"><table><thead><tr>${head}</tr></thead>${rows ? `<tbody>${rows}</tbody>` : ''}</table></div></div>`;
       }
       case 'list': {
         const tag = block.ordered ? 'ol' : 'ul';
@@ -536,8 +561,15 @@ export function renderMarkdown(source, { headingOffset = 2 } = {}) {
   let text = String(source ?? '');
   let cut = '';
   if (text.length > MAX_INPUT) { text = text.slice(0, MAX_INPUT); cut = '<p>…</p>'; }
-  const lines = text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ').replace(/\u0000/g, '\ufffd').split('\n');
-  return renderBlocks(parseBlocks(lines, 0), { headingOffset }) + cut;
+  const raw = text.replace(/\r\n?/g, '\n').replace(/\u0000/g, '\ufffd').split('\n');
+  const lines = raw.map((line) => line.replace(/\t/g, '    '));
+  TAB_LINES = new Map();
+  if (text.includes('\t')) raw.forEach((line, i) => { if (line !== lines[i] && TAB_LINES.size < MAX_TAB_LINES) TAB_LINES.set(lines[i], line); });
+  try {
+    return renderBlocks(parseBlocks(lines, 0), { headingOffset }) + cut;
+  } finally {
+    TAB_LINES = new Map();
+  }
 }
 
 // Escaped source text for a render that failed. CSS keeps the line breaks.
@@ -573,7 +605,8 @@ export function sanitizeRendered(root) {
           || (name === 'loading' && (tag !== 'img' || attr.value !== 'lazy'))
           || (name === 'href' && !safeUrl(attr.value))
           || (name === 'style' && !(/^t[hd]$/.test(tag) && CELL_STYLE.test(attr.value)))
-          || (name === 'type' && attr.value !== 'checkbox');
+          || (name === 'type' && attr.value !== (tag === 'button' ? 'button' : 'checkbox'))
+          || (name === 'data-copy-code' && tag !== 'button');
         if (bad) { node.removeAttribute(attr.name); removed += 1; }
       }
       walk(node);
