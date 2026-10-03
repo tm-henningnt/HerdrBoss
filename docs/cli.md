@@ -1559,6 +1559,8 @@ herdr-boss factory boss start NAME [--harness claude|codex] [--resume] [--dry-ru
 herdr-boss factory connect NAME
 herdr-boss factory connect --check NAME
 herdr-boss factory connect --undo NAME
+herdr-boss factory attach NAME
+herdr-boss factory attach NAME --undo
 ```
 
 If `NAME` names a private host connection, `new` uses that host. Otherwise it uses local Docker. Use `--host` to select a host explicitly. The local host needs no connection record.
@@ -1595,6 +1597,24 @@ Replace `USER` with the registered host user. The terminal hint prints that name
 The command checks that the tailnet health route requires Owner access before it imports a credential. It enables **Poll registered factories** through the local dashboard API. It does not restart factory zero. It restarts the remote supervised service only when its allowed host list changes. `connect --check NAME` sends one summary request. It prints one line: name, state, and summary age. An unknown age prints `unknown`. Exit code 0 means that the factory answered with a valid summary. Exit code 1 means that a check or connection step failed. Exit code 3 means that the Owner must enable Serve or configure a forward. Another Serve failure, such as a stopped Tailscale daemon or a missing login, exits 1 with the code `serve-failed` and the masked error. The command does not wait for the Owner in that case. Private connection settings remain outside the dashboard because they hold connection fields.
 
 `connect --undo NAME` reverses what `connect` created. It turns off the Serve forward for the registered dashboard port only, and only when `connect` created that forward. It never runs `serve reset`. It removes the allowed host entry that `connect` added, and restarts the remote supervised service. It removes the imported read credential of that factory. It turns off **Poll registered factories** when no other factory stays registered. It removes the registration from `fleet.json` as the last step. The private token export file in the factory stays. Run the command again after a failed step. A second run prints that nothing is left to undo.
+
+`attach` connects Herdr on this Mac to a registered container factory. Run it on the Mac, after `connect` or on its own. Herdr takes an SSH target, so the command uses plain OpenSSH. It does not publish a new port.
+
+The command does these steps. Each step has a check.
+
+1. It writes the SSH include file `~/.ssh/herdr-boss.d/hf-NAME.conf` with mode 600. The file defines the alias `hf-NAME`. The alias jumps through the factory host on the tailnet to the loopback SSH port of the factory, as the user `factory`. The host details come from the private host record.
+2. It adds the line `Include ~/.ssh/herdr-boss.d/*.conf` at the top of `~/.ssh/config`. It prints the line first and saves the old file as `~/.ssh/config.herdr-boss.bak`. It adds the line once for all factories. It adds nothing when the line exists.
+3. It reads the public key of the key file in the host record. It adds that key to `/home/factory/.ssh/authorized_keys` in the container only when the key is missing.
+4. It runs `herdr machine add --label NAME hf-NAME`. A saved machine with the label `NAME` that attach did not create stops the command.
+5. It runs `herdr machine status NAME --json` and `TERM=xterm-256color herdr --remote hf-NAME`. The second command has an 8-second limit. It passes when Herdr exits with 0 or still runs at the limit.
+
+Exit code 0 means that all checks passed. Exit code 1 means that a step failed. The message names the step and holds no address, host name, key path, or key content. Run the command again after you fix the cause. It keeps one include file and one machine.
+
+The output has the alias, the sidebar label, and the detach command. Herdr shows the factory in the sidebar under the label `NAME`.
+
+`attach NAME --undo` removes the Herdr machine that attach saved, the include file, and the Include line. It removes the Include line only when attach added it and no other factory include file stays. It never changes another SSH entry or another Herdr machine. It leaves the Mac key in the `authorized_keys` of the factory. A second run prints that nothing is left to undo.
+
+The Fleet page shows `Attach: attached` or `Attach: not attached` under each remote factory name. A copy button copies `herdr-boss factory attach NAME`. The page shows no host detail.
 
 The `configure` wizard checks the container, volumes, Herdr server, and service. It exits 3 and writes one Owner instruction file when those checks pass. Run `herdr-boss factory login NAME claude` or `herdr-boss factory login NAME codex` in an Owner terminal to sign in. The command runs the harness login in the labeled factory container with the terminal attached. It then checks login with a harmless command. It prints only `ok` or `failed` after that check. It never captures a token.
 
