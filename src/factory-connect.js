@@ -1,4 +1,5 @@
 // Connect a registered container factory without exposing provisioning output.
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { Readable } from 'node:stream';
@@ -7,10 +8,11 @@ import { factoryFile, readPrivate, writePrivate, readFleet, updateFleet, assertN
 import { createHostTransport, isHostUnreachable } from './factory-transport.js';
 import { pollFleetSummary, fleetPollError } from './fleet-poller.js';
 import { FLEET_READ_TOKEN } from './fleet-access.js';
-import { readFleetFile } from './fleet-store.js';
+import { readFleetFile, writeFleetFile } from './fleet-store.js';
 import { validateDashboardUrl } from './fleet-settings.js';
 import { maskLine } from './factory-host.js';
 
+const CREATED_FILE = 'connect-created.json';
 const REMOTE_CLI = '/home/factory/herdr-boss/src/cli.js';
 const failure = (code) => Object.assign(new Error(code), { code });
 const privateDir = (env) => path.join(env.HOME || os.homedir(), '.config', 'herdr-boss');
@@ -38,7 +40,13 @@ fs.chmodSync(file, 0o600);
 process.stdout.write(JSON.stringify(token));
 `;
 
-async function endpoint(host, record, container, io) {
+// Only an access denied message needs the Owner. Other Serve failures fail without a wait.
+const serveError = (result, host) => {
+  const output = `${result.stdout}${result.stderr}`;
+  return Object.assign(failure(/access denied/i.test(output) ? 'serve-owner-required' : 'serve-failed'), { publicError: maskLine(output, host, true) });
+};
+
+async function endpoint(host, record, container, io, created) {
   const transport = io.hostTransportFactory ? io.hostTransportFactory(host) : createHostTransport(host, io);
   const status = await transport.run(['tailscale', 'status', '--json']);
   if (status.code !== 0) throw failure('tailnet-unavailable');
@@ -74,11 +82,12 @@ async function endpoint(host, record, container, io) {
     if (handler?.Proxy !== target) {
       const args = ['tailscale', 'serve', '--bg', `--http=${port}`, target];
       const result = await transport.run(args);
-      if (result.code !== 0) throw Object.assign(failure('serve-owner-required'), { publicError: maskLine(`${result.stdout}${result.stderr}`, host, true) });
+      if (result.code !== 0) throw serveError(result, host);
+      created.serve = true;
     }
     return validateDashboardUrl(`http://${hostname}:${port}`);
   }
-  throw Object.assign(failure('serve-owner-required'), { publicError: maskLine(`${config.stdout}${config.stderr}`, host, true) });
+  throw serveError(config, host);
 }
 
 async function importCredential(factoryId, token, io) {
@@ -118,22 +127,97 @@ async function check(record, io, token) {
   return error ? 1 : 0;
 }
 
+const undoScript = 'const fs=require("fs");const file="/home/factory/.herdr-boss/config.json";const host=process.argv[1];let c;try{c=JSON.parse(fs.readFileSync(file,"utf8"));}catch(e){if(e.code==="ENOENT"){console.log(JSON.stringify({removed:false}));process.exit(0);}throw e;}const removed=(c.allowedHosts||[]).includes(host);if(removed){c.allowedHosts=c.allowedHosts.filter((item)=>item!==host);fs.writeFileSync(file+".connect-undo.tmp",JSON.stringify(c)+"\\n",{mode:0o600});fs.renameSync(file+".connect-undo.tmp",file);}console.log(JSON.stringify({removed}));';
+
+async function disableHeadOffice(io) {
+  const fetchImpl = io.fetchImpl || fetch;
+  const origin = `http://127.0.0.1:${io.env.HERDR_BOSS_PORT || 4477}`;
+  const response = await fetchImpl(`${origin}/api/fleet/settings`, { signal: AbortSignal.timeout(5000), redirect: 'error' });
+  if (!response.ok) throw failure('head-office-unavailable');
+  const { factoryId: _id, error, ...settings } = await response.json();
+  if (error) throw failure('head-office-unavailable');
+  if (settings.headOffice !== true) return;
+  const saved = await fetchImpl(`${origin}/api/fleet/settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...settings, headOffice: false }), signal: AbortSignal.timeout(5000), redirect: 'error' });
+  if (!saved.ok) throw failure('head-office-unavailable');
+}
+
+// Remove what connect created. Keep the registration until the last step so that a retry can finish.
+async function undo(name, io) {
+  if (!readFleet(io.env).factories.some((item) => item.name === name && item.kind === 'container')) {
+    io.stdout.write(`${name} nothing is left to undo.\n`);
+    return 0;
+  }
+  const { record, host } = managedFactory(io.env, name);
+  const createdFile = factoryFile(io.env, name, CREATED_FILE);
+  const created = { serve: false, allowedHost: null, ...readPrivate(createdFile, {}) };
+  const removed = [];
+  let stage = 'serve';
+  try {
+    if (created.serve) {
+      const transport = io.hostTransportFactory ? io.hostTransportFactory(host) : createHostTransport(host, io);
+      const result = await transport.run(['tailscale', 'serve', `--http=${record.ports.dashboard}`, 'off']);
+      if (result.code !== 0 && !/no (serve )?config|not found|does not exist|nothing to/i.test(`${result.stdout}${result.stderr}`)) throw failure('serve-failed');
+      created.serve = false; writePrivate(createdFile, created); removed.push('serve forward');
+    }
+    stage = 'allowed-host';
+    if (created.allowedHost) {
+      const docker = transportFor(host, io);
+      const container = await inspect(docker, 'container', record.containerName);
+      if (!container) throw failure('container-stopped');
+      assertOwned(container, name);
+      if (!container.State?.Running) throw failure('container-stopped');
+      const { removed: gone } = parse(await dockerCall(docker, ['exec', '--user', 'factory', record.containerName, 'node', '-e', undoScript, created.allowedHost]));
+      if (gone) {
+        await dockerCall(docker, ['exec', record.containerName, '/command/s6-svc', '-r', '/run/service/herdr-boss-serve']);
+        await readHealth(docker, name);
+        removed.push('allowed host');
+      }
+      created.allowedHost = null; writePrivate(createdFile, created);
+    }
+    stage = 'credential';
+    const remotes = path.join(privateDir(io.env), 'fleet-remotes.json');
+    const records = readFleetFile(remotes, {});
+    if (Object.hasOwn(records, record.factoryId)) {
+      delete records[record.factoryId];
+      writeFleetFile(remotes, records);
+      removed.push('read credential');
+    }
+    stage = 'head-office';
+    if (!readFleet(io.env).factories.some((item) => item.name !== name)) await disableHeadOffice(io);
+    stage = 'register';
+    updateFleet(io.env, (fleet) => { fleet.factories = fleet.factories.filter((item) => item.name !== name); });
+    removed.push('registration');
+    for (const file of [CREATED_FILE, 'connect.json', 'connect-cache.json']) fs.rmSync(factoryFile(io.env, name, file), { force: true });
+  } catch (error) {
+    const reason = isHostUnreachable(error) ? 'unreachable' : ['serve-failed', 'container-stopped', 'head-office-unavailable'].includes(error.code) ? error.code : 'undo-failed';
+    io.stderr.write(`${name} undo failed: ${stage} ${reason}. Retry factory connect --undo ${name}.\n`);
+    return 1;
+  }
+  io.stdout.write(`${name} undone: removed ${removed.join(', ')}.\n`);
+  return 0;
+}
+
 export async function factoryConnectCommand(args, io) {
   const checkOnly = args.includes('--check');
-  const names = args.filter((arg) => arg !== '--check');
-  if (names.length !== 1 || args.length !== (checkOnly ? 2 : 1)) throw new Error('Use factory connect [--check] NAME.');
+  const undoOnly = args.includes('--undo');
+  const names = args.filter((arg) => arg !== '--check' && arg !== '--undo');
+  if (names.length !== 1 || args.length !== (checkOnly || undoOnly ? 2 : 1) || (checkOnly && undoOnly)) throw new Error('Use factory connect [--check|--undo] NAME.');
   assertName(names[0]);
+  if (undoOnly) return undo(names[0], io);
   const { record, host } = managedFactory(io.env, names[0]);
   if (checkOnly) return check(record, io);
   const journal = factoryFile(io.env, record.name, 'connect.json');
+  const createdFile = factoryFile(io.env, record.name, CREATED_FILE);
+  const created = { serve: false, allowedHost: null, ...readPrivate(createdFile, {}) };
   let stage = 'endpoint';
   try {
     const docker = transportFor(host, io);
     const container = await inspect(docker, 'container', record.containerName);
     assertOwned(container, record.name);
     if (!container.State?.Running) throw failure('container-stopped');
-    const dashboardUrl = await endpoint(host, record, container, io);
+    const dashboardUrl = await endpoint(host, record, container, io, created);
     writePrivate(journal, { schema: 1, name: record.name, stage, dashboardUrl });
+    if (created.serve) writePrivate(createdFile, created);
     stage = 'settings';
     const settings = parse(await dockerCall(docker, remoteCli(record, ['settings'])));
     if (typeof settings.factoryId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(settings.factoryId)) throw failure('contract-mismatch');
@@ -141,6 +225,7 @@ export async function factoryConnectCommand(args, io) {
     if (readFleet(io.env).factories.some((item) => item.name !== record.name && item.factoryId === settings.factoryId)) throw failure('duplicate-factory-id');
     const configScript = 'const fs=require("fs");const file="/home/factory/.herdr-boss/config.json";let c={};try{c=JSON.parse(fs.readFileSync(file,"utf8"));}catch(e){if(e.code!=="ENOENT")throw e;}const host=process.argv[1];const changed=!(c.allowedHosts||[]).includes(host);if(changed){c.allowedHosts=[...new Set([...(c.allowedHosts||[]),host])];fs.writeFileSync(file+".connect.tmp",JSON.stringify(c)+"\\n",{mode:0o600});fs.renameSync(file+".connect.tmp",file);}console.log(JSON.stringify({changed}));';
     const changed = parse(await dockerCall(docker, ['exec', '--user', 'factory', record.containerName, 'node', '-e', configScript, new URL(dashboardUrl).hostname])).changed;
+    if (changed) { created.allowedHost = new URL(dashboardUrl).hostname; writePrivate(createdFile, created); }
     const { factoryId, ...values } = settings;
     await dockerCall(docker, remoteCli(record, ['init', '--from-file', '-']), { input: JSON.stringify({ factoryId, ...values, name: record.name, dashboardUrl }) });
     if (changed) {
@@ -180,14 +265,14 @@ export async function factoryConnectCommand(args, io) {
     if (error.code === 'serve-owner-required') {
       try { writePrivate(journal, { schema: 1, name: record.name, stage, state: 'waiting', error: error.code }); }
       catch { io.stderr.write(`${record.name} connect failed: private-store-unavailable.\n`); return 1; }
-      io.stderr.write(`${record.name} waiting for the Owner.\n${error.publicError?.trim() || 'Tailscale Serve is unavailable.'}\nRun one command in the WSL Owner terminal:\n  sudo tailscale set --operator=factory\n  sudo tailscale serve --bg ${record.ports.dashboard}\nThen retry factory connect ${record.name}.\n`);
+      io.stderr.write(`${record.name} waiting for the Owner.\n${error.publicError?.trim() || 'Tailscale Serve is unavailable.'}\nRun one command in the WSL Owner terminal:\n  sudo tailscale set --operator=${host.user}\n  sudo tailscale serve --bg ${record.ports.dashboard}\nThen retry factory connect ${record.name}.\n`);
       return 3;
     }
-    const allowed = ['tailnet-unavailable', 'unsafe-dashboard-binding', 'serve-route-conflict', 'dashboard-auth-required', 'contract-mismatch', 'container-stopped', 'credential-invalid', 'duplicate-factory-id', 'registration-changed', 'head-office-unavailable'];
+    const allowed = ['serve-failed', 'tailnet-unavailable', 'unsafe-dashboard-binding', 'serve-route-conflict', 'dashboard-auth-required', 'contract-mismatch', 'container-stopped', 'credential-invalid', 'duplicate-factory-id', 'registration-changed', 'head-office-unavailable'];
     const reason = isHostUnreachable(error) ? 'unreachable' : allowed.includes(error.code) ? error.code : 'connect-failed';
     try { writePrivate(journal, { schema: 1, name: record.name, stage, state: 'failed', error: reason }); }
     catch { io.stderr.write(`${record.name} connect failed: private-store-unavailable.\n`); return 1; }
-    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}. Retry factory connect.\n`);
+    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}.${reason === 'serve-failed' && error.publicError?.trim() ? `\n${error.publicError.trim()}` : ''} Retry factory connect.\n`);
     return 1;
   }
 }

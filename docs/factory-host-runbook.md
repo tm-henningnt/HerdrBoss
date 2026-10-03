@@ -19,15 +19,9 @@ WSL can stop without a Windows reboot. The repeating trigger starts it again. A 
 
 Connect each registered container factory with `herdr-boss factory connect NAME`. Check it with `herdr-boss factory connect --check NAME`. Connect one factory at a time. The command uses Tailscale Serve. It reuses an existing matching HTTP or HTTPS forward. The forward goes to the container loopback port. The dashboard access rule stays in force. See `cli.md`, section Container factories, for resume and permission rules.
 
-The approved tailnet did not permit Serve for the SSH operator during the connection check. The masked error was:
+`factory connect` needs the Tailscale operator right or an existing Serve forward for the dashboard port. Run `sudo tailscale set --operator=USER` in the WSL Owner terminal. Replace `USER` with the registered host user. Alternatively, run `sudo tailscale serve --bg PORT` there once. Replace `PORT` with the registered loopback dashboard port. Then retry `factory connect NAME`. If Serve refuses the change with an access denied message, the command prints the masked error and both Owner choices. It exits 3 and keeps the connection at the Owner step. Any other Serve failure exits 1 with the code `serve-failed`. Keep passwords out of the host tool output.
 
-```text
-sending serve config: Access denied: serve config denied
-```
-
-The diagnostic root status check returned `sudo: a password is required`. These results show a host permission block. They do not prove that the tailnet cannot support Serve. The host tool does not bypass this block.
-
-Run `sudo tailscale set --operator=factory` in the WSL Owner terminal on each host. Alternatively, run `sudo tailscale serve --bg PORT` there once. Replace `PORT` with the registered loopback dashboard port. Then retry `factory connect NAME`. If no matching forward exists and Serve refuses the change, the command prints the masked error and both Owner choices. It exits 3 and keeps the connection at the Owner step. Keep passwords out of the host tool output.
+Undo a connection with `herdr-boss factory connect --undo NAME`. See `cli.md`, section Container factories.
 
 A remote Docker timeout reports `host-unreachable`. Do not call a container stopped or unhealthy when the host cannot answer. Continue work on another reachable host. Recheck the missing host when it returns. Do not restart an unrelated service.
 

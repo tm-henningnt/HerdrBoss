@@ -15,7 +15,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory host remove NAME',
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
-  '       factory connect [--check] NAME',
+  '       factory connect [--check|--undo] NAME',
 ].join('\n');
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
