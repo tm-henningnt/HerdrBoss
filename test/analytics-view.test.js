@@ -167,6 +167,86 @@ test('quotaSeries gives a used line and a dashed pace line per provider in hourl
   assert.equal((svg.match(/class="viz-hit"/g) || []).length, 2);
 });
 
+test('quotaPlanSeries aligns selected-window history with fast and slow plans, windows, and credit times', () => {
+  assert.equal(typeof communicationView.quotaPlanSeries, 'function');
+  const at = (hour) => new Date(Date.parse('2032-04-01T00:00:00.000Z') + hour * 3600000).toISOString();
+  const view = communicationView.quotaPlanSeries({
+    provider: 'codex', windowKey: 'weekly', now: at(2),
+    history: [
+      { at: at(0), window: 'weekly', usedPercent: 10 },
+      { at: at(1), window: 'weekly', usedPercent: 20 },
+      { at: at(2), window: 'weekly', usedPercent: 35 },
+      { at: at(2), window: 'daily', usedPercent: 99 },
+      { at: at(4), window: 'weekly', usedPercent: 90 },
+    ],
+    plan: {
+      horizon: at(5),
+      fast: {
+        curve: [{ at: at(2), usedPercent: 35 }, { at: at(3), usedPercent: 70 }, { at: at(5), usedPercent: 95 }],
+        windows: [{ startAt: at(2), endAt: at(4), resetsAt: at(4), startReason: 'current' }, { startAt: at(4), endAt: at(5), resetsAt: at(8), startReason: 'credit' }],
+        credits: [{ id: '<credit-a>', applyAt: at(4), expiresAt: at(5), usedPercent: 95 }],
+      },
+      slow: {
+        curve: [{ at: at(2), usedPercent: 35 }, { at: at(4), usedPercent: 45 }, { at: at(5), usedPercent: 75 }],
+        windows: [{ startAt: at(2), endAt: at(5), resetsAt: at(5), startReason: 'current' }],
+        credits: [{ id: '<credit-a>', applyAt: at(5), expiresAt: at(5), usedPercent: 95 }],
+      },
+    },
+  });
+
+  assert.deepEqual(view.history.map((row) => row.usedPercent), [10, 20, 35]);
+  assert.deepEqual(view.series.map((row) => row.key), ['actual', 'fast', 'slow']);
+  assert.deepEqual(view.series[0].values, [10, 20, 35, null, null, null]);
+  assert.equal(view.series[1].values[3], 70);
+  assert.equal(view.series[2].values[4], 45);
+  assert.equal(view.windows.length, 3);
+  assert.ok(view.markers.some((marker) => marker.kind === 'credit-apply' && marker.at === at(4)));
+  assert.ok(view.markers.some((marker) => marker.kind === 'credit-expiry' && marker.at === at(5)));
+  assert.match(communicationView.quotaPlanDetailsHtml(view), /&lt;credit-a&gt;/);
+  assert.doesNotMatch(communicationView.quotaPlanDetailsHtml(view), /<credit-a>/);
+  const svg = lineChart({ points: view.points, series: view.series, ranges: view.ranges, markers: view.markers, label: '<Codex plan>' });
+  assert.match(svg, /class="viz-range"/);
+  assert.match(svg, /aria-label="&lt;Codex plan&gt;"/);
+  assert.doesNotMatch(svg, /aria-label="<Codex plan>"/);
+});
+
+test('quotaPlanSeries returns an empty history model when the selected window has no history', () => {
+  assert.equal(typeof communicationView.quotaPlanSeries, 'function');
+  const view = communicationView.quotaPlanSeries({ windowKey: 'weekly', history: [], plan: { horizon: '2032-04-02T00:00:00.000Z', fast: { curve: [], windows: [], credits: [] }, slow: { curve: [], windows: [], credits: [] } } });
+  assert.deepEqual(view.points, []);
+  assert.deepEqual(view.series, []);
+});
+
+test('quotaPlanSeries does not forecast past the plan horizon', () => {
+  const at = (hour) => new Date(Date.parse('2032-04-01T00:00:00.000Z') + hour * 3600000).toISOString();
+  const view = communicationView.quotaPlanSeries({
+    provider: 'codex', windowKey: 'weekly', now: at(2), history: [{ at: at(0), window: 'weekly', usedPercent: 10 }],
+    plan: {
+      horizon: at(1),
+      fast: { curve: [{ at: at(0), usedPercent: 10 }, { at: at(1), usedPercent: 90 }], windows: [], credits: [] },
+      slow: { curve: [{ at: at(0), usedPercent: 10 }, { at: at(1), usedPercent: 50 }], windows: [], credits: [] },
+    },
+  });
+  const nowIndex = view.points.findIndex((point) => point.at === at(2));
+  assert.ok(nowIndex >= 0);
+  assert.equal(view.series[1].values[nowIndex], null);
+  assert.equal(view.series[2].values[nowIndex], null);
+});
+
+test('Analytics quota reset form posts to the Owner-only announcement route', () => {
+  assert.match(app, /data-quota-reset-form/);
+  assert.match(app, /postJson\('\/api\/quota-plan\/codex\/announce'/);
+  assert.match(app, /OWNER_PAGE_HEADERS/);
+  assert.match(app, /refundPercent/);
+});
+
+test('the Codex quota plan chart and reset form appear in Analytics help and docs', () => {
+  assert.match(app, /Codex quota plan[\s\S]*Only the Owner can save an announcement/);
+  assert.match(guide, /\*\*Codex quota plan\*\*: the actual line uses quota history/);
+  assert.match(guide, /Only the Owner can save an announcement/);
+  assert.match(cli, /The Analytics page uses matching history/);
+});
+
 test('lineChart leaves a gap at a missing value and shades a held column', () => {
   const svg = lineChart({ points: [1, 2, 3, 4], series: [{ cls: 's1', values: [10, null, 30, 40] }], bands: [{ i: 2, alpha: 1 }] });
   const d = /d="([^"]+)"/.exec(svg)[1];
@@ -217,11 +297,11 @@ test('activityFilter filters by kind, project, level, time range, and search, ne
 test('the Analytics page leads with questions and charts, each with a Details table', () => {
   const start = app.indexOf('function analyticsView(');
   const view = app.slice(start, app.indexOf('\n}\n', start));
-  for (const block of ['analyticsHeadline', 'spendChart', 'quotaChart', 'scorecardChart', 'denialsBlock', 'timelineChart', 'machineHoursBlock', 'noticeChart', 'activitySection']) assert.match(view, new RegExp(`${block}\\(`), block);
+  for (const block of ['analyticsHeadline', 'spendChart', 'quotaChart', 'quotaPlanChart', 'scorecardChart', 'denialsBlock', 'timelineChart', 'machineHoursBlock', 'noticeChart', 'activitySection']) assert.match(view, new RegExp(`${block}\\(`), block);
   assert.match(app, /function vizCard\(/);
   assert.match(app, /<details class="viz-details" data-viz-detail=/);
   assert.match(app, /<summary>Details<\/summary>/);
-  assert.match(app, /'\/api\/spend\?days=14', '\/api\/analytics', '\/api\/machine-hours'\]\.map/);
+  assert.match(app, /if \(location\.pathname === '\/analytics'\) urls\.push\('\/api\/quota-plan\/codex'\)/);
   assert.match(app, /API-price equivalent/);
   // The page keeps its DOM on refresh, so a chart keeps its sideways scroll and the search keeps its focus.
   assert.match(app, /const KEYED_ROUTES = \[[^\]]*'analytics'/);

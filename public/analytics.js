@@ -219,9 +219,10 @@ export function stackedBars({ cats, series, fmt = (n) => String(n), label = '', 
 }
 
 // Lines over time on one axis. A null value leaves a gap. bands shade the columns where a lock holder held the lock.
-export function lineChart({ points, series, yMax = 100, fmt = (n) => `${n}%`, label = '', height = 200, tips = [], xLabels = [], bands = [] }) {
+export function lineChart({ points, series, yMax = 100, fmt = (n) => `${n}%`, label = '', height = 200, tips = [], xLabels = [], bands = [], ranges = [], markers = [] }) {
   const n = points.length;
-  const left = 40, right = 8, top = 10, bottom = 26;
+  const marks = markers.filter((m) => Number.isInteger(m?.i) && m.i >= 0 && m.i < n);
+  const left = 40, right = 8, top = marks.length ? 28 : 10, bottom = 26;
   const plotH = height - top - bottom;
   const step = Math.max(3, Math.min(40, 520 / Math.max(1, n)));
   const width = left + right + n * step;
@@ -230,6 +231,15 @@ export function lineChart({ points, series, yMax = 100, fmt = (n) => `${n}%`, la
   const x = (i) => left + i * step + step / 2;
   const ticks = [0, max / 2, max].map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" class="viz-grid${v === 0 ? ' base' : ''}"/><text x="${left - 6}" y="${y(v) + 4}" text-anchor="end" class="viz-tick">${esc(fmt(v))}</text>`).join('');
   const shade = bands.map((b) => (b.alpha > 0 ? `<rect x="${left + b.i * step}" y="${top}" width="${step}" height="${plotH}" class="viz-band" style="opacity:${(0.25 + 0.55 * Math.min(1, b.alpha)).toFixed(2)}"/>` : '')).join('');
+  const rangePaths = ranges.map((range) => {
+    const quads = [];
+    for (let i = 0; i < n - 1; i += 1) {
+      const lower = range.lowerValues || [], upper = range.upperValues || [];
+      if (![lower[i], lower[i + 1], upper[i], upper[i + 1]].every(Number.isFinite)) continue;
+      quads.push(`M${x(i).toFixed(1)} ${y(upper[i]).toFixed(1)}L${x(i + 1).toFixed(1)} ${y(upper[i + 1]).toFixed(1)}L${x(i + 1).toFixed(1)} ${y(lower[i + 1]).toFixed(1)}L${x(i).toFixed(1)} ${y(lower[i]).toFixed(1)}Z`);
+    }
+    return quads.length ? `<path d="${quads.join('')}" class="viz-range${range.cls ? ` ${esc(range.cls)}` : ''}"/>` : '';
+  }).join('');
   const paths = series.map((s) => {
     let d = '';
     let pen = false;
@@ -243,7 +253,7 @@ export function lineChart({ points, series, yMax = 100, fmt = (n) => `${n}%`, la
   const labels = xLabels.map((l) => `<text x="${x(l.i)}" y="${top + plotH + 17}" text-anchor="middle" class="viz-tick">${esc(l.label)}</text>`).join('');
   const tipAttr = rovingTips();
   const hits = points.map((_, i) => (tips[i] ? `<rect x="${left + i * step}" y="${top}" width="${step}" height="${plotH}" class="viz-hit" ${tipAttr(tips[i])}/>` : '')).join('');
-  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, timelineMin(width))}" role="img" aria-label="${esc(label)}">${ticks}${shade}${paths}${labels}${hits}</svg>`;
+  return `<svg class="viz" viewBox="0 0 ${width} ${height}" style="${sizeStyle(width, timelineMin(width))}" role="img" aria-label="${esc(label)}">${ticks}${shade}${rangePaths}${paths}${labels}${markerLayer(marks, { left, right, top, plotH, step, width }, tipAttr)}${hits}</svg>`;
 }
 
 // A small strip of bars under a timeline, with its own short axis: the minutes a suite request waited in each column.
@@ -358,6 +368,164 @@ export function quotaSeries(trend, labelOf = (p) => p) {
     series.push({ key: `${p}-pace`, label: `${labelOf(p)} pace`, cls, values: pace, dashed: true, provider: p });
   });
   return { cols, series };
+}
+
+const QUOTA_PLAN_HOUR_MS = 60 * 60 * 1000;
+const QUOTA_PLAN_POINT_LIMIT = 3000;
+const quotaTime = (value) => {
+  const time = typeof value === 'number' ? value : Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+};
+
+function quotaCurvePoints(curve) {
+  return (Array.isArray(curve) ? curve : []).flatMap((point) => {
+    const time = quotaTime(point?.at);
+    return time !== null && Number.isFinite(point?.usedPercent) ? [{ time, usedPercent: point.usedPercent }] : [];
+  }).sort((a, b) => a.time - b.time);
+}
+
+function quotaCurveAt(points, requested) {
+  if (!points.length) return null;
+  let previous = null;
+  for (const point of points) {
+    if (point.time <= requested) { previous = point; continue; }
+    if (!previous) return null;
+    const duration = point.time - previous.time;
+    return duration > 0 ? previous.usedPercent + (point.usedPercent - previous.usedPercent) * ((requested - previous.time) / duration) : point.usedPercent;
+  }
+  return previous?.usedPercent ?? null;
+}
+
+// Align actual readings and the planner's fast and slow curves on one hourly axis.
+export function quotaPlanSeries(data) {
+  const plan = data?.plan;
+  const windowKey = typeof data?.windowKey === 'string' ? data.windowKey : null;
+  const now = quotaTime(data?.now) ?? Date.now();
+  const history = (Array.isArray(data?.history) ? data.history : []).flatMap((row) => {
+    const time = quotaTime(row?.at);
+    if (time === null || time > now || !Number.isFinite(row?.usedPercent) || row.usedPercent < 0 || row.usedPercent > 100) return [];
+    if (data?.provider && row.provider && row.provider !== data.provider) return [];
+    if (windowKey && row.window && row.window !== windowKey) return [];
+    return [{ at: new Date(time).toISOString(), time, usedPercent: row.usedPercent }];
+  }).sort((a, b) => a.time - b.time);
+  const empty = { windowKey, history, points: [], series: [], ranges: [], markers: [], windows: [], credits: [], now: new Date(now).toISOString(), horizon: null };
+  if (!history.length) return empty;
+
+  const fast = plan?.fast || {};
+  const slow = plan?.slow || {};
+  const fastCurve = quotaCurvePoints(fast.curve);
+  const slowCurve = quotaCurvePoints(slow.curve);
+  const curveEnd = Math.max(fastCurve.at(-1)?.time ?? now, slowCurve.at(-1)?.time ?? now);
+  const horizon = quotaTime(plan?.horizon) ?? quotaTime(fast.horizon) ?? quotaTime(slow.horizon) ?? curveEnd;
+  const windows = ['fast', 'slow'].flatMap((key) => (Array.isArray(data?.plan?.[key]?.windows) ? data.plan[key].windows : []).map((window, index) => ({
+    scenario: key === 'fast' ? 'Fast' : 'Slow',
+    index: index + 1,
+    startAt: window.startAt,
+    endAt: window.endAt,
+    resetsAt: window.resetsAt,
+    reason: window.startReason,
+  })));
+  const fastCredits = Array.isArray(fast.credits) ? fast.credits : [];
+  const slowCredits = Array.isArray(slow.credits) ? slow.credits : [];
+  const sourceCredits = Array.isArray(data?.credits) ? data.credits : [];
+  const ids = [...new Set([...fastCredits, ...slowCredits, ...sourceCredits].map((credit) => credit?.id).filter((id) => typeof id === 'string'))];
+  const credits = ids.map((id, index) => {
+    const fastCredit = fastCredits.find((credit) => credit.id === id);
+    const slowCredit = slowCredits.find((credit) => credit.id === id);
+    const source = sourceCredits.find((credit) => credit.id === id);
+    return {
+      id,
+      label: `Credit ${index + 1}`,
+      markerLabel: String(index + 1),
+      fastApplyAt: fastCredit?.applyAt ?? null,
+      slowApplyAt: slowCredit?.applyAt ?? null,
+      expiresAt: fastCredit?.expiresAt ?? slowCredit?.expiresAt ?? source?.expiresAt ?? source?.expires_at ?? null,
+    };
+  });
+  const start = Math.min(history[0].time, now);
+  const end = Math.max(horizon, now, start);
+  const hours = Math.max(1, Math.ceil((end - start) / QUOTA_PLAN_HOUR_MS));
+  const stepMs = Math.max(QUOTA_PLAN_HOUR_MS, Math.ceil(hours / QUOTA_PLAN_POINT_LIMIT) * QUOTA_PLAN_HOUR_MS);
+  const first = Math.floor(start / stepMs) * stepMs;
+  const last = Math.max(first, Math.floor(end / stepMs) * stepMs);
+  const times = new Set(Array.from({ length: Math.floor((last - first) / stepMs) + 1 }, (_, i) => first + i * stepMs));
+  const eventTimes = [now, end, ...fastCurve.map((point) => point.time), ...slowCurve.map((point) => point.time),
+    ...windows.flatMap((window) => [window.startAt, window.endAt, window.resetsAt]),
+    ...credits.flatMap((credit) => [credit.fastApplyAt, credit.slowApplyAt, credit.expiresAt])]
+    .map(quotaTime).filter((time) => time !== null && time >= first && time <= end);
+  eventTimes.forEach((time) => times.add(time));
+  const orderedTimes = [...times].sort((a, b) => a - b);
+  const indexByTime = new Map(orderedTimes.map((time, index) => [time, index]));
+  const actual = Array(orderedTimes.length).fill(null);
+  for (const row of history) {
+    const bucket = first + Math.floor((row.time - first) / stepMs) * stepMs;
+    const index = indexByTime.get(bucket);
+    if (index === undefined) continue;
+    actual[index] = row.usedPercent;
+  }
+  const planned = (curve) => orderedTimes.map((time) => time < now || time > horizon ? null : quotaCurveAt(curve, time));
+  const fastValues = planned(fastCurve);
+  const slowValues = planned(slowCurve);
+  const points = orderedTimes.map((time) => ({ at: new Date(time).toISOString(), time }));
+  const nearestIndex = (value) => {
+    const time = quotaTime(value);
+    if (time === null || time < first || time > end) return null;
+    let low = 0, high = orderedTimes.length - 1;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (orderedTimes[mid] < time) low = mid + 1;
+      else high = mid;
+    }
+    return low > 0 && time - orderedTimes[low - 1] < orderedTimes[low] - time ? low - 1 : low;
+  };
+  const markers = [];
+  const windowMarkers = new Map();
+  for (const window of windows) {
+    if (window.index === 1) continue;
+    const index = nearestIndex(window.startAt);
+    if (index === null) continue;
+    const marker = windowMarkers.get(index) || { i: index, at: window.startAt, kind: 'window', flag: 'Window', tips: [] };
+    marker.tips.push(`${window.scenario} window ${window.index} starts ${window.startAt}; next reset ${window.resetsAt || 'unknown'}`);
+    windowMarkers.set(index, marker);
+  }
+  for (const marker of windowMarkers.values()) markers.push({ ...marker, tip: marker.tips.join('\n') });
+  for (const credit of credits) {
+    const timing = `${credit.label}\nFast apply: ${credit.fastApplyAt || 'not planned'}\nSlow apply: ${credit.slowApplyAt || 'not planned'}\nExpires: ${credit.expiresAt || 'unknown'}`;
+    for (const [scenario, at] of [['Fast', credit.fastApplyAt], ['Slow', credit.slowApplyAt]]) {
+      const i = nearestIndex(at);
+      if (i !== null) markers.push({ i, at, kind: 'credit-apply', flag: `${credit.markerLabel} ${scenario[0]}`, tip: timing });
+    }
+    const expiryIndex = nearestIndex(credit.expiresAt);
+    if (expiryIndex !== null) markers.push({ i: expiryIndex, at: credit.expiresAt, kind: 'credit-expiry', flag: `${credit.markerLabel} exp`, tip: timing });
+  }
+  return {
+    windowKey,
+    history,
+    points,
+    series: [
+      { key: 'actual', label: 'Actual usage', cls: 's1', values: actual },
+      { key: 'fast', label: 'Fast plan', cls: 's2', values: fastValues },
+      { key: 'slow', label: 'Slow plan', cls: 's3', dashed: true, values: slowValues },
+    ],
+    ranges: [{ lowerValues: fastValues, upperValues: slowValues }],
+    markers,
+    windows,
+    credits,
+    now: new Date(now).toISOString(),
+    horizon: new Date(horizon).toISOString(),
+  };
+}
+
+export function quotaPlanDetailsHtml(view) {
+  const windows = Array.isArray(view?.windows) ? view.windows : [];
+  const credits = Array.isArray(view?.credits) ? view.credits : [];
+  const windowTable = windows.length
+    ? `<h4>Quota windows</h4>${communicationTable(['Scenario', 'Window', 'Start', 'End', 'Next reset', 'Reason'], windows.map((row) => [row.scenario, row.index, row.startAt, row.endAt, row.resetsAt, row.reason || '–']))}`
+    : '<div class="calm-state">No planned quota windows.</div>';
+  const creditTable = credits.length
+    ? `<h4>Reset credits</h4>${communicationTable(['Credit', 'Fast apply', 'Slow apply', 'Expiry'], credits.map((row) => [row.id, row.fastApplyAt || 'Not planned', row.slowApplyAt || 'Not planned', row.expiresAt || 'Unknown']))}`
+    : '<div class="calm-state">No reset credits are available.</div>';
+  return `${windowTable}${creditTable}`;
 }
 
 // Denials for one harness or all: one row for each cause, one column for each day.

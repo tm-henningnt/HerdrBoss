@@ -20,7 +20,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 
 const $app = document.getElementById('app');
@@ -59,6 +59,38 @@ document.addEventListener('submit', async (event) => {
   } catch (error) { form.querySelector('[data-fleet-feedback]').textContent = error.message; }
   finally { button.disabled = false; }
 });
+document.addEventListener('submit', async (event) => {
+  const form = event.target.closest?.('[data-quota-reset-form]');
+  if (!form) return;
+  event.preventDefault();
+  const button = form.querySelector('button[type="submit"]');
+  const at = new Date(form.elements.namedItem('at').value);
+  const kind = form.elements.namedItem('kind').value === 'partial' ? 'partial' : 'full';
+  if (!Number.isFinite(at.getTime())) {
+    quotaPlanUi.message = 'Enter a valid reset time.';
+    form.querySelector('[data-quota-reset-feedback]').textContent = quotaPlanUi.message;
+    return;
+  }
+  const body = { at: at.toISOString(), kind };
+  if (kind === 'partial') body.refundPercent = Number(form.elements.namedItem('refundPercent').value);
+  quotaPlanUi.busy = true;
+  quotaPlanUi.message = '';
+  if (button) button.disabled = true;
+  try {
+    const result = await postJson('/api/quota-plan/codex/announce', body, OWNER_PAGE_HEADERS);
+    quotaPlanUi.at = null;
+    quotaPlanUi.message = `Reset announced for ${result.announcement.at}.`;
+    try {
+      const response = await fetch('/api/quota-plan/codex');
+      if (response.ok) quotaPlanData = await response.json();
+    } catch { /* Keep the confirmed announcement message if the plan refresh fails. */ }
+  } catch (error) {
+    quotaPlanUi.message = error.message;
+  } finally {
+    quotaPlanUi.busy = false;
+    if (location.pathname === '/analytics') { lastRender = ''; render(); }
+  }
+});
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -82,6 +114,8 @@ let machineHoursOpen = false;
 // The Analytics page: /api/spend and /api/analytics, the chart switches, the open Details, and the activity log filters.
 let spendData = null;
 let analyticsData = null;
+let quotaPlanData = null;
+const quotaPlanUi = { at: null, kind: 'full', refundPercent: 0, busy: false, message: '' };
 let pendingHash = location.pathname === '/analytics' && location.hash ? location.hash.slice(1) : null;
 const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
 function loadDenialRange() {
@@ -2352,6 +2386,7 @@ function analyticsView(s) {
     '<div class="viz-group" data-key="grp:cost"><h2>Cost and quota</h2><div class="viz-grid">',
     spendChart(),
     quotaChart(),
+    quotaPlanChart(),
     actionsMinutesBlock(),
     '</div></div><div class="viz-group" data-key="grp:quality"><h2>Quality and friction</h2><div class="viz-grid">',
     scorecardChart(s),
@@ -2374,10 +2409,11 @@ function analyticsView(s) {
 }
 
 // One chart card: a title that says what to read, a scope line, a legend, the chart in its own sideways scroll box, and the table behind Details.
-function vizCard({ id, title, sub = '', controls = '', legend = '', chart = '', notes = '', details = '', empty = '' }) {
+function vizCard({ id, title, sub = '', controls = '', legend = '', chart = '', notes = '', details = '', empty = '', footer = '' }) {
   const open = analyticsUi.open.has(id);
   return `<section class="viz-card" id="${id}" data-key="viz:${id}"><header class="viz-head"><div class="viz-titles"><h3>${esc(title)}</h3>${sub ? `<p class="viz-sub">${sub}</p>` : ''}</div>${controls}</header>${notes}`
     + (empty ? `<div class="calm-state">${empty}</div>` : `${legend}<div class="viz-scroll" data-key="scroll:${id}">${chart}</div>`)
+    + footer
     + `<div class="viz-tip" role="tooltip" hidden></div>`
     + (details ? `<details class="viz-details" data-viz-detail="${id}"${open ? ' open' : ''}><summary>Details</summary><div class="viz-details-body">${details}</div></details>` : '')
     + '</section>';
@@ -2552,6 +2588,62 @@ function quotaChart() {
     legend,
     chart: lineChart({ points: q.cols, series: q.series, yMax: 100, tips, xLabels, label: title }),
     details: vizTable(['Lane', 'Used now', 'Pace now', 'Difference'], rows),
+  });
+}
+
+function quotaResetForm() {
+  const now = Date.now();
+  const selectedAt = quotaPlanUi.at || localInputValue(new Date(now + 24 * 60 * 60 * 1000));
+  const kind = quotaPlanUi.kind === 'partial' ? 'partial' : 'full';
+  const refund = kind === 'partial' ? `<label>Refund points <input type="number" name="refundPercent" min="0" max="100" step="1" value="${esc(quotaPlanUi.refundPercent)}" data-quota-reset-refund required></label>` : '';
+  return `<form class="quota-reset-form" data-quota-reset-form><label>Reset time <input type="datetime-local" name="at" value="${esc(selectedAt)}" min="${esc(localInputValue(new Date(now + 60000)))}" max="${esc(localInputValue(new Date(now + 30 * 24 * 60 * 60 * 1000)))}" data-quota-reset-at required></label><label>Kind <select name="kind" data-quota-reset-kind><option value="full"${kind === 'full' ? ' selected' : ''}>Full</option><option value="partial"${kind === 'partial' ? ' selected' : ''}>Partial</option></select></label>${refund}<button type="submit"${quotaPlanUi.busy ? ' disabled' : ''}>${quotaPlanUi.busy ? 'Saving…' : 'Announce reset'}</button><p class="quota-reset-feedback" role="status" aria-live="polite" data-quota-reset-feedback>${esc(quotaPlanUi.message)}</p></form>`;
+}
+
+function quotaPlanChart() {
+  const base = { id: 'quota-plan', title: 'Codex quota plan' };
+  const view = quotaPlanSeries(quotaPlanData);
+  const footer = quotaResetForm();
+  const details = quotaPlanDetailsHtml(view);
+  if (!view.points.length) return vizCard({
+    ...base,
+    sub: 'Compare recorded Codex quota use with the fast and slow reset plans.',
+    empty: 'No Codex quota history is available for the planned window yet.',
+    footer,
+    details,
+  });
+  const tips = view.points.map((point, index) => [point.at, ...view.series.flatMap((line) => {
+    const value = line.values[index];
+    return Number.isFinite(value) ? [`${line.label}: ${Number(value.toFixed(1))}%`] : [];
+  })].join('\n'));
+  const xLabels = [];
+  let lastLabel = -24;
+  view.points.forEach((point, i) => {
+    const date = new Date(point.time);
+    if (date.getUTCHours() === 0 && i - lastLabel >= 16) {
+      xLabels.push({ i, label: dayLabel(date.toISOString().slice(0, 10)) });
+      lastLabel = i;
+    }
+  });
+  const markerKey = view.markers.length ? '<li><i class="viz-key-flag" aria-hidden="true"></i>Quota windows and credit times</li>' : '';
+  const rangeKey = '<li><i class="viz-key band" aria-hidden="true"></i>Fast and slow range</li>';
+  const chart = lineChart({
+    points: view.points,
+    series: view.series,
+    ranges: view.ranges,
+    markers: view.markers,
+    yMax: 100,
+    fmt: (value) => `${Math.round(value)}%`,
+    tips,
+    xLabels,
+    label: 'Codex quota history and fast and slow plan curves',
+  });
+  return vizCard({
+    ...base,
+    sub: 'Actual use comes from quota history. The fast and slow lines show planned use. Flags mark quota windows, credit apply times, and expiry times.',
+    legend: legendHtml(view.series, `${rangeKey}${markerKey}`),
+    chart,
+    footer,
+    details,
   });
 }
 function lastWindowText(hours) {
@@ -5488,6 +5580,11 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-quota-reset-kind]')) {
+    quotaPlanUi.kind = e.target.value === 'partial' ? 'partial' : 'full';
+    render();
+    return;
+  }
   if (e.target.matches?.('[data-communication-project]')) {
     analyticsUi.communicationProject = e.target.value;
     render();
@@ -5501,6 +5598,8 @@ document.addEventListener('change', (e) => {
 // The search renders 150 ms after the last key, not on each key.
 let activityQueryTimer = null;
 document.addEventListener('input', (e) => {
+  if (e.target.matches?.('[data-quota-reset-at]')) quotaPlanUi.at = e.target.value;
+  if (e.target.matches?.('[data-quota-reset-refund]')) quotaPlanUi.refundPercent = Number(e.target.value);
   if (e.target.dataset?.activityFilter !== 'q') return;
   analyticsUi.log.q = e.target.value;
   clearTimeout(activityQueryTimer);
@@ -6400,7 +6499,11 @@ const HELP = {
     <h3>Headline strip</h3><p>Each tile shows one figure and its change. <b>Claude spend a day</b> is the mean of the last 7 days, with the change on the 7 days before. <b>Quota against pace</b> shows the lane with the most use above its pace line. <b>Denials this week</b> compares the last 24 hours with the 6-day mean. <b>Notices per pane a day</b> is the 7-day mean and today. <b>Lock wait and hold</b> shows the median wait and the median hold. <b>First-time success</b> counts the judged runs of the last 30 days.</p>
     <h3>Charts</h3><p>The title of each chart tells what to read from it. Hover, focus, or touch a column, a cell, or a row to read its values. On a phone each chart scrolls sideways inside its own box. <b>Details</b> under a chart opens the table of the same figures.</p>
     <h3>GitHub Actions minutes</h3><p>The stacked bars show minutes estimated from run times for each registered GitHub repository by ISO week. Details shows this week, last week, and this week's run count. The service uses its GitHub token. It skips a repository when the token cannot read it. It reads at most 500 runs per repository. The card says when older weeks may be incomplete. If no repository is available, the page hides this card. Turn off <code>analytics.actionsMinutes</code> in Settings to stop these API calls.</p>
-    <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts. <b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window. <b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
+    <p><b>Spend</b>: stacked bars for each day, split by role or by harness with the switch. The USD figure is the API-price equivalent. The Owner pays a subscription, not these amounts.</p>
+    <p><b>Quota</b>: one solid line for the use of each lane and one dashed line for its expected pace, in the weekly window.</p>
+    <h3>Codex quota plan</h3><p>The solid line shows actual use from quota history for the selected window. The fast and slow lines show planned use. The shaded area shows the range between both plans. Flags mark quota windows, credit apply times, and expiry times. The card shows an empty state when history is missing. <b>Details</b> lists exact window and credit times.</p>
+    <p>Use the reset form to announce a full or partial reset. Enter a future time within 30 days. A partial reset needs a refund from 0 to 100 points. Only the Owner can save an announcement.</p>
+    <p><b>Model scorecard</b>: the share of first-time, rework, failed, and not judged runs for each model. <b>Details</b> also holds the recorded work by project and provider and the recent runs.</p>
     <h3>Denials and permission prompts</h3><p>Herdr Boss reads the Claude, Codex, OpenCode, and Pi logs every 15 minutes. It counts classifier refusals, sandbox errors, escalation requests, permission prompts, prompts with no answer within 10 minutes, OpenCode worker permission denials, and Herdr guard blocks. It keeps the day, harness, cause, project, model, and count. It keeps no message text.</p>
     <p>The chart shows one bar for each day. The solid part is events that were refused: classifier refusals, sandbox errors, guard blocks, and OpenCode denials. The outlined part is escalations that an existing rule approved. The legend gives the total of each part for the range. An approved escalation is friction, not a failure. An event with no known outcome counts as refused, and Details says how many. The range is 3 days by default. Choose 7 or 30 days with the buttons; the browser remembers the choice. The switch selects one harness or all.</p>
     <p>A flag on the chart marks a day on which a harness fix went in. The flags come from <code>harness-changes.jsonl</code> in the data folder, one JSON object on each line: <code>date</code> (YYYY-MM-DD), <code>harness</code> (<code>claude</code>, <code>codex</code>, <code>opencode</code>, or <code>pi</code>), and <code>label</code> (up to 80 characters). Add a line with <code>herdr-boss harness change HARNESS LABEL [--date YYYY-MM-DD]</code>. Hover, focus, or touch a flag to read its date, harness, and label. Details lists the days, both series, and the flags. The small table in Details shows counts for the last 7 days by harness, model, and cause. It shows up to 10 rows.</p>
@@ -8826,7 +8929,9 @@ function refreshForcesRender(pathname) {
 
 async function refreshExtras() {
   if (['/fleet', '/mailbox'].includes(location.pathname)) void refreshFleet();
-  const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/spend?days=14', '/api/analytics', '/api/machine-hours'].map((url) => fetch(url).then((r) => r.json())));
+  const urls = ['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/spend?days=14', '/api/analytics', '/api/machine-hours'];
+  if (location.pathname === '/analytics') urls.push('/api/quota-plan/codex');
+  const results = await Promise.allSettled(urls.map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;
   if (results[2].status === 'fulfilled') {
@@ -8844,6 +8949,7 @@ async function refreshExtras() {
   if (results[8].status === 'fulfilled' && Array.isArray(results[8].value?.days)) spendData = results[8].value;
   if (results[9].status === 'fulfilled' && results[9].value?.timeline) analyticsData = results[9].value;
   if (results[10].status === 'fulfilled' && results[10].value?.hours) machineHours = results[10].value;
+  if (location.pathname === '/analytics' && results[11]?.status === 'fulfilled' && results[11].value?.provider === 'codex') quotaPlanData = results[11].value;
   if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
   agentsRefresh();
   if (refreshForcesRender(location.pathname)) lastRender = '';

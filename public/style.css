@@ -2006,6 +2006,14 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .hl-trend.up { color: var(--crit); } .hl-trend.down { color: var(--ok); } .hl-trend.flat { color: var(--muted); }
 
 .viz-group { display: grid; gap: 10px; min-width: 0; }
+.quota-reset-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.quota-reset-form label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.quota-reset-form input, .quota-reset-form select { min-height: 36px; max-width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); color: var(--text); font: 12px var(--sans); }
+.quota-reset-form input[type="datetime-local"] { min-width: 205px; }
+.quota-reset-form input[type="number"] { width: 116px; }
+.quota-reset-form button { min-height: 36px; }
+.quota-reset-feedback { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; }
+@media (max-width: 760px) { .quota-reset-form label, .quota-reset-form input[type="datetime-local"] { width: 100%; } .quota-reset-form input, .quota-reset-form select, .quota-reset-form button { min-height: 44px; } }
 .viz-group > h2 { margin: 8px 0 0; }
 .viz-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 @media (min-width: 1180px) { .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -2052,6 +2060,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .viz-line.dashed { stroke-width: 1.5; stroke-dasharray: 5 4; opacity: .9; }
 .viz-fill { fill: var(--c); }
 .viz-band { fill: color-mix(in srgb, var(--muted) 22%, transparent); }
+.viz-range { fill: color-mix(in srgb, var(--muted) 24%, transparent); }
 .viz-track { fill: var(--track); }
 .viz-heat { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; }
 .viz-heat.q1, .viz-heat-key.q1 { fill: var(--q1); background: var(--q1); stroke: none; }

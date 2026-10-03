@@ -329,8 +329,10 @@ Do not warn for a credit that the current plan no longer lists.
 Use `herdr-boss quota announce codex --at TIME` to save a reset announcement.
 The time must be in the future and within 30 days.
 Only the Owner can use `POST /api/quota-plan/codex/announce`.
-`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets.
+`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets. It returns the selected quota window key. It also returns up to 14 days of matching history for the Analytics chart. Each history row has its sample time, provider, window key, usage percent, and reset time when available.
 The state API has a small `quotaPlanSummary` object for later dashboard use.
+
+The Analytics page plots history for the selected Codex window. It adds the fast and slow plan curves. A shaded area shows the range between the curves. Flags mark quota windows, credit apply times, and credit expiry times. The chart shows an empty state when the window has no history. The Owner can use its form to announce a full or partial reset. A partial reset needs a refund from 0 to 100 points.
 
 Herdr Boss never applies a reset credit.
 The Owner applies it in the Codex app.
@@ -503,7 +505,5 @@ The reference simulator keeps the burst rate throughout.
 ## Later tasks
 
 Add the fleet lane text and bulletin guidance in a later task.
-Compare actual usage with the planned curve.
-Add the Analytics chart in a later task.
 The Owner applies each credit in the Codex app.
 Herdr Boss never opens or changes `/usage`.

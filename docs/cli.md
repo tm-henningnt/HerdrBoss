@@ -62,6 +62,8 @@ When `NODE_TEST_CONTEXT` is set, or the data directory differs from the configur
 
 Use `herdr-boss quota plan codex` to calculate Codex reset credit guidance. The command prints the current use, reset time, history p90, planned credit times, total use by the horizon, gain against a plan without credits, five burst rates, and fast and slow scenarios. Add `--json` to print the full plan.
 
+The Analytics page uses matching history for the selected Codex window. It plots actual use, fast and slow plans, and the range between them. It marks quota windows, credit apply times, and expiries. The card shows an empty state when the window has no history. Use the reset form to save a full or partial reset announcement. Only the Owner can save an announcement.
+
 Set `--burst-pace N` to compare another burst pace. Use `--what-if TIME` to set the calculation horizon. Use `--announce TIME[:full|partial]` to include a hypothetical reset in this calculation. These options do not save a plan or an event. The default horizon is the last available credit expiry. Herdr Boss supports only `codex` for this command.
 
 Use `herdr-boss quota announce codex --at TIME [--kind full|partial] [--refund N]` to save a known reset and re-plan. The time must be in the future and within 30 days. A partial reset needs a refund from 0 to 100 points. List saved events with `herdr-boss quota announce --list`. Remove one with `herdr-boss quota announce --remove ID`.
@@ -74,7 +76,7 @@ The service adds one `warn` notice when an available credit enters its 24-hour e
 
 The service refreshes the plan after each good quota reading. It skips a write when the inputs have not changed. It reads the current Codex quota, the sanitized reset credit fields, and the last 14 days of `quota-history.jsonl`. It stores events, used credit IDs, and up to 50 plan records in `quota-plan.json` in the data directory. The service writes this file atomically.
 
-`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets. `POST /api/quota-plan/codex/announce` accepts an announced reset with the same time and refund rules. Only the Owner can use this route. `/api/state` includes a small `quotaPlanSummary` object for dashboard use.
+`GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, observed resets, and the selected window key. It also returns up to 14 days of matching history for the Analytics chart. `POST /api/quota-plan/codex/announce` accepts an announced reset with the same time and refund rules. Only the Owner can use this route. `/api/state` includes a small `quotaPlanSummary` object for dashboard use.
 
 ## Resources and policy
 
