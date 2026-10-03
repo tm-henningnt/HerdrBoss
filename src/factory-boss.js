@@ -1,4 +1,7 @@
 import path from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
+import { maskLine } from './factory-host.js';
+import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
 import { verifyHarnessLogin } from './factory-wizard.js';
@@ -80,6 +83,42 @@ export function inspectBossPromptText(text, prompt, promptMarker) {
   return { promptMarkerPresent: priorText.includes(promptMarker), promptTyped };
 }
 
+function startupDialog(text) {
+  const visible = stripVTControlCharacters(String(text ?? ''));
+  if (/choose (?:the |a )?(?:text style|theme)|select (?:a |your )?(?:color )?theme/i.test(visible)) return 'theme';
+  if (/do you trust|trust this (?:folder|directory|workspace)|yes, I trust|is this a project you created/i.test(visible)) return 'trust';
+  if (/not logged in|please (?:run )?\/login|sign in (?:to|with)|log in (?:to|with)|device (?:code|authorization)/i.test(visible)) return 'login';
+  if (/update available|new version available|update (?:now|Codex|Claude)|upgrade (?:now|available)/i.test(visible)) return 'update';
+  if (/press (?:enter|return) to continue|select (?:an|one) option|do you want to proceed/i.test(visible)) return 'unknown';
+  return null;
+}
+
+function maskBossDiagnostic(value, host = {}) {
+  let text = stripVTControlCharacters(String(value ?? ''));
+  text = redactSecrets(text)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]')
+    .replace(/\b(?:device|authorization|login)[ _-]?code\s*[:=]\s*\S+/gi, 'code=[REDACTED]')
+    .replace(/(?:\/home\/|\/Users\/|\/root(?:\/|\b)|~\/|[A-Z]:\\Users\\)[^\s"'<>]*/gi, '<home>')
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '<account>');
+  for (const name of [host.hostname, host.factoryHostname, host.hostId]) {
+    if (typeof name === 'string' && name) text = text.split(name).join('<host>');
+  }
+  return maskLine(text, host, true).trim().slice(0, 6000);
+}
+
+async function readBossPane(docker, name, pane) {
+  try {
+    const result = await herdrCall(docker, name, ['pane', 'read', pane, '--source', 'detection', '--lines', '120', '--format', 'text']);
+    return typeof result === 'string' ? result : result?.text ?? result?.output ?? '';
+  } catch { return null; }
+}
+
+function bossStartError(pane, text, stderr, host, dialog = startupDialog(text) ?? 'unknown') {
+  return new Error(`The factory Boss could not start: ${dialog} dialog in pane ${pane}. Inspect this pane before you retry.\n` +
+    `Pane text:\n${text === null ? '(capture unavailable)' : maskBossDiagnostic(text, host) || '(empty)'}\n` +
+    `Prompt script stderr:\n${maskBossDiagnostic(stderr, host) || '(empty)'}`);
+}
+
 export function runBossPromptReadiness({
   herdr,
   wait = pause,
@@ -109,6 +148,7 @@ export function runBossPromptReadiness({
   };
 
   let text = readTextSafe();
+  if (startupDialog(text)) return { outcome: 'dialog', enterAttempts };
   const promptAlreadyPresent = text.includes(promptMarker);
   if (!ready(BOSS_PROMPT_RETRY_WAIT_MS) && !(resumeExisting && promptAlreadyPresent)) {
     return { outcome: 'not-ready', enterAttempts };
@@ -128,6 +168,7 @@ export function runBossPromptReadiness({
   while (!isAgentReady && enterAttempts < BOSS_PROMPT_RETRY_LIMIT && readyChecks < BOSS_PROMPT_RETRY_LIMIT) {
     agentStatus = readStatus();
     text = readTextSafe();
+    if (startupDialog(text)) return { outcome: 'dialog', enterAttempts };
     if (ready(1)) { isAgentReady = true; break; }
     if (['idle', 'done'].includes(agentStatus) && text.includes(promptMarker)) {
       try { herdr(['agent', 'send-keys', 'boss', 'enter']); } catch {}
@@ -208,7 +249,7 @@ async function inspectFactory(name, io) {
   const container = await inspect(docker, 'container', factory.record.containerName);
   if (!container) throw new Error('The factory container is missing.');
   assertFactoryContainer(container, name);
-  return { ...factory, docker };
+  return { ...factory, docker, diagnosticHost: { ...factory.host, hostname: container.Config?.Hostname, factoryHostname: factory.record.hostname } };
 }
 
 async function probeBoss(docker, name) {
@@ -257,18 +298,28 @@ function kitCommand(name, cwd, command) {
     '--workdir', cwd, `hf-${name}`, 'herdr-boss', ...command];
 }
 
-async function installFactoryKits(docker, name) {
+async function readFactoryRoots(docker, name) {
   const raw = await dockerCall(docker, ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
     `hf-${name}`, 'herdr-boss', 'project', 'paths', '--json']);
   let projects;
   try { projects = JSON.parse(raw); } catch { throw new Error('The factory project paths are invalid.'); }
   if (!Array.isArray(projects)) throw new Error('The factory project paths are invalid.');
-  const roots = [{ path: BOSS_ROOT }, ...projects.map((project) => project?.path).filter((value) => typeof value === 'string').map((value) => ({ path: value }))];
-  const checked = new Set();
-  for (const { path: cwd } of roots) {
-    if (checked.has(cwd)) continue;
-    checked.add(cwd);
+  const roots = [...new Set([BOSS_ROOT, ...projects.map((project) => project?.path).filter((value) => typeof value === 'string')])];
+  for (const cwd of roots) {
     if (cwd !== BOSS_ROOT && !safeProjectPath(cwd)) throw new Error('A project path is outside the factory work volume.');
+  }
+  return roots;
+}
+
+async function prepareFactoryHarness(docker, name, harness, roots) {
+  const script = `import { prepareHarnessHome } from '${BOSS_ROOT}/src/factory-harness-state.js';\nprepareHarnessHome(process.argv[1], JSON.parse(process.argv[2]));`;
+  const result = await docker.run(['exec', '--user', 'factory', '--env', 'HOME=/home/factory',
+    `hf-${name}`, 'node', '--input-type=module', '-e', script, harness, JSON.stringify(roots)]);
+  if (result.code !== 0) throw new Error('The harness first-run state could not be prepared. Check the factory configuration.');
+}
+
+async function installFactoryKits(docker, name, roots) {
+  for (const cwd of roots) {
     const check = await docker.run(kitCommand(name, cwd, ['check', 'agents']));
     if (check.code === 0) continue;
     const install = await docker.run(kitCommand(name, cwd, ['kit', 'install']));
@@ -329,15 +380,21 @@ async function ensureBossPane(docker, name, state) {
   return { workspaceId: id, paneId: paneName };
 }
 
-async function startBossPrompt(docker, name, harness, { workspaceId: workspace, paneId: pane }, { resumeExisting = false } = {}) {
+async function startBossPrompt(docker, name, harness, { workspaceId: workspace, paneId: pane }, { resumeExisting = false, diagnosticHost } = {}) {
   const result = await docker.run([
     'exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
     '--env', 'HERDR_ENV=1', '--env', `HERDR_PANE_ID=${pane}`, '--env', `HERDR_WORKSPACE_ID=${workspace}`,
     '--env', 'USER=factory', '--workdir', BOSS_ROOT, `hf-${name}`, 'node', '--input-type=module', '-e', BOSS_PROMPT_SCRIPT,
     harness, pane, workspace, BOSS_PROMPT, String(resumeExisting),
   ], { timeout: 300_000 });
-  if (result.code !== 0) throw new Error('The factory Boss could not start. Inspect the Boss pane before you retry.');
-  try { return JSON.parse(result.stdout); } catch { throw new Error('The factory Boss did not return a start result. Inspect the Boss pane before you retry.'); }
+  const text = await readBossPane(docker, name, pane);
+  const dialog = startupDialog(text);
+  if (result.code !== 0 || text === null || dialog) throw bossStartError(pane, text, result.stderr, diagnosticHost, dialog ?? 'unknown');
+  let outcome;
+  try { outcome = JSON.parse(result.stdout); }
+  catch { throw bossStartError(pane, text, result.stderr, diagnosticHost); }
+  if (!['ready', 'unsent'].includes(outcome?.outcome)) throw bossStartError(pane, text, result.stderr, diagnosticHost);
+  return outcome;
 }
 
 const MAILBOX_SCRIPT = String.raw`
@@ -389,6 +446,7 @@ export async function factoryLoginCommand(args, io) {
     const result = await docker.run(['exec', '-it', '--user', 'factory', record.containerName, ...command], { interactive: true, timeout: LOGIN_TIMEOUT_MS });
     const verified = await verifyHarnessLogin(docker, name, harness);
     const ok = result.code === 0 && verified;
+    if (ok) await prepareFactoryHarness(docker, name, harness, await readFactoryRoots(docker, name));
     io.stdout.write(`${ok ? 'ok' : 'failed'}\n`);
     return ok ? 0 : 1;
   } catch {
@@ -410,10 +468,14 @@ export async function factoryBossStart(args, io) {
     return 0;
   }
 
-  const { record, docker } = await inspectFactory(name, io);
+  const { docker, diagnosticHost } = await inspectFactory(name, io);
   const existing = await probeBoss(docker, name);
   let resumeExisting = false;
   if (existing.live) {
+    if (['blocked', 'unknown', 'idle'].includes(existing.state)) {
+      const text = await readBossPane(docker, name, paneId(existing.pane));
+      if (text === null || startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
+    }
     if (resume && existing.pane?.agent === harness && existing.state === 'idle') {
       resumeExisting = await hasTypedUnsentBossPrompt(docker, name, existing);
     }
@@ -429,9 +491,11 @@ export async function factoryBossStart(args, io) {
     io.stdout.write(`Factory ${name}: ${harness} login is required. A Mailbox item names the Owner command.\n`);
     return 3;
   }
-  await installFactoryKits(docker, name);
+  const roots = await readFactoryRoots(docker, name);
+  await prepareFactoryHarness(docker, name, harness, roots);
+  await installFactoryKits(docker, name, roots);
   const bossPane = await ensureBossPane(docker, name, existing);
-  const result = await startBossPrompt(docker, name, harness, bossPane, { resumeExisting });
+  const result = await startBossPrompt(docker, name, harness, bossPane, { resumeExisting, diagnosticHost });
   if (result?.outcome === 'ready') {
     io.stdout.write(`Started the ${harness} Boss in pane ${bossPane.paneId}.\n`);
     return 0;

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { factoryCommand } from '../src/factory-host.js';
 import { BOSS_START_CALL_PLAN } from '../src/factory-boss.js';
 import { factoryFile, writeFleet, writePrivate } from '../src/factory-store.js';
@@ -29,6 +31,11 @@ function fixture({
   resumePromptProbe = { promptMarkerPresent: false, promptTyped: false },
   promptCode = 0,
   promptOutcome = 'ready',
+  executeHarnessState = false,
+  paneText = '',
+  promptStderr = 'private prompt error',
+  containerHostname = 'fixture-node',
+  paneReadCode = 0,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-boss-'));
   const env = {
@@ -56,7 +63,7 @@ function fixture({
   const output = [];
   const dockerCalls = [];
   const container = {
-    Config: { Labels: { 'herdr-factory': factoryLabel, ...(workerLabel ? { 'herdr-factory-spike': workerLabel } : {}) } },
+    Config: { Hostname: containerHostname, Labels: { 'herdr-factory': factoryLabel, ...(workerLabel ? { 'herdr-factory-spike': workerLabel } : {}) } },
     State: { Status: running ? 'running' : 'exited', Running: running },
   };
   const installedPaths = new Set();
@@ -68,6 +75,14 @@ function fixture({
       if (args[0] === 'container' && args[1] === 'inspect') return { code: 0, stdout: JSON.stringify([container]), stderr: '' };
       const scriptIndex = args.indexOf('-e');
       const script = scriptIndex >= 0 ? args[scriptIndex + 1] : '';
+      if (executeHarnessState && script.includes('prepareHarnessHome')) {
+        const localScript = script.replace('/home/factory/herdr-boss/src/factory-harness-state.js',
+          pathToFileURL(path.resolve('src/factory-harness-state.js')).href);
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', localScript, ...args.slice(scriptIndex + 2)], {
+          encoding: 'utf8', env: { ...process.env, HOME: root },
+        });
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      }
       if (args.includes('auth') && args.at(-1) === 'login') return { code: interactiveCode, stdout: 'private login output', stderr: '' };
       if ((args.includes('auth') || args.includes('login')) && args.at(-1) === 'status') return { code: verifierCode, stdout: 'private verifier output', stderr: '' };
       if (args.includes('project') && args.includes('paths')) {
@@ -90,6 +105,7 @@ function fixture({
         return { code: 0, stdout: JSON.stringify({ workspaces }), stderr: '' };
       }
       if (args.includes('pane') && args.includes('list')) return { code: 0, stdout: JSON.stringify({ panes }), stderr: '' };
+      if (args.includes('pane') && args.includes('read')) return { code: paneReadCode, stdout: JSON.stringify({ text: paneText }), stderr: '' };
       if (script.includes('inspectBossPromptText') && script.includes('readAgentText')) {
         return { code: 0, stdout: JSON.stringify(currentResumePromptProbe), stderr: '' };
       }
@@ -113,7 +129,7 @@ function fixture({
       }
       if (script.includes('openMessageStore')) return { code: 0, stdout: '', stderr: '' };
       if (script.includes('deliverPrompt')) {
-        if (promptCode !== 0) return { code: promptCode, stdout: '', stderr: 'private prompt error' };
+        if (promptCode !== 0) return { code: promptCode, stdout: '', stderr: promptStderr };
         const pane = panes.find((item) => item.label === 'boss');
         if (pane) Object.assign(pane, {
           agent: 'claude',
@@ -186,6 +202,143 @@ test('factory login prints only failed when the harmless verifier rejects the lo
     assert.deepEqual(f.dockerCalls.find(({ args }) => args.includes('login') && args.at(-1) === 'status').args,
       ['exec', '--user', 'factory', 'hf-demo', 'codex', 'login', 'status']);
   } finally { f.cleanup(); }
+});
+
+test('factory login prepares a fresh Claude home and keeps the credential file untouched', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    fs.mkdirSync(path.join(f.root, '.claude'));
+    const credential = path.join(f.root, '.claude', '.credentials.json');
+    fs.writeFileSync(credential, '{"fixture":"keep exactly"}\n', { mode: 0o600 });
+    const before = fs.statSync(credential);
+    assert.equal(await factoryCommand(['login', 'demo', 'claude'], f.io), 0);
+    const file = path.join(f.root, '.claude.json');
+    assert.ok(fs.existsSync(file), 'the factory user gets first-run state after login');
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(state.hasCompletedOnboarding, true);
+    assert.equal(state.theme, 'dark');
+    for (const folder of ['/home/factory/herdr-boss', '/home/factory/work/alpha']) {
+      assert.equal(state.projects[folder].hasTrustDialogAccepted, true);
+    }
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(credential, 'utf8'), '{"fixture":"keep exactly"}\n');
+    assert.equal(fs.statSync(credential).mtimeMs, before.mtimeMs);
+    const prepare = f.dockerCalls.find(({ args }) => args.some((arg) => arg.includes('prepareHarnessHome')));
+    assert.ok(prepare.args.includes('HOME=/home/factory'));
+    assert.equal(prepare.args[prepare.args.indexOf('--user') + 1], 'factory');
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start prepares an existing Claude home without losing other keys', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    const file = path.join(f.root, '.claude.json');
+    fs.writeFileSync(file, JSON.stringify({ theme: 'light', oauthAccount: { fixture: 'keep' }, custom: [1, 2],
+      projects: { '/home/factory/work/alpha': { allowedTools: ['Read'], hasTrustDialogAccepted: false },
+        '/unrelated': { hasTrustDialogAccepted: false } } }));
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(state.hasCompletedOnboarding, true);
+    assert.equal(state.theme, 'light');
+    assert.deepEqual(state.oauthAccount, { fixture: 'keep' });
+    assert.deepEqual(state.custom, [1, 2]);
+    assert.deepEqual(state.projects['/home/factory/work/alpha'], { allowedTools: ['Read'], hasTrustDialogAccepted: true });
+    assert.deepEqual(state.projects['/unrelated'], { hasTrustDialogAccepted: false });
+    const prepIndex = f.dockerCalls.findIndex(({ args }) => args.some((arg) => arg.includes('prepareHarnessHome')));
+    assert.ok(prepIndex >= 0 && prepIndex < f.dockerCalls.findIndex(hasBossPromptScript));
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally { f.cleanup(); }
+});
+
+test('factory login prepares fresh Codex trust and first-run notice state without touching auth', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    fs.mkdirSync(path.join(f.root, '.codex'));
+    const auth = path.join(f.root, '.codex', 'auth.json');
+    fs.writeFileSync(auth, '{"fixture":"unchanged"}\n', { mode: 0o600 });
+    const before = fs.statSync(auth);
+    assert.equal(await factoryCommand(['login', 'demo', 'codex'], f.io), 0);
+    const file = path.join(f.root, '.codex', 'config.toml');
+    const text = fs.readFileSync(file, 'utf8');
+    assert.match(text, /\[projects\."\/home\/factory\/herdr-boss"\]\ntrust_level = "trusted"/);
+    assert.match(text, /\[projects\."\/home\/factory\/work\/alpha"\]\ntrust_level = "trusted"/);
+    assert.match(text, /\[notice\]\nhide_full_access_warning = true/);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(auth, 'utf8'), '{"fixture":"unchanged"}\n');
+    assert.equal(fs.statSync(auth).mtimeMs, before.mtimeMs);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start merges existing Codex tables and repeated preparation is stable', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    fs.mkdirSync(path.join(f.root, '.codex'));
+    const file = path.join(f.root, '.codex', 'config.toml');
+    const previous = '# keep this comment\nmodel = "fixture-model"\n\n[sandbox_workspace_write]\nnetwork_access = true\n\n' +
+      "[projects.'/home/factory/herdr-boss'] # keep header\ntrust_level = 'untrusted' # change only this value\nextra = 7\n\n" +
+      '[projects."/unrelated"]\ntrust_level = "untrusted"\n\n[notice]\nhide_full_access_warning = false\ncustom = true\n';
+    fs.writeFileSync(file, previous);
+    assert.equal(await factoryCommand(['boss', 'start', 'demo', '--harness', 'codex'], f.io), 0);
+    const once = fs.readFileSync(file, 'utf8');
+    assert.match(once, /trust_level = "trusted" # change only this value/);
+    assert.match(once, /hide_full_access_warning = true/);
+    for (const keep of ['# keep this comment', 'model = "fixture-model"', '[sandbox_workspace_write]\nnetwork_access = true',
+      '[projects."/unrelated"]\ntrust_level = "untrusted"', 'extra = 7', 'custom = true']) assert.ok(once.includes(keep));
+    assert.equal(once.match(/^\[notice\]/gm).length, 1);
+    assert.equal(await factoryCommand(['login', 'demo', 'codex'], f.io), 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), once);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally { f.cleanup(); }
+});
+
+test('factory preparation preserves dotted Codex keys and table text inside multiline strings', async () => {
+  const f = fixture({ executeHarnessState: true });
+  try {
+    fs.mkdirSync(path.join(f.root, '.codex'));
+    const file = path.join(f.root, '.codex', 'config.toml');
+    fs.writeFileSync(file, 'projects."/home/factory/herdr-boss".trust_level = "untrusted"\n' +
+      'notice.hide_full_access_warning = false\n' +
+      'custom = """\n[notice]\nhide_full_access_warning = false\n"""\n');
+    assert.equal(await factoryCommand(['login', 'demo', 'codex'], f.io), 0);
+    const text = fs.readFileSync(file, 'utf8');
+    assert.match(text, /^projects\."\/home\/factory\/herdr-boss"\.trust_level = "trusted"/);
+    assert.match(text, /notice\.hide_full_access_warning = true/);
+    assert.ok(text.includes('custom = """\n[notice]\nhide_full_access_warning = false\n"""'));
+    assert.equal(text.match(/^\[notice\]/gm).length, 1, 'the only notice header is inside the string');
+  } finally { f.cleanup(); }
+});
+
+test('factory preparation adds a missing dotted trust key before a new Codex project table', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    fs.mkdirSync(path.join(f.root, '.codex'));
+    const file = path.join(f.root, '.codex', 'config.toml');
+    fs.writeFileSync(file, 'notice.custom = true\nprojects."/home/factory/herdr-boss".extra = 7\n');
+    assert.equal(await factoryCommand(['login', 'demo', 'codex'], f.io), 0);
+    const text = fs.readFileSync(file, 'utf8');
+    const trust = text.indexOf('projects."/home/factory/herdr-boss".trust_level = "trusted"');
+    const table = text.indexOf('[projects."/home/factory/work/alpha"]');
+    assert.ok(trust >= 0 && table > trust, 'the dotted assignment stays in the root table');
+    assert.ok(text.includes('notice.hide_full_access_warning = true'));
+  } finally { f.cleanup(); }
+});
+
+test('factory preparation does not replace malformed Claude state or inline Codex tables', async () => {
+  for (const [harness, relative, previous] of [['claude', '.claude.json', '{broken'],
+    ['codex', '.codex/config.toml', 'projects = { "/home/factory/herdr-boss" = { trust_level = "untrusted" } }\n']]) {
+    const f = fixture({ executeHarnessState: true });
+    try {
+      const file = path.join(f.root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, previous);
+      assert.equal(await factoryCommand(['login', 'demo', harness], f.io), 1);
+      assert.equal(f.output.join(''), 'failed\n');
+      assert.equal(fs.readFileSync(file, 'utf8'), previous);
+      await assert.rejects(factoryCommand(['boss', 'start', 'demo', '--harness', harness], f.io), /first-run state could not be prepared/);
+      assert.equal(f.dockerCalls.some(hasBossPromptScript), false);
+      assert.equal(fs.readFileSync(file, 'utf8'), previous);
+    } finally { f.cleanup(); }
+  }
 });
 
 test('factory login still checks authentication after the interactive command fails', async () => {
@@ -443,6 +596,73 @@ test('a failed Boss start stops with a safe error', async () => {
   } finally { f.cleanup(); }
 });
 
+test('a Boss startup dialog names its kind and pane and masks the pane and prompt stderr', async () => {
+  const f = fixture({ promptCode: 1,
+    paneText: 'Choose the text style\n/home/factory/herdr-boss\nServer: 192.0.2.45 fixture-node demo.localhost\nBearer fixture-bearer\naccess_token=fixture-access',
+    promptStderr: 'agent_not_ready: onboarding blocked at /home/factory/.claude.json token=fixture-stderr\nhttps://private.example.test/login',
+  });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), (error) => {
+      assert.match(error.message, /theme dialog.*ws-boss:p-new/);
+      assert.match(error.message, /Pane text:\nChoose the text style/);
+      assert.match(error.message, /Prompt script stderr:\nagent_not_ready: onboarding blocked/);
+      assert.doesNotMatch(error.message, /fixture-bearer|fixture-access|fixture-stderr|192\.0\.2\.45|private\.example|\/home\/factory|fixture-node|demo\.localhost/);
+      return true;
+    });
+    const read = f.dockerCalls.find(({ args }) => args.includes('pane') && args.includes('read'));
+    assert.ok(read.args.includes('ws-boss:p-new'));
+    assert.equal(read.args[read.args.indexOf('--user') + 1], 'factory');
+  } finally { f.cleanup(); }
+});
+
+test('a failed Boss pane capture still reports masked prompt stderr and an unknown dialog', async () => {
+  const f = fixture({ paneReadCode: 1, promptCode: 1, promptStderr: 'agent_not_ready at /home/factory token=fixture-private' });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), (error) => {
+      assert.match(error.message, /unknown dialog in pane ws-boss:p-new/);
+      assert.match(error.message, /capture unavailable/);
+      assert.match(error.message, /agent_not_ready/);
+      assert.doesNotMatch(error.message, /\/home\/factory|fixture-private/);
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('Boss start reports an unavailable dialog check when the prompt script claims readiness', async () => {
+  const f = fixture({ paneReadCode: 1, promptOutcome: 'ready' });
+  try { await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /capture unavailable/); }
+  finally { f.cleanup(); }
+});
+
+test('Boss start names trust, login, update and unknown dialogs even when the script exits zero', async () => {
+  for (const [kind, paneText] of [['trust', 'Do you trust this folder?'], ['login', 'Not logged in · Please run /login'],
+    ['update', 'Update available. Update now?'], ['unknown', 'Select an option to continue']]) {
+    const f = fixture({ paneText, promptOutcome: 'not-ready' });
+    try {
+      await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), (error) => {
+        assert.ok(error.message.includes(`${kind} dialog in pane ws-boss:p-new`));
+        assert.ok(error.message.includes(paneText));
+        assert.match(error.message, /Prompt script stderr:/);
+        return true;
+      });
+    } finally { f.cleanup(); }
+  }
+  const f = fixture({ paneText: 'Choose the text style', promptOutcome: 'ready' });
+  try { await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /theme dialog/); }
+  finally { f.cleanup(); }
+});
+
+test('an existing blocked Boss dialog fails with the pane text instead of reporting success', async () => {
+  const f = fixture({ workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', label: 'boss', agent: 'claude', agent_status: 'blocked' }],
+    paneText: 'Do you trust this folder? /home/factory/herdr-boss',
+  });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo', '--resume'], f.io), /trust dialog in pane ws-existing:p1/);
+    assert.equal(f.dockerCalls.some(hasBossPromptScript), false);
+  } finally { f.cleanup(); }
+});
+
 test('an unsent Boss prompt exits 3 and posts one Mailbox resume item', async () => {
   const f = fixture({ promptOutcome: 'unsent' });
   try {
@@ -493,6 +713,17 @@ test('prompt readiness retries three Enter presses with 20 second waits and retu
   assert.equal(result.enterAttempts, 3);
   assert.equal(enters.length, 3);
   assert.deepEqual(waits, [20000, 20000, 20000]);
+});
+
+test('prompt readiness sends no prompt or Enter when a startup dialog is visible', async () => {
+  const { runBossPromptReadiness } = await import('../src/factory-boss.js');
+  const calls = [];
+  const result = runBossPromptReadiness({ harness: 'claude', herdr: (args) => calls.push(args),
+    readText: () => 'Choose the text style\nYou are the Boss of this factory.', isReady: () => true,
+    deliverPrompt: () => calls.push('prompt'), promptMarker: 'You are the Boss of this factory.',
+  });
+  assert.equal(result.outcome, 'dialog');
+  assert.deepEqual(calls, []);
 });
 
 test('interactive Docker calls inherit all terminal streams and return no captured text', async () => {
