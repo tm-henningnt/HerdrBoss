@@ -539,3 +539,52 @@ test('the state exposes the fixed scan and store limits', async () => {
     messages: { retentionMs: 30 * 86400 * 1000, sendLimitPerMinute: 10 },
   });
 });
+
+// NW10c: exec_command rows, one count for each denial, subagent sessions, and the scan of the reader itself.
+const execCall = (args, { callId = 'call-1', at = NOW, name = 'exec_command' } = {}) => ({
+  timestamp: iso(at), type: 'response_item', payload: { type: 'function_call', name, call_id: callId, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+});
+
+test('Codex parser counts an exec_command row that requests escalation', () => {
+  const ctx = {};
+  const escalated = execCall({ cmd: 'git push origin main', sandbox_permissions: 'require_escalated', justification: SECRET });
+  const [event] = parseCodexLine(JSON.stringify(escalated), ctx);
+  assert.equal(event.cause, 'escalation:request');
+  assert.equal(event.id, 'call-1');
+  assert.deepEqual(parseCodexLine(JSON.stringify(execCall({ cmd: 'ls', sandbox_permissions: 'use_default' })), ctx), []);
+  assert.deepEqual(parseCodexLine(JSON.stringify(execCall({ cmd: 'ls' })), ctx), []);
+});
+
+test('Codex parser does not count a command that only quotes the escalation text', () => {
+  const ctx = {};
+  const quoted = execCall({ cmd: 'rg \'sandbox_permissions": "require_escalated\' ~/.codex/sessions | wc -l' });
+  assert.deepEqual(parseCodexLine(JSON.stringify(quoted), ctx), []);
+  const scanBody = codexCall('await tools.exec_command({ cmd: "rg -c \\"sandbox_permissions: require_escalated\\" ~/.codex/sessions" })');
+  assert.deepEqual(parseCodexLine(JSON.stringify(scanBody), ctx), []);
+  const readsDenials = codexCall('await tools.exec_command({ cmd: "node scripts/scan.js", sandbox_permissions: "require_escalated" }); // parseCodexLine denials.json');
+  assert.deepEqual(parseCodexLine(JSON.stringify(readsDenials), ctx), []);
+});
+
+test('a scan counts one escalation once when two log files hold the same call', () => {
+  const home = newHome();
+  const row = execCall({ cmd: 'git push', sandbox_permissions: 'require_escalated' }, { callId: 'call-dup', at: NOW });
+  const other = execCall({ cmd: 'git push', sandbox_permissions: 'require_escalated' }, { callId: 'call-two', at: NOW });
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-a.jsonl'), [codexMeta('/work/HerdrBoss'), row, row, other]);
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-b.jsonl'), [codexMeta('/work/HerdrBoss'), row]);
+  const first = scanDenialLogs({ home, state: {}, now: NOW, repos: REPOS });
+  assert.equal(first.records.find((r) => r.cause === 'escalation:request')?.count, 2);
+  // A later scan with the saved state does not count the same call again.
+  writeLines(path.join(home, '.codex/sessions/2026/09/28/rollout-c.jsonl'), [codexMeta('/work/HerdrBoss'), row]);
+  const second = scanDenialLogs({ home, state: first.state, now: NOW, repos: REPOS });
+  assert.equal(second.records.find((r) => r.cause === 'escalation:request'), undefined);
+});
+
+test('a scan counts a Claude subagent session', () => {
+  const home = newHome();
+  writeLines(path.join(home, '.claude/projects/-work-Shop/s1.jsonl'), [claudeDenial('Git Destructive', '/work/Shop')]);
+  writeLines(path.join(home, '.claude/projects/-work-Shop/s1/subagents/agent-a1.jsonl'), [claudeDenial('Git Destructive', '/work/Shop'), claudeDenial('Instruction Poisoning', '/work/Shop')]);
+  const result = scanDenialLogs({ home, state: {}, now: NOW, repos: REPOS });
+  const find = (cause) => result.records.find((r) => r.harness === 'claude' && r.cause === cause)?.count;
+  assert.equal(find('classifier:Git Destructive'), 2);
+  assert.equal(find('classifier:Instruction Poisoning'), 1);
+});

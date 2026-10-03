@@ -415,3 +415,18 @@ test('a blank picture retention field remains blank and invalid after rendering'
   const s = fixture(); s.policy.attachments = { retentionDays: null }; app.setState(s);
   assert.match(app.settingsView(s), /value="" data-policy-attachment="retentionDays"[^>]*aria-invalid="true"/);
 });
+
+test('the Opus settings render and accept a policy edit', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture(); s.policy.opus = { allowWithoutForce: true, maxConcurrent: 3 };
+  app.setState(s);
+  const html = app.allocationView(s);
+  assert.match(html, /data-setting-help="opus\.allowWithoutForce"/);
+  assert.match(html, /data-setting-help="opus\.maxConcurrent"/);
+  assert.match(html, /data-policy-opus-bool="allowWithoutForce" checked/);
+  assert.match(html, /max="8" value="3" data-policy-opus="maxConcurrent"/);
+  const change = (dataset, extra) => app.context.handlers.get('change').find((handler) => handler.toString().includes('el.dataset.policyOpus'))({ target: { closest: () => ({}), dataset, id: 'x', setCustomValidity() {}, setAttribute() {}, removeAttribute() {}, ...extra } });
+  change({ policyOpus: 'maxConcurrent' }, { value: '4' });
+  change({ policyOpusBool: 'allowWithoutForce' }, { checked: false });
+  assert.deepEqual(app.getDraft().opus, { allowWithoutForce: false, maxConcurrent: 4 });
+});

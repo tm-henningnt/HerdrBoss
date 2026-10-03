@@ -10,6 +10,7 @@ const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
   attachments: { retentionDays: 30 },
   agentMessages: { retentionDays: 14, metaRetentionDays: 180, promptTimeoutSeconds: 25 },
+  opus: { allowWithoutForce: false, maxConcurrent: 2 },
   machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskClearFreeGB: 24, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
   locks: { slots: 2, shortLimitMinutes: 6, guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 } },
   maxWorkers: 8,
@@ -127,7 +128,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   for (const [kind, list] of Object.entries(policy.ignoredRoutes)) for (const model of list) {
     const key = `${file}:${kind}/${model}:${policy.modelProviders[model]}`;
@@ -201,6 +202,11 @@ export function validatePolicy(value, models) {
     if (!Number.isInteger(value.agentMessages.retentionDays) || value.agentMessages.retentionDays < 1 || value.agentMessages.retentionDays > 90) errors.push('agentMessages.retentionDays must be an integer from 1 to 90.');
     if (!Number.isInteger(value.agentMessages.metaRetentionDays) || value.agentMessages.metaRetentionDays < 7 || value.agentMessages.metaRetentionDays > 730) errors.push('agentMessages.metaRetentionDays must be an integer from 7 to 730.');
     if (!Number.isInteger(value.agentMessages.promptTimeoutSeconds) || value.agentMessages.promptTimeoutSeconds < 1 || value.agentMessages.promptTimeoutSeconds > 120) errors.push('agentMessages.promptTimeoutSeconds must be an integer from 1 to 120.');
+  }
+  if (!isObject(value.opus)) errors.push('opus must be an object.');
+  else {
+    if (typeof value.opus.allowWithoutForce !== 'boolean') errors.push('opus.allowWithoutForce must be boolean.');
+    if (!Number.isInteger(value.opus.maxConcurrent) || value.opus.maxConcurrent < 1 || value.opus.maxConcurrent > 8) errors.push('opus.maxConcurrent must be an integer from 1 to 8.');
   }
   if (!isObject(value.locks)) errors.push('locks must be an object.');
   else {

@@ -520,6 +520,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'Turning it off sends the Owner goal as plain text.',
     apply: 'policy',
   }),
+  S('capacity', 'opus.allowWithoutForce', 'Allow Opus without --force', {
+    what: 'Lets `herdr-boss worker start` start a Claude Opus worker without `--force`. Turn it on only when the Owner approves Opus for workers. The Boss gets an alert for each Opus start. A refused start names this setting.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets each Opus start pass while the number of running Opus workers is below the limit.',
+    lower: 'Turning it off means each Opus start needs `--force` and the Owner\'s approval.',
+    apply: 'policy',
+  }),
+  S('capacity', 'opus.maxConcurrent', 'Running Opus workers at most', {
+    what: 'The most Opus workers that can run at the same time when Opus starts without `--force`. A start at the limit is refused and names this setting. `--force` skips the limit.',
+    default: '2', unit: 'Workers', range: '1 to 8',
+    raise: 'A higher value allows more Opus workers at the same time and uses the Opus quota faster.',
+    lower: 'A lower value refuses an Opus start sooner. Running Opus workers continue.',
+    apply: 'policy',
+  }),
   S('capacity', 'defaultOrchestratorGoal', 'Default orchestrator goal', {
     what: 'The goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the orchestrator waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
     default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',

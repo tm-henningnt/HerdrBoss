@@ -22,6 +22,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'pacingGoals', // quota.goalPercent (goal and goal end)
   'quotaProbe', // the quotaProbe.* controls on Quotas have their own explanations
   'goals', // the goals.autoCommand switch on Allocation
+  'opus', // the opus.* keys are checked one by one below
   'excludedWorkspaces', 'projects', // the workspace switches and project shares on Allocation
 ]);
 
@@ -284,4 +285,18 @@ test('agent prompt timeout has complete help and a Settings control', () => {
   assert.match(SETTING_HELP['agentMessages.promptTimeoutSeconds'].what, /agent is idle/);
   assert.match(app.slice(app.indexOf('const HELP =')), /unsubmitted input while the agent is idle/);
   assert.match(app, /lockInput\('agentMessages.promptTimeoutSeconds'/);
+});
+
+test('the Opus policy has defaults, controls, and help text', () => {
+  assert.deepEqual(POLICY_DEFAULTS.opus, { allowWithoutForce: false, maxConcurrent: 2 });
+  assert.equal(SETTING_HELP['opus.allowWithoutForce']?.group, 'capacity');
+  assert.equal(SETTING_HELP['opus.allowWithoutForce']?.default, 'Off');
+  assert.equal(SETTING_HELP['opus.maxConcurrent']?.group, 'capacity');
+  assert.equal(SETTING_HELP['opus.maxConcurrent']?.default, '2');
+  assert.equal(SETTING_HELP['opus.maxConcurrent']?.range, '1 to 8');
+  assert.match(SETTING_HELP['opus.allowWithoutForce'].what, /--force/);
+  assert.match(app, /data-policy-opus-bool="allowWithoutForce"/);
+  assert.match(app, /data-policy-opus="maxConcurrent"/);
+  assert.ok(app.includes("settingRow('opus.allowWithoutForce'"));
+  assert.ok(app.includes("settingRow('opus.maxConcurrent'"));
 });

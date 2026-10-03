@@ -174,7 +174,8 @@ test('harness check passes on a complete setup and prints no setting value that 
   assert.ok(result.stdout.split('\n').some((line) => /^ok +codex writable_roots: /.test(line) && line.endsWith(`${path.join(f.home, 'Projects', '.herdr-wt')} (worker worktrees)`)), result.stdout);
   assert.match(result.stdout, /^ok +claude autoMode: \*\*Herdr Boss projects\*\* names .*Alpha \(alpha\)$/m);
   assert.match(result.stdout, /^ok +opencode: agent worker exists$/m);
-  assert.doesNotMatch(result.stdout + result.stderr, /SECRET|apiKey|primary|allow\b/);
+  // The printed rule line for a stop by pid holds the word allow. It is a fixed text, not a setting value.
+  assert.doesNotMatch((result.stdout + result.stderr).replaceAll('decision="allow"', ''), /SECRET|apiKey|primary|allow\b/);
   assert.doesNotMatch(result.stdout + result.stderr, /KEEP-ENV-PRIVATE|KEEP-ALLOW-PRIVATE/);
 });
 
@@ -214,6 +215,9 @@ test('harness check reports each fixed entry', (t) => {
   assert.match(out, /^ok +codex rules: ps e is forbidden$/m);
   for (const arg of ['-E', 'eww', 'auxe', 'auxeww']) assert.match(out, new RegExp(`^missing +codex rules: ps ${arg} is not forbidden`, 'm'));
   for (const command of ['pkill', 'killall']) assert.match(out, new RegExp(`^missing +codex rules: ${command} is not forbidden`, 'm'));
+  // The check prints the optional rule for a stop of an own pid. It does not add the rule.
+  assert.match(out, /^ok +codex rules: optional rule for a stop by pid, not added: prefix_rule\(pattern=\["kill"\], decision="allow"\)$/m);
+  assert.doesNotMatch(fs.readFileSync(path.join(f.home, '.codex', 'rules', 'herdr.rules'), 'utf8'), /"kill"/);
   assert.match(out, /^missing +opencode: agent worker/m);
   assert.match(out, /^missing +pi: .*herdr-guard\.ts$/m);
   assert.match(out, /^ok +models\.json claude: --permission-mode auto$/m);

@@ -644,7 +644,7 @@ function activeUnavailableModel(unavailableModels, kind, model, now) {
     && Number.isSafeInteger(item.retryAt) && item.retryAt > now);
 }
 
-function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null, unavailableModels = {}, now = Date.now()) {
+function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null, unavailableModels = {}, now = Date.now(), runningOpus = 0) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
   const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
@@ -686,9 +686,20 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
     }
   }
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
+  // The Owner can allow Opus without --force. The allowance has a limit on running Opus workers; --force skips it.
+  let opusAllowed = false;
   if (isOpus(model) && !options.force) {
-    onOpusRefused?.(model);
-    throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force.`);
+    const opus = resourcePolicy?.opus;
+    if (opus?.allowWithoutForce !== true) {
+      onOpusRefused?.(model);
+      throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force. The Owner can allow Opus starts without --force with the setting opus.allowWithoutForce.`);
+    }
+    const limit = Number.isInteger(opus.maxConcurrent) ? opus.maxConcurrent : 2;
+    if ((runningOpus ?? 0) >= limit) {
+      onOpusRefused?.(model);
+      throw new Error(`${model} is at the limit of ${limit} running Opus workers (setting opus.maxConcurrent). Wait for an Opus worker to finish, or start with --force.`);
+    }
+    opusAllowed = true;
   }
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
   const effort = options.effort ?? policy.defaultEffort;
@@ -696,7 +707,7 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
   const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
-  return { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: isOpus(model) && !!options.force };
+  return { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed };
 }
 
 function appendWorkerEvent(env, event, now) {
@@ -715,7 +726,7 @@ function taskIdForEvent(options) {
 }
 
 export function alertBossForOpus(name, model, options, config, env, herdr, now, output) {
-  const text = `Opus worker: ${name} runs ${model} (forced).`;
+  const text = `Opus worker: ${name} runs ${model} (${options.allowedByPolicy ? 'allowed by opus.allowWithoutForce' : 'forced'}).`;
   const taskId = taskIdForEvent(options);
   appendWorkerEvent(env, { type: 'worker-opus', text, worker: name, taskId, project: config.slug }, now);
   output(text);
@@ -1258,7 +1269,7 @@ function startWorkerOnce(name, options, {
     : null;
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
-  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now);
+  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0);
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1605,7 +1616,7 @@ function startWorkerOnce(name, options, {
         plannerRegistered = true;
         output(`Started planner session ${session.id} for ${config.slug} on pane ${paneId}.`);
       }
-      if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, options, config, env, herdr, now, output);
+      if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, { ...options, allowedByPolicy: opusAllowed }, config, env, herdr, now, output);
       let delivery;
       const preBriefBaseline = options.kind === 'opencode' ? readPaneSnapshot() : null;
       try { delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir); }

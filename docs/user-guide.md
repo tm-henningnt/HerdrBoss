@@ -1235,6 +1235,8 @@ Herdr Boss recommends the first succession choice that can start, preferring a n
 
 If Opus is the only eligible choice, automatic handover does not prepare it. The engine sends the Boss one notice for that handover key. The notice says that Owner approval is needed and gives the `herdr-boss handoff prepare PANE --to claude --model claude-opus-5-5 --force` command.
 
+The Owner can approve Opus starts for workers once. Turn on **Allow Opus without --force** in Settings, then select **Apply policy**. The policy key is `opus.allowWithoutForce`. Then `herdr-boss worker start` starts a Claude Opus worker without `--force`. **Running Opus workers at most** (`opus.maxConcurrent`, default 2) limits the Opus workers that run at the same time. A start at the limit fails with a message that names the setting. `--force` skips the limit. The setting does not change the handover rules above.
+
 When no choice can start, Herdr Boss recommends no successor. The automatic handover then logs that no alternative provider is eligible.
 
 The automatic handover never touches the Boss. It prepares and activates no Boss successor, and it activates no prepared Boss record. The Owner does each Boss handover by hand. The Boss project page keeps its successor recommendation.
@@ -2237,7 +2239,7 @@ When a `report.md` line starts with `Status: done` and the next character is whi
 
 ## Denials and permission prompts
 
-Every 15 minutes, the service reads the Claude, Codex, OpenCode, and Pi logs for denials. The scan runs beside the engine tick, only when the engine acts. Two scans never run at the same time. The dashboard preview does not scan. One scan reads at most 20 MB in total. It continues from the saved byte offset of each file. A file with a new inode or a smaller size starts again at byte 0. The offsets are in `memory.json` under `denialScan`.
+Every 15 minutes, the service reads the Claude, Codex, OpenCode, and Pi logs for denials. The scan runs beside the engine tick, only when the engine acts. Two scans never run at the same time. The dashboard preview does not scan. One scan reads at most 20 MB in total. It continues from the saved byte offset of each file. A file with a new inode or a smaller size starts again at byte 0. The offsets are in `memory.json` under `denialScan`. The scan also reads Claude subagent sessions in `<session>/subagents/`. A Codex escalation is a `function_call` row, such as `exec_command`, that sets `sandbox_permissions` to `require_escalated`. The scan counts each call once by its call ID, time, and cause. The saved list of counted IDs is also under `denialScan`. A command that only quotes the escalation text, or that reads the session logs, is not an escalation.
 
 Herdr Boss keeps only counts in `denials.json` in the data folder, with mode 0600. Each record has the UTC day, the harness, the cause, the project, the model, and the count. The model comes from session metadata. Herdr Boss uses `unknown` when the model is missing. The file keeps 30 days. It holds no message text, command, argument, or path. What each harness counts is in [the harness setup](harness-setup.md#denial-counts).
 
