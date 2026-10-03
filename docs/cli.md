@@ -1467,6 +1467,32 @@ Herdr Boss derives a Herdr-safe agent name from each handoff record ID. Use the 
 
 If a `needs-inspection` record still has a pane in the current Herdr pane list, repeat `handoff prepare` for the same source pane, target kind, and mode. It waits for readiness and starts the successor in that pane. It keeps the existing handoff record and pane. If the pane does not become ready, the record stays `needs-inspection` and the command reports the readiness error. If a successful current pane list proves that the pane is absent, the record expires and prepare can create a new successor.
 
+## Factory hosts
+
+Warning: the registry holds the address, the user, and the key file path of each host. Do not paste them into a chat, a report, or a commit.
+
+### Commands
+
+```
+herdr-boss factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]
+herdr-boss factory host list
+herdr-boss factory host remove NAME
+herdr-boss factory ssh HOST -- COMMAND...
+herdr-boss factory docker HOST -- ARGS...
+```
+
+`factory host add` stores the name, the address, the user, and the key file path in `registry.json`. The folder is `~/.herdr-factories`. Set `HERDR_FACTORIES_DIR` to use another folder. Herdr Boss creates the folder with mode 700 and the file with mode 600. The key file path is a path only. Herdr Boss never reads the key file. Only `ssh -i` reads it.
+
+To keep the address out of the shell history, give the fields as JSON with `--from-file FILE`, with `--from-file -`, or on stdin. The fields are `address`, `user`, and `keyFile`. A flag overrides the same field in the JSON. The name uses lower case letters, digits, and hyphens.
+
+`factory host list` prints the name and the user of each host. It never prints the address or the key file path. `factory host remove NAME` deletes the host.
+
+`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. The masking also covers the warning lines of ssh.
+
+`factory docker HOST -- ARGS...` runs `docker ARGS...` on the host through the same ssh transport. It quotes each argument for the remote shell. It has no terminal, so `docker run -it` and `docker exec -it` do not work.
+
+A Docker context over SSH stores the address in the Docker context store, and `docker context ls` shows it. `factory docker` is the supported route.
+
 ## Set the goal of an orchestrator
 
 ### Command
@@ -1551,3 +1577,52 @@ The routes need the dashboard login and a same-origin request, as the project-ne
 Each `artifactChecks` rule has `artifacts` and `sources` repository-relative POSIX globs. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
 
 `checkAgents` is an object with one key, `exclude`. `exclude` is a list of repository-relative POSIX globs, for example `{ "checkAgents": { "exclude": [".orchestration/tenant-*.md"] } }`. The globs have the same rules as `artifactChecks`.
+
+## Read-only fleet
+
+Run `herdr-boss fleet settings` to read the local factory ID and fleet settings.
+Open **Fleet** in the dashboard to change the factory name, dashboard base URL, title sharing, polling, and account scopes.
+A change applies to the next poll.
+The poll interval is 30 seconds.
+The head office reads factory records from `fleet.json` in `HERDR_FACTORIES_DIR`.
+The default directory is `~/.herdr-factories`.
+It does not read the private host connection file `registry.json`.
+
+Before the first service start, run `herdr-boss fleet init --from-file FILE` with a JSON object.
+Use `factoryId`, `name`, `dashboardUrl`, `headOffice`, `shareItemTitles`, and `accounts`.
+Use the same `factoryId` as the factory registry record.
+Set `headOffice` to `true` on factory zero.
+Set it to `false` on a container factory.
+A factory keeps its ID in `factory-identity.json` in its data directory.
+The command refuses a different ID after initialization.
+Do not copy that identity file to another factory.
+
+Run private provisioning at an Owner terminal.
+Do not put an identity or a credential in a command argument, pane, report, or repository.
+The `--from-file -` option reads JSON from standard input.
+
+- `herdr-boss fleet account --from-file FILE`: Read `harness`, `identity`, `hmacKey`, and `scope`. Use at least 32 bytes for `hmacKey`. Use the same identity spelling and HMAC key on factories that share an account. `scope` is a list of factory IDs. The command stores only the HMAC digest and scope. It does not store the identity or HMAC key.
+- `herdr-boss fleet read-token rotate --out-file FILE`: Create a read credential. Save it as a JSON string in a new file inside the private Herdr Boss configuration folder. The file has mode 0600. The command prints no credential. The previous credential stays valid for 10 minutes.
+- `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel.
+
+The read credential permits only `GET /api/fleet/summary` and `GET /api/health`.
+It returns 403 for every other route or method.
+This restriction also applies on loopback.
+Use the `Authorization: Bearer` header.
+Do not put a credential in a URL.
+Credentials have no dashboard field because they are secrets.
+
+`GET /api/fleet/summary` returns contract 1.0.0 from the local factory.
+`GET /api/fleet` returns the head office's last good summaries and their ages.
+`GET /api/fleet/settings` reads the local settings and account digests.
+`PUT /api/fleet/settings` replaces `name`, `dashboardUrl`, `headOffice`, `shareItemTitles`, and `accounts`.
+Each account has `harness`, `accountKey`, and `scope`.
+These three dashboard routes use normal Owner access.
+A read-only preview refuses changes and makes no remote fleet requests.
+
+The summary uses the existing local quota collector.
+CodexBar uses the same JSON interface on Linux.
+An absent reader or partial reading gives `null` and `unknown`.
+An account without a provisioned identity has no quota row.
+Pi has no confirmed Linux quota reader in this slice.
+No factory share, policy push, or message routing is enabled.

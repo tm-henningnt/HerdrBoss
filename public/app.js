@@ -1,3 +1,4 @@
+import { fleetView, fleetMailbox, fleetSettingsFromForm } from './fleet.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
@@ -32,7 +33,32 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', settings: 'Settings' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', settings: 'Settings' };
+let fleetData = null, fleetSettings = null, fleetLoading = false, fleetMessage = '';
+async function refreshFleet() {
+  if (fleetLoading) return;
+  fleetLoading = true;
+  try {
+    const responses = await Promise.all(['/api/fleet', '/api/fleet/settings'].map((url) => fetch(url)));
+    if (responses.some((response) => !response.ok)) throw new Error('Fleet data could not be read.');
+    [fleetData, fleetSettings] = await Promise.all(responses.map((response) => response.json()));
+  } catch { fleetData = { factories: [], registryError: 'Fleet data could not be read.' }; }
+  finally { fleetLoading = false; lastRender = ''; autoRender(); }
+}
+document.addEventListener('submit', async (event) => {
+  const form = event.target.closest?.('[data-fleet-settings-form]');
+  if (!form || !fleetSettings) return;
+  event.preventDefault();
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  const body = fleetSettingsFromForm(form, fleetSettings);
+  try {
+    const response = await fetch('/api/fleet/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error('Check the name, base URL, and account scopes.');
+    fleetSettings = await response.json(); fleetMessage = 'Saved.';
+    form.querySelector('[data-fleet-feedback]').textContent = fleetMessage;
+  } catch (error) { form.querySelector('[data-fleet-feedback]').textContent = error.message; }
+  finally { button.disabled = false; }
+});
 const settingsLink = document.createElement('a');
 settingsLink.href = '/settings';
 settingsLink.dataset.nav = 'settings';
@@ -3195,6 +3221,12 @@ document.addEventListener('keydown', (e) => {
 // A project page link opens one Mailbox conversation directly with ?thread= and ?conversation=.
 function openMailboxDeepLink() {
   const params = new URLSearchParams(location.search);
+  const itemId = params.get('item');
+  if (itemId && mailbox.openedDeepLink !== `item:${itemId}`) {
+    const item = [...mailbox.needsYou, ...mailbox.inbox, ...mailbox.done].find((row) => row.id === itemId);
+    if (item) { mailbox.openedDeepLink = `item:${itemId}`; openMailboxConversation(item.thread, item.conversationId || item.id, item.id); }
+    return;
+  }
   const thread = params.get('thread');
   const conversation = params.get('conversation');
   if (!thread || !conversation) return;
@@ -3254,7 +3286,7 @@ function mailboxView(s) {
     + `<aside class="mail-folder-pane" data-key="mail-rail"><button type="button" class="mail-compose-button" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New message</span></button><nav class="mail-folder-nav" aria-label="Mailbox folders">${mailFolderLinks(folder, counts, 'mail-folder-link')}</nav>${messageLimitsLine(s)}</aside>`
     + `<section class="mail-list-pane${selecting ? ' selecting' : ''}" data-key="mail-list" aria-label="${esc(label)}"><div class="app-bar mail-list-bar">${appMenuButton(s, 'mailbox')}<h1>${esc(label)}${mailbox.loaded ? `<span class="app-bar-count num">${items.length}</span>` : ''}</h1>${appBarIcons(s, 'mailbox')}</div>`
     + `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>${bulk}`
-    + `<div class="mail-list-scroll" data-key="mail-list-scroll">${list}</div>`
+    + `<div class="mail-list-scroll" data-key="mail-list-scroll">${list}${fleetData?.factories?.some((factory) => factory.remote) ? `<details class="fleet-mailbox-details"><summary>Fleet Mailbox</summary>${fleetMailbox(fleetData)}</details>` : ''}</div>`
     + (selecting ? mailSelectionBarHtml({ selected, total: mailbox.needsYou.length, busy: mailbox.busy, esc, icon: appIcon }) : '')
     + (selecting ? '' : `<button type="button" class="mail-fab" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New</span></button>`) + '</section>'
     + `<section class="mail-conversation-pane" data-key="mail-thread-pane"${open ? '' : ' hidden'}>${conversationPanel}</section></div>`
@@ -6127,6 +6159,7 @@ function project(s, slug) {
 // Short notes for each page. They say what the page shows and how to use it; the CLI and setup are in docs/.
 
 const HELP = {
+  fleet: ['Fleet', '<p>The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. Spend shows USD by day, role, and harness.</p><p>Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.</p>'],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p>
@@ -6267,6 +6300,7 @@ const HELP = {
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. After a save, each field shows the stored value. When the stored value differs from the typed value, the status line names both values. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
     <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
+    <h3>Factory hosts</h3><p>The host registry is not on this page, because it holds an address and a key file path. Manage it with <code>herdr-boss factory host add|list|remove</code>. Run a command on a host with <code>herdr-boss factory ssh</code> or <code>herdr-boss factory docker</code>. The output masks the address and the key path.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>
     <h3>Harnesses</h3><p>Clear <b>Available</b> to stop all workers from using a harness. The preferred model is the model that worker start and handover use when no model is given. An empty choice uses the harness default.</p>
     <p>Each model row has a box and a provider. Clear the box to stop that harness from using the model. Choose a provider to count the model against that provider quota. Choose <b>Unmetered</b> when no quota applies.</p>
@@ -7294,7 +7328,7 @@ function restoreScroll(route, scroll) {
 }
 
 // These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews'];
+const KEYED_ROUTES = ['fleet', 'projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews'];
 
 function render(force = false) {
   if (!state) return;
@@ -7325,8 +7359,11 @@ function render(force = false) {
     history.replaceState(null, '', location.pathname + location.hash);
     requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
   }
-  const route = m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
-  const page = route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const route = m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
+  const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
+  const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
+  const page = route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -8759,6 +8796,7 @@ function refreshForcesRender(pathname) {
 }
 
 async function refreshExtras() {
+  if (['/fleet', '/mailbox'].includes(location.pathname)) void refreshFleet();
   const results = await Promise.allSettled(['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/spend?days=14', '/api/analytics', '/api/machine-hours'].map((url) => fetch(url).then((r) => r.json())));
   if (results[0].status === 'fulfilled') models = results[0].value;
   if (results[1].status === 'fulfilled') usage = results[1].value;

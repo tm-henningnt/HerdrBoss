@@ -1,0 +1,28 @@
+/* Keep large comparisons inside their own scroll region on a phone. */
+.fleet-table-scroll { max-width: 100%; overflow-x: auto; }
+.fleet-table { width: 100%; min-width: 680px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.fleet-table th, .fleet-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.fleet-table th { font-weight: 600; }
+.fleet-secondary { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.fleet-key { display: block; max-width: 240px; overflow-wrap: anywhere; font-size: 12px; font-weight: 400; color: var(--muted); }
+.fleet-item-list { list-style: none; margin: 0; padding: 0; }
+.fleet-item-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.fleet-item-list a { overflow-wrap: anywhere; }
+.fleet-settings summary { cursor: pointer; font-weight: 600; }
+.fleet-settings form { display: grid; gap: 14px; max-width: 680px; margin-top: 16px; }
+.fleet-settings label { display: grid; gap: 6px; min-width: 0; }
+.fleet-settings input { width: 100%; min-width: 0; font: inherit; padding: 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.fleet-settings .fleet-checkbox { display: flex; align-items: center; gap: 8px; }
+.fleet-settings input[type="checkbox"] { width: auto; }
+.fleet-settings fieldset { display: grid; gap: 12px; border: 1px solid var(--line); min-width: 0; }
+.fleet-settings button { justify-self: start; }
+.fleet-mailbox-details { padding: 12px; border-top: 1px solid var(--line); }
+.fleet-mailbox-details summary { cursor: pointer; font-weight: 600; }
+.fleet-mailbox-details .fleet-mail { margin-top: 12px; }
+.fleet-table-scroll:focus-visible, .fleet-settings summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .fleet-table th, .fleet-table td { padding: 8px; }
+  .fleet-item-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .fleet-item-list .tag { justify-self: start; }
+  .fleet-settings form { max-width: 100%; }
+}
