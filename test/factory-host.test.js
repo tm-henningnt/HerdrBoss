@@ -223,8 +223,8 @@ test('docker runs docker on the host through the ssh transport with quoted argum
     assert.equal(code, 0);
     const [call] = f.calls;
     assert.equal(call.command, 'ssh');
-    assert.deepEqual(call.args.slice(0, 9), ['-i', f.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', `builder@${ADDRESS}`]);
-    assert.deepEqual(call.args.slice(9), ['docker', 'ps', '--format', "'{{.Names}} x'", `'it'\\''s'`]);
+    assert.deepEqual(call.args.slice(0, 10), ['-i', f.keyFile, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new', '--', `builder@${ADDRESS}`]);
+    assert.deepEqual(call.args.slice(10), ['docker', 'ps', '--format', "'{{.Names}} x'", `'it'\\''s'`]);
     await assert.rejects(factoryCommand(['docker', 'nohost', '--', 'ps'], f.io(fakeSpawn(f.calls))), /not in the registry/);
   } finally { f.cleanup(); }
 });
