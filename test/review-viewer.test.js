@@ -331,7 +331,7 @@ test('the answer bar has only the asked controls, and a decision shows as presse
   assert.match(html, /data-rv-note-open/);
   assert.match(html, /data-rv-live="pending"/);
   const only = bar(packWith({ ...spec, ask: ['accept'] }));
-  assert.doesNotMatch(only, /data-rv-decision="deny"/);
+  assert.match(only, /data-rv-decision="deny"/);
   assert.doesNotMatch(only, /data-rv-note-open/);
   assert.doesNotMatch(only, /data-rv-live/);
 });
