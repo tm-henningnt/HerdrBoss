@@ -123,7 +123,7 @@ export function retryOpenCodeStart(name, paneId, operation, { herdr, output = co
     try { return operation(attempt); }
     catch (error) {
       // A launch block marks the model. Another launch of the same model cannot work.
-      if (error?.code === 'model_launch_blocked') throw error;
+      if (error?.code === 'model_launch_blocked' || error?.code === 'opencode_pane_startup_failed') throw error;
       const failure = (detail = '') => new Error(`OpenCode worker ${name} failed after ${attempt} launch attempts: ${error.message}${detail}`, { cause: error });
       if (attempt === 3) throw failure();
       let agent;
