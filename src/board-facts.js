@@ -187,7 +187,9 @@ export function applyBoardFacts(tasks, workers = [], facts = {}, { now = Date.no
     let state = task.state;
     let source = null;
     const workerName = /worker ([^\s)]+)/.exec(task.stateSource || '')?.[1] ?? null;
-    if (commit && !reworking) {
+    // A worker-name or worker-branch match is still a worker fact for a blocked card.
+    const workerCommit = commit && commit.via !== id;
+    if (commit && !reworking && !(publishedState === 'blocked' && workerCommit)) {
       state = 'done';
       source = { kind: 'commit', ref: commit.short, at: commit.at };
     } else if (workerName && !(publishedState === 'blocked' && issue?.state === 'closed')) {

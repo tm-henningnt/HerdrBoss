@@ -14,7 +14,7 @@ The sources are listed from the strongest to the weakest. The first source that 
 
 A live worker that started after the newest commit of the task overrides the commit. The task is in rework and the computed state is `doing`.
 
-A worker fact does not change a published `blocked` card. The card keeps `blocked` in `computedState` and keeps the worker as its source. A commit fact or a closed issue keeps its existing rule and can still give `done`.
+A worker fact does not change a published `blocked` card. The card keeps `blocked` in `computedState` and keeps the worker as its source. A commit that names the task ID, or a closed issue, can still set a blocked card to `done`.
 
 ## What counts as a commit fact
 

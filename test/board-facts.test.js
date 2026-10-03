@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { boardColumns } from '../public/board.js';
+import { boardDigestAlerts, DIVERGE_AFTER_MS, DIVERGE_BOSS_AFTER_MS } from '../src/board-digest.js';
 
 // Every repository, file, and fake gh command is in a temporary directory. No real project is read.
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-board-facts-'));
@@ -16,7 +18,7 @@ for (const [name, dir] of [['HOME', 'home'], ['HERDR_BOSS_DIR', 'data'], ['HERDR
 }
 await import('./helpers/test-env.js');
 const { explicitPattern, validBranch, idPattern, mergedBranchName, readCommits, readIssues, issueNumber, commitIndex, applyBoardFacts, boardCounts, BoardFactsCache, STUCK_MS } = await import('../src/board-facts.js');
-const { applyTaskState, overlayTasks } = await import('../src/task-state.js');
+const { applyTaskState, overlayTasks, workerFactFromRun } = await import('../src/task-state.js');
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
@@ -179,6 +181,41 @@ test('a merged worker keeps a published blocked card blocked, while commit and i
   );
   assert.equal(closedIssue.computedState, 'done');
   assert.equal(closedIssue.source.kind, 'issue');
+});
+
+test('a merged worker branch does not complete or diverge a blocked card', () => {
+  const now = Date.now();
+  const record = {
+    name: 'g4d', taskId: 'G4', branch: 'g4d', startedAt: iso(now - 30 * MIN),
+    collectedAt: iso(now - MIN),
+  };
+  const workers = [workerFactFromRun(record, { isLive: () => false, isMerged: () => true, now })];
+  const merge = {
+    id: 'worker-merge-id', short: 'def5678', at: iso(now - MIN), parents: 2,
+    subject: "Merge branch 'g4d' into main", body: '',
+  };
+  const project = {
+    slug: 'alpha', workspace: 'w-alpha', project: 'Alpha', updated: iso(now),
+    tasks: [task('G4', { status: 'blocked', waitingOn: 'external' })],
+  };
+  const [result] = applyTaskState([project], { alpha: workers }, {
+    boardFacts: { alpha: { commits: [merge], issues: null } }, now,
+  });
+  const [card] = result.tasks;
+
+  assert.equal(card.state, 'blocked');
+  assert.equal(card.computedState, 'blocked');
+  assert.match(card.stateSource, /worker g4d/);
+  assert.deepEqual(card.source, { kind: 'worker', ref: 'g4d', at: record.startedAt });
+  assert.equal(card.diverges, false);
+  assert.equal(result.boardDiverged, 0);
+  assert.deepEqual(result.boardDivergedIds, []);
+  const counts = boardColumns(result.tasks, { showAllDone: true }).counts;
+  assert.equal(counts.blocked, 1);
+  assert.equal(counts.done, 0);
+
+  const tracker = { alpha: { since: now - DIVERGE_AFTER_MS - DIVERGE_BOSS_AFTER_MS } };
+  assert.deepEqual(boardDigestAlerts({ projects: [result], tracker, now }), []);
 });
 
 test('a doing card with no live worker and no commit for three hours is stuck', () => {

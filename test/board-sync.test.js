@@ -43,6 +43,16 @@ test('syncStatuses changes nothing without a fact and keeps a stuck card as doin
   assert.deepEqual(data, before);
 });
 
+test('syncStatuses leaves a blocked card unchanged when only its worker branch was merged', () => {
+  const data = { tasks: [{ id: 'G4', title: 'Samples', status: 'blocked', waitingOn: 'external' }] };
+  const before = structuredClone(data);
+  const mergedWorker = worker('g4d', 'G4', 'merged', { branch: 'g4d', collectedAt: iso(NOW - MIN) });
+  const merge = { ...commit("Merge branch 'g4d' into main"), parents: 2 };
+
+  assert.deepEqual(syncStatuses(data, { workers: [mergedWorker], facts: { commits: [merge], issues: null }, now: NOW }), []);
+  assert.deepEqual(data, before);
+});
+
 test('syncStatuses reads a closed issue and leaves a status without tasks alone', () => {
   const data = { tasks: [{ id: 'X', title: 'A', status: 'doing', url: 'https://github.com/o/r/issues/9' }] };
   const issues = new Map([[9, { state: 'closed', closedAt: iso(NOW - MIN) }]]);
@@ -82,6 +92,45 @@ test('publish --sync installs the computed card states and prints how many cards
   assert.match(result.stderr, /^sync: T1 doing -> done \([0-9a-f]{7,}: T1: add the parser\)$/m);
   assert.match(result.stdout, /^published .*\/projects\/demo$/m);
   assert.deepEqual(stored.tasks.map((task) => task.status), ['done', 'todo']);
+});
+
+test('publish --sync keeps a blocked card when only its collected worker branch was merged', (t) => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-blocked-home-')));
+  const root = temporaryRepo('herdr-publish-blocked-repo-');
+  t.after(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  git(root, 'checkout', '-b', 'g4d');
+  fs.writeFileSync(path.join(root, 'samples.txt'), 'sample\n');
+  git(root, 'add', 'samples.txt');
+  git(root, 'commit', '-m', 'Record samples');
+  git(root, 'checkout', 'main');
+  git(root, 'merge', '--no-ff', '-m', "Merge branch 'g4d' into main", 'g4d');
+
+  const runs = path.join(root, '.orchestration', 'runs');
+  fs.mkdirSync(runs, { recursive: true });
+  fs.writeFileSync(path.join(runs, 'g4d.json'), JSON.stringify({
+    name: 'g4d', taskId: 'G4', branch: 'g4d', base: 'main', baseCommit,
+    startedAt: iso(Date.now() - MIN), collectedAt: iso(Date.now()),
+  }));
+  const status = path.join(home, 'status.json');
+  fs.writeFileSync(status, JSON.stringify({ project: 'Demo', tasks: [{ id: 'G4', title: 'Samples', status: 'blocked', waitingOn: 'external' }] }));
+  const dataDir = path.join(home, 'boss');
+  const result = spawnSync(process.execPath, [cli, 'publish', 'demo', status, '--sync'], {
+    cwd: root, encoding: 'utf8',
+    env: {
+      ...process.env, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: home,
+      HERDR_BOSS_DIR: dataDir, HERDR_SOCKET_PATH: path.join(home, 'none.sock'), TMPDIR: home,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^synced 0 cards from git and workers$/m);
+  assert.doesNotMatch(result.stderr, /^sync:/m);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', 'demo.json'), 'utf8'));
+  assert.equal(stored.tasks[0].status, 'blocked');
 });
 
 test('publish --sync truncates the matching commit subject to 60 characters', (t) => {
