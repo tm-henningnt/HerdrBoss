@@ -190,6 +190,7 @@ Start `--task` or the task file with a plain title: what the worker does and for
 - Answer it with `herdr agent prompt <name> "..."`. Put missing files into the worker worktree; do not point the worker outside it.
 - Approve extra scope with `herdr-boss worker scope add <name> <path>... --reason TEXT`. `worker allow` remains an alias. A prompt or message alone does not change the approved paths.
 - The verified `orch` or `boss` pane must approve scope. The run records the caller, reason, time, and paths.
+- When a worker changed a file outside its scope and the orchestrator approved that file by message, run `herdr-boss worker collect <name> --accept-scope FILE[,FILE] --reason TEXT`. Use it only for files that you reviewed. The command passes only the listed outside files, refuses every other outside file, and records the files and the reason as a Scope exception in the run record and the printed report.
 - When the question is a product decision, decide it yourself. Ask the Boss only when it conflicts with a recorded Owner decision.
 - Add the answer to the next brief of the same kind, so the next worker does not need to ask.
 - Require the worker to save both report files before sending its completion message.

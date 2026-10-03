@@ -21,7 +21,7 @@ import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '.
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
 import { activeLaunchRecords, detectLaunchBlock, isPaneStartupBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
-import { briefCopy, firstParagraph, titleFromTask } from '../worker-view.js';
+import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1977,7 +1977,22 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     // allowed paths. The scope check above still runs on each real file.
     const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], allowedPaths).length === 0);
     const omitted = changed.filter((item) => !reported.includes(item) && !folders.some((folder) => item.startsWith(folder)));
-    if (scopeErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${scopeErrors.join(', ')}.`);
+    // --accept-scope passes only the listed files that lie outside the allowed scope. Any other outside file still refuses.
+    let scopeException = null;
+    let unlistedErrors = scopeErrors;
+    if (options.acceptScope != null) {
+      const reason = String(options.acceptScopeReason ?? '').trim();
+      if (!reason) throw new Error('--accept-scope needs --reason TEXT with a reason that is not blank.');
+      const listed = [...new Set(options.acceptScope.map((item) => String(item).trim()).filter(Boolean))];
+      if (!listed.length) throw new Error('--accept-scope needs at least one repository-relative path.');
+      const notOutside = listed.filter((item) => !scopeErrors.includes(item));
+      if (notOutside.length) throw new Error(`--accept-scope lists paths that are not changed outside the allowed scope of worker ${name}: ${notOutside.join(', ')}.`);
+      unlistedErrors = scopeErrors.filter((item) => !listed.includes(item));
+      scopeException = { files: listed, reason: maskText(reason) };
+    } else if (options.acceptScopeReason != null) {
+      throw new Error('--reason needs --accept-scope FILE[,FILE].');
+    }
+    if (unlistedErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${unlistedErrors.join(', ')}.`);
     const recordedPaths = omitted.length ? changed : reported;
     try {
       const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
@@ -2002,7 +2017,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       reportedPaths: reported,
       actualPaths: changed,
       recordedPaths,
-      outOfScope: scopeErrors,
+      outOfScope: unlistedErrors,
+      ...(scopeException ? { scopeException } : {}),
       scopeExtensions: run.scopeExtensions ?? [],
       artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
       report: reportMd,
@@ -2050,6 +2066,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       const reportSummary = firstParagraph(reportMd);
       if (reportSummary) run.reportSummary = reportSummary;
       run.collectedAt = run.collectedAt || entry.endedAt;
+      if (scopeException) run.scopeException = scopeException;
       writeJsonAtomic(file, run);
       if (run.leases?.length) {
         const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
@@ -2086,6 +2103,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         output(`Warning: worker pane close was not scheduled: ${error.message}`);
       }
     }
+    if (scopeException) output(`Scope exception\n- files: ${scopeException.files.join(', ')}\n- reason: ${scopeException.reason}`);
     output(JSON.stringify(summary, null, 2));
     for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (usageWarning) output(usageWarning);
