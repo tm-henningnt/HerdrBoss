@@ -8,10 +8,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // Delete each entry as its page is added by DOC1f, DOC1g, DOC1h, or ONB1.
 const PENDING_GUIDE_PAGES = new Set([
-  'docs/guide/see.md',
-  'docs/guide/answer.md',
-  'docs/guide/review.md',
-  'docs/guide/cost.md',
   'docs/guide/phone.md',
   'docs/guide/project.md',
   'docs/guide/factory.md',
