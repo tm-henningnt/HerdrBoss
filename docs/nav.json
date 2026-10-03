@@ -2,7 +2,7 @@
   "sections": [
     { "title": "Start", "pages": ["", "start-here", "concepts", "explainer", "glossary"] },
     { "title": "User guide", "pages": ["user-guide", "guide/see", "guide/answer", "guide/review", "guide/cost", "guide/phone", "guide/project", "guide/factory", "guide/trouble"] },
-    { "title": "Reference", "pages": ["reference/*", "cli", "harness-setup", "windows-host", "factory-host-runbook"] },
+    { "title": "Reference", "pages": ["reference", "reference/service", "reference/api", "reference/dashboard", "reference/settings", "reference/handover", "reference/browsers", "reference/factories", "reference/locks", "reference/docs-section", "quota-plan", "adr", "cli", "harness-setup", "windows-host", "factory-host-runbook"] },
     { "title": "Page help", "pages": ["help/*"] }
   ]
 }
