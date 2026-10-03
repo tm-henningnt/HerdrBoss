@@ -31,7 +31,7 @@ function fixture(remote = false) {
   db.exec('CREATE TABLE sample(value TEXT); INSERT INTO sample VALUES (\'kept\')');
   db.close();
   const hostId = remote ? 'host-a' : 'local';
-  if (remote) writePrivate(path.join(env.HERDR_FACTORIES_DIR, 'registry.json'), { version: 1, hosts: { 'host-a': { dockerContext: 'example-context', address: '192.0.2.1', user: 'example', keyFile: '/example.invalid/key' } } });
+  if (remote) writePrivate(path.join(env.HERDR_FACTORIES_DIR, 'registry.json'), { version: 1, hosts: { 'host-a': { dockerContext: 'example-context', address: '192.0.2.1', user: 'example', keyFile: '/example.invalid/key', codexSandbox: 'user-namespaces' } } });
   writeFleet(env, { schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId, runtime: remote ? 'docker-engine-wsl2' : 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: remote ? 'ssh' : 'local', ...(remote ? { connectionRef: hostId } : {}) }], factories: [{ factoryId: 'demo', name: 'demo', hostId, profile: 'personal', dashboardUrl: 'http://demo.localhost:4478', version: health.version, kitRevision: health.kitRevision, kind: 'container', containerName: 'hf-demo', hostname: 'demo.localhost', ports: { dashboard: 4478, ssh: 2222 }, image: { builtAt: image.Config.Labels['org.opencontainers.image.created'], pinsHash: 'a'.repeat(64) } }] });
   writePrivate(path.join(env.HERDR_FACTORIES_DIR, 'demo', 'factory.json'), { schema: 1, name: 'demo', hostId, profile: 'personal', imageTag: 'example-factory:test', ports: { dashboard: 4478, ssh: 2222 }, stage: 'ready' });
   let container = makeContainer();
