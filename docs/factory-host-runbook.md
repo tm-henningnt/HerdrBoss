@@ -48,3 +48,30 @@ Check memory and swap before a Mac factory start. Start one container factory at
 After the service check, run `claude --version` and `opencode --version` in the factory container. A successful image build alone does not prove that an npm postinstall script ran. Keep harness logins for the Owner terminal.
 
 Check `/api/health` through container loopback. It must return 200. Check the factory hostname separately. Without a login, that name must return 401. A response of 403 means the host rule rejected the name. Do not remove authentication to pass this check.
+
+## Backup and repair
+
+Run `factory backup NAME --include-home` before planned removal.
+Use a private destination outside repositories and cloud folders.
+The backup stops a running factory.
+It removes its labeled archive helper by its exact name before it restarts the source.
+If helper cleanup fails, the source stays stopped.
+After successful cleanup, the previous running or paused state returns.
+A stopped factory stays stopped.
+Keep the matching image for `factory restore FILE`.
+Type the factory name at an Owner terminal for restore or destroy.
+Destroy needs the recorded backup from the last 24 hours that includes home.
+Back up with `--include-home` if the last backup omits home.
+It removes only the named container and four volumes with matching factory and worker labels.
+It keeps builders and images.
+
+A failed restore checks the target container and volumes after a lost create reply.
+It removes only resources with matching factory and worker labels.
+It removes the helper before volume rollback.
+A helper cleanup failure keeps the volumes and pending record for repair.
+
+For a dead service, use `factory logs NAME`, `factory shell NAME`, or `factory stop NAME --now`.
+Use `factory freeze NAME` to pause all container processes.
+Use `factory freeze NAME --off` to resume them.
+These commands need Docker, but they need no service response.
+See `cli.md`, section Backup and recovery, for the archive and retry rules.

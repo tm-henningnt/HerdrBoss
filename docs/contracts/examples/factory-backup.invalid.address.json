@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "format": "herdr-boss.factory-backup/1",
+  "name": "demo",
+  "factoryId": "factory-00000000-0000-4000-8000-000000000000",
+  "createdAt": "2026-10-03T00:00:00Z",
+  "profile": "personal",
+  "version": "0.1.0",
+  "kitRevision": "abcdef012345",
+  "imageTag": "example-factory:test",
+  "image": {
+    "builtAt": "2026-10-03T00:00:00Z",
+    "pinsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "ports": {
+    "dashboard": 4478,
+    "ssh": 2222
+  },
+  "volumes": [
+    "data",
+    "work",
+    "home"
+  ],
+  "resourceOwner": "ft14",
+  "address": "192.0.2.1"
+}

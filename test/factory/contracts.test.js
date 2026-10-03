@@ -9,7 +9,7 @@ const contractDoc = new URL('../../docs/contracts/factories.md', import.meta.url
 const contracts = [
   'fleet-summary', 'head-office-role', 'succession-list', 'fleet-join',
   'fleet-enrolment', 'viewer-routes', 'project-transfer', 'factory-registry',
-  'fleet-guidance', 'factory-health',
+  'fleet-guidance', 'factory-health', 'factory-backup',
 ];
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 

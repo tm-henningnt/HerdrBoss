@@ -16,6 +16,12 @@ export const FACTORY_HOST_USAGE = [
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
   '       factory connect [--check|--undo] NAME',
+  '       factory backup NAME [--file FILE] [--include-home]',
+  '       factory restore FILE [--host HOST]',
+  '       factory destroy NAME',
+  '       factory shell NAME [-- COMMAND...]',
+  '       factory logs NAME [--tail COUNT]',
+  '       factory freeze NAME [--off]',
 ].join('\n');
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
@@ -294,6 +300,10 @@ export async function factoryCommand(args, io = {}) {
   const { isInsideContainer } = await import('./factory-core.js');
   if ((context.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
   const [sub, ...rest] = args;
+  if (['backup', 'restore', 'destroy', 'shell', 'logs', 'freeze'].includes(sub)) {
+    const { factoryRecoveryCommand } = await import('./factory-recovery.js');
+    return factoryRecoveryCommand(args, context);
+  }
   if (sub === 'connect') {
     const { factoryConnectCommand } = await import('./factory-connect.js');
     return factoryConnectCommand(rest, context);

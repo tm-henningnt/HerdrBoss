@@ -193,7 +193,10 @@ async function lifecycle(action, args, io) {
       factory.version = health.version;
       factory.kitRevision = health.kitRevision;
     });
-  } else await dockerCall(docker, ['stop', '--time', flags['--now'] ? '0' : '30', record.containerName]);
+  } else {
+    if (container.State?.Paused) await dockerCall(docker, ['unpause', record.containerName]);
+    await dockerCall(docker, ['stop', '--time', flags['--now'] ? '0' : '30', record.containerName]);
+  }
   io.stdout.write(`${action === 'start' ? 'Started' : 'Stopped'} factory ${name}.\n`);
   return 0;
 }
@@ -229,6 +232,8 @@ async function newFactory(args, io) {
   const file = factoryFile(io.env, name);
   const previous = readPrivate(file, null);
   const record = previous || { schema: 1, name, hostId: host.hostId, profile: 'personal', ports: allocatePorts(fleet, host.hostId, flags), imageTag: flags['--image'] || defaultFactoryImage(), stage: 'creating' };
+  const spikeLabel = record.resourceOwner ? `herdr-factory-spike=${record.resourceOwner}` : SPIKE_LABEL;
+  if (record.resourceOwner) assertName(record.resourceOwner);
   if (record.name !== name || record.hostId !== host.hostId || (flags['--image'] && flags['--image'] !== record.imageTag)) throw new Error('The pending factory has different creation settings.');
   if (typeof record.imageTag !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/.test(record.imageTag)) throw new Error('The factory image tag is invalid.');
   const docker = transportFor(host, io);
@@ -247,10 +252,11 @@ async function newFactory(args, io) {
     const volumeName = `hf-${name}-${kind}`;
     const volume = await inspect(docker, 'volume', volumeName);
     if (volume) { assertOwned(volume, name); if (!previous) throw new Error('A volume with this factory name already exists.'); }
-    else await dockerCall(docker, ['volume', 'create', '--label', `${FACTORY_LABEL}=${name}`, '--label', SPIKE_LABEL, volumeName]);
+    else await dockerCall(docker, ['volume', 'create', '--label', `${FACTORY_LABEL}=${name}`, '--label', spikeLabel, volumeName]);
   }
+  if (io.prepareFactoryVolumes) await io.prepareFactoryVolumes();
   if (!existing) {
-    const create = ['container', 'create', '--name', `hf-${name}`, '--hostname', `${name}.localhost`, '--label', `${FACTORY_LABEL}=${name}`, '--label', SPIKE_LABEL,
+    const create = ['container', 'create', '--name', `hf-${name}`, '--hostname', `${name}.localhost`, '--label', `${FACTORY_LABEL}=${name}`, '--label', spikeLabel,
       '--restart', 'unless-stopped', '--cpus', '4', '--memory', host.transport === 'local' ? '4g' : '8g', '--memory-swap', host.transport === 'local' ? '4g' : '8g', '--pids-limit', '512', '--shm-size', '1g',
       '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '-p', `127.0.0.1:${record.ports.dashboard}:4477`, '-p', `127.0.0.1:${record.ports.ssh}:22`,
       '--security-opt', `seccomp=${path.join(FACTORY_ROOT, 'seccomp-codex.json')}`, '--security-opt', 'systempaths=unconfined'];

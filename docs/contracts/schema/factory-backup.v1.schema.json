@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example/factories/1.0.0/schema/factory-backup.v1.schema.json",
+  "title": "Factory backup manifest",
+  "version": "1.0.0",
+  "description": "Version 1.0.0. See docs/contracts/factories.md for archive framing and refusal rules.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "contractVersion": {
+      "$ref": "common.v1.schema.json#/$defs/contractVersion"
+    },
+    "format": {
+      "const": "herdr-boss.factory-backup/1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\\s\\S])"
+    },
+    "factoryId": {
+      "$ref": "common.v1.schema.json#/$defs/slug"
+    },
+    "createdAt": {
+      "$ref": "common.v1.schema.json#/$defs/timestamp"
+    },
+    "profile": {
+      "const": "personal"
+    },
+    "version": {
+      "$ref": "common.v1.schema.json#/$defs/version"
+    },
+    "kitRevision": {
+      "$ref": "common.v1.schema.json#/$defs/kitRevision"
+    },
+    "imageTag": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$(?![\\s\\S])"
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "builtAt": {
+          "$ref": "common.v1.schema.json#/$defs/timestamp"
+        },
+        "pinsHash": {
+          "$ref": "common.v1.schema.json#/$defs/digest"
+        }
+      },
+      "required": [
+        "builtAt",
+        "pinsHash"
+      ],
+      "additionalProperties": false
+    },
+    "ports": {
+      "type": "object",
+      "properties": {
+        "dashboard": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "ssh": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "dashboard",
+        "ssh"
+      ],
+      "additionalProperties": false
+    },
+    "volumes": {
+      "oneOf": [
+        {
+          "const": [
+            "data",
+            "work"
+          ]
+        },
+        {
+          "const": [
+            "data",
+            "work",
+            "home"
+          ]
+        }
+      ]
+    },
+    "resourceOwner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 31,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\\s\\S])"
+    }
+  },
+  "required": [
+    "schema",
+    "contractVersion",
+    "format",
+    "name",
+    "factoryId",
+    "createdAt",
+    "profile",
+    "version",
+    "kitRevision",
+    "imageTag",
+    "image",
+    "ports",
+    "volumes",
+    "resourceOwner"
+  ],
+  "additionalProperties": false
+}

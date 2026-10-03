@@ -429,11 +429,87 @@ Keep the last good body after a poll failure.
 `factory-health.invalid.negative-tick-age.json`, and
 `factory-health.invalid.missing-reading.json` in [examples/](examples/).
 
+## Factory backup archive
+
+**Purpose:** Restore the data and work of one container factory.
+**Producer:** The host command `factory backup NAME`.
+**Consumer:** The host commands `factory restore FILE` and `factory destroy NAME`.
+**Version:** 1.0.0; major schema number 1.
+**Schema:** [factory-backup.v1.schema.json](schema/factory-backup.v1.schema.json).
+**Source:** Ticket [14](../tickets/factories/14-backup-restore.md).
+
+The `.hfb` file is a gzip stream.
+Its first JSON line has `type: "manifest"` and a `value` object.
+The value follows the manifest schema.
+It holds the factory identity, UTC backup time, image metadata, ports, volumes, and resource owner label.
+It holds no host address, key path, Docker context, or connection reference.
+The private backup receipt holds the file path, UTC time, name, and SHA-256 checksum.
+Do not copy that receipt into a repository.
+
+Each next JSON line describes a directory, file, or symbolic link.
+Each entry has `type`, `path`, and `mode`.
+A file entry also has `size`.
+Exactly `size` raw bytes follow its newline.
+The next header starts directly after those bytes.
+A link entry also has `target`.
+A final line with `type: "end"` closes the archive.
+No byte can follow that line in the decoded stream.
+A header can hold at most 65536 bytes.
+A path or link target can hold at most 4096 characters.
+Modes are integers from 0 to 511.
+File sizes are nonnegative safe integers.
+
+Paths start with `data`, `work`, or the optional `home`.
+The manifest lists the included volumes in that order.
+A parent directory must appear before a child.
+Refuse an absolute entry path, a duplicate, a traversal component, a backslash, or a null byte.
+Refuse a child of a symbolic link.
+Keep file bytes, permissions, and symbolic links.
+Runtime sockets and devices are excluded.
+The helper gives restored entries to UID and GID 1000.
+The image startup script sets the SSH host key owner.
+
+**Add-only rules:** Add optional manifest metadata only within this major version.
+A framing change needs a new major format.
+**Error and refusal behavior:** Validate the complete archive before a restore creates resources.
+Require typed Owner confirmation for restore and destroy.
+Require an empty target name and new volumes for restore.
+Require a matching image and free registered ports.
+Stop a running source for backup.
+Use `VACUUM INTO` for each SQLite database in the data volume.
+Exclude its journal sidecars.
+Remove the archive helper by its exact name after each attempt.
+Check its factory and worker labels first.
+Perform this check also after a Docker timeout.
+Restart the source only after helper cleanup.
+Keep the source stopped if helper cleanup fails.
+Keep a stopped source stopped.
+The `code` volume comes from the matching image during restore.
+The private host connection store is excluded.
+Store every backup in a private folder outside repositories and cloud folders.
+Use mode 600 for the backup file and mode 700 for its folder.
+Destroy requires a matching checksum and a backup from the last 24 hours that includes home.
+Refuse a backup without home and name `--include-home` in the error.
+After a lost restore create reply, inspect the fixed target container and four volume names.
+Remove only resources with matching factory and worker labels.
+Remove the archive helper before volume rollback.
+Keep a resource with different labels.
+Keep the pending record when a label differs or cleanup cannot finish.
+Remove only the named factory's container and four volumes with matching factory and worker labels.
+Keep the image, builder, connection record, and backup.
+A destroy retry skips resources already removed.
+It checks all remaining labels before removal.
+
+**Example files:** `factory-backup.valid.home.json` and
+`factory-backup.invalid.address.json` in [examples/](examples/).
+These files show manifest metadata only.
+The command tests check the archive bytes and a SQLite restore.
+
 ## Shared value definitions
 
 **Purpose:** Keep the contract value rules consistent.
 **Producer:** The contract maintainers.
-**Consumer:** All ten exchange schemas.
+**Consumer:** All eleven exchange schemas.
 **Version:** 1.0.0.
 **Schema:** [common.v1.schema.json](schema/common.v1.schema.json).
 This file defines values and is not an exchanged document.

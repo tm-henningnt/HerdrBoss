@@ -1535,6 +1535,12 @@ herdr-boss factory new NAME [--host HOST] [--profile personal] [--image TAG] [--
 herdr-boss factory build NAME [--host HOST] [--image TAG]
 herdr-boss factory start NAME
 herdr-boss factory stop NAME [--now]
+herdr-boss factory backup NAME [--file FILE] [--include-home]
+herdr-boss factory restore FILE [--host HOST]
+herdr-boss factory destroy NAME
+herdr-boss factory shell NAME [-- COMMAND...]
+herdr-boss factory logs NAME [--tail COUNT]
+herdr-boss factory freeze NAME [--off]
 herdr-boss factory status NAME [--json]
 herdr-boss factory list [--json]
 herdr-boss factory configure NAME [--resume] [--step STEP]
@@ -1589,6 +1595,96 @@ A Docker context over SSH stores the address in the Docker context store. To lis
 An IPv6 token must have `::` or eight hex groups. Clock times remain visible.
 
 Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker Engine, key login, Tailscale, and the Windows boot task. The image spike uses an approved Docker context. List only its name with `docker context ls --format '{{.Name}}'`. Keep the real name outside reports and the repository.
+
+### Backup and recovery
+
+Run `factory backup NAME` before you remove a factory.
+The default destination is the private connection store's `backups` folder.
+Use `--file FILE` to select an absolute destination.
+Use a private folder with mode 700.
+Keep the folder outside every repository and cloud folder.
+The command refuses a repository, a known cloud folder, and a symlink into either one.
+It does not change an existing folder's permissions.
+The `.hfb` file has mode 600.
+The command refuses an existing file.
+It prints the factory name only.
+The private `backup.json` receipt records the destination and checksum.
+Keep that receipt out of a repository.
+
+The backup holds the data files and the `work` volume.
+Each SQLite database in the data volume uses `VACUUM INTO`.
+The helper uses a 2 GiB temporary file system for the database snapshots.
+A snapshot that exceeds this limit fails the backup.
+The backup excludes database journal sidecars and runtime sockets.
+Add `--include-home` to include harness logins and SSH host keys.
+Without that option, sign in again after a restore.
+The private host connection store and the `code` volume are excluded.
+Keep the matching factory image available for restore.
+A restore seeds `code` from that image.
+Apply later service updates again after the restore.
+
+The backup stops a running factory for a consistent snapshot.
+It removes the labeled archive helper by its exact name before it restarts that factory.
+It also checks for that helper after a Docker timeout.
+If helper cleanup fails, recovery stops and keeps the source stopped.
+It keeps a stopped factory stopped.
+It restores a paused factory to the paused state.
+The command needs Docker and the factory volumes.
+It does not need the Herdr Boss service.
+
+Run `factory restore FILE [--host HOST]` at an Owner terminal.
+Type the exact factory name when the command asks.
+The command uses the name and ports from the backup.
+It refuses an existing factory, an existing target volume, a registered port conflict, and a different image.
+It validates the whole archive before it creates resources.
+It restores the files, starts the factory, and checks the service.
+A failed restore checks the target container and four volume names after a lost create reply.
+It removes only resources with matching factory and worker labels.
+It removes its archive helper before it rolls back volumes.
+A different label keeps that resource unchanged.
+If a helper cannot be removed, no volume rollback runs.
+If a resource has different labels or the host cannot answer, the pending factory record stays available for repair.
+
+Run `factory destroy NAME` at an Owner terminal.
+Type the exact factory name when the command asks.
+The command needs the recorded backup from the last 24 hours.
+That backup must include home.
+If it does not, back up again with `--include-home`.
+It checks the archive identity and checksum again.
+It checks both the factory label and the worker label on all four volumes and the container.
+It stops and removes that container.
+It removes only those four volumes.
+It keeps the backup, image, builder, and host connection.
+It runs no prune command.
+If removal fails, run destroy again with typed confirmation.
+It checks the labels of all remaining resources before it removes one.
+A command argument cannot replace typed confirmation.
+
+### Repair a dead service
+
+Use these commands when the service cannot answer:
+
+```sh
+herdr-boss factory logs NAME --tail 200
+herdr-boss factory shell NAME
+herdr-boss factory shell NAME -- COMMAND ARGUMENT...
+herdr-boss factory freeze NAME
+herdr-boss factory freeze NAME --off
+herdr-boss factory stop NAME --now
+```
+
+`logs` reads the last 200 container log lines by default.
+Use `--tail` for 1 to 10000 lines.
+The output masks connection fields and recognized secret values.
+`shell` opens Bash as the factory user at an Owner terminal.
+Use `-- COMMAND...` for a command without an interactive terminal.
+`freeze` pauses every process in the container.
+A stopped factory is already frozen.
+Use `--off` to resume a paused container.
+These commands bypass the service version gate.
+They still check container ownership and safety.
+Docker must be reachable.
+Do not print a login file or token from a shell.
 
 ## Set the goal of an orchestrator
 

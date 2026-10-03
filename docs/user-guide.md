@@ -1116,7 +1116,47 @@ Use `factory start`, `factory stop`, `factory status`, and `factory list` to con
 
 The service health check uses container loopback. A request with the factory hostname still needs a login. Its response of 401 confirms that the host rule accepts that name.
 
-The private host connections stay outside the dashboard because they hold private connection fields. The host tool controls the container resources. This release has no dashboard controls for factory creation. See `docs/cli.md`, section Container factories.
+Back up a factory with `factory backup NAME`.
+The command stops a running factory.
+It removes its labeled archive helper before it restarts the source.
+If helper cleanup fails, the source stays stopped.
+It stores a SQLite snapshot, data files, and work files in a private `.hfb` file.
+Use `--include-home` to include logins and SSH host keys.
+Store the file outside repositories and cloud folders.
+Its mode is 600, and its folder mode is 700.
+The default folder is the private connection store's `backups` folder.
+Use `--file FILE` to choose an absolute destination.
+
+Restore it with `factory restore FILE [--host HOST]`.
+The matching image must be available.
+The factory name, ports, and volumes must be free.
+The command restores data and work before the service starts.
+The code volume comes from the image.
+Apply later service updates again.
+After a lost create reply, restore checks the target container and four volume names.
+It removes only resources with matching factory and worker labels.
+It removes its archive helper before volume rollback.
+A helper cleanup failure keeps the volumes and the pending record for repair.
+A different resource label keeps that resource unchanged.
+The pending record also stays available if a label differs or the host cannot answer.
+
+Use `factory destroy NAME` to remove the container and its four volumes.
+Keep a recorded backup from the last 24 hours that includes home.
+Back up with `--include-home` before destroy.
+Restore and destroy each require the exact factory name typed at an Owner terminal.
+The tool keeps the image, builder, host connection, and backup.
+It never prunes the daemon.
+
+For a dead service, use `factory logs NAME` and `factory shell NAME`.
+Use `factory freeze NAME` to pause all container processes.
+Use `factory freeze NAME --off` to resume them.
+Use `factory stop NAME --now` to stop the container at once.
+These commands go directly to Docker.
+They do not need the service or a current factory version.
+Docker must remain reachable.
+Keep tokens and login files out of terminal output.
+
+The private host connections stay outside the dashboard because they hold private connection fields. The host tool controls the container resources. This release has no dashboard controls for factory creation and recovery. Recovery paths stay private, and restore and destroy require an Owner terminal. See `docs/cli.md`, section Container factories.
 
 ## Orchestrator handover
 

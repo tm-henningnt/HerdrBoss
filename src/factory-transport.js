@@ -1,5 +1,6 @@
 // Both transports accept Docker arguments and return a captured result. No shell parses an argument.
 import { spawn as nodeSpawn } from 'node:child_process';
+import fs from 'node:fs';
 import { sshArguments, shellQuote } from './factory-host.js';
 
 export function hostUnreachable() {
@@ -22,14 +23,21 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
   delete childEnv.DOCKER_HOST;
   delete childEnv.DOCKER_CONTEXT;
   return {
-    async run(args, { timeout = context ? 15_000 : 30_000, input } = {}) {
+    async run(args, { timeout = context ? 15_000 : 30_000, input, inputFile, outputFile, interactive = false } = {}) {
       return new Promise((resolve, reject) => {
         let child;
+        let inputFd, outputFd;
+        const closeFiles = () => {
+          if (inputFd !== undefined) { fs.closeSync(inputFd); inputFd = undefined; }
+          if (outputFd !== undefined) { fs.closeSync(outputFd); outputFd = undefined; }
+        };
         try {
+          if (inputFile) inputFd = fs.openSync(inputFile, 'r');
+          if (outputFile) outputFd = fs.openSync(outputFile, 'wx', 0o600);
           child = spawn('docker', [...(selected ? ['--context', selected] : []), ...args], {
-            env: childEnv, shell: false, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+            env: childEnv, shell: false, stdio: interactive ? ['inherit', 'inherit', 'pipe'] : [inputFd ?? (input === undefined ? 'ignore' : 'pipe'), outputFd ?? 'pipe', 'pipe'],
           });
-        } catch { reject(new Error('Docker could not start.')); return; }
+        } catch { closeFiles(); reject(new Error('Docker could not start.')); return; }
         let stdout = '';
         let stderr = '';
         let timedOut = false;
@@ -39,13 +47,14 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
           child.kill('SIGTERM');
           killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
         }, timeout);
-        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        child.stdout?.on('data', (chunk) => { stdout += chunk; });
         child.stderr.on('data', (chunk) => { stderr += chunk; });
         if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
-        child.once('error', () => { clearTimeout(timer); clearTimeout(killTimer); reject(new Error('Docker could not start.')); });
+        child.once('error', () => { clearTimeout(timer); clearTimeout(killTimer); closeFiles(); reject(new Error('Docker could not start.')); });
         child.once('close', (code) => {
           clearTimeout(timer);
           clearTimeout(killTimer);
+          closeFiles();
           if (timedOut) reject(context ? hostUnreachable() : new Error('Docker did not finish before the time limit.'));
           else if (context && code !== 0 && /connection refused|connection timed out|no route to host|network is unreachable|could not resolve|dial tcp|exit status 255/i.test(stderr)) reject(hostUnreachable());
           else resolve({ code: code ?? 1, stdout, stderr });
