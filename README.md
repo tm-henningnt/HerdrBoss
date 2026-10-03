@@ -1,40 +1,79 @@
 # Herdr Boss
 
-Herdr Boss supervises the orchestrator agents that run in [Herdr](https://herdr.dev). It watches subscription quotas and machine resources, tells orchestrators when to change how they work, and serves one dashboard for all projects. It also holds the shared orchestration kit: the worker CLI, the orchestrator skill, and the brief templates.
+Herdr Boss helps you build products with coding agents. It runs one agent for each project and watches all of them. It asks you a question only when an agent cannot go on without you.
 
-Herdr Boss is a script. It uses no LLM and no tokens.
+You see all projects on one dashboard, also on your phone. Herdr Boss runs on your computer. It works with [Herdr](https://herdr.dev), the terminal program that holds your agents.
 
-## Requirements
+## What you get
 
-| Software | Needed for |
-|---|---|
-| Node 26.10+ | Everything. The service uses the built-in `node:sqlite` module. |
-| [Herdr](https://herdr.dev) CLI | Agents, panes, notices, workers, and handover. |
-| CodexBar CLI | Quota readings and pacing. |
-| Git | Worker worktrees. |
-| Codex, Claude, OpenCode, or Pi CLI | The harnesses that you make available. |
-| Google Chrome (optional) | Project browsers. |
-| `session-migrate` (optional) | Handover with the conversation history. |
-| GitHub CLI `gh` (optional) | The kit's issue commands. |
-| Roamgate, Tailscale (optional) | A dashboard link to Roamgate; remote access from a tailnet. |
+- One agent for each project that leads the work, and workers that do the tasks.
+- A dashboard that shows what every agent does, also on your phone.
+- Questions only when an agent needs you, in the Mailbox.
+- Review packs: you judge the finished work one item at a time.
+- Control of your usage limits, so that no agent uses up your plan.
+- Support for more than one computer. Each computer is a factory.
 
-## Install
+## How the parts fit
 
-1. Run `bin/herdr-boss install`. This installs and starts the macOS launchd agent.
-2. Link the CLI: `ln -s "$(pwd)/bin/herdr-boss" ~/.local/bin/herdr-boss`, with `~/.local/bin` on your `PATH`.
-3. Open http://127.0.0.1:4477.
-4. Label each orchestrator pane `orch`: `herdr pane rename <pane-id> orch`.
+```mermaid
+flowchart TD
+    you([You]) --> dash[Dashboard]
+    dash --> boss[Boss]
+    boss --> leadA[Project lead: Shop]
+    boss --> leadB[Project lead: Recipes]
+    leadA --> workerA[Workers]
+    leadB --> workerB[Workers]
+    subgraph factory [Factory: one computer]
+        boss
+        leadA
+        leadB
+        workerA
+        workerB
+    end
+```
 
-To remove the service, run `bin/herdr-boss uninstall`. On other systems, run `herdr-boss serve`.
+You talk to the Boss through the dashboard. The Boss watches all projects. Each project has one project lead. The project lead gives tasks to workers. A factory is one complete Herdr Boss setup on one computer.
 
-## Documentation
+## Start here
 
-- [User guide](docs/user-guide.md): how it works, rules, configuration, remote access, handover, and browsers.
-- [CLI reference](docs/cli.md): every command and option, including `herdr-boss project new` to create a project.
-- [Factories spec](docs/specs/factories.md): the fleet of factories, with the glossary in [docs/CONTEXT.md](docs/CONTEXT.md).
-- [Harness setup](docs/harness-setup.md): the Claude, Codex, OpenCode, and Pi settings that orchestration needs.
-- [Project status files](docs/project-status.md): what orchestrators publish for their project page.
-- [Orchestrator instructions](docs/orchestrator-instructions.md): add the shared rules to a project.
-- [Orchestrator skill](kit/skills/herdr-orchestrator/SKILL.md) and [browser service](kit/browser-service.md): the shared kit for agents.
+[Start here](docs/start-here.md) is a checklist for your first hour. It ends with your first project on the dashboard.
 
-The dashboard has a **Help** panel on each page.
+## What it looks like
+
+The Overview shows all projects and the usage limits.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/overview-dark.jpg">
+  <img alt="The Overview page with three sample projects: Shop, Recipes, and Notes." src="docs/images/readme/overview-light.jpg" width="720">
+</picture>
+
+The Mailbox lists the questions that need you. This is the phone view.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/mailbox-dark.jpg">
+  <img alt="The Mailbox on a phone. Two questions are in the Needs you list." src="docs/images/readme/mailbox-light.jpg" width="240">
+</picture>
+
+A review pack lists the items that you judge. This is the phone view.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/review-dark.jpg">
+  <img alt="A review pack on a phone. Two items wait for a decision." src="docs/images/readme/review-light.jpg" width="240">
+</picture>
+
+The projects in the pictures are samples.
+
+## What you need
+
+- A Mac.
+- [Claude Code](https://claude.com/claude-code).
+- A Claude plan.
+
+Linux works too. On Windows, install Ubuntu in WSL2 and follow the Linux path. Codex, OpenCode, and Pi are optional add-ons.
+
+## More
+
+- [Concepts](docs/concepts.md): the parts of Herdr Boss, with diagrams.
+- [User guide](docs/user-guide.md): one chapter for each job.
+- [Glossary](docs/glossary.md): each word that Herdr Boss uses.
+- [Reference](docs/reference/index.md): commands, settings, the HTTP API, and technical details.
