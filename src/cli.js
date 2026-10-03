@@ -517,7 +517,14 @@ async function main() {
   }
   if (cmd === 'factory') {
     const { factoryCommand } = await import('./factory-host.js');
-    const code = await factoryCommand(args);
+    const { hostGuideHint } = await import('./host-guide-link.js');
+    let code;
+    try { code = await factoryCommand(args); } catch (error) {
+      // A host failure names the setup guide. The message keeps its own text.
+      const hint = hostGuideHint(error?.message);
+      if (hint && error instanceof Error) error.message = `${error.message}\n${hint}`;
+      throw error;
+    }
     if (code) process.exitCode = code;
     return;
   }

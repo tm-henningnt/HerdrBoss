@@ -1,4 +1,5 @@
 import { fleetView, fleetMailbox, fleetSettingsFromForm } from './fleet.js';
+import { HOST_GUIDE_PATH } from './host-guide-view.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
@@ -38,7 +39,7 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', settings: 'Settings', docs: 'Docs' };
+const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', 'add-host': 'Add a host', settings: 'Settings', docs: 'Docs' };
 let fleetData = null, fleetSettings = null, fleetLoading = false, fleetMessage = '';
 async function refreshFleet() {
   if (fleetLoading) return;
@@ -166,6 +167,17 @@ function docsAfterRender() {
   if (!root || root.dataset.mounted) return;
   root.dataset.mounted = '1';
   import('/explainer.js').then((mod) => { if (root.isConnected) mod.mountExplainer(root); }, () => { root.textContent = 'The explainer did not load.'; });
+}
+// The Add a host page keeps its own DOM. The render gives it one empty element, so a refresh of the state never replaces it.
+// The module loads when the page shows. A render that replaces the element mounts it again.
+function hostGuideView() {
+  return '<div class="hg-root" data-host-guide></div>';
+}
+function hostGuideAfterRender() {
+  const root = document.querySelector('[data-host-guide]');
+  if (!root || root.dataset.mounted) return;
+  root.dataset.mounted = '1';
+  import('/host-guide.js').then((mod) => { if (root.isConnected) mod.mountHostGuide(root); }, () => { root.textContent = 'The host guide did not load. Reload the page.'; });
 }
 // Docs text changes when a file changes. A reload of the page reads it again.
 const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
@@ -6622,12 +6634,13 @@ const HELP = {
 };
 
 // The text of these topics is in docs/help/<topic>.md. The service renders the file, and the Docs section shows the same file.
-const HELP_FILES = ['board', 'browsers', 'docs', 'fleet'];
+const HELP_FILES = ['add-host', 'board', 'browsers', 'docs', 'fleet'];
 const helpFiles = new Map();
 const helpLoading = new Set();
 
 function currentRoute() {
   if (docsPageName(location.pathname) !== null) return 'docs';
+  if (location.pathname === HOST_GUIDE_PATH) return 'add-host';
   if (/^\/(projects|p)(\/|$)/.test(location.pathname)) return 'projects';
   if (parseReviewPath(location.pathname)) return 'reviews';
   const name = location.pathname.slice(1);
@@ -7625,11 +7638,11 @@ function render(force = false) {
     history.replaceState(null, '', location.pathname + location.hash);
     requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
   }
-  const route = docsPageName(location.pathname) !== null ? 'docs' : m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
+  const route = docsPageName(location.pathname) !== null ? 'docs' : location.pathname === HOST_GUIDE_PATH ? 'add-host' : m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
   const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
   const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
-  const page = route === 'docs' ? docsView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const page = route === 'docs' ? docsView() : route === 'add-host' ? hostGuideView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -7638,14 +7651,16 @@ function render(force = false) {
   if (!chatPhoneOpen) document.body.classList.remove('chat-keyboard-open');
   chatViewportDebug?.setVisible(chatPhoneOpen);
   if (!APP_VIEW_ROUTES.includes(route)) appDrawerOpen = false;
-  if (route !== 'docs') document.title = 'Herdr Boss';
+  if (route !== 'docs') document.title = route === 'add-host' ? 'Add a host · Herdr Boss' : 'Herdr Boss';
   $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
   for (const a of $nav.querySelectorAll('a')) {
-    if (a.dataset.nav === route) a.setAttribute('aria-current', 'page');
+    if (a.dataset.nav === (route === 'add-host' ? 'fleet' : route)) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
   updateMailboxBadge(state);
   updateWatchIcon(state);
+  // The Add a host page owns its DOM. A render of the same route leaves it alone, so a refresh never resets the scroll or the typed text.
+  if (route === 'add-host' && lastRoute === route && $app.querySelector('[data-host-guide]')) lastRender = html;
   if (html !== lastRender) {
     const active = document.activeElement;
     const focusId = active?.dataset?.mailDraft || active?.matches?.('[data-mail-compose-draft], [data-mail-reply-draft]') ? active.id : null;
@@ -7675,6 +7690,7 @@ function render(force = false) {
   }
   if (route === 'reviews') reviewsAfterRender();
   if (route === 'docs') docsAfterRender();
+  if (route === 'add-host') hostGuideAfterRender();
   syncSettingPopup();
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;

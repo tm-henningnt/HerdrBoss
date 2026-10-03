@@ -312,6 +312,21 @@ test('a remote timeout is host unreachable, separate from a stopped or unhealthy
   } finally { f.cleanup(); }
 });
 
+test('a wizard failure of an unreachable host names the host setup guide', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context'], f.io);
+    await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    f.docker.run = async () => { const error = new Error('private endpoint example.invalid'); error.code = 'ETIMEDOUT'; throw error; };
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 1);
+    const text = f.output.join('');
+    assert.match(text, /Factory demo: container failed\. The factory host is unreachable\./);
+    assert.match(text, /Host setup guide: open \/fleet\/add-host\?host=host-a in the dashboard/);
+    assert.equal(text.includes('example.invalid'), false);
+  } finally { f.cleanup(); }
+});
+
 test('a health timeout after container inspection still reports host unreachable', async () => {
   const f = fixture();
   try {

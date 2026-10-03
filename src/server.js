@@ -39,6 +39,7 @@ import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { listAgentPairs, readAgentMessages, readAgentMetadata } from './agent-messages.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
+import { BODY_LIMIT as HOST_GUIDE_BODY_LIMIT, createHostGuideApi } from './host-guide.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
 import { createRawRoute } from './review-raw.js';
@@ -167,9 +168,9 @@ async function attachedGuard(body, checkAttached = tabAttached) {
 }
 
 // The body of a project-new POST route: a JSON object of at most 16 KB. A bad body has a status code for the route.
-async function projectNewBody(req) {
+async function projectNewBody(req, limit = PROJECT_NEW_BODY_LIMIT) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw Object.assign(new Error('Content-Type must be application/json.'), { statusCode: 400 });
-  const bytes = await readBytes(req, PROJECT_NEW_BODY_LIMIT);
+  const bytes = await readBytes(req, limit);
   try { return JSON.parse(bytes.toString('utf8')); } catch { throw Object.assign(new Error('The body is not valid JSON.'), { statusCode: 400 }); }
 }
 
@@ -209,7 +210,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {}, docsSite = defaultDocsSite } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {}, docsSite = defaultDocsSite, hostGuide = {} } = {}) {
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -238,6 +239,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   }
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
+  const hostGuideApi = createHostGuideApi({ dataDir: DATA_DIR, ...hostGuide });
   // The goal routes use the Herdr runner of the engine. A test replaces run.
   const goalApi = createGoalApi({
     run: async (args, options) => {
@@ -379,7 +381,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (!allowedRequest(req, p, cfg.allowedHosts)) return send(res, 403, { error: 'This control plane requires a local interface or Tailscale host and a same-origin request.' });
       // The project-new GET routes show local paths, so the preview refuses them too.
       const projectNewRoute = p === '/api/project-new' || p.startsWith('/api/project-new/');
-      if (readOnlyPreview && p.startsWith('/api/') && (projectNewRoute || !['GET', 'HEAD'].includes(req.method))) {
+      // The host guide holds the values that the user typed about a host, so the preview refuses its GET routes too.
+      const hostGuideRoute = p === '/api/host-guide' || p.startsWith('/api/host-guide/');
+      if (readOnlyPreview && p.startsWith('/api/') && (projectNewRoute || hostGuideRoute || !['GET', 'HEAD'].includes(req.method))) {
         return send(res, 403, { error: 'This read-only preview does not allow changes.' });
       }
       if (!readOnlyPreview && p === '/login' && req.method === 'GET') return send(res, 200, loginPage(), 'text/html; charset=utf-8');
@@ -438,6 +442,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (projectNewRoute) {
         const routed = await projectNewApi.handle(req.method, p, () => projectNewBody(req));
         return send(res, routed.status, routed.body);
+      }
+      // A change of the host guide and each check are actions: only the owner may run them.
+      if (hostGuideRoute) {
+        const routed = await hostGuideApi.handle(req.method, p, () => projectNewBody(req, HOST_GUIDE_BODY_LIMIT), { owner: access.owner(req) });
+        return send(res, routed ? routed.status : 404, routed ? routed.body : { error: 'not found' });
       }
       // The review routes sit behind the same checks. The read-only preview guard above already refuses each change.
       const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);

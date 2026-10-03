@@ -3,6 +3,7 @@ import path from 'node:path';
 import { managedFactory, transportFor, inspect, assertOwned, dockerCall, readHealth, configSafetyError } from './factory-core.js';
 import { factoryFile, readPrivate, writePrivate, updateFleet, assertVersion, effectiveMinimum, VOLUMES } from './factory-store.js';
 import { isHostUnreachable } from './factory-transport.js';
+import { hostGuideHint } from './host-guide-link.js';
 
 export const FACTORY_STEPS = Object.freeze(['container', 'volumes', 'herdr', 'service', 'harness-claude', 'harness-codex', 'harness-other', 'github', 'project']);
 
@@ -139,6 +140,8 @@ export async function configureFactory(args, io) {
       flow.state = isHostUnreachable(error) ? 'host-unreachable' : 'failed';
       writePrivate(file, flow);
       io.stderr.write(`Factory ${name}: ${step.name} failed. ${error.message}\n`);
+      const hint = hostGuideHint(error.message, record.hostId);
+      if (hint) io.stderr.write(`${hint}\n`);
       return 1;
     }
   }

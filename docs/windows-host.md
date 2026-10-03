@@ -2,6 +2,8 @@
 
 Use this runbook to prepare a Windows computer as a factory host. It runs Docker Engine in WSL2. Do the 25 steps once on each host, in order. Do not start a step before the check of the step before it passes. The [factory chapter of the user guide](guide/factory.md) explains the goal and the commands that follow.
 
+The dashboard page **Add a host** (Fleet, Add a host) shows these steps with copy buttons for each command, saves your progress, and tests the host from the Mac. Its step names are the step names of this runbook.
+
 Use named Docker volumes in the Linux file system. Do not use a Windows folder as a factory volume.
 
 This runbook uses placeholders only. Replace `DISTRO`, `FACTORY_USER`, `HOST`, `HOST_FQDN`, `HOST_ALIAS`, `KEY_NAME`, `CONTEXT`, `BUILDER`, and `WORKER` before you run a command. `FACTORY_USER` is the Linux user, for example `factory`. Keep the real values on the host and in the private registry. Do not put an address, a tailnet name, a key path, or a real Docker context name in a report or a repository.
