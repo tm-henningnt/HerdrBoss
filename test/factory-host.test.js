@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import { factoryCommand, maskLine, shellQuote } from '../src/factory-host.js';
 
 const ADDRESS = '192.0.2.1';
@@ -258,4 +258,107 @@ test('maskLine masks compressed IPv6 addresses', () => {
     const out = maskLine(`Connection to ${ip} port 22 timed out`, { address: 'example.invalid', keyFile: '/k' });
     assert.ok(!out.includes(ip), out);
   }
+});
+
+test('docker uses the registered Docker context without a shell and masks its private name', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    const file = path.join(f.dir, 'registry.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    registry.hosts.box.dockerContext = 'example-context';
+    fs.writeFileSync(file, JSON.stringify(registry));
+    const code = await factoryCommand(['docker', 'box', '--', 'ps', '--format', '{{.Names}} x'], f.io(fakeSpawn(f.calls, {
+      stdout: ['ok\n'], stderr: ['context example-context: host 192.0.2.1\n'], code: 7,
+    })));
+    assert.equal(code, 7);
+    assert.equal(f.calls[0].command, 'docker');
+    assert.deepEqual(f.calls[0].args, ['--context', 'example-context', 'ps', '--format', '{{.Names}} x']);
+    assert.equal(f.calls[0].options.shell, false);
+    assert.equal('DOCKER_CONTEXT' in f.calls[0].options.env, false);
+    assert.equal(f.errText().includes('example-context'), false);
+    assert.equal(f.errText().includes(ADDRESS), false);
+  } finally { f.cleanup(); }
+});
+
+test('host add accepts a context name without reading a key or printing the context', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['host', 'add', 'box', '--docker-context', 'example-context'], f.io(fakeSpawn(f.calls))), 0);
+    const record = JSON.parse(fs.readFileSync(path.join(f.dir, 'registry.json'), 'utf8')).hosts.box;
+    assert.deepEqual(record, { transport: 'docker-context', dockerContext: 'example-context' });
+    assert.equal(f.text().includes('example-context'), false);
+    await assert.rejects(factoryCommand(['host', 'add', 'bad', '--docker-context', '-bad'], f.io(fakeSpawn(f.calls))), /context/i);
+    assert.equal(fs.statSync(path.join(f.dir, 'registry.json')).mode & 0o777, 0o600);
+  } finally { f.cleanup(); }
+});
+
+test('host add updates only the context of an existing SSH record', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    assert.equal(await factoryCommand(['host', 'add', 'box', '--docker-context', 'example-context'], f.io(fakeSpawn(f.calls))), 0);
+    const host = JSON.parse(fs.readFileSync(path.join(f.dir, 'registry.json'), 'utf8')).hosts.box;
+    assert.equal(host.address, ADDRESS);
+    assert.equal(host.keyFile, f.keyFile);
+    assert.equal(host.dockerContext, 'example-context');
+    await assert.rejects(factoryCommand(['host', 'list'], { ...f.io(fakeSpawn(f.calls)), isContainer: () => true }), /inside a container/);
+  } finally { f.cleanup(); }
+});
+
+async function contextHost(f) {
+  if (!fs.existsSync(path.join(f.dir, 'registry.json'))) await addHost(f);
+  const file = path.join(f.dir, 'registry.json');
+  const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+  registry.hosts.box.dockerContext = 'example-context';
+  fs.writeFileSync(file, JSON.stringify(registry));
+}
+
+test('docker refuses a first word that starts with a dash on both transports', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    await assert.rejects(factoryCommand(['docker', 'box', '--', '--context', 'other', 'rm', '-f', 'db'], f.io(fakeSpawn(f.calls))), /must not start with/);
+    await contextHost(f);
+    await assert.rejects(factoryCommand(['docker', 'box', '--', '--context', 'other', 'rm', '-f', 'db'], f.io(fakeSpawn(f.calls))), /must not start with/);
+    assert.equal(f.calls.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('docker masks tailnet names, endpoints and the remote Name line', async () => {
+  const f = fixture();
+  try {
+    await contextHost(f);
+    const code = await factoryCommand(['docker', 'box', '--', 'info'], f.io(fakeSpawn(f.calls, {
+      stdout: ['Name: winbox.tail1234.ts.net\nEndpoint: ssh://user@winbox.tail1234.ts.net\nServer at other.tail1234.ts.net\n'],
+      stderr: ['dial tcp: lookup third.tail1234.ts.net\n'],
+    })));
+    assert.equal(code, 0);
+    for (const text of [f.text(), f.errText()]) {
+      assert.equal(text.includes('ts.net'), false);
+      assert.equal(text.includes('winbox'), false);
+      assert.equal(text.includes('ssh://'), false);
+    }
+    assert.match(f.text(), /Server at <host>/);
+  } finally { f.cleanup(); }
+});
+
+test('the docker passthrough allows a command longer than the probe timeout', async () => {
+  const f = fixture();
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await contextHost(f);
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => {};
+    let spawned = false;
+    const pending = factoryCommand(['docker', 'box', '--', 'pull', 'example-image'], f.io(() => { spawned = true; return child; }));
+    while (!spawned) await new Promise((resolve) => setImmediate(resolve));
+    mock.timers.tick(20_000);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit('close', 0);
+    assert.equal(await pending, 0);
+  } finally { mock.timers.reset(); f.cleanup(); }
 });

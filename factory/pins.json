@@ -5,6 +5,10 @@
     "tag": "trixie-slim",
     "digest": "sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
   },
+  "buildkit": {
+    "image": "moby/buildkit",
+    "tag": "buildx-stable-1"
+  },
   "s6Overlay": "3.2.3.2",
   "node": "26.10.0",
   "herdr": "0.9.3",

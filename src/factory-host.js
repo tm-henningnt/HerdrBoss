@@ -10,6 +10,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 export const FACTORY_HOST_USAGE = [
   'Usage: factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]',
+  '       factory host add NAME --docker-context CONTEXT',
   '       factory host list',
   '       factory host remove NAME',
   '       factory ssh HOST -- COMMAND...',
@@ -19,8 +20,9 @@ export const FACTORY_HOST_USAGE = [
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const ADDRESS = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,31}$/;
-const HOST_FIELDS = ['address', 'user', 'keyFile'];
+const HOST_FIELDS = ['address', 'user', 'keyFile', 'dockerContext'];
 const SSH_FAILED = 255;
+const DOCKER_PASSTHROUGH_TIMEOUT_MS = 1_800_000;
 const MASK_HOST = '<host>';
 const MASK_KEY = '<key>';
 const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
@@ -47,6 +49,43 @@ export function loadRegistry(env = process.env) {
   return registry;
 }
 
+const LOCK_STALE_MS = 60_000;
+
+function lockIsStale(lock) {
+  let stat;
+  try { stat = fs.statSync(lock); } catch { return false; }
+  if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) return true;
+  let pid;
+  try { pid = Number.parseInt(fs.readFileSync(lock, 'utf8'), 10); } catch { return false; }
+  if (!Number.isInteger(pid) || pid < 1) return false;
+  try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+}
+
+// Take an exclusive lock file for a synchronous read-modify-write. A lock is stale when its owner process is gone or it is older than 60 seconds.
+export function acquireLock(lock, busyMessage) {
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  let descriptor;
+  for (let attempt = 0; descriptor === undefined; attempt += 1) {
+    try { descriptor = fs.openSync(lock, 'wx', 0o600); } catch (error) {
+      if (error.code !== 'EEXIST' || attempt > 0 || !lockIsStale(lock)) throw new Error(busyMessage);
+      fs.rmSync(lock, { force: true });
+    }
+  }
+  try { fs.writeSync(descriptor, `${process.pid}\n`); } catch { /* The age check covers an unwritten owner. */ }
+  return () => { fs.closeSync(descriptor); fs.rmSync(lock, { force: true }); };
+}
+
+// Change the registry under its lock. Keep the change function synchronous.
+export function updateRegistry(env, change) {
+  const release = acquireLock(path.join(factoriesDir(env), 'registry.lock'), 'The host registry is busy. Retry the command.');
+  try {
+    const registry = loadRegistry(env);
+    change(registry);
+    saveRegistry(env, registry);
+    return registry;
+  } finally { release(); }
+}
+
 function saveRegistry(env, registry) {
   const dir = factoriesDir(env);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -65,12 +104,19 @@ function findHost(env, name) {
 }
 
 // Mask the address, the host name, the key path, and any IP address in one line of ssh output.
-export function maskLine(line, host) {
+const TAILNET = /\b(?:[A-Za-z0-9-]+\.)+ts\.net\b/gi;
+const ENDPOINT = /\b(?:ssh|tcp|unix|npipe|http|https):\/\/\S+/gi;
+const NAME_LINE = /^(\s*Name:[ \t]*).*$/gm;
+
+// `docker` output also masks tailnet names, endpoints, and the `Name:` line that a remote Docker prints.
+export function maskLine(line, host, docker = false) {
   let text = line;
+  if (docker) text = text.replace(NAME_LINE, '$1<host>').replace(ENDPOINT, '<endpoint>').replace(TAILNET, MASK_HOST);
   const replace = (value, mask) => {
     if (typeof value === 'string' && value) text = text.split(value).join(mask);
   };
   replace(host.keyFile, MASK_KEY);
+  replace(host.dockerContext, '<context>');
   if (host.keyFile) replace(path.basename(host.keyFile), MASK_KEY);
   if (host.address) text = text.replace(new RegExp(escapeRegExp(host.address), 'gi'), MASK_HOST);
   if (host.name) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.name)}(?![A-Za-z0-9_-])`, 'gi'), MASK_HOST);
@@ -112,7 +158,7 @@ function expandHome(file, env) {
 
 async function hostFields(flags, io) {
   const fromFile = flags['--from-file'];
-  const given = ['--address', '--user', '--key-file'].some((flag) => flag in flags);
+  const given = ['--address', '--user', '--key-file', '--docker-context'].some((flag) => flag in flags);
   let json = {};
   if (fromFile !== undefined || !given) {
     if (fromFile === undefined && io.stdin.isTTY) throw usageError('Give --address, --user, and --key-file, or JSON on stdin.');
@@ -127,46 +173,55 @@ async function hostFields(flags, io) {
     address: flags['--address'] ?? json.address,
     user: flags['--user'] ?? json.user,
     keyFile: flags['--key-file'] ?? json.keyFile,
+    dockerContext: flags['--docker-context'] ?? json.dockerContext,
   };
 }
 
 // Messages never repeat a value: an address or a key path can be secret.
 function validateHost(fields, env) {
-  const { address, user, keyFile } = fields;
+  const { address, user, keyFile, dockerContext } = fields;
+  if (dockerContext !== undefined) {
+    if (typeof dockerContext !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(dockerContext)) throw usageError('The Docker context name is invalid.');
+    if (address === undefined && user === undefined && keyFile === undefined) return { transport: 'docker-context', dockerContext };
+  }
   if (typeof address !== 'string' || !ADDRESS.test(address)) throw usageError('The address is missing or has characters that a host address cannot have.');
   if (typeof user !== 'string' || !USER.test(user)) throw usageError('The user is missing or has characters that a user name cannot have.');
   if (typeof keyFile !== 'string' || !keyFile) throw usageError('The key file path is missing.');
   const expanded = expandHome(keyFile, env);
   if (!path.isAbsolute(expanded) || expanded.includes('\0')) throw usageError('The key file path must be absolute.');
-  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh' };
+  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh', ...(dockerContext ? { dockerContext } : {}) };
 }
 
 async function hostCommand(args, io) {
   const [action, ...rest] = args;
   if (action === 'add') {
-    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file'], 'host name');
+    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file', '--docker-context'], 'host name');
     if (!NAME.test(name)) throw usageError('The host name must use lower case letters, digits, and hyphens, up to 31 characters.');
     const host = validateHost(await hostFields(flags, io), io.env);
-    const registry = loadRegistry(io.env);
-    if (Object.hasOwn(registry.hosts, name)) throw new Error('The host is already in the registry. Remove it first.');
-    registry.version = 1;
-    registry.hosts[name] = host;
-    saveRegistry(io.env, registry);
-    io.stdout.write(`Added host ${name}.\n`);
+    let updated = false;
+    updateRegistry(io.env, (registry) => {
+      if (Object.hasOwn(registry.hosts, name)) {
+        if (Object.keys(flags).length !== 1 || !flags['--docker-context']) throw new Error('The host is already in the registry. Remove it first.');
+        registry.hosts[name] = { ...registry.hosts[name], dockerContext: host.dockerContext };
+        updated = true;
+        return;
+      }
+      registry.version = 1;
+      registry.hosts[name] = host;
+    });
+    io.stdout.write(`${updated ? 'Updated' : 'Added'} host ${name}.\n`);
     return 0;
   }
   if (action === 'list') {
     if (rest.length) throw usageError('`factory host list` takes no argument.');
-    const entries = Object.entries(loadRegistry(io.env).hosts);
-    io.stdout.write(entries.length ? `${entries.map(([name, host]) => `${name}  ${host.user}`).join('\n')}\n` : 'No hosts.\n');
+    const entries = Object.entries(loadRegistry(io.env).hosts).filter(([name]) => name !== 'local');
+    io.stdout.write(entries.length ? `${entries.map(([name, host]) => `${name}  ${host.user || 'docker-context'}`).join('\n')}\n` : 'No hosts.\n');
     return 0;
   }
   if (action === 'remove') {
     if (rest.length !== 1) throw usageError('Give exactly one host name.');
     findHost(io.env, rest[0]);
-    const registry = loadRegistry(io.env);
-    delete registry.hosts[rest[0]];
-    saveRegistry(io.env, registry);
+    updateRegistry(io.env, (registry) => { delete registry.hosts[rest[0]]; });
     io.stdout.write(`Removed host ${rest[0]}.\n`);
     return 0;
   }
@@ -174,7 +229,7 @@ async function hostCommand(args, io) {
 }
 
 // Write each complete line through the mask. The decoder and the buffer keep a value that a chunk boundary splits.
-function maskedPipe(stream, sink, host) {
+function maskedPipe(stream, sink, host, docker = false) {
   const decoder = new StringDecoder('utf8');
   let pending = '';
   return new Promise((resolve) => {
@@ -182,12 +237,12 @@ function maskedPipe(stream, sink, host) {
       pending += decoder.write(chunk);
       const cut = pending.lastIndexOf('\n');
       if (cut < 0) return;
-      sink.write(maskLine(pending.slice(0, cut + 1), host));
+      sink.write(maskLine(pending.slice(0, cut + 1), host, docker));
       pending = pending.slice(cut + 1);
     });
     stream.on('end', () => {
       pending += decoder.end();
-      if (pending) sink.write(maskLine(pending, host));
+      if (pending) sink.write(maskLine(pending, host, docker));
       resolve();
     });
   });
@@ -200,12 +255,12 @@ export function sshArguments(host, command) {
 }
 
 // Run ssh with an args array and no shell. The exit code of the remote command is the result; ssh failure is 255.
-async function runSsh(host, command, io) {
+async function runSsh(host, command, io, docker = false) {
   let child;
   try { child = io.spawn('ssh', sshArguments(host, command), { stdio: ['inherit', 'pipe', 'pipe'], shell: false }); } catch (error) {
     throw new Error(maskLine(`ssh could not start: ${error.message}`, host));
   }
-  const piped = Promise.all([maskedPipe(child.stdout, io.stdout, host), maskedPipe(child.stderr, io.stderr, host)]);
+  const piped = Promise.all([maskedPipe(child.stdout, io.stdout, host, docker), maskedPipe(child.stderr, io.stderr, host, docker)]);
   let failedToStart = false;
   const exit = await new Promise((resolve) => {
     child.once('error', (error) => {
@@ -228,15 +283,33 @@ function splitCommand(args, name) {
 // `args` are the words after `factory`. `io` holds env, spawn, stdin, stdout, and stderr, so a test injects a fake transport.
 export async function factoryCommand(args, io = {}) {
   const context = { env: process.env, spawn: nodeSpawn, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, ...io };
+  const { isInsideContainer } = await import('./factory-core.js');
+  if ((context.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
   const [sub, ...rest] = args;
+  if (['new', 'build', 'start', 'stop', 'status', 'list', 'configure', 'login'].includes(sub)) {
+    const { factoryCoreCommand } = await import('./factory-core.js');
+    return factoryCoreCommand(args, context);
+  }
   if (sub === 'host') return hostCommand(rest, context);
   if (sub === 'ssh') {
     const { hostName, command } = splitCommand(rest, 'factory ssh');
-    return runSsh(findHost(context.env, hostName), command, context);
+    const host = findHost(context.env, hostName);
+    if (!host.address || !host.user || !host.keyFile) throw new Error('The host has no SSH connection record.');
+    return runSsh(host, command, context);
   }
   if (sub === 'docker') {
     const { hostName, command } = splitCommand(rest, 'factory docker');
-    return runSsh(findHost(context.env, hostName), ['docker', ...command.map(shellQuote)], context);
+    const host = findHost(context.env, hostName);
+    // A leading option such as `--context other` would select another Docker daemon.
+    if (command[0].startsWith('-')) throw usageError('The Docker command must not start with "-".');
+    if (host.dockerContext) {
+      const { createDockerTransport } = await import('./factory-transport.js');
+      const result = await createDockerTransport(host, context).run(command, { timeout: DOCKER_PASSTHROUGH_TIMEOUT_MS });
+      context.stdout.write(maskLine(result.stdout, host, true));
+      context.stderr.write(maskLine(result.stderr, host, true));
+      return result.code;
+    }
+    return runSsh(host, ['docker', ...command.map(shellQuote)], context, true);
   }
   throw usageError('Unknown or missing factory command.');
 }

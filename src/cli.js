@@ -130,7 +130,9 @@ const USAGE = `herdr-boss <command>
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   project paths [--json]  Print the registered paths of other projects.
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
-  factory host add|list|remove  Keep the registry of factory hosts. Run a command on a host with factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
+  factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
+  factory configure NAME [--resume] [--step STEP]  Check the container, volumes, Herdr server, and service. Exit 3 waits for Owner logins.
+  factory host add|list|remove  Keep private host connections. Use --docker-context CONTEXT for Docker. Run factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
   goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
                         Exit 0 goal active, 2 pane busy or not an orchestrator, 3 sent but not shown.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
