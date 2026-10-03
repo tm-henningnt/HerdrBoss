@@ -10,6 +10,13 @@ Read this file before you dispatch a reviewer or a review subagent.
 
 - Put this rule in a review task brief: run any command that reads Herdr Boss data with a temporary `HOME` and `HERDR_BOSS_DIR` (`mktemp -d`). Do not import modules of `src/` that open the live data directory.
 
+## Docs check
+
+- Put this rule in a review task brief: check that a change of behavior comes with a change of the docs and the page help in the same branch.
+- Report a missing docs change as a finding. A change that has no docs change passes only with a recorded `Docs-Exempt: <reason>` trailer or exemption entry, and the reason must be true.
+- Run the docs gate command of the project, when the project has one, and quote its result in the review.
+- Do not merge a branch that fails the docs check. Send it back to the worker.
+
 ## Review-pack values
 
 - Use these item types in `manifest.json`: `image`, `image-pair`, `gallery`, `video`, `markdown`, `table`, `diff`, `file`, `link`, and `checklist`.

@@ -185,3 +185,7 @@ Summary: Start each worker task with a plain title (what, for which ticket), bec
 ## 1c6764de0c20
 Impact: useful
 Summary: Give every review item that needs a decision accept and deny, agent-verified items included; an item with only note in ask is information and never counts as open.
+
+## a525a7ad7655
+Impact: useful
+Summary: Add the docs rule: a change of behavior changes the docs and the page help in the same branch, or records a Docs-Exempt reason; the worker brief, the review task rules, and the review-pack evidence rule carry it.

@@ -1,0 +1,25 @@
+{
+  "behavior": [
+    "src/**",
+    "public/**",
+    "bin/**",
+    "factory/**",
+    "kit/**"
+  ],
+  "behaviorIgnore": [
+    "kit/CHANGES.md"
+  ],
+  "docs": [
+    "docs/**",
+    "README.md"
+  ],
+  "docsIgnore": [
+    "docs/orchestration/**",
+    "docs/plans/**",
+    "docs/tickets/**",
+    "docs/ideas/**",
+    "docs/spikes/**",
+    "docs/gate-exemptions"
+  ],
+  "exemptionFile": "docs/gate-exemptions"
+}
