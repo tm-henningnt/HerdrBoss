@@ -130,7 +130,7 @@ Git and worktree hygiene
 - Do not switch a worker to another branch to make a check pass.
 - Do not delete unmerged work or a dirty worktree.
 - Do not use reset, clean, force-push, or discard checkout as a shortcut.
-- Decide and run your own pushes, deployments, and releases. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Decide and run your own pushes, deployments, and releases. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Take the machine-wide lock around every full test suite run and every push whose hook runs the full suite: run `herdr-boss lock acquire full-suite --wait 1800`, run the suite or the push, then run `herdr-boss lock release full-suite`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. The lock lane guard (policy `locks.guard`, Settings page, Locks section) holds a queued short-lane job while the 5-minute load is above 231 percent of the cores, swap is above 96 percent, or free memory is below 40 percent. The job waits until the load drops. The machine guard (`machine.guardEnabled`) is a separate setting.
 - Inspect prune candidates before `herdr-boss worktree prune --apply`.
 - Record the verified commit or uncommitted state before starting another task.
 

@@ -5,7 +5,7 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 # Herdr orchestrator
 
-- Read the project's `AGENTS.md`, product documents, and current issue before choosing work.
+- Read the project's `AGENTS.md`, product documents, and current issue first.
 - Keep project rules, acceptance commands, and browser procedures in project files.
 
 ## Reference files
@@ -28,11 +28,10 @@ Read each file in the skill folder when its step comes:
 - Read issue dependencies and work only the first unblocked item.
 - Delegate one bounded task at a time. Do not hand the entire roadmap to one worker.
 - Give each worker a clear role, exact paths, evidence, and a stopping point.
-- Keep workers subordinate to the project orchestrator.
-- Do not delegate roadmap ownership or product direction.
+- Do not delegate roadmap or product direction.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
 - Workers do not commit, merge, rebase, push, deploy, or publish unless the brief names an exception.
-- Preserve existing user work before any edit, checkout, or cleanup.
+- Preserve user work before any edit, checkout, or cleanup.
 - Inspect every worker result before accepting it.
 - Run the required acceptance commands yourself.
 - Orchestrators and workers may read another Herdr Boss project repository to learn how it solved a problem.
@@ -45,7 +44,7 @@ Read each file in the skill folder when its step comes:
 - Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start and at resume, before you choose work.
 - If the file does not exist, create it from `kit/templates/project-memory.md`.
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
-- Commit the file with the next orchestrator commit.
+- Commit the file with your next commit.
 - Obey a hold or freeze in the file until the Owner or the Boss lifts it.
 - Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
 
@@ -55,7 +54,7 @@ Read each file in the skill folder when its step comes:
 - Take back only findings with file and line evidence. Verify a finding at the source before you act.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
-- As a backup only, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
+- As a backup, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
 - Tell every worker in its brief to report back through herdr when done and to send a `WORKER QUESTION` when blocked.
 
 ## Roles and escalation
@@ -63,7 +62,7 @@ Read each file in the skill folder when its step comes:
 - The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
 - Settle implementation, product and design details, naming, thresholds, test design, scope inside the project, and review findings within project rules and Owner decisions in the memory file. Do not ask the Boss about them.
 - Escalate only when project documents and available evidence cannot settle the next action.
-- Before you escalate, check `docs/orchestration/memory.md` and the issue history for an Owner decision that already answers the question.
+- Before you escalate, check `docs/orchestration/memory.md` for an Owner decision that already answers the question.
 - Ask the Boss only about a conflict between projects or a change that affects another project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Do not edit the Herdr Boss kit or its skills from another project. Send a change request to the Boss. The HerdrBoss orchestrator decides whether to relay it.
@@ -73,7 +72,7 @@ Read each file in the skill folder when its step comes:
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
-- Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. There is no load threshold.
+- Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. The lane guard holds a queued short-lane job while 5-minute load exceeds 231% of the cores. Set it in Settings, Locks (`locks.guard`).
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The serve-lease rules are in [the machine and quota rules](reference/machine-and-quota.md).
 
 ### Human gates and parking

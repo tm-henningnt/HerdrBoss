@@ -386,7 +386,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'lock-policy',
   }),
   S('locks', 'locks.guard.maxLoadPercent', 'Maximum load for a short job', {
-    what: 'The 5-minute load average as a percent of the machine core count. The guard pauses above this value.',
+    what: 'The 5-minute load average as a percent of the machine core count. The guard pauses above this value. A queued short job shows `waits: lane guard` and the load in the Locks panel.',
     default: '231', unit: 'Percent of cores', range: '0 to 1000; a blank field is invalid',
     raise: 'A higher value lets a short job start at a higher load.',
     lower: 'A lower value pauses short jobs at a lower load.',

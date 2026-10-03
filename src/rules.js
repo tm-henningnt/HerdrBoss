@@ -449,7 +449,7 @@ export function renderBulletin(snap, evaluation, cfg) {
       const ageSeconds = lock.ageSeconds ?? Math.max(0, Math.floor((Date.parse(snap.updatedAt) - Date.parse(lock.acquiredAt)) / 1000));
       const queue = Array.isArray(lock.queue) ? lock.queue : [];
       const queueText = queue.length
-        ? `; queue: ${queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} ${fmtDuration(ticket.waitSeconds)}`).join(', ')}`
+        ? `; queue: ${queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} ${fmtDuration(ticket.waitSeconds)}${ticket.waitReason ? ` (${ticket.waitReason})` : ''}`).join(', ')}`
         : '';
       L.push(`- ${lock.name} held by ${lock.ownerPane} (${lock.kind}) for ${fmtDuration(ageSeconds)}${queueText}.`);
     }

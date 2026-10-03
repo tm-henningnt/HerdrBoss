@@ -366,6 +366,22 @@ test('LK3 R15 the lock panel labels saved and effective capacity during legacy e
   }
 });
 
+test('the lock panel shows the lane guard wait reason on a queued short job', async () => {
+  const app = await views();
+  const s = fixture();
+  const reason = 'waits: lane guard, 5-minute load 245% exceeds 231%';
+  s.locks = [{ name: 'full-suite', scope: 'machine', state: 'live', lane: 'long', slot: 'long', kind: 'suite',
+    ownerPane: 'ws:long', project: 'alpha', ageSeconds: 60, slotsInUse: 1, slotLimit: 2,
+    configuredSlotLimit: 2, admissionMode: 'lanes', predictedMs: null,
+    queue: [{ id: 'q1', position: 1, lane: 'short', project: 'beta', pane: 'ws:wait', kind: 'suite', waitSeconds: 12, predictedMs: 60000, waitReason: reason }],
+  }];
+  app.setState(s);
+  for (const render of [app.agentsView, app.allocationView]) {
+    const html = render(s);
+    assert.equal(html.split(reason).length - 1, 2, 'the lane card and the lock table row show the reason');
+  }
+});
+
 test('picture retention renders its saved value, help and a working policy editor', async () => {
   const app = await views(); app.setModels({ codex: catalog, claude: catalog });
   const s = fixture(); s.policy.attachments = { retentionDays: 45 }; app.setState(s);
