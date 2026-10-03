@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { factoriesDir } from './factory-host.js';
+import { acquireLock, factoriesDir } from './factory-host.js';
 
 export const MINIMUM_FACTORY_VERSION = '0.1.0';
 export const FACTORY_NAME = /^(?=.{1,31}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/;
@@ -84,16 +84,23 @@ export function writeFleet(env, fleet) {
 export function updateFleet(env, change) {
   const directory = factoriesDir(env);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const lock = path.join(directory, 'fleet.lock');
-  let descriptor;
-  try { descriptor = fs.openSync(lock, 'wx', 0o600); }
-  catch { throw new Error('The fleet registry is busy. Retry the command.'); }
+  const release = acquireLock(path.join(directory, 'fleet.lock'), 'The fleet registry is busy. Retry the command.');
   try {
     const fleet = readFleet(env);
     change(fleet);
     writeFleet(env, fleet);
     return fleet;
-  } finally { fs.closeSync(descriptor); fs.unlinkSync(lock); }
+  } finally { release(); }
+}
+
+// The release constant is the floor. A lower fleet value cannot reduce it.
+export function effectiveMinimum(fleet) {
+  const fleetMinimum = fleet?.minimumFactoryVersion;
+  if (!/^\d+\.\d+\.\d+$/.test(fleetMinimum)) return MINIMUM_FACTORY_VERSION;
+  const a = fleetMinimum.split('.').map(Number);
+  const b = MINIMUM_FACTORY_VERSION.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) if (a[index] !== b[index]) return a[index] > b[index] ? fleetMinimum : MINIMUM_FACTORY_VERSION;
+  return fleetMinimum;
 }
 
 export function assertVersion(version, minimum = MINIMUM_FACTORY_VERSION) {

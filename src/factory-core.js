@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { loadRegistry } from './factory-host.js';
 import { createDockerTransport, isHostUnreachable, hostUnreachable } from './factory-transport.js';
-import { assertName, assertVersion, factoryFile, readFleet, readPrivate, updateFleet, writePrivate, VOLUMES } from './factory-store.js';
+import { assertName, assertVersion, effectiveMinimum, factoryFile, readFleet, readPrivate, updateFleet, writePrivate, VOLUMES } from './factory-store.js';
 
 export const FACTORY_ROOT = fileURLToPath(new URL('../factory/', import.meta.url));
 export const FACTORY_LABEL = 'herdr-factory';
@@ -77,6 +77,26 @@ export async function inspect(docker, kind, name) {
   } catch { throw new Error('Docker returned an invalid resource record.'); }
 }
 
+// Check the settings of a factory container. The check does not need a running container.
+export function configSafetyError(container, name) {
+  const config = container?.HostConfig;
+  if (config?.Privileged !== false) return 'The factory container is privileged or its safety record is missing.';
+  if (config.CapAdd?.length) return 'The factory container adds a capability.';
+  if (config.Devices?.length) return 'The factory container maps a host device.';
+  if ([config.PidMode, config.NetworkMode, config.IpcMode, config.UsernsMode].some((mode) => mode === 'host')) return 'The factory container shares a host namespace.';
+  const security = config.SecurityOpt;
+  if (Array.isArray(security) && security.some((option) => /^apparmor[=:]unconfined$/.test(option))) return 'The factory container has no AppArmor profile.';
+  // Docker translates systempaths=unconfined to these two empty lists.
+  const effectiveSystempaths = Array.isArray(config.MaskedPaths) && config.MaskedPaths.length === 0 && Array.isArray(config.ReadonlyPaths) && config.ReadonlyPaths.length === 0;
+  const systempaths = security?.some((option) => /^systempaths[=:]unconfined$/.test(option)) || effectiveSystempaths;
+  if (!Array.isArray(security) || !systempaths || !security.some((option) => /^seccomp[=:]/.test(option) && !/^seccomp[=:]unconfined$/.test(option))) return 'The factory container has no approved Codex security profile.';
+  if (!Array.isArray(container.Mounts) || container.Mounts.length !== 4) return 'The factory container must have four named volumes only.';
+  for (const [kind, target] of Object.entries(VOLUMES)) {
+    if (!container.Mounts.some((mount) => mount.Type === 'volume' && mount.Name === `hf-${name}-${kind}` && mount.Destination === target)) return 'The factory container has a host mount or an unexpected volume.';
+  }
+  return null;
+}
+
 export function assertOwned(resource, name) {
   const labels = resource?.Config?.Labels || resource?.Labels;
   if (labels?.[FACTORY_LABEL] !== name) throw new Error('The resource does not carry this factory label.');
@@ -129,10 +149,10 @@ async function reachableStatus(name, io) {
   const image = await inspect(docker, 'image', local.imageTag);
   const labels = image?.Config?.Labels || {};
   let compatible = true;
-  try { assertVersion(health?.version || record.version, fleet.minimumFactoryVersion); } catch { compatible = false; }
+  try { assertVersion(health?.version || record.version, effectiveMinimum(fleet)); } catch { compatible = false; }
   return { name, state, health: container?.State?.Health?.Status || null, schema: health?.schema ?? null, kitRevision: health?.kitRevision ?? null,
     version: health?.version ?? null, imageBuildDate: labels['org.opencontainers.image.created'] || null, pinsHash: labels['org.herdr-boss.pins-sha256'] || null,
-    workers, disk, minimumFactoryVersion: fleet.minimumFactoryVersion, compatible };
+    workers, disk, minimumFactoryVersion: effectiveMinimum(fleet), compatible };
 }
 
 async function statusFactory(name, io) {
@@ -141,7 +161,7 @@ async function statusFactory(name, io) {
     if (!isHostUnreachable(error)) throw error;
     const { fleet } = managedFactory(io.env, name);
     return { name, state: 'host-unreachable', health: 'host-unreachable', schema: null, kitRevision: null, version: null, imageBuildDate: null, pinsHash: null,
-      workers: null, disk: null, minimumFactoryVersion: fleet.minimumFactoryVersion, compatible: null };
+      workers: null, disk: null, minimumFactoryVersion: effectiveMinimum(fleet), compatible: null };
   }
 }
 
@@ -160,11 +180,11 @@ async function lifecycle(action, args, io) {
   const container = await inspect(docker, 'container', record.containerName);
   if (!container) throw new Error('The factory container is missing.');
   assertOwned(container, name);
-  if (!flags['--now']) assertVersion(record.version, fleet.minimumFactoryVersion);
+  if (!flags['--now']) assertVersion(record.version, effectiveMinimum(fleet));
   if (action === 'start') {
     await dockerCall(docker, ['start', record.containerName]);
     const health = await readHealth(docker, name);
-    assertVersion(health.version, fleet.minimumFactoryVersion);
+    assertVersion(health.version, effectiveMinimum(fleet));
     record.version = health.version;
     record.kitRevision = health.kitRevision;
     updateFleet(io.env, (current) => {
@@ -188,6 +208,13 @@ function allocatePorts(fleet, hostId, flags) {
   const existing = fleet.factories.filter((record) => record.hostId === hostId).flatMap((record) => record.ports ? Object.values(record.ports) : []);
   if (dashboard === ssh || existing.includes(dashboard) || existing.includes(ssh)) throw new Error('The factory ports collide.');
   return { dashboard, ssh };
+}
+
+export function imageBuildMeta(image) {
+  const labels = image.Config?.Labels || {};
+  const meta = { builtAt: labels['org.opencontainers.image.created'], pinsHash: labels['org.herdr-boss.pins-sha256'] };
+  if (!Number.isFinite(Date.parse(meta.builtAt)) || !/^[a-f0-9]{64}$/.test(meta.pinsHash)) throw new Error('The image has no valid factory build metadata.');
+  return meta;
 }
 
 async function newFactory(args, io) {
@@ -215,9 +242,7 @@ async function newFactory(args, io) {
     image = await inspect(docker, 'image', record.imageTag);
     if (!image) throw new Error('The factory build produced no image.');
   }
-  const labels = image.Config?.Labels || {};
-  const imageMeta = { builtAt: labels['org.opencontainers.image.created'], pinsHash: labels['org.herdr-boss.pins-sha256'] };
-  if (!Number.isFinite(Date.parse(imageMeta.builtAt)) || !/^[a-f0-9]{64}$/.test(imageMeta.pinsHash)) throw new Error('The image has no valid factory build metadata.');
+  const imageMeta = imageBuildMeta(image);
   for (const kind of Object.keys(VOLUMES)) {
     const volumeName = `hf-${name}-${kind}`;
     const volume = await inspect(docker, 'volume', volumeName);
@@ -233,12 +258,15 @@ async function newFactory(args, io) {
     create.push(record.imageTag);
     await dockerCall(docker, create);
   }
+  // Check the container settings before the first start and before each resumed start.
+  const unsafe = configSafetyError(existing || await inspect(docker, 'container', `hf-${name}`), name);
+  if (unsafe) throw new Error(unsafe);
   await dockerCall(docker, ['start', `hf-${name}`]);
   const health = await readHealth(docker, name);
-  assertVersion(health.version, fleet.minimumFactoryVersion);
+  assertVersion(health.version, effectiveMinimum(fleet));
   const hostRecord = { hostId: host.hostId, runtime: host.runtime, personalOnly: host.personalOnly, codexSandbox: host.codexSandbox, transport: host.transport === 'local' ? 'local' : 'ssh', ...(host.transport === 'local' ? {} : { connectionRef: host.hostId }) };
   updateFleet(io.env, (current) => {
-    assertVersion(health.version, current.minimumFactoryVersion);
+    assertVersion(health.version, effectiveMinimum(current));
     if (current.factories.some((item) => item.name === name)) throw new Error('The factory is already registered.');
     if (!current.hosts.some((item) => item.hostId === host.hostId)) current.hosts.push(hostRecord);
     current.factories.push({ factoryId: name, name, hostId: host.hostId, profile: 'personal', dashboardUrl: `http://${name}.localhost:${record.ports.dashboard}`, version: health.version, kitRevision: health.kitRevision, kind: 'container', containerName: `hf-${name}`, hostname: `${name}.localhost`, ports: record.ports, image: imageMeta });
@@ -250,6 +278,10 @@ async function newFactory(args, io) {
   io.stdout.write(`Created factory ${name}. Health /api/health: 200.\n`);
   return 0;
 }
+
+// Print the contract fields of a host only. An old inline record also holds an address and a Docker context.
+const HOST_CONTRACT_FIELDS = ['hostId', 'runtime', 'personalOnly', 'codexSandbox', 'transport', 'connectionRef'];
+const publicFleet = (fleet) => ({ ...fleet, hosts: fleet.hosts.map((host) => Object.fromEntries(HOST_CONTRACT_FIELDS.filter((key) => key in host).map((key) => [key, host[key]]))) });
 
 export async function factoryCoreCommand(args, io) {
   if ((io.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
@@ -266,8 +298,12 @@ export async function factoryCoreCommand(args, io) {
     const host = hostFor(io.env, name, flags['--host']);
     const imageTag = flags['--image'] || readPrivate(factoryFile(io.env, name), {}).imageTag || defaultFactoryImage();
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]*$/.test(imageTag)) throw new Error('The factory image tag is invalid.');
+    const docker = transportFor(host, io);
+    // Refuse a tag that exists and was not built by this tool. A build would re-tag it.
+    const present = await inspect(docker, 'image', imageTag);
+    if (present) imageBuildMeta(present);
     const { buildFactoryImage } = await import('./factory-build.js');
-    await buildFactoryImage(name, imageTag, host, transportFor(host, io), io);
+    await buildFactoryImage(name, imageTag, host, docker, io);
     io.stdout.write(`Built factory image for ${name}.\n`);
     return 0;
   }
@@ -276,7 +312,7 @@ export async function factoryCoreCommand(args, io) {
     const { positional, flags } = parse(args.slice(1), [], ['--json']);
     if (positional.length) throw new Error('Factory list takes no argument.');
     const fleet = readFleet(io.env);
-    io.stdout.write(flags['--json'] ? `${JSON.stringify(fleet)}\n` : `${fleet.factories.map((record) => `${record.name}  ${record.kind}  ${record.profile}  ${record.version}`).join('\n') || 'No factories.'}\n`);
+    io.stdout.write(flags['--json'] ? `${JSON.stringify(publicFleet(fleet))}\n` : `${fleet.factories.map((record) => `${record.name}  ${record.kind}  ${record.profile}  ${record.version}`).join('\n') || 'No factories.'}\n`);
     return 0;
   }
   throw new Error('Unknown factory command.');

@@ -23,6 +23,16 @@ A remote Docker timeout reports `host-unreachable`. Do not call a container stop
 
 Use one dedicated builder for each host. Use a labeled BuildKit container and the remote driver with `docker-container://`. Keep the builder name in the private connection store. Leave its container intact. Do not prune a shared daemon.
 
+The builder container runs with `--privileged`. This is an accepted risk. BuildKit with the remote driver needs the privileges to create build sandboxes, and the builder container runs no factory code. Limits on the container: 2 CPUs, 4 GB memory and swap, 1024 processes. The pins file `factory/pins.json` records the BuildKit image. Add a `digest` field to the `buildkit` entry to pin the image by digest.
+
+`factory build NAME --image TAG` refuses a tag that exists and has no factory build metadata. The tool never re-tags another image.
+
+The private connection store tells a Docker context host from a direct SSH host. The fleet record does not: it uses the transport `ssh` for both.
+
+The tool refuses to start a factory container that maps a host device, uses the host PID, network, IPC or user namespace, or has an unconfined AppArmor profile. The check runs before each start, also when `factory new` resumes. Codex stays off until the check passes.
+
+A stale lock file (`fleet.lock` or `registry.lock`) is removed when its owner process is gone or the file is older than 60 seconds.
+
 Use four labeled named volumes for each factory. Bind its dashboard and SSH ports to loopback. Mount no host folder or Docker socket. Add no capability to a factory. Do not use a privileged factory container.
 
 Check memory and swap before a Mac factory start. Start one container factory at a time on the Mac. Keep the OrbStack memory limit at 4 GB. Stop the OrbStack daemon when it is idle and no other task uses it.

@@ -1,25 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { managedFactory, transportFor, inspect, assertOwned, dockerCall, readHealth } from './factory-core.js';
-import { factoryFile, readPrivate, writePrivate, updateFleet, assertVersion, VOLUMES } from './factory-store.js';
+import { managedFactory, transportFor, inspect, assertOwned, dockerCall, readHealth, configSafetyError } from './factory-core.js';
+import { factoryFile, readPrivate, writePrivate, updateFleet, assertVersion, effectiveMinimum, VOLUMES } from './factory-store.js';
 import { isHostUnreachable } from './factory-transport.js';
 
 export const FACTORY_STEPS = Object.freeze(['container', 'volumes', 'herdr', 'service', 'harness-claude', 'harness-codex', 'harness-other', 'github', 'project']);
 
 function safetyError(container, name) {
   if (!container?.State?.Running) return 'The factory container is stopped.';
-  if (container.HostConfig?.Privileged !== false) return 'The factory container is privileged or its safety record is missing.';
-  if (container.HostConfig.CapAdd?.length) return 'The factory container adds a capability.';
-  const security = container.HostConfig.SecurityOpt;
-  // Docker translates systempaths=unconfined to these two empty lists.
-  const effectiveSystempaths = Array.isArray(container.HostConfig.MaskedPaths) && container.HostConfig.MaskedPaths.length === 0 && Array.isArray(container.HostConfig.ReadonlyPaths) && container.HostConfig.ReadonlyPaths.length === 0;
-  const systempaths = security?.some((option) => /^systempaths[=:]unconfined$/.test(option)) || effectiveSystempaths;
-  if (!Array.isArray(security) || !systempaths || !security.some((option) => /^seccomp[=:]/.test(option) && !/^seccomp[=:]unconfined$/.test(option))) return 'The factory container has no approved Codex security profile.';
-  if (!Array.isArray(container.Mounts) || container.Mounts.length !== 4) return 'The factory container must have four named volumes only.';
-  for (const [kind, target] of Object.entries(VOLUMES)) {
-    if (!container.Mounts.some((mount) => mount.Type === 'volume' && mount.Name === `hf-${name}-${kind}` && mount.Destination === target)) return 'The factory container has a host mount or an unexpected volume.';
-  }
-  return null;
+  return configSafetyError(container, name);
 }
 
 async function codexGate(docker, name, enabled) {
@@ -57,7 +46,7 @@ async function serviceStep(docker, name, fleet, record) {
   probe = await hostnameProbe();
   if (!allowed(probe)) throw new Error('The service does not accept the factory hostname.');
   if (health.herdrReachable !== true) throw new Error('The service cannot reach its Herdr server.');
-  assertVersion(health.version, fleet.minimumFactoryVersion);
+  assertVersion(health.version, effectiveMinimum(fleet));
   record.version = health.version;
   record.kitRevision = health.kitRevision;
   return { health, hostnameStatus: Number(probe.stdout.trim()) };

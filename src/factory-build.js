@@ -4,15 +4,21 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { factoriesDir, loadRegistry } from './factory-host.js';
+import { updateRegistry } from './factory-host.js';
 import { FACTORY_ROOT, dockerCall, inspect } from './factory-core.js';
-import { writePrivate } from './factory-store.js';
 
 const runFile = promisify(execFile);
 
 async function git(args, env) {
   try { return (await runFile('git', args, { env, timeout: 60_000, maxBuffer: 1024 * 1024 })).stdout.trim(); }
   catch { throw new Error('The factory build cannot prepare its public seed checkout.'); }
+}
+
+// The pins file records the BuildKit image. A digest is used when the file holds one.
+function buildkitImage() {
+  const { buildkit } = JSON.parse(fs.readFileSync(path.join(FACTORY_ROOT, 'pins.json'), 'utf8'));
+  if (!buildkit || !/^[a-z0-9./-]+$/.test(buildkit.image) || !/^[A-Za-z0-9_.-]+$/.test(buildkit.tag) || (buildkit.digest && !/^sha256:[a-f0-9]{64}$/.test(buildkit.digest))) throw new Error('The BuildKit pin is invalid.');
+  return `${buildkit.image}:${buildkit.tag}${buildkit.digest ? `@${buildkit.digest}` : ''}`;
 }
 
 async function buildContext(io) {
@@ -49,7 +55,7 @@ export async function prepareFactoryBuilder(host, docker, io) {
     const labels = container.Config?.Labels || {};
     if (labels['herdr-factory-spike'] !== 'fa1' || labels['herdr-factory-builder'] !== host.hostId) throw new Error('The builder container does not carry this worker label.');
     if (!container.State?.Running) await dockerCall(docker, ['start', containerName]);
-  } else await dockerCall(docker, ['run', '-d', '--name', containerName, '--label', 'herdr-factory-spike=fa1', '--label', `herdr-factory-builder=${host.hostId}`, '--privileged', 'moby/buildkit:buildx-stable-1']);
+  } else await dockerCall(docker, ['run', '-d', '--name', containerName, '--label', 'herdr-factory-spike=fa1', '--label', `herdr-factory-builder=${host.hostId}`, '--privileged', '--cpus', '2', '--memory', '4g', '--memory-swap', '4g', '--pids-limit', '1024', buildkitImage()]);
   const found = await docker.run(['buildx', 'inspect', builderName]);
   if (found.code !== 0) {
     if (!/no builder|not found|no such file or directory/i.test(found.stderr || '')) throw new Error('Docker cannot inspect the factory builder.');
@@ -60,9 +66,7 @@ export async function prepareFactoryBuilder(host, docker, io) {
     const endpoints = [...found.stdout.matchAll(/^Endpoint:\s*(\S+)/gm)].map((match) => match[1]);
     if (actualName !== builderName || driver !== 'remote' || endpoints.length !== 1 || endpoints[0] !== endpoint) throw new Error('The builder is not the dedicated factory builder.');
   }
-  const connections = loadRegistry(io.env);
-  connections.hosts[host.hostId] = { ...(connections.hosts[host.hostId] || { transport: 'local' }), builderName };
-  writePrivate(path.join(factoriesDir(io.env), 'registry.json'), connections);
+  updateRegistry(io.env, (connections) => { connections.hosts[host.hostId] = { ...(connections.hosts[host.hostId] || { transport: 'local' }), builderName }; });
   return builderName;
 }
 

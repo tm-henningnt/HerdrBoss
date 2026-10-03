@@ -15,13 +15,18 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
     throw new Error('The Docker context name is invalid.');
   }
   if (host?.transport !== 'local' && !context) throw new Error('The host has no Docker context.');
+  // The local host uses the OrbStack context by argument. No DOCKER_HOST or DOCKER_CONTEXT value from the caller reaches Docker.
+  const selected = context || (host?.runtime === 'orbstack' ? 'orbstack' : undefined);
+  const childEnv = { ...env };
+  delete childEnv.DOCKER_HOST;
+  delete childEnv.DOCKER_CONTEXT;
   return {
     async run(args, { timeout = context ? 15_000 : 30_000 } = {}) {
       return new Promise((resolve, reject) => {
         let child;
         try {
-          child = spawn('docker', [...(context ? ['--context', context] : []), ...args], {
-            env: { ...env, ...(context ? { DOCKER_CONTEXT: context } : host?.runtime === 'orbstack' ? { DOCKER_CONTEXT: 'orbstack' } : {}) }, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+          child = spawn('docker', [...(selected ? ['--context', selected] : []), ...args], {
+            env: childEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
           });
         } catch { reject(new Error('Docker could not start.')); return; }
         let stdout = '';
