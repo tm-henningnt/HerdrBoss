@@ -140,7 +140,7 @@ const DEFAULTS = {
   // Minimum seconds before the same alert is pushed again.
   alertCooldownSeconds: 6 * 3600,
   quota: { warnPercent: 90, criticalPercent: 98 },
-  quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5 },
+  quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5, planMode: 'paced' },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
   // Optional legacy shared browsers. Only alert about explicitly configured entries.
   sharedBrowsers: [],
@@ -184,6 +184,7 @@ const SERVICE_SETTINGS = [
   ['Quota plan', 'quotaPlan.horizon'],
   ['Quota plan', 'quotaPlan.tolerance'],
   ['Quota plan', 'quotaPlan.slowFactor'],
+  ['Quota plan', 'quotaPlan.planMode'],
   ['Status', 'staleStatusMinutes'],
   ['Workers', 'workers.staleIdleMinutes'],
   ['Workers', 'workers.paneCloseDelayMinutes'],
@@ -438,7 +439,7 @@ const SERVICE_SETTING_DECIMALS = new Map([
   ['quotaPlan.tolerance', [0, 50]],
   ['quotaPlan.slowFactor', [0.1, 1]],
 ]);
-const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon']);
+const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode']);
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
@@ -537,6 +538,7 @@ function validateServiceSettingValues(changes) {
       }
       normalizedChanges[setting] = value;
     } else if (SERVICE_SETTING_TEXT.has(setting)) {
+      if (setting === 'quotaPlan.planMode' && !['paced', 'burst'].includes(value)) throw new Error('quotaPlan.planMode must be paced or burst.');
       if (setting === 'quotaPlan.horizon' && value !== 'last-expiry'
         && (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value)))) {
         throw new Error('quotaPlan.horizon must be last-expiry or an ISO time.');

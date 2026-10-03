@@ -516,6 +516,37 @@ export function quotaPlanSeries(data) {
   };
 }
 
+const quotaPoints = (value) => Number(value.toFixed(1));
+
+// Format a time as weekday, day, month and browser local time, for example "Sun 4 Oct 03:00".
+function quotaLocalTime(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.weekday} ${parts.day} ${parts.month} ${parts.hour}:${parts.minute}`;
+}
+
+// One note for the Codex quota plan card: the plan mode, the distance from the planned curve, and the projection at the recent burn.
+export function quotaPlanStandingHtml(data) {
+  const difference = data?.guidance?.difference;
+  if (!Number.isFinite(difference) || !Number.isFinite(data?.usedPercent) || !Number.isFinite(data?.plannedUsageNow)) return '';
+  const points = quotaPoints(Math.abs(difference));
+  const deviation = points === 0 ? 'on plan' : `${difference > 0 ? 'ahead of plan' : 'behind plan'} by ${points} points`;
+  const [label, rule] = data.planMode === 'burst' ? ['Burst mode', 'the curve is advice only.'] : ['Paced mode', 'the curve holds the lane when use is ahead of it.'];
+  const parts = [`${quotaPoints(data.usedPercent)}% used, ${quotaPoints(data.plannedUsageNow)}% planned, ${deviation}.`];
+  const projection = data.projection;
+  if (projection && Number.isFinite(projection.ratePerHour) && Number.isFinite(projection.targetPercent)) {
+    const burn = `Recent burn ${quotaPoints(projection.ratePerHour)} points per hour;`;
+    const reach = projection.status === 'reached' ? `already at or above ${projection.targetPercent} percent.`
+      : !quotaLocalTime(projection.at) ? ''
+        : projection.status === 'after-reset' ? `at this rate: ${projection.targetPercent} percent not before the window reset.`
+          : `at this rate: ${projection.targetPercent} percent about ${quotaLocalTime(projection.at)}.`;
+    if (reach) parts.push(`${burn} ${reach}`);
+  }
+  return `<p class="viz-note"><b>${label}</b>: ${rule} ${esc(parts.join(' '))}</p>`;
+}
+
 export function quotaPlanDetailsHtml(view) {
   const windows = Array.isArray(view?.windows) ? view.windows : [];
   const credits = Array.isArray(view?.credits) ? view.credits : [];

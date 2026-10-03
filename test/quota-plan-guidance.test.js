@@ -38,9 +38,11 @@ test('Codex lane guidance compares actual use with the planned curve and toleran
     ] },
   };
 
-  assert.equal(codexPlanGuidance(plan, 5).laneState, 'ahead of plan', 'the tolerance edge stays out of hold');
+  assert.equal(codexPlanGuidance(plan, 5).laneState, 'on pace', 'the tolerance edge stays out of hold');
   assert.equal(codexPlanGuidance(plan, 4).laneState, 'hold');
-  assert.equal(codexPlanGuidance({ ...plan, usedPercent: 49 }, 5).laneState, 'Use now');
+  assert.equal(codexPlanGuidance({ ...plan, usedPercent: 49 }, 5).laneState, 'Use now', 'behind at any distance is Use now');
+  assert.equal(codexPlanGuidance({ ...plan, usedPercent: 50 }, 5).laneState, 'Use now', 'on the curve is Use now');
+  assert.equal(codexPlanGuidance({ ...plan, usedPercent: 51 }, 5).laneState, 'on pace', 'ahead within the tolerance is on pace');
   assert.equal(codexPlanGuidance(plan, 5).nextCredit.label, 'A');
   assert.equal(codexPlanGuidance({ ...plan, plan: { credits: [
     { id: 'credit-a', applyAt: null, usedPercent: null },
@@ -137,6 +139,7 @@ test('the Overview lane text shows the planned Codex state and planned percent',
   assert.match(html, /Use now/);
   assert.match(html, /50% planned/);
   assert.doesNotMatch(html, /42% expected/);
+  assert.match(ctx.laneLine('codex', { state: 'open', usedPercent: 40, planGuidance: { ...planGuidance, laneState: 'hold', deviationText: 'ahead of plan by 8 points' } }), /50% planned · ahead of plan by 8 points/);
 });
 
 test('the lane guidance falls back when there are no credits or usage history', (t) => {

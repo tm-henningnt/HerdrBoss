@@ -1,6 +1,7 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
 import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, planPercent, quotaPlanLaneText, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
+import { projectionText } from './quota-plan.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -31,13 +32,16 @@ export function fmtTime(iso) {
 
 export function codexPlanLine(guidance) {
   if (!guidance || typeof guidance !== 'object') return null;
-  const state = guidance.usageGuidance || 'normal';
+  const state = guidance.planMode === 'burst' ? 'burst mode, the curve is advice only' : guidance.usageGuidance || 'normal';
+  const head = [guidance.deviationText, state].filter(Boolean).join(', ');
   const credit = guidance.nextCredit;
-  if (!credit || typeof credit !== 'object') return `Codex plan: ${state}, no reset credit is due within the plan.`;
+  const projection = projectionText(guidance.projection);
+  const tail = projection ? `; ${projection}` : '';
+  if (!credit || typeof credit !== 'object') return `Codex plan: ${head}, no reset credit is due within the plan${tail}`;
   const percent = planPercent(credit.usedPercent);
   const due = credit.applyAt ? ` due about ${fmtTime(credit.applyAt)}` : '';
   const reach = percent ? ` when usage reaches ${percent} percent` : '';
-  return `Codex plan: ${state}, credit${credit.label ? ` ${credit.label}` : ''}${due}${reach}`;
+  return `Codex plan: ${head}, credit${credit.label ? ` ${credit.label}` : ''}${due}${reach}${tail}`;
 }
 
 // Broadcast alerts go only to orchestrators whose workspace has a working or blocked non-orchestrator agent.

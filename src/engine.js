@@ -1209,7 +1209,7 @@ export class Engine extends EventEmitter {
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
       snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse, readingAt: this.quotasAt });
       const quotaPlan = this.quotaPlanService.get({ provider: 'codex', now });
-      const planGuidance = codexPlanGuidance(quotaPlan, this.cfg.quotaPlan.tolerance);
+      const planGuidance = codexPlanGuidance(quotaPlan, this.cfg.quotaPlan.tolerance, this.cfg.quotaPlan.planMode);
       if (planGuidance && snap.lanes.codex) snap.lanes.codex.planGuidance = planGuidance;
       const nightConfig = this.cfg.watch || {};
       const laneCapsActive = snap.night?.active === true &&

@@ -90,6 +90,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     'quotaPlan.horizon': 'last-expiry',
     'quotaPlan.tolerance': 5,
     'quotaPlan.slowFactor': 0.5,
+    'quotaPlan.planMode': 'paced',
   };
   for (const [setting, value] of Object.entries(expected)) {
     assert.deepEqual(defaults.find((item) => item.setting === setting), {
@@ -103,6 +104,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     ['quotaPlan.tolerance', 0], ['quotaPlan.tolerance', 50],
     ['quotaPlan.slowFactor', 0.1], ['quotaPlan.slowFactor', 1],
     ['quotaPlan.horizon', 'last-expiry'], ['quotaPlan.horizon', '2032-04-01T00:00:00.000Z'],
+    ['quotaPlan.planMode', 'paced'], ['quotaPlan.planMode', 'burst'],
   ]) assertSetting(t, key, value);
   for (const [key, value] of [
     ['quotaPlan.burstPace', 0.09], ['quotaPlan.burstPace', 10.01],
@@ -110,7 +112,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     ['quotaPlan.margin', -0.1], ['quotaPlan.margin', 50.1],
     ['quotaPlan.tolerance', -0.1], ['quotaPlan.tolerance', 50.1],
     ['quotaPlan.slowFactor', 0.09], ['quotaPlan.slowFactor', 1.01],
-    ['quotaPlan.horizon', 'tomorrow'], ['quotaPlan.horizon', '2032-04-01'],
+    ['quotaPlan.horizon', 'tomorrow'], ['quotaPlan.horizon', '2032-04-01'], ['quotaPlan.planMode', 'fast'],
   ]) assertRejectedSetting(t, key, value);
 });
 

@@ -226,10 +226,54 @@ Usage more than the tolerance above the curve gives `hold`.
 The threshold edges count as `normal`.
 This result is guidance only.
 
-Fleet guidance uses this comparison for Codex when quota history or a reset credit is available.
-The Codex lane says `Use now` at or below the planned curve.
-It says `ahead of plan` above the curve by up to the tolerance.
-It says `hold` above the curve by more than the tolerance.
+### Anchor of the planned curve
+
+The service plans the guidance curve from a fixed anchor.
+The anchor holds a time, the used percent at that time, the window key, the reset time of the window, and the burst pace.
+The service stores the anchor as `anchor` in `quota-plan.json`.
+A new reading never moves the anchor.
+The anchor moves to the current reading in exactly four cases.
+No anchor exists.
+The burst pace differs from the pace of the anchor.
+The reset time of the window moves by more than 10 minutes.
+The used percent is more than 1 point below the used percent of the anchor, for example after a credit or a manual reset.
+The service calculates the guidance curve with `planQuota` at the anchor time and the anchor used percent.
+It stores the curve as `anchorCurve`.
+The view returns `plannedUsageNow` and `guidance` from this curve.
+`guidance.difference` is the used percent minus the planned percent.
+A preview with another burst pace does not save an anchor.
+
+### Projection at the recent burn
+
+Call `recentBurn(readings, { now })` for the burn of the last 24 hours.
+The helper uses the readings of the current run.
+A usage drop of more than 30 points or a new reset time starts a new run.
+It returns null with fewer than two readings in the run or without a positive rate.
+Call `projectedReach(burn, targetPercent, resetsAt)` for the time at which the burn reaches the target percent.
+The result has a status.
+Status `reached` means the last reading is at or above the target. The result has no time.
+Status `after-reset` means the projected time follows the window reset time.
+Status `projected` means the projected time is before the reset.
+The service uses `quotaPlan.applyThreshold` as the target.
+The projection starts at the last reading.
+The view returns the result as `projection`, or null.
+Call `projectionText(projection)` for the text.
+Status `projected` gives `at this rate: 95 percent about <weekday day month HH:MM>` in local time.
+Status `after-reset` gives `at this rate: 95 percent not before the window reset`.
+Status `reached` gives `already at or above 95 percent`.
+The helper returns an empty text when the rate, the target, or the time is not a finite value.
+Call `planDeviationText(difference)` for `ahead of plan by N points`, `behind plan by N points`, or `on plan`.
+
+### Lane guidance
+
+Fleet guidance uses the anchored comparison for Codex when quota history or a reset credit is available.
+The setting `quotaPlan.planMode` selects `paced` or `burst`.
+The default is `paced`.
+In `paced` mode the Codex lane says `hold` above the curve by more than the tolerance.
+It says `on pace` above the curve by up to the tolerance.
+It says `Use now` at or below the curve.
+In `burst` mode the curve is advice only and the lane says `Use now`.
+Both modes add the deviation text and the projection to the bulletin line, the lane text, and the Analytics card.
 Reserve, exhaustion, and trickle states keep priority over these labels.
 A lane that is ahead of pace keeps the pace text and is not in the Use now list. The plan label shows as an aside.
 With no quota history and no available credit, keep the existing linear lane guidance.
@@ -285,7 +329,7 @@ Each plan record has its time, input digest, and planned credit times.
 The service writes the file through a temporary file and rename.
 A quota tick with the same input digest skips a plan write.
 
-The `quotaPlan` settings control burst pace, application threshold, margin, horizon, guidance tolerance, and slow scenario pace.
+The `quotaPlan` settings control burst pace, application threshold, margin, horizon, guidance tolerance, slow scenario pace, and plan mode.
 The service supports Codex only.
 The calculation core can support other providers when a later service connects them.
 
@@ -301,6 +345,7 @@ Post one open Mailbox item when usage reaches the effective apply threshold and 
 Also post an item when the credit expires within 48 hours.
 Use the `approve` action.
 State the measured usage, the current time, the exact expiry, and the value of applying now against waiting.
+State the planned use, the distance from the plan, the projection at the recent burn, and, for status `projected` only, how many hours the projected time is earlier or later than the planned apply time.
 Compare two forecasts through the same horizon.
 The first forecast applies only this credit now.
 The second follows the planned time for this credit.

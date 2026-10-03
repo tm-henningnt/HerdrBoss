@@ -816,6 +816,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower tolerance makes the lane say hold after a smaller gap.',
     apply: 'service',
   }),
+  S('quota-plan', 'quotaPlan.planMode', 'Plan mode', {
+    what: 'How the planned curve guides the Codex lane. Paced holds the lane when use is ahead of the curve by more than the tolerance. Burst gives the curve as advice only and keeps the lane at Use now.',
+    default: 'paced', unit: 'Mode', range: 'paced or burst',
+    raise: 'Burst stops the hold guidance. The lane shows the points ahead of the plan and the time at which the recent burn reaches the credit threshold.',
+    lower: 'Paced enforces the curve in the guidance text and in the lane. Worker start rules do not change.',
+    apply: 'service',
+  }),
   S('quota-plan', 'quotaPlan.slowFactor', 'Slow scenario factor', {
     what: 'The fraction of the burst pace that the slow scenario uses.',
     default: '0.5', unit: 'Factor', range: '0.1 to 1',

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
+import { planDeviationText } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
@@ -851,19 +852,25 @@ function creditLabel(index) {
 }
 
 // The plan changes Codex guidance only. Keep laneStatus and worker admission rules unchanged.
-export function codexPlanGuidance(plan, tolerance = 5) {
+export function codexPlanGuidance(plan, tolerance = 5, planMode = 'paced') {
   if (!plan || (!plan.historyAvailable && !(plan.historicalP90 > 0) && !plan.credits?.length)
     || !Number.isFinite(plan.usedPercent) || !Number.isFinite(plan.plannedUsageNow)) return null;
   const difference = plan.usedPercent - plan.plannedUsageNow;
-  const laneState = difference > tolerance ? 'hold' : difference > 0 ? 'ahead of plan' : 'Use now';
+  const mode = planMode === 'burst' ? 'burst' : 'paced';
+  // A burst plan is advice only: the lane stays Use now. A paced plan holds when the use is ahead of the curve by more than the tolerance. Use at or below the curve is Use now.
+  const laneState = mode === 'burst' ? 'Use now' : difference > tolerance ? 'hold' : difference > 0 ? 'on pace' : 'Use now';
   const scheduledIndex = (plan.plan?.credits || []).findIndex((credit) => credit.applyAt);
   const scheduledCredit = scheduledIndex >= 0 ? plan.plan.credits[scheduledIndex] : null;
   return {
     laneState,
+    planMode: mode,
     usageGuidance: plan.guidance?.state ?? 'unavailable',
     usedPercent: plan.usedPercent,
     plannedPercent: plan.plannedUsageNow,
+    differencePoints: difference,
+    deviationText: planDeviationText(difference),
     tolerancePoints: tolerance,
+    projection: plan.projection ?? null,
     nextCredit: scheduledCredit ? {
       label: creditLabel(scheduledIndex),
       applyAt: scheduledCredit.applyAt,
@@ -888,7 +895,7 @@ export function quotaPlanLaneText(guidance) {
   const used = planPercent(guidance.usedPercent);
   const planned = planPercent(guidance.plannedPercent);
   const tolerance = planPercent(guidance.tolerancePoints);
-  const parts = [used && `${used}% used`, planned && `${planned}% planned`, tolerance && `tolerance ${tolerance} points`].filter(Boolean);
+  const parts = [used && `${used}% used`, planned && `${planned}% planned`, guidance.deviationText, tolerance && `tolerance ${tolerance} points`].filter(Boolean);
   return parts.length ? `${guidance.laneState} (${parts.join(', ')})` : guidance.laneState;
 }
 

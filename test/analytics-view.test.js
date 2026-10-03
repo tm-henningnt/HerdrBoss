@@ -233,6 +233,30 @@ test('quotaPlanSeries does not forecast past the plan horizon', () => {
   assert.equal(view.series[2].values[nowIndex], null);
 });
 
+test('quotaPlanStandingHtml shows the mode, the points ahead of or behind the plan, and the projection', () => {
+  assert.equal(communicationView.quotaPlanStandingHtml(null), '');
+  assert.equal(communicationView.quotaPlanStandingHtml({ guidance: null }), '');
+  const html = communicationView.quotaPlanStandingHtml({
+    planMode: 'paced', usedPercent: 38, plannedUsageNow: 30, guidance: { difference: 8, state: 'hold' },
+    projection: { ratePerHour: 3.5, targetPercent: 95, at: '2032-04-04T03:00:00.000Z' },
+  });
+  assert.match(html, /Paced/);
+  assert.match(html, /38% used, 30% planned/);
+  assert.match(html, /ahead of plan by 8 points/);
+  assert.match(html, /at this rate: 95 percent about [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d\d:\d\d/);
+  assert.match(html, /3\.5 points per hour/);
+  const burst = communicationView.quotaPlanStandingHtml({ planMode: 'burst', usedPercent: 20, plannedUsageNow: 26, guidance: { difference: -6 }, projection: null });
+  assert.match(burst, /Burst/);
+  assert.match(burst, /behind plan by 6 points/);
+  assert.doesNotMatch(burst, /at this rate/);
+  assert.doesNotMatch(communicationView.quotaPlanStandingHtml({ planMode: 'paced', usedPercent: 1, plannedUsageNow: 1, guidance: { difference: 0 }, projection: { ratePerHour: 1, targetPercent: 95, at: 'not a time' } }), /NaN|undefined|Invalid/);
+  const standing = (projection) => communicationView.quotaPlanStandingHtml({ planMode: 'paced', usedPercent: 96, plannedUsageNow: 30, guidance: { difference: 66 }, projection });
+  assert.match(standing({ ratePerHour: 2, targetPercent: 95, status: 'reached' }), /already at or above 95 percent/);
+  assert.match(standing({ ratePerHour: 2, targetPercent: 95, status: 'after-reset', at: '2032-04-09T00:00:00.000Z' }), /not before the window reset/);
+  assert.doesNotMatch(standing({ ratePerHour: 2, targetPercent: 95, status: 'projected', at: 'garbage' }), /at this rate/);
+  assert.match(app, /notes: quotaPlanStandingHtml\(quotaPlanData\)/);
+});
+
 test('Analytics quota reset form posts to the Owner-only announcement route', () => {
   assert.match(app, /data-quota-reset-form/);
   assert.match(app, /postJson\('\/api\/quota-plan\/codex\/announce'/);
