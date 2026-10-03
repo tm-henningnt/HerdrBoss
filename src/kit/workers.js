@@ -428,7 +428,7 @@ export function describeLane(provider, lane, now = Date.now()) {
     ? `; last reading ${reading.usedPercent}% ${String(reading.window || 'quota').toLowerCase()}, ${readingAge}${reading.stale ? ', stale' : ''}`
     : '';
   const planText = provider === 'codex' ? quotaPlanLaneText(lane?.planGuidance) : '';
-  const planReplacesPace = planText && !lane?.ignored && ['open', 'pace'].includes(lane?.state);
+  const planReplacesPace = planText && !lane?.ignored && lane?.state === 'open';
   const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}`;
   if (planReplacesPace) return `${provider} ${planText}${suffix}`;
   if (lane?.state === 'open' && lane.onPace) {

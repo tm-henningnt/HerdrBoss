@@ -231,6 +231,7 @@ The Codex lane says `Use now` at or below the planned curve.
 It says `ahead of plan` above the curve by up to the tolerance.
 It says `hold` above the curve by more than the tolerance.
 Reserve, exhaustion, and trickle states keep priority over these labels.
+A lane that is ahead of pace keeps the pace text and is not in the Use now list. The plan label shows as an aside.
 With no quota history and no available credit, keep the existing linear lane guidance.
 This comparison does not change worker admission, the reserve rule, or credit use.
 

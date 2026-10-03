@@ -819,10 +819,10 @@ export function useNowLanes(lanes) {
       if (lane.state === 'open') ignored.push({ ...entry, reason: 'open, quota ignored' });
       continue;
     }
-    if (provider === 'codex' && lane.planGuidance && ['open', 'pace'].includes(lane.state)) {
+    if (provider === 'codex' && validPlanGuidance(lane.planGuidance) && lane.state === 'open') {
       if (lane.planGuidance.laneState !== 'Use now') continue;
       const roomPercent = Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent);
-      belowPace.push({ ...entry, roomPercent, reason: 'below plan' });
+      belowPace.push({ ...entry, roomPercent: Number.isFinite(roomPercent) ? roomPercent : 0, reason: 'below plan' });
       continue;
     }
     if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) {
@@ -872,10 +872,24 @@ export function codexPlanGuidance(plan, tolerance = 5) {
   };
 }
 
+// A guidance object without a laneState text is no plan.
+export function validPlanGuidance(guidance) {
+  return guidance && typeof guidance === 'object' && typeof guidance.laneState === 'string' && guidance.laneState ? guidance : null;
+}
+
+// Format a percent value for plan text. A value that is not a finite number gives an empty string.
+export function planPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  return Number.isInteger(value) ? String(value) : Number(value.toFixed(1)).toString();
+}
+
 export function quotaPlanLaneText(guidance) {
-  if (!guidance) return '';
-  const percent = (value) => Number.isInteger(value) ? String(value) : Number(value.toFixed(1)).toString();
-  return `${guidance.laneState} (${percent(guidance.usedPercent)}% used, ${percent(guidance.plannedPercent)}% planned, tolerance ${percent(guidance.tolerancePoints)} points)`;
+  if (!validPlanGuidance(guidance)) return '';
+  const used = planPercent(guidance.usedPercent);
+  const planned = planPercent(guidance.plannedPercent);
+  const tolerance = planPercent(guidance.tolerancePoints);
+  const parts = [used && `${used}% used`, planned && `${planned}% planned`, tolerance && `tolerance ${tolerance} points`].filter(Boolean);
+  return parts.length ? `${guidance.laneState} (${parts.join(', ')})` : guidance.laneState;
 }
 
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.
