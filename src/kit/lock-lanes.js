@@ -13,6 +13,13 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
+// Nearest-rank percentile. With ten samples, p90 is the ninth value, so one slow release does not change a lane.
+// A key with fewer than ten holds has no percentile: the lane uses the median.
+function percentile(values, fraction) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
+}
+
 // Predict a lock duration from completed, non-reentrant release lines for one key.
 export function predictLockDuration(lines, { project, kind, name, now = Date.now() } = {}) {
   const current = typeof now === 'function' ? now() : now;
@@ -26,7 +33,12 @@ export function predictLockDuration(lines, { project, kind, name, now = Date.now
       && !line.takeover && !line.reentrant && !line.reused
       && Number.isFinite(at) && at >= cutoff && at <= nowMs;
   }).sort((left, right) => Date.parse(left.at) - Date.parse(right.at)).slice(-10);
-  return { ms: samples.length < 3 ? null : median(samples.map((line) => line.holdMs)), samples: samples.length };
+  const holds = samples.map((line) => line.holdMs);
+  return {
+    ms: samples.length < 3 ? null : median(holds),
+    p90Ms: samples.length < 10 ? null : percentile(holds, 0.9),
+    samples: samples.length,
+  };
 }
 
 function readLedgerTail(file, maxBytes) {
@@ -96,10 +108,13 @@ export function readLockLaneDurationPredictions({ dataDir = DATA_DIR, name, now 
   }));
 }
 
+// With ten holds, the lane uses the 90th percentile of the recent holds, not the median. With fewer, it uses the median. A key that is mostly fast but sometimes slow, such as
+// a push that reuses a pass and sometimes runs the full suite, must not hold the short slot during its slow runs.
 export function classifyLockLane(prediction, shortLimitMinutes) {
   const predictedMs = Number.isFinite(prediction?.ms) ? prediction.ms : null;
+  const tailMs = Number.isFinite(prediction?.p90Ms) ? prediction.p90Ms : predictedMs;
   return {
-    lane: predictedMs !== null && predictedMs <= shortLimitMinutes * 60_000 ? 'short' : 'long',
+    lane: predictedMs !== null && tailMs <= shortLimitMinutes * 60_000 ? 'short' : 'long',
     predictedMs,
   };
 }

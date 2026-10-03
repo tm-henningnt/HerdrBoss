@@ -6,7 +6,7 @@ import { createHerdrRunner } from './workers.js';
 import { DEFAULT_RULES_FILE } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
 import { FULL_SUITE_LOCK, acquireProjectLock, printLockRecords, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock } from './locks.js';
-import { DEFAULT_SUITE_UNTESTED, SUITE_PASSES_FILE, cleanTreeKey, readSuitePasses, samePassKey, sameTreeKey, writeSuitePasses } from './suite-passes.js';
+import { DEFAULT_SUITE_UNTESTED, SUITE_PASSES_FILE, cleanTreeKey, findDocsOnlyBase, readSuitePasses, samePassKey, sameTreeKey, writeSuitePasses } from './suite-passes.js';
 
 export { SUITE_PASSES_FILE };
 
@@ -35,7 +35,7 @@ export function listSuitePasses({
     const repoName = commonDirName === '.git' ? path.basename(path.dirname(record.repo)) : commonDirName;
     const tree = typeof record.tree === 'string' ? record.tree.slice(0, 12) : 'unknown';
     const command = Array.isArray(record.command) ? JSON.stringify(record.command) : '[]';
-    output(`suite: ${record.time ?? 'unknown time'} ${repoName || 'unknown repo'} ${tree} ${command}`);
+    output(`suite: ${record.time ?? 'unknown time'} ${repoName || 'unknown repo'} ${tree} ${command}${record.skipped ? ' (skipped, only docs changed)' : ''}`);
   }
   // Show the full-suite holder and queue, in the same text that `lock list` uses. A failed pane list prints nothing.
   try {
@@ -65,6 +65,7 @@ export function runSuite(command, {
   waitSeconds = SUITE_WAIT_SECONDS,
   keep = [],
   reuse = false,
+  skipDocs = false,
   output = console.log,
   now = Date.now,
   pause,
@@ -87,6 +88,22 @@ export function runSuite(command, {
     if (pass) {
       output(`suite: reused the pass of ${pass.time} for tree ${pass.tree.slice(0, 12)}`);
       return { exitCode: 0, removed: 0, reused: true, pass };
+    }
+  }
+
+  // --skip-docs: a clean tree whose changes since the last pass are docs that no test reads needs no run. The skip is a pass record.
+  if (initialKey && skipDocs) {
+    const base = findDocsOnlyBase(dataDir, initialKey, commandArray, repoRoot);
+    if (base) {
+      output('suite: skipped, only docs changed');
+      try {
+        const records = readSuitePasses(dataDir);
+        records.push({ ...initialKey, command: commandArray, node: process.version, time: new Date(now()).toISOString(), skipped: 'docs', from: base.pass.tree });
+        writeSuitePasses(dataDir, records);
+      } catch (error) {
+        output(`Warning: could not record the suite skip (${error.code ?? 'error'}).`);
+      }
+      return { exitCode: 0, removed: 0, skipped: true, from: base.pass };
     }
   }
 

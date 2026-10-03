@@ -372,7 +372,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'lock-policy',
   }),
   S('locks', 'locks.shortLimitMinutes', 'Short job limit', {
-    what: 'The predicted hold time at or below which a job uses the short lane.',
+    what: 'The hold time at or below which a job uses the short lane. Herdr Boss compares it with the median of fewer than 10 holds, or with the 90th percentile of the last 10 holds.',
     default: '6', unit: 'Minutes', range: '1 to 60',
     raise: 'A higher value sends more jobs to the short lane.',
     lower: 'A lower value sends more jobs to the long lane.',

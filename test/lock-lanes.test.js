@@ -24,13 +24,13 @@ test('predictLockDuration uses the median of the last ten qualifying releases fo
 
   assert.deepEqual(predictLockDuration(lines, {
     project: 'demo', kind: 'suite', name: 'full-suite', now: NOW,
-  }), { ms: 7500, samples: 10 });
+  }), { ms: 7500, p90Ms: 11000, samples: 10 });
 });
 
 test('predictLockDuration needs three qualifying releases', () => {
   assert.deepEqual(predictLockDuration([
     line(1, 1000), line(2, 3000),
-  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: null, samples: 2 });
+  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: null, p90Ms: null, samples: 2 });
 });
 
 test('predictLockDuration ignores takeovers, re-entrant and reused lines', () => {
@@ -39,7 +39,7 @@ test('predictLockDuration ignores takeovers, re-entrant and reused lines', () =>
     line(2, 1000, { reentrant: true }),
     line(3, 1000, { reused: true }),
     line(4, 4000), line(5, 6000), line(6, 8000),
-  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: 6000, samples: 3 });
+  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: 6000, p90Ms: null, samples: 3 });
 });
 
 test('predictLockDuration ignores releases outside the 14 day window and other keys', () => {
@@ -49,7 +49,7 @@ test('predictLockDuration ignores releases outside the 14 day window and other k
     line(2, 3000, { kind: 'push' }),
     line(3, 4000, { name: 'other-lock' }),
     line(4, 5000), line(5, 7000),
-  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: null, samples: 2 });
+  ], { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW }), { ms: null, p90Ms: null, samples: 2 });
 });
 
 test('lock policy has safe defaults and validates each lane and guard range', () => {
@@ -175,4 +175,48 @@ test('LK3 R3 a legacy holder or ticket makes admission exclusive and globally FI
     tickets: [{ id: 'old' }, { id: 'new', lane: 'short' }], ticketId: 'new' }), null);
   assert.deepEqual(chooseLockSlot({ lane: 'long', slots: 2,
     tickets: [{ id: 'old' }, { id: 'new', lane: 'short' }], ticketId: 'old' }), { slot: 'long' });
+});
+
+test('predictLockDuration reports the 90th percentile of the last ten holds next to the median', () => {
+  const lines = [...Array.from({ length: 8 }, (_, i) => line(10 - i, 3000)), line(2, 600000), line(1, 900000)];
+
+  const prediction = predictLockDuration(lines, { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW });
+
+  assert.equal(prediction.ms, 3000);
+  assert.equal(prediction.p90Ms, 600000);
+  assert.equal(prediction.samples, 10);
+});
+
+test('classifyLockLane sends a key with a long tail to the long lane although its median is short', () => {
+  const lines = [...Array.from({ length: 7 }, (_, i) => line(10 - i, 3000)), line(3, 600000), line(2, 600000), line(1, 600000)];
+  const prediction = predictLockDuration(lines, { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW });
+
+  assert.equal(classifyLockLane(prediction, 6).lane, 'long');
+});
+
+test('classifyLockLane keeps a key with one slow release in the short lane', () => {
+  const lines = [...Array.from({ length: 9 }, (_, i) => line(10 - i, 60000)), line(1, 900000)];
+  const prediction = predictLockDuration(lines, { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW });
+
+  assert.equal(classifyLockLane(prediction, 6).lane, 'short');
+});
+
+test('classifyLockLane uses the median when a prediction has no percentile', () => {
+  assert.equal(classifyLockLane({ ms: 60000, samples: 5 }, 6).lane, 'short');
+  assert.equal(classifyLockLane({ ms: 600000, samples: 5 }, 6).lane, 'long');
+});
+
+test('fewer than ten holds use the median, so a key with five holds ignores its slow hold', () => {
+  const lines = [...Array.from({ length: 4 }, (_, i) => line(6 - i, 60000)), line(1, 900000)];
+  const prediction = predictLockDuration(lines, { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW });
+
+  assert.equal(prediction.p90Ms, null);
+  assert.equal(classifyLockLane(prediction, 6).lane, 'short');
+});
+
+test('fewer than ten holds with a slow median use the long lane', () => {
+  const lines = [line(3, 900000), line(2, 900000), line(1, 60000)];
+  const prediction = predictLockDuration(lines, { project: 'demo', kind: 'suite', name: 'full-suite', now: NOW });
+
+  assert.equal(classifyLockLane(prediction, 6).lane, 'long');
 });

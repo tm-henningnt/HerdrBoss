@@ -171,3 +171,84 @@ export function reusablePushPass(root, { dataDir, hookFile, untested = DEFAULT_S
   const passes = commands.map((command) => findSuitePass(dataDir, key, command));
   return passes.every(Boolean) ? { key, commands, passes } : null;
 }
+
+// A docs-only skip. A changed path counts as a doc only when it is LICENSE or a .md file outside the code folders. A doc is never
+// a symbolic link or a submodule. A doc counts as read, and the suite runs, when any test file, or any tracked file under src, test,
+// public, or kit, contains its relative path or its name without the extension, or when a test reads a folder of the path with
+// readdir, glob, or walk. When unsure, the suite runs.
+const NEVER_DOC = /^(src|public|test|tests|__tests__|spec|kit|bin|scripts|\.github)\//;
+const TEST_FILE = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
+const READER_FOLDER = /^(src|test|public|kit)\//;
+const MAX_READER_FILES = 5000;
+const MAX_READER_BYTES = 64 * 1024 * 1024;
+
+const isDocPath = (file) => !NEVER_DOC.test(file) && (file === 'LICENSE' || file.endsWith('.md'));
+
+// The texts of the tracked files that can read a doc: the test files and every file under src, test, public, and kit.
+// Returns null when the set is too large to check.
+function readerTexts(root) {
+  const files = gitText(root, 'ls-tree', '-r', '--name-only', 'HEAD').split('\n')
+    .filter((file) => file && (TEST_FILE.test(file) || READER_FOLDER.test(file)));
+  if (files.length > MAX_READER_FILES) return null;
+  let bytes = 0;
+  const texts = [];
+  for (const file of files) {
+    const text = fs.readFileSync(path.join(root, file), 'utf8');
+    bytes += text.length;
+    if (bytes > MAX_READER_BYTES) return null;
+    texts.push(text);
+  }
+  return texts;
+}
+
+const quoted = (name) => new RegExp(`['"\`]${name.replace(/[.*+^${}()|[\]\\]/g, '\\$&')}['"\`]`);
+
+function readByCode(file, texts) {
+  const segments = file.split('/');
+  const base = segments.at(-1);
+  const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+  const folders = segments.slice(0, -1);
+  const folderNamed = (text) => folders.some((name, index) => quoted(name).test(text) || quoted(`${folders.slice(0, index + 1).join('/')}/?`).test(text));
+  return texts.some((text) => text.includes(file) || text.includes(stem) || quoted(base).test(text)
+    || (/readdir|glob|walk/i.test(text) && folderNamed(text)));
+}
+
+// The changed paths from tree fromTree to tree toTree, with the git modes. Returns null when a path is a symbolic link or a submodule.
+function changedPaths(root, fromTree, toTree) {
+  const fields = gitText(root, 'diff-tree', '-r', '--no-renames', '--raw', '-z', fromTree, toTree).split('\0').filter(Boolean);
+  const files = [];
+  for (let i = 0; i < fields.length; i += 2) {
+    const [oldMode, newMode] = fields[i].slice(1).split(' ');
+    if ([oldMode, newMode].some((mode) => mode === '120000' || mode === '160000')) return null;
+    files.push(fields[i + 1]);
+  }
+  return files;
+}
+
+// Returns { skip: true, files } when every path that changed from the tree fromTree to the tree of HEAD is a doc that no code reads.
+export function docsOnlyChange(root, fromTree) {
+  try {
+    if (!/^[0-9a-f]{40,64}$/i.test(fromTree ?? '')) return { skip: false };
+    const toTree = gitText(root, 'rev-parse', 'HEAD^{tree}');
+    const files = changedPaths(root, fromTree, toTree);
+    if (!files?.length || !files.every(isDocPath)) return { skip: false };
+    const texts = readerTexts(root);
+    if (!texts || files.some((file) => readByCode(file, texts))) return { skip: false };
+    return { skip: true, files };
+  } catch {
+    return { skip: false };
+  }
+}
+
+// The newest pass of the same repository, lockfiles, Node version, and command, whatever its tree. A docs-only change from it
+// can reuse it.
+export function findDocsOnlyBase(dataDir, key, command, root) {
+  const pass = readSuitePasses(dataDir).slice().reverse().find((record) => record?.repo === key.repo
+    && JSON.stringify(record.locks ?? {}) === JSON.stringify(key.locks ?? {})
+    && record.node === process.version && Array.isArray(record.command)
+    && JSON.stringify(record.command) === JSON.stringify(command));
+  if (!pass) return null;
+  const change = docsOnlyChange(root, pass.tree);
+  return change.skip ? { pass, files: change.files } : null;
+}
+
