@@ -1503,6 +1503,7 @@ function useNowList(lanes) {
     if (!lane) continue;
     if (lane.unmetered) { if (lane.state === 'open') free.push('free models'); continue; }
     if (lane.ignored) { if (lane.state === 'open') ignored.push(kind(provider)); continue; }
+    if (lane.paceHold) continue;
     if (provider === 'codex' && validPlan(lane.planGuidance) && lane.state === 'open') {
       if (lane.planGuidance.laneState === 'Use now') below.push([Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent) || 0, kind(provider)]);
       continue;
@@ -1525,6 +1526,9 @@ function guidanceSummary(s) {
   const slow = Object.entries(s.lanes || {}).filter(([provider, lane]) => lane && !lane.unmetered && !lane.ignored
     && held[lane.state] && !(provider === 'codex' && validPlan(lane.planGuidance) && lane.state === 'open'));
   if (slow.length) parts.push(slow.map(([provider, lane]) => `${PROVIDERS[provider] || provider} ${held[lane.state]}`).join(', '));
+  for (const [provider, lane] of Object.entries(s.lanes || {})) {
+    if (lane?.paceHold && !lane.ignored) parts.push(`${PROVIDERS[provider] || provider} hold new Claude work`);
+  }
   const codexPlan = s.lanes?.codex?.planGuidance;
   if (validPlan(codexPlan) && !s.lanes.codex.ignored && s.lanes.codex.state === 'open' && codexPlan.laneState !== 'Use now') {
     parts.push(`Codex ${codexPlan.laneState}`);
@@ -1538,6 +1542,14 @@ function guidanceSummary(s) {
 }
 
 // The state of each lane in plain words, for the body of the Overview guidance.
+// The projection of a Claude hold, for example "100 percent at Sun 4 Oct 03:00". An empty text means no projection.
+function holdProjection(hold) {
+  const at = Date.parse(hold?.projectedAt);
+  if (!Number.isFinite(at)) return '';
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(at)).map((part) => [part.type, part.value]));
+  return ` · 100 percent at ${parts.weekday} ${parts.day} ${parts.month} ${parts.hour}:${parts.minute}`;
+}
+
 function laneLine(provider, lane) {
   const name = provider === 'unmetered' ? 'Free models' : PROVIDERS[provider] || provider;
   const plan = provider === 'codex' ? validPlan(lane.planGuidance) : null;
@@ -1550,9 +1562,10 @@ function laneLine(provider, lane) {
   const readingText = Number.isFinite(reading?.usedPercent) && (Number.isFinite(reading?.ageMinutes) || reading.stale)
     ? ` · last reading ${reading.usedPercent}% ${esc(String(reading.window || 'quota').toLowerCase())}, ${readingAge}${reading.stale ? ' · stale' : ''}`
     : '';
-  const text = planReplacesPace ? plan.laneState : lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
+  const hold = lane.paceHold && !lane.ignored ? lane.paceHold : null;
+  const text = hold ? `hold new Claude work${holdProjection(hold)}` : planReplacesPace ? plan.laneState : lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
     : ({ open: 'open', pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted', trickle: 'trickle', closed: 'closed', unknown: 'no quota data' })[lane.state] || lane.state;
-  const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : planReplacesPace ? plan.laneState === 'Use now' ? 'ok' : 'warn' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
+  const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : hold ? 'warn' : planReplacesPace ? plan.laneState === 'Use now' ? 'ok' : 'warn' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
   const planAside = plan && !planReplacesPace ? ` · plan ${plan.laneState}` : '';
   return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}</span></li>`;
 }
@@ -6296,7 +6309,7 @@ const HELP = {
   fleet: ['Fleet', '<p>The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. The health cell becomes red and shows the reason. Last seen shows the last successful poll. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. Spend shows USD by day, role, and harness.</p><p>Use factory connect NAME on the host tool machine to connect a registered container factory. Run it again to resume. Use factory connect --check NAME for one check with name, state, and age only. The command reuses a matching Tailscale Serve forward. If Serve needs Owner rights, it prints the masked error and two Owner command choices, then exits 3. Run one choice in the WSL Owner terminal. The dashboard access rule stays in force.</p><p>Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.</p>'],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
-    <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p><p>When quota history or a reset credit is available, the Codex lane compares current use with its planned curve. The lane says <b>Use now</b>, <b>on pace</b>, or <b>hold</b>, and shows how many points use is ahead of or behind the plan. The plan changes guidance only.</p>
+    <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p><p>When quota history or a reset credit is available, the Codex lane compares current use with its planned curve. The lane says <b>Use now</b>, <b>on pace</b>, or <b>hold</b>, and shows how many points use is ahead of or behind the plan. The plan changes guidance only.</p><p>At 80 percent weekly use with more than 12 hours to the weekly reset, the Claude lane says <b>hold new Claude work</b> and leaves the Use now list. It shows the time at which the recent burn reaches 100 percent. Without a positive burn or with fewer than two readings, it shows no time. The hold changes guidance only. A worker start follows the lane state.</p>
     <h3>Needs your decision</h3><p>The line under the guidance shows the number of open tasks that wait for you, with a link to each project. It shows only when a task waits for you.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the current guidance at its rules. <b>Adjust policy</b> opens the Allocation page.</p>
     <h3>Handovers</h3><p>When no handover waits for review, <b>Project continuity</b> is one line under <b>Needs attention</b>. Otherwise it lists the prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>

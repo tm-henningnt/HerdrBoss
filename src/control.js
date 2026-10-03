@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
-import { planDeviationText } from './quota-plan.js';
+import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
@@ -696,7 +696,7 @@ const isLongQuotaWindow = (window) => (Number.isFinite(window.windowMinutes) && 
   || /^monthly$/i.test(String(window.label || '').trim());
 
 // One state per metered provider: open, trickle, pace, reserve, exhausted, or unknown.
-export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, readingAt = null } = {}) {
+export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, readingAt = null, readings = [] } = {}) {
   const lanes = {};
   for (const source of quotas || []) {
     const measuredAt = quotaObservedAt(source, readingAt);
@@ -792,6 +792,8 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, re
   for (const source of quotas || []) {
     const lane = lanes[source.provider];
     if (!lane) continue;
+    const hold = source.provider === 'claude' ? claudePaceHold(source, lane, readings, now) : null;
+    if (hold) lane.paceHold = hold;
     const window = (source.windows || []).find((item) => item.key === 'primary' && !item.extra)
       || (source.windows || []).find((item) => !item.extra);
     const measuredAt = quotaObservedAt(source, readingAt);
@@ -806,6 +808,33 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, re
     } : null;
   }
   return lanes;
+}
+
+const CLAUDE_HOLD_PERCENT = 80;
+const CLAUDE_HOLD_MIN_HOURS = 12;
+
+// Claude pace guidance: from 80 percent weekly use with more than 12 hours to the reset, hold new Claude work.
+// The guidance changes the lanes line and the bulletin only. The lane state and worker admission stay unchanged.
+// projectedAt is the time at which the recent burn reaches 100 percent, or null without a positive burn or after the reset.
+function claudePaceHold(source, lane, readings, now) {
+  if (lane.state === 'unknown' || lane.state === 'exhausted' || lane.ignored) return null;
+  const window = (source.windows || []).find((w) => !w.extra && Number(w.windowMinutes) >= 10080 && liveWindow(w, now));
+  const hoursToReset = window ? (Date.parse(window.resetsAt) - now) / 3600000 : NaN;
+  if (!window || window.usedPercent < CLAUDE_HOLD_PERCENT || !(hoursToReset > CLAUDE_HOLD_MIN_HOURS)) return null;
+  const burn = recentBurn((readings || []).filter((row) => row.provider === 'claude' && row.window === window.key), { now });
+  const projection = projectedReach(burn, 100, window.resetsAt);
+  return {
+    usedPercent: window.usedPercent,
+    resetsAt: window.resetsAt,
+    projectedAt: projection?.status === 'projected' ? projection.at : null,
+  };
+}
+
+// The text of the hold, for the lanes line and the bulletin.
+export function claudePaceHoldText(hold) {
+  if (!hold || !Number.isFinite(hold.usedPercent)) return '';
+  const projection = hold.projectedAt && Number.isFinite(Date.parse(hold.projectedAt)) ? `; 100 percent at ${formatLocalTime(hold.projectedAt)}` : '';
+  return `hold new Claude work (${planPercent(hold.usedPercent)}% weekly used${projection})`;
 }
 
 const USE_NOW_KINDS = { claude: 'claude', codex: 'codex', opencodego: 'opencode' };
@@ -829,6 +858,7 @@ export function useNowLanes(lanes) {
       if (lane.state === 'open') ignored.push({ ...entry, reason: 'open, quota ignored' });
       continue;
     }
+    if (lane.paceHold) continue;
     if (provider === 'codex' && validPlanGuidance(lane.planGuidance) && lane.state === 'open') {
       if (lane.planGuidance.laneState !== 'Use now') continue;
       const roomPercent = Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent);

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
+import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine, refreshKitIfRequired, safeRefreshKit } from './agents-check.js';
@@ -429,7 +429,9 @@ export function describeLane(provider, lane, now = Date.now()) {
     : '';
   const planText = provider === 'codex' ? quotaPlanLaneText(lane?.planGuidance) : '';
   const planReplacesPace = planText && !lane?.ignored && lane?.state === 'open';
-  const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}`;
+  const holdText = claudePaceHoldText(lane?.paceHold);
+  const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}${holdText && lane?.state !== 'open' ? `; pace guidance: ${holdText}` : ''}`;
+  if (holdText && lane.state === 'open' && !lane.ignored) return `${provider} ${holdText}${suffix}`;
   if (planReplacesPace) return `${provider} ${planText}${suffix}`;
   if (lane?.state === 'open' && lane.onPace) {
     const { usedPercent, expectedPercent, tolerancePoints } = lane.onPace;

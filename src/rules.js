@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, planPercent, quotaPlanLaneText, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
+import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, claudePaceHoldText, planPercent, quotaPlanLaneText, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
 import { projectionText } from './quota-plan.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
@@ -489,12 +489,13 @@ export function renderBulletin(snap, evaluation, cfg) {
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
       const planText = provider === 'codex' && lane.planGuidance ? quotaPlanLaneText(lane.planGuidance) : '';
       const planReplacesPace = planText && !lane.ignored && lane.state === 'open';
-      const text = planReplacesPace ? `${planText}.` : lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
+      const holdText = claudePaceHoldText(lane.paceHold);
+      const text = holdText && lane.state === 'open' ? `${holdText}.` : planReplacesPace ? `${planText}.` : lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
         : lane.state === 'exhausted' ? `exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || '?'}.`
           : lane.state === 'trickle' ? `trickle (${lane.window} ${lane.usedPercent}% used, ahead of pace): about ${lane.allowancePercent.toFixed(1)}%/day, ${(lane.usedTodayPercent || 0).toFixed(1)}% used today.`
         : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window${lane.expectedPercent != null && Number.isFinite(lane.tolerancePoints) ? `, tolerance ${lane.tolerancePoints} points` : ''}.${back}`;
       const goals = goalSummary(lane.goals);
-      const planAside = planText && !planReplacesPace ? ` Plan guidance: ${planText}.` : '';
+      const planAside = `${planText && !planReplacesPace ? ` Plan guidance: ${planText}.` : ''}${holdText && lane.state !== 'open' ? ` Pace guidance: ${holdText}.` : ''}`;
       L.push(`- ${providerName(provider)}: ${text}${planAside}${goals ? ` ${goals}.` : ''}${lane.state === 'pace' && snap.leastOverProvider === provider ? ' Every metered provider is over pace; this one is the least over, and worker start allows it.' : ''}`);
     }
   }

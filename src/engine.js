@@ -15,7 +15,7 @@ import { isOpus, normalizeModel } from './kit/workers.js';
 import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
-import { quotaUsageToday, recordQuotaSnapshot, readUsage } from './usage.js';
+import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser, rememberBrowserTabs } from './browser-pool.js';
@@ -1225,7 +1225,7 @@ export class Engine extends EventEmitter {
       // Apply the failure status before deriving control, so a failed worker does not count as running.
       snap.herdr = herdr ? { ...herdr, panes: applyWorkerFailureStatuses(herdr.panes, workerTransitions.failures) } : herdr;
       const todayUse = quotaUsageToday(snap.quotas, undefined, now);
-      snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse, readingAt: this.quotasAt });
+      snap.lanes = laneStatus(snap.quotas, policy, now, { todayUse, readingAt: this.quotasAt, readings: readQuotaHistory({ since: new Date(now - 24 * 3600000).toISOString() }) });
       const quotaPlan = this.quotaPlanService.get({ provider: 'codex', now });
       const planGuidance = codexPlanGuidance(quotaPlan, this.cfg.quotaPlan.tolerance, this.cfg.quotaPlan.planMode);
       if (planGuidance && snap.lanes.codex) snap.lanes.codex.planGuidance = planGuidance;
