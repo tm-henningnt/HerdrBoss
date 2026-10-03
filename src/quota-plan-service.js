@@ -110,6 +110,92 @@ function normalizedCredits(row, usedCredits, now) {
   });
 }
 
+function creditMailboxItem(item, provider, id) {
+  return item?.thread === 'boss' && item.to === 'owner' && item.action === 'approve'
+    && item.quotaCreditProvider === provider && item.quotaCreditId === id;
+}
+
+function openCreditMailboxItems(messageStore, provider, id) {
+  if (!messageStore) return [];
+  return messageStore.all().filter((item) => creditMailboxItem(item, provider, id) && !item.closedAt);
+}
+
+function closeCreditMailboxItems(messageStore, provider, id, now) {
+  const at = new Date(now).toISOString();
+  for (const item of openCreditMailboxItems(messageStore, provider, id)) {
+    messageStore.update(item.id, { closedAt: at, readAt: item.readAt || at }, { now });
+  }
+}
+
+function markCreditUsed(state, provider, id, now) {
+  if (state.usedCredits.some((credit) => credit.provider === provider && credit.id === id)) return;
+  state.usedCredits.push({ provider, id, usedAt: new Date(now).toISOString() });
+  state.usedCredits = state.usedCredits.slice(-EVENT_HISTORY_LIMIT);
+}
+
+function soonestExpiringCreditMailboxItem(messageStore, provider) {
+  if (!messageStore) return null;
+  return messageStore.all().filter((item) => item?.thread === 'boss' && item.to === 'owner' && item.action === 'approve'
+    && item.quotaCreditProvider === provider && typeof item.quotaCreditId === 'string' && !item.closedAt)
+    .sort((left, right) => Date.parse(left.quotaCreditExpiresAt) - Date.parse(right.quotaCreditExpiresAt))[0] || null;
+}
+
+function signedPoints(value) {
+  const points = Math.round(value * 10) / 10;
+  return `${points > 0 ? '+' : ''}${points}`;
+}
+
+function creditPromptText({ credit, built, view, now }) {
+  const creditInput = { ...built.input, credits: [built.input.credits.find((item) => item.id === credit.id)], horizon: view.horizon };
+  const waitingPlan = planQuota(creditInput);
+  const immediatePlan = planQuota({ ...creditInput, credits: [], announcedResets: [
+    ...(creditInput.announcedResets || []), { at: new Date(now).toISOString(), kind: 'full' },
+  ] });
+  const fastValue = immediatePlan.fast.totalConsumed - waitingPlan.fast.totalConsumed;
+  const slowValue = immediatePlan.slow.totalConsumed - waitingPlan.slow.totalConsumed;
+  const waitingAt = waitingPlan.credits[0]?.applyAt || 'no planned application time';
+  return [
+    `Codex reset credit ${credit.id} is ready at ${built.window.usedPercent}% usage.`,
+    `Time: ${new Date(now).toISOString()}.`,
+    `Value of applying now against waiting for ${waitingAt}: ${signedPoints(fastValue)} quota points in the fast plan and ${signedPoints(slowValue)} in the slow plan by ${view.horizon}.`,
+    `Exact expiry: ${credit.expiresAt}.`,
+    'Apply the credit in the Codex app. Herdr Boss does not apply credits.',
+  ].join('\n');
+}
+
+function postDueCreditPrompts(messageStore, provider, built, view, now) {
+  if (!messageStore) return;
+  const threshold = view.plan.applyThreshold;
+  for (const credit of view.credits) {
+    const expiry = Date.parse(credit.expiresAt);
+    const plannedAt = Date.parse(credit.applyAt);
+    const dueByPlan = built.window.usedPercent >= threshold && Number.isFinite(plannedAt) && plannedAt <= now;
+    const expiringSoon = expiry > now && expiry - now <= 48 * HOUR;
+    if (!dueByPlan && !expiringSoon) continue;
+    if (openCreditMailboxItems(messageStore, provider, credit.id).length) continue;
+    messageStore.append({
+      thread: 'boss', from: 'boss', to: 'owner', kind: 'reply',
+      text: creditPromptText({ credit, built, view, now }), action: 'approve', replyTo: null, status: 'new',
+      quotaCreditProvider: provider, quotaCreditId: credit.id, quotaCreditExpiresAt: credit.expiresAt,
+    }, { now });
+  }
+}
+
+function quotaCreditExpiryNotices(state, now) {
+  const current = state.current;
+  if (current?.provider !== 'codex') return [];
+  return (current.credits || []).flatMap((credit) => {
+    const expiresAt = Date.parse(credit.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt - now > DAY) return [];
+    return [{
+      key: `quota-plan:expiry:${credit.id}:${credit.expiresAt}`,
+      severity: 'warn', scope: 'user', once: true,
+      title: 'Codex reset credit expires within 24 hours',
+      text: `Codex reset credit ${credit.id} expires at ${credit.expiresAt}. Apply it in the Codex app before then if you want to use it. Herdr Boss does not apply credits.`,
+    }];
+  });
+}
+
 function validSettings(settings) {
   const result = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   const ranged = [
@@ -181,8 +267,7 @@ function addPlan(state, view) {
   state.current = view;
 }
 
-function calculate(options) {
-  const built = buildInput(options);
+function calculate(options, built = buildInput(options)) {
   const existing = options.state.current;
   if (existing?.inputsDigest === built.inputsDigest && !options.force) {
     const plannedUsageNow = plannedUsageAt(existing.plan, built.currentTime);
@@ -242,7 +327,7 @@ function validateAnnouncement({ provider, at, kind = 'full', refundPercent = 0, 
   return { id: randomUUID(), provider, at: new Date(resetAt).toISOString(), kind, ...(kind === 'partial' ? { refundPercent } : {}), createdAt: new Date(currentTime).toISOString() };
 }
 
-export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_SETTINGS, now: clock = () => Date.now() } = {}) {
+export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_SETTINGS, now: clock = () => Date.now(), messageStore = null } = {}) {
   const directory = path.resolve(dataDir);
   const file = path.join(directory, 'quota-plan.json');
   let normalizedSettings = validSettings(settings);
@@ -258,10 +343,21 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
     const window = findWindow(row);
     let changedByObservation = false;
     if (window) changedByObservation = observeReset(state, { provider, row, window, currentTime, dataDir: directory });
-    const view = calculate({ provider, quotas: quotas || loadQuotas(), now: currentTime, settings: normalizedSettings, state: { ...state, dataDir: directory }, burstPace, horizon, whatIf, force: force || changedByObservation });
+    if (changedByObservation) {
+      const prompt = soonestExpiringCreditMailboxItem(messageStore, provider);
+      if (prompt) {
+        markCreditUsed(state, provider, prompt.quotaCreditId, currentTime);
+        closeCreditMailboxItems(messageStore, provider, prompt.quotaCreditId, currentTime);
+      }
+    }
+    const calculationOptions = { provider, quotas: quotas || loadQuotas(), now: currentTime, settings: normalizedSettings,
+      state: { ...state, dataDir: directory }, burstPace, horizon, whatIf, force: force || changedByObservation };
+    const built = buildInput(calculationOptions);
+    const view = calculate(calculationOptions, built);
     if (!view.skipped) addPlan(state, view);
     else if (changedByObservation) state.current = { ...view, skipped: undefined };
     if (save && (!view.skipped || changedByObservation || nextState)) writeState(file, state);
+    if (save) postDueCreditPrompts(messageStore, provider, built, view, currentTime);
     const summary = { ...view };
     delete summary.skipped;
     return summary;
@@ -295,6 +391,9 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
         guidance: usageGuidance(current.plan, currentTime, current.usedPercent, normalizedSettings.tolerance),
       };
     },
+    expiryNotices({ now = clock() } = {}) {
+      return quotaCreditExpiryNotices(loadState(), time(now, 'now'));
+    },
     summary({ provider = 'codex', now = clock() } = {}) {
       const view = this.get({ provider, now });
       const nextCreditAt = view.plan?.credits?.find((credit) => credit.applyAt)?.applyAt ?? null;
@@ -322,14 +421,14 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
       if (typeof id !== 'string' || !id.trim()) throw new Error('A credit ID is required.');
       const currentQuotas = quotas || loadQuotas();
       const row = currentQuotas.find((item) => item.provider === provider && !item.error);
-      const found = normalizedCredits(row, [], time(now, 'now')).some((credit) => credit.id === id);
+      const currentTime = time(now, 'used time');
+      const found = normalizedCredits(row, [], currentTime).some((credit) => credit.id === id)
+        || openCreditMailboxItems(messageStore, provider, id).length > 0;
       if (!found) throw new Error(`No available credit has ID ${id}.`);
       const state = loadState();
-      if (!state.usedCredits.some((credit) => credit.provider === provider && credit.id === id)) {
-        state.usedCredits.push({ provider, id, usedAt: iso(now, 'used time') });
-        state.usedCredits = state.usedCredits.slice(-EVENT_HISTORY_LIMIT);
-      }
-      return persistCalculated({ provider, quotas: currentQuotas, now, force: true }, { nextState: state, save: true });
+      markCreditUsed(state, provider, id, currentTime);
+      closeCreditMailboxItems(messageStore, provider, id, currentTime);
+      return persistCalculated({ provider, quotas: currentQuotas, now: currentTime, force: true }, { nextState: state, save: true });
     },
   };
 }

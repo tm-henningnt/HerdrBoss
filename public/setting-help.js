@@ -94,8 +94,8 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'quota-plan', title: 'Quota plan', advanced: true,
-    controls: 'The Codex reset credit plan and the usage curve that guides it.',
-    affects: 'Quota plan guidance only. It does not change worker starts or apply a credit.',
+    controls: 'The Codex reset credit plan, Owner prompts, expiry notices, and usage curve.',
+    affects: 'Quota plan guidance, Mailbox items, and expiry notices. It does not change worker starts or apply a credit.',
     safe: 'Safe to change. Herdr Boss shows estimates and never applies a reset credit.',
     restart: 'No restart. Select Save in Quota plan settings.',
   },
@@ -789,7 +789,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('quota-plan', 'quotaPlan.applyThreshold', 'Credit apply threshold', {
-    what: 'The used percent at which the plan may schedule a reset credit.',
+    what: 'The used percent at which the plan may schedule a reset credit and ask the Owner to apply it.',
     default: '95', unit: 'Percent used', range: '50 to 100',
     raise: 'A higher threshold saves more quota before the planned reset.',
     lower: 'A lower threshold schedules the reset sooner.',

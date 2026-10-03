@@ -866,7 +866,13 @@ Herdr Boss refreshes the plan after a good quota reading. It saves announcements
 
 Use `herdr-boss quota plan codex` to view the plan. Use `--what-if TIME` to change the horizon for one calculation. Use `--announce TIME[:full|partial]` to examine a possible reset without saving it. Use `herdr-boss quota announce codex --at TIME` to save a known reset. A saved reset must be in the next 30 days. Only the Owner can save one through the dashboard API.
 
-Herdr Boss never applies a reset credit. The Owner applies it in the Codex app. Use `herdr-boss quota credit used ID` only after the Owner confirms the application. Read [Quota reset planner](quota-plan.md) for the calculation and API details.
+Herdr Boss never applies a reset credit. The Owner applies it in the Codex app. Use `herdr-boss quota credit used ID` only after the Owner confirms the application.
+
+The service posts one approval item in the Mailbox when usage reaches the effective threshold and the plan says to apply a credit now. It also posts an item when a credit expires within 48 hours. The item shows usage, the current time, the exact expiry, and the point difference between applying now and waiting for the planned time in the fast and slow forecasts. The service does not post another item while that credit has an open item.
+
+The service closes the item when you run `herdr-boss quota credit used ID`. It also closes the open credit item with the earliest expiry when a quota reading shows a usage drop greater than 30 points. The service marks that credit as used. It sends one warning when an available credit enters the 24 hours before expiry. The warning uses the normal notice path.
+
+Read [Quota reset planner](quota-plan.md) for the calculation and API details.
 
 ## Settings and allocation
 

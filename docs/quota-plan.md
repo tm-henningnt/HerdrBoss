@@ -278,6 +278,30 @@ Use `herdr-boss quota plan codex` to view the guidance.
 The `--announce` option adds a reset to this calculation only.
 The `--what-if` option sets a horizon for this calculation only.
 Neither option saves an event.
+
+### Owner prompts and expiry notices
+
+On each good Codex quota tick, check each available credit.
+Post one open Mailbox item when usage reaches the effective apply threshold and the plan time has arrived.
+Also post an item when the credit expires within 48 hours.
+Use the `approve` action.
+State the measured usage, the current time, the exact expiry, and the value of applying now against waiting.
+Compare two forecasts through the same horizon.
+The first forecast applies only this credit now.
+The second follows the planned time for this credit.
+Show the point difference for the fast and slow scenarios.
+Do not post another item while an item for the same credit stays open.
+
+The Owner applies the credit in the Codex app.
+Herdr Boss never applies it.
+`herdr-boss quota credit used ID` marks the confirmed credit used and closes its open item.
+When a quota reading shows a usage drop greater than 30 points, mark the open credit item with the earliest expiry as used and close it.
+This rule treats the drop as evidence that the Owner applied that credit.
+
+At the first service tick within 24 hours of an available credit expiry, add a `warn` alert to normal notice delivery.
+Use one alert key for each credit ID and expiry.
+The normal notice path delivers it once.
+Do not warn for a credit that the current plan no longer lists.
 Use `herdr-boss quota announce codex --at TIME` to save a reset announcement.
 The time must be in the future and within 30 days.
 Only the Owner can use `POST /api/quota-plan/codex/announce`.
@@ -456,10 +480,6 @@ The reference simulator keeps the burst rate throughout.
 
 Add the fleet lane text and bulletin guidance in a later task.
 Compare actual usage with the planned curve.
-Add one Mailbox prompt when a credit is due or expires within 48 hours.
-Show the actual usage and the planned application time in that prompt.
-Add a warning 24 hours before expiry.
 Add the Analytics chart in a later task.
-Add an automatic mark after reset evidence in a later task.
-The Owner applies it in the Codex app.
+The Owner applies each credit in the Codex app.
 Herdr Boss never opens or changes `/usage`.

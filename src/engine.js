@@ -604,7 +604,6 @@ export class Engine extends EventEmitter {
     // Claude probe back-off: consecutive timeouts, and the earliest next probe.
     this.claudeProbe = { timeouts: 0, nextAt: 0 };
     this.quotaTimeoutIndexes = Object.fromEntries(QUOTA_PROVIDERS.map((provider) => [provider, 0]));
-    this.quotaPlanService = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan, now: () => this.clock() });
     this.worktreeCounts = {};
     this.worktreeCountsAt = 0;
     this.orphanedWorktreeProcesses = [];
@@ -681,6 +680,8 @@ export class Engine extends EventEmitter {
     this.kitNoticeRead = false;
     this.state = maskBrowserState(readJson(STATE_FILE, null));
     this.messageStore = openMessageStore({ dir: DATA_DIR });
+    this.quotaPlanService = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan, now: () => this.clock(),
+      messageStore: this.act ? this.messageStore : null });
     this.messageVersion = this.messageStore.version();
     this.messageSnapshot = new Map(this.messageStore.all().map((record) => [record.id, JSON.stringify(record)]));
     const savedAt = Date.parse(this.state?.quotasAt);
@@ -1275,6 +1276,7 @@ export class Engine extends EventEmitter {
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy);
+      if (this.act) evaluation.alerts.push(...this.quotaPlanService.expiryNotices({ now }));
       evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now));
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);

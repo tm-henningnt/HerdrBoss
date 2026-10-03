@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { openMessageStore } from '../src/message-store.js';
 import { createQuotaPlanService } from '../src/quota-plan-service.js';
 
 const HOUR = 3600000;
@@ -38,11 +39,12 @@ function syntheticHistory() {
   });
 }
 
-function setup(t) {
+function setup(t, { withMailbox = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-quota-plan-service-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'quota-history.jsonl'), `${syntheticHistory().map((row) => JSON.stringify(row)).join('\n')}\n`);
-  return { dir, service: createQuotaPlanService({ dataDir: dir }) };
+  const messageStore = withMailbox ? openMessageStore({ dir, backend: 'json' }) : null;
+  return { dir, messageStore, service: createQuotaPlanService({ dataDir: dir, now: () => NOW, messageStore }) };
 }
 
 test('service reads the weekly Codex quota and synthetic history without exposing other credit fields', (t) => {
@@ -139,4 +141,73 @@ test('service rejects unsupported providers and validates announced reset times'
   assert.throws(() => service.announce({ provider: 'codex', at: at(-1), now: NOW }), /future/i);
   assert.throws(() => service.announce({ provider: 'codex', at: at(31 * 24), now: NOW }), /30 days/i);
   assert.throws(() => service.announce({ provider: 'codex', at: at(1), kind: 'partial', refundPercent: 101, now: NOW }), /refund/i);
+});
+
+test('quota tick posts one approval item when a credit is due or expires within 48 hours', (t) => {
+  const { service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-due', status: 'available', expiresAt: at(400) }]);
+  quotas[0].windows[0].usedPercent = 95;
+
+  const result = service.replan({ provider: 'codex', quotas, now: NOW });
+  let items = messageStore.all().filter((item) => item.quotaCreditId === 'credit-due' && !item.closedAt);
+  assert.equal(result.credits[0].applyAt, at(0));
+  assert.equal(items.length, 1);
+  assert.equal(items[0].action, 'approve');
+  assert.match(items[0].text, /95%/);
+  assert.match(items[0].text, new RegExp(new Date(NOW).toISOString()));
+  assert.match(items[0].text, /Value of applying now against waiting/);
+  assert.match(items[0].text, new RegExp(at(400)));
+
+  service.replan({ provider: 'codex', quotas, now: NOW + 60000 });
+  items = messageStore.all().filter((item) => item.quotaCreditId === 'credit-due' && !item.closedAt);
+  assert.equal(items.length, 1, 'a later quota tick must reuse the open item');
+
+  const expiring = quota([{ id: 'credit-expiring', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas: expiring, now: NOW });
+  assert.equal(messageStore.all().filter((item) => item.quotaCreditId === 'credit-expiring' && !item.closedAt).length, 1);
+});
+
+test('quota plan exposes one warn notice in the 24 hours before each credit expires', (t) => {
+  const { service } = setup(t);
+  service.replan({ provider: 'codex', quotas: quota([{ id: 'credit-soon', status: 'available', expiresAt: at(48) }]), now: NOW });
+
+  assert.deepEqual(service.expiryNotices({ now: NOW + 23 * HOUR }).map((notice) => notice.key), []);
+  const notices = service.expiryNotices({ now: NOW + 24 * HOUR });
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].severity, 'warn');
+  assert.match(notices[0].text, new RegExp(at(48)));
+  assert.deepEqual(service.expiryNotices({ now: NOW + 25 * HOUR }).map((notice) => notice.key), [notices[0].key]);
+  assert.deepEqual(service.expiryNotices({ now: NOW + 49 * HOUR }), []);
+});
+
+test('marking a credit used closes its open approval item', (t) => {
+  const { service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-used', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas, now: NOW });
+  const item = messageStore.all().find((message) => message.quotaCreditId === 'credit-used');
+  assert.ok(item);
+
+  service.markCreditUsed({ provider: 'codex', id: 'credit-used', now: NOW + HOUR, quotas });
+
+  const closed = messageStore.all().find((message) => message.id === item.id);
+  assert.ok(closed.closedAt);
+  assert.ok(service.read().usedCredits.some((credit) => credit.id === 'credit-used'));
+});
+
+test('an observed usage drop closes and marks the soonest-expiring open credit prompt used', (t) => {
+  const { dir, service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-observed', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas, now: NOW - HOUR });
+  const item = messageStore.all().find((message) => message.quotaCreditId === 'credit-observed');
+  assert.ok(item);
+  fs.writeFileSync(path.join(dir, 'quota-history.jsonl'), `${[
+    { at: at(-2), provider: 'codex', window: 'primary', usedPercent: 80, resetsAt: at(168) },
+    { at: at(-1), provider: 'codex', window: 'primary', usedPercent: 40, resetsAt: at(168) },
+  ].map((row) => JSON.stringify(row)).join('\n')}\n`);
+
+  service.replan({ provider: 'codex', quotas, now: NOW });
+
+  const closed = messageStore.all().find((message) => message.id === item.id);
+  assert.ok(closed.closedAt);
+  assert.ok(service.read().usedCredits.some((credit) => credit.id === 'credit-observed'));
 });
