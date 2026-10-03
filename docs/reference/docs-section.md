@@ -65,6 +65,8 @@ A name that is not a plain page name gets status 400. An unknown page, topic, or
 | Limit | Value |
 |---|---|
 | Page size | 2 MB |
+| Image size | 8 MB (status 413 above it) |
+| Pages in the cache | 200 |
 | Files in the index | 2000 |
 | Folder levels | 6 |
 | Scan interval | 2 seconds |

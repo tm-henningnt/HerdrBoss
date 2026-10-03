@@ -11,6 +11,8 @@ const MAX_FILES = 2000;
 const MAX_DEPTH = 6;
 const MAX_PAGE = 2 * 1024 * 1024;
 const MAX_NAV = 64 * 1024;
+const MAX_IMAGE = 8 * 1024 * 1024;
+const MAX_CACHED_PAGES = 200;
 const SCAN_TTL_MS = 2000;
 const THEME_FRAGMENT = /^only-(light|dark)$/;
 
@@ -101,7 +103,23 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
   const pages = new Map();
   const titles = new Map();
 
-  function walk(dir, depth, found) {
+  // A page or help text enters the cache. The cache keeps at most MAX_CACHED_PAGES entries and drops the oldest.
+  function remember(key, value) {
+    pages.delete(key);
+    pages.set(key, value);
+    if (pages.size > MAX_CACHED_PAGES) pages.delete(pages.keys().next().value);
+  }
+
+  // The real path of a file that README.md or nav.json names, or null when the path leaves the repository.
+  function insideRoot(file) {
+    try {
+      const base = fs.realpathSync(root);
+      const real = fs.realpathSync(file);
+      return real.startsWith(base + path.sep) ? real : null;
+    } catch { return null; }
+  }
+
+  function walk(dir, depth, found, images) {
     if (depth > MAX_DEPTH || found.length >= MAX_FILES) return;
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -109,7 +127,8 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
       const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(file, depth + 1, found);
+      if (entry.isDirectory()) walk(file, depth + 1, found, images);
+      else if (entry.isFile() && Object.hasOwn(IMAGE_TYPES, path.extname(entry.name).toLowerCase())) images.push(file);
       else if (entry.isFile() && entry.name.endsWith('.md') && found.length < MAX_FILES) found.push(file);
     }
   }
@@ -118,7 +137,8 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
   function scan() {
     if (index && now() - scannedAt < ttlMs) return index;
     const files = [];
-    walk(docsDir, 0, files);
+    const images = [];
+    walk(docsDir, 0, files, images);
     const readme = path.join(root, 'README.md');
     const byName = new Map();
     const byRel = new Map();
@@ -127,6 +147,7 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
       let st;
       try { st = fs.statSync(file); } catch { continue; }
       if (!st.isFile() || st.size > MAX_PAGE) continue;
+      if (file === readme && !insideRoot(file)) continue;
       const rel = path.relative(root, file).split(path.sep).join('/');
       const name = pageName(rel);
       if (byName.has(name)) continue;
@@ -135,10 +156,18 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
       byRel.set(rel, entry);
       stamp.push(`${rel}:${st.mtimeMs}:${st.size}`);
     }
+    // An image that appears, changes, or goes changes how a page renders, so the images are part of the signature.
+    for (const file of images) {
+      try {
+        const st = fs.statSync(file);
+        stamp.push(`${path.relative(root, file)}:${st.mtimeMs}:${st.size}`);
+      } catch { /* A file that vanished is not in the signature. */ }
+    }
     let navStamp = '';
     let nav = null;
     try {
       const navFile = path.join(docsDir, 'nav.json');
+      if (!insideRoot(navFile)) throw new Error('outside');
       const st = fs.statSync(navFile);
       navStamp = `${st.mtimeMs}:${st.size}`;
       if (st.size <= MAX_NAV) nav = JSON.parse(fs.readFileSync(navFile, 'utf8'));
@@ -203,12 +232,16 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
     const [pathPart, ...rest] = String(target).split('#');
     const hash = rest.join('#');
     if (pathPart === '') return { rel: from, hash };
-    let joined = pathPart.startsWith('/') ? pathPart.slice(1) : posix.join(posix.dirname(from), pathPart);
+    // A target can hold percent escapes and a query. The query is dropped. The escapes are decoded once, before the path is resolved.
+    const decoded = safeDecode(pathPart.split('?')[0]);
+    if (/[\0\\]/.test(decoded)) return null;
+    let joined = decoded.startsWith('/') ? decoded.slice(1) : posix.join(posix.dirname(from), decoded);
     joined = posix.normalize(joined);
     if (joined.startsWith('../') || joined === '..' || joined.startsWith('/')) return null;
     return { rel: joined.replace(/\/$/, ''), hash };
   }
 
+  const encodePath = (name) => name.split('/').map(encodeURIComponent).join('/');
   const anchor = (hash) => (hash ? `#${ID_PREFIX}${headingSlug(safeDecode(hash))}` : '');
   function safeDecode(text) { try { return decodeURIComponent(text); } catch { return text; } }
 
@@ -221,7 +254,7 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
         if (!hit) return null;
         if (hit.rel === from && !raw.split('#')[0]) return anchor(hit.hash) || null;
         const entry = idx.byRel.get(hit.rel) || idx.byRel.get(`${hit.rel}.md`) || idx.byRel.get(`${hit.rel}/index.md`) || idx.byName.get(hit.rel.replace(/^docs\//, ''));
-        if (entry) return `/docs${entry.name ? `/${entry.name}` : ''}${anchor(hit.hash)}`;
+        if (entry) return `/docs${entry.name ? `/${encodePath(entry.name)}` : ''}${anchor(hit.hash)}`;
         return imageUrl(hit.rel);
       },
       image(raw) {
@@ -237,7 +270,8 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
   // The URL of an image file inside docs/, or null.
   function imageUrl(rel) {
     if (!rel.startsWith('docs/') || !Object.hasOwn(IMAGE_TYPES, posix.extname(rel).toLowerCase())) return null;
-    return imageFile(rel.slice('docs/'.length)) ? `/docs/${rel.slice('docs/'.length)}` : null;
+    const name = rel.slice('docs/'.length);
+    return imageFile(name) ? `/docs/${encodePath(name)}` : null;
   }
 
   // The real path of an image inside docs/, or null for a name that leaves docs/, a link, or a missing file.
@@ -276,7 +310,7 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
     if (cached?.mtimeMs === entry.mtimeMs) return { status: 200, body: cached.body };
     const { html, headings } = render(entry, { ids: true, heading: { headingOffset: 0, minHeading: 1 } });
     const body = { name: entry.name, title: titleOf(entry), source: entry.rel, html, headings: headings.filter((h) => h.level === 2 || h.level === 3) };
-    pages.set(key, { mtimeMs: entry.mtimeMs, body });
+    remember(key, { mtimeMs: entry.mtimeMs, body });
     return { status: 200, body };
   }
 
@@ -290,7 +324,7 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
     if (cached?.mtimeMs === entry.mtimeMs) return { status: 200, body: cached.body };
     const { html } = render(entry, { dropTitle: true, heading: { headingOffset: 1, minHeading: 3 } });
     const body = { topic, title: titleOf(entry), html };
-    pages.set(key, { mtimeMs: entry.mtimeMs, body });
+    remember(key, { mtimeMs: entry.mtimeMs, body });
     return { status: 200, body };
   }
 
@@ -298,6 +332,7 @@ export function createDocsSite({ root, ttlMs = SCAN_TTL_MS, now = Date.now } = {
   function image(rawName) {
     const file = imageFile(rawName);
     if (!file) return fail(404, 'Image not found.');
+    if (fs.statSync(file).size > MAX_IMAGE) return fail(413, 'The image is larger than 8 MB.');
     return { status: 200, type: IMAGE_TYPES[path.extname(file).toLowerCase()], bytes: fs.readFileSync(file) };
   }
 

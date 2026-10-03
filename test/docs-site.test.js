@@ -38,6 +38,10 @@ fs.writeFileSync(path.join(root, 'secret.png'), png);
 fs.writeFileSync(path.join(repo, 'secret.md'), '# Root secret\n\nSECRET-TEXT\n');
 fs.symlinkSync(path.join(root, 'secret.png'), path.join(repo, 'docs/images/link.png'));
 fs.symlinkSync(path.join(root, 'secret.md'), path.join(repo, 'docs/linked.md'));
+put('docs/images/my pic.png', png);
+put('docs/images/a#b.png', png);
+put('docs/images/100%.png', png);
+put('docs/names.md', '# Names\n\n![a](images/my%20pic.png) ![b](images/a%23b.png) ![c](images/100%25.png) ![d](images/shot.png?v=1) ![e](..%2fsecret.png) ![f](images%2f..%2f..%2fsecret.png) [g](images/my%20pic.png)\n');
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const site = () => createDocsSite({ root: repo });
@@ -160,6 +164,7 @@ test('the routes answer at the HTTP boundary and need the login for a remote req
   assert.equal(image.status, 200);
   assert.equal(image.headers['content-type'], 'image/png');
   assert.equal(image.headers['x-content-type-options'], 'nosniff');
+  for (const route of ['/docs/images/my%20pic.png', '/docs/images/a%23b.png', '/docs/images/100%25.png']) assert.equal((await raw(route)).status, 200, route);
   for (const route of ['/api/docs/page?path=..%2Fsecret', '/api/docs/page?path=%2e%2e%2f%2e%2e%2fsecret', '/api/docs/page?path=%2Fetc%2Fpasswd', '/api/docs/help/..%2Fboard']) {
     const answer = await raw(route);
     assert.ok([400, 404].includes(answer.status), route);
@@ -172,4 +177,57 @@ test('the routes answer at the HTTP boundary and need the login for a remote req
   assert.equal((await raw('/docs/images/link.png')).status, 404);
   const remote = { host: 'fixture.tail0000.ts.net' };
   for (const route of ['/api/docs/tree', '/api/docs/page?path=', '/api/docs/help/board', '/docs/images/shot.png']) assert.equal((await raw(route, remote)).status, 401, route);
+});
+
+test('an image that appears later refreshes a page that showed its alt text', () => {
+  put('docs/late.md', '# Late\n\n![Later](images/late.png)\n');
+  const s = createDocsSite({ root: repo, ttlMs: 0 });
+  assert.doesNotMatch(s.page('late').body.html, /<img/);
+  put('docs/images/late.png', png);
+  assert.match(s.page('late').body.html, /<img src="\/docs\/images\/late\.png"/);
+  fs.rmSync(path.join(repo, 'docs/images/late.png'));
+  assert.doesNotMatch(s.page('late').body.html, /<img/);
+});
+
+test('percent escapes decode before the path resolves, and the served URL encodes each segment', async () => {
+  const html = site().page('names').body.html;
+  assert.match(html, /src="\/docs\/images\/my%20pic\.png"/);
+  assert.match(html, /src="\/docs\/images\/a%23b\.png"/);
+  assert.match(html, /src="\/docs\/images\/100%25\.png"/);
+  assert.match(html, /src="\/docs\/images\/shot\.png"/);
+  assert.doesNotMatch(html, /secret/);
+  assert.match(html, /<a href="\/docs\/images\/my%20pic\.png">g<\/a>/);
+  const s = site();
+  for (const name of ['images/my pic.png', 'images/a#b.png', 'images/100%.png']) assert.equal(s.image(name).status, 200, name);
+});
+
+test('an image over 8 MB is refused with 413', () => {
+  put('docs/images/big.png', Buffer.alloc(8 * 1024 * 1024 + 1));
+  assert.equal(site().image('images/big.png').status, 413);
+  assert.equal(site().image('images/shot.png').status, 200);
+});
+
+test('the page cache drops its oldest entries', () => {
+  const big = path.join(root, 'many');
+  for (let i = 0; i < 205; i += 1) { fs.mkdirSync(path.join(big, 'docs'), { recursive: true }); fs.writeFileSync(path.join(big, 'docs', `p${i}.md`), `# P${i}\n`); }
+  const s = createDocsSite({ root: big });
+  const first = s.page('p0').body;
+  const bodies = [];
+  for (let i = 1; i < 205; i += 1) bodies.push(s.page(`p${i}`).body);
+  assert.notEqual(s.page('p0').body, first);
+  assert.equal(s.page('p204').body, bodies[203]);
+});
+
+test('README.md and nav.json do not follow a link out of the repository', () => {
+  const out = path.join(root, 'linked');
+  fs.mkdirSync(path.join(out, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'outside-readme.md'), '# Outside\n\nSECRET-TEXT\n');
+  fs.writeFileSync(path.join(root, 'outside-nav.json'), JSON.stringify({ sections: [{ title: 'Outside', pages: [''] }] }));
+  fs.symlinkSync(path.join(root, 'outside-readme.md'), path.join(out, 'README.md'));
+  fs.symlinkSync(path.join(root, 'outside-nav.json'), path.join(out, 'docs/nav.json'));
+  fs.writeFileSync(path.join(out, 'docs/a.md'), '# A\n');
+  const s = createDocsSite({ root: out });
+  assert.equal(s.page('').status, 404);
+  assert.deepEqual(s.tree().body.sections.map((x) => x.title), ['Docs'].filter(() => false));
+  assert.equal(s.page('a').status, 200);
 });
