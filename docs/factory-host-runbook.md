@@ -106,6 +106,14 @@ The update refuses a working worker, a live suite or push lock, or a prepared ha
 
 After the backup, the tool checks a fresh work snapshot before it merges code or replaces the container. It refuses a snapshot older than 15 seconds. It checks for new work again. The image tier also checks for a live Boss pane. If a check fails, it resumes the factory. Run `herdr-boss factory configure NAME --resume` to check it, then retry the update.
 
+The service tier runs every git command as the user `factory` with `HOME=/home/factory`. The `code` volume repository belongs to that user. The tool adds no `safe.directory` setting.
+
+If the repository has no `origin` remote, the tool adds one. The URL is the `repository` field of the `package.json` file of the Herdr Boss checkout on the host. If that field is absent, the tool uses `git remote get-url origin` of that checkout. The tool removes credentials from the URL. It refuses a URL that is not HTTPS. The branch name of the repository does not matter. The tool fetches `main` and fast-forwards to it.
+
+If `origin` exists and names another repository, the tool refuses the update. The error shows the expected URL and the found URL without credentials. Fix the remote, then retry.
+
+If the update fails, the error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, or `restart`. A `git fetch` failure means that the factory cannot reach the remote.
+
 After restart, the tool checks `/api/state` and one clean service tick within 30 seconds. It rolls back automatically when the schema has not increased. If the schema increased or cannot be read after the new container starts, it keeps a private pending rollback record.
 
 Review the error, then repeat the same tier command with `--accept-data-loss`. The tool restores the private backup and the previous code or image. This can discard data written after the backup. Do not remove the pending record by hand. If the new container never starts, rollback does not restore data or require this flag.

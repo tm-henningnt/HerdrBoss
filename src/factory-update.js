@@ -1,6 +1,8 @@
 // Factory updates use Docker as the only host boundary. Private state stays in the factory volumes.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { defaultFactoryImage, FACTORY_LABEL, managedFactory, transportFor, inspect, dockerCall, readHealth, imageBuildMeta, configSafetyError } from './factory-core.js';
 import { assertName, factoryFile, readPrivate, writePrivate, updateFleet, VOLUMES } from './factory-store.js';
 import { restoreBackupInPlace } from './factory-recovery.js';
@@ -244,8 +246,56 @@ async function abortBeforeChange(docker, name, tier, error) {
 
 async function raw(docker, args, options) { return docker.run(args, options); }
 
+// The code volume belongs to the user factory. Git refuses a repository that another user owns.
+function gitArgs(name, args) {
+  return ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', `hf-${name}`, 'git', '-C', '/home/factory/herdr-boss', ...args];
+}
+
 async function gitText(docker, name, args) {
-  return dockerCall(docker, ['exec', `hf-${name}`, 'git', '-C', '/home/factory/herdr-boss', ...args]);
+  return dockerCall(docker, gitArgs(name, args));
+}
+
+// Name the failing step. The Docker error text holds no step and the step text holds no private data.
+async function runStep(label, hint, action) {
+  try { return await action(); }
+  catch (error) { throw new Error(`The factory update failed at the ${label} step.${hint ? ` ${hint}` : ''}`, { cause: error }); }
+}
+
+function stripCredentials(text) { return String(text).trim().replace(/\/\/[^/@\s]*@/, '//'); }
+
+function normalizeUrl(url) { return url.replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase(); }
+
+// The expected origin is the public repository of this Herdr Boss checkout, without credentials.
+function expectedOriginUrl(io) {
+  let configured = io.originUrl;
+  if (!configured) {
+    try {
+      const repository = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).repository;
+      configured = typeof repository === 'string' ? repository : repository?.url;
+    } catch {}
+  }
+  if (!configured) {
+    const result = spawnSync('git', ['-C', fileURLToPath(new URL('..', import.meta.url)), 'remote', 'get-url', 'origin'], { encoding: 'utf8' });
+    if (result.status === 0) configured = result.stdout.trim();
+  }
+  if (!configured) throw new Error('The Herdr Boss repository URL is unknown. The factory update cannot set the origin remote.');
+  let parsed;
+  try { parsed = new URL(configured.replace(/^git\+/, '')); } catch { throw new Error('The Herdr Boss repository URL is not an HTTPS URL.'); }
+  if (parsed.protocol !== 'https:') throw new Error('The Herdr Boss repository URL is not an HTTPS URL.');
+  parsed.username = ''; parsed.password = ''; parsed.search = ''; parsed.hash = '';
+  return parsed.href;
+}
+
+async function ensureOrigin(docker, name, expected) {
+  const current = await raw(docker, gitArgs(name, ['remote', 'get-url', 'origin']));
+  if (current.code !== 0) {
+    await runStep('git remote add', '', () => gitText(docker, name, ['remote', 'add', 'origin', expected]));
+    return;
+  }
+  const found = stripCredentials(current.stdout);
+  if (normalizeUrl(found) !== normalizeUrl(expected)) {
+    throw new Error(`The factory origin remote differs from the Herdr Boss repository. Expected ${expected}. Found ${found}. Fix the remote before the update.`);
+  }
 }
 
 async function schemaVersion(docker, name) {
@@ -398,10 +448,12 @@ async function recreate(docker, name, record, host, owner, imageTag, onStartAtte
 }
 
 async function updateService(name, factory, docker, owner, flags, initial) {
-  const commit = (await gitText(docker, name, ['rev-parse', 'HEAD'])).trim();
+  const expectedOrigin = expectedOriginUrl(factory.io);
+  const commit = (await runStep('git rev-parse', '', () => gitText(docker, name, ['rev-parse', 'HEAD']))).trim();
   if (!/^[a-f0-9]{40,64}$/i.test(commit)) throw new Error('The factory code revision is invalid.');
-  await gitText(docker, name, ['fetch', 'origin', 'main']);
-  const ancestor = await raw(docker, ['exec', `hf-${name}`, 'git', '-C', '/home/factory/herdr-boss', 'merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD']);
+  await ensureOrigin(docker, name, expectedOrigin);
+  await runStep('git fetch', 'The factory cannot reach the remote.', () => gitText(docker, name, ['fetch', 'origin', 'main']));
+  const ancestor = await raw(docker, gitArgs(name, ['merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD']));
   if (ancestor.code !== 0) throw new Error('The factory code update is not a fast-forward.');
   const schema = await schemaVersion(docker, name);
   if (schema === null) throw new Error('The factory database version cannot be read.');
@@ -412,8 +464,8 @@ async function updateService(name, factory, docker, owner, flags, initial) {
   try {
     await assertUpdateStillSafe(docker, name, 'service', false);
     mergeStarted = true;
-    await gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']);
-    await dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']);
+    await runStep('git merge', '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
+    await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']));
     const health = await waitForCleanTick(docker, name, initial, factory.io.updateTimeoutMs ?? 30_000);
     updateRecord(name, factory, health);
     fs.rmSync(pendingFile(factory.io.env, name), { force: true });

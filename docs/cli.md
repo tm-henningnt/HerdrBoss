@@ -1619,6 +1619,8 @@ herdr-boss factory update NAME --tier service [--dry-run]
 herdr-boss factory update NAME --tier image [--dry-run] [--allow-boss-restart]
 ```
 
+The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, or `restart`.
+
 An update is refused while a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. `--dry-run` checks the factory and prints the selected tier without changing Docker resources.
 
 After the backup, the tool takes a fresh work snapshot before it merges code or replaces the container. A snapshot must be no more than 15 seconds old. The tool checks for new work again. The image tier also checks for a live Boss pane. If a check fails, it resumes the factory and prints `herdr-boss factory configure NAME --resume` as the check and retry path.
