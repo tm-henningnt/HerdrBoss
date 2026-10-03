@@ -246,6 +246,10 @@ async function abortBeforeChange(docker, name, tier, error) {
 
 async function raw(docker, args, options) { return docker.run(args, options); }
 
+// The s6 tools are not in PATH inside the container.
+const S6_SVC = '/command/s6-svc';
+const S6_SVSTAT = '/command/s6-svstat';
+
 // The code volume belongs to the user factory. Git refuses a repository that another user owns.
 function gitArgs(name, args) {
   return ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', `hf-${name}`, 'git', '-C', '/home/factory/herdr-boss', ...args];
@@ -305,7 +309,7 @@ async function schemaVersion(docker, name) {
 }
 
 async function serviceState(docker, name) {
-  const result = await raw(docker, ['exec', `hf-${name}`, 's6-svstat', '-o', 'up', '/run/service/herdr-boss-serve']);
+  const result = await raw(docker, ['exec', `hf-${name}`, S6_SVSTAT, '-o', 'up', '/run/service/herdr-boss-serve']);
   return result.code === 0 ? result.stdout.trim() : null;
 }
 
@@ -320,7 +324,7 @@ async function waitFor(docker, name, predicate, message, timeoutMs = 10_000) {
 }
 
 async function quiesce(docker, name) {
-  await dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-d', '/run/service/herdr-boss-serve']);
+  await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-d', '/run/service/herdr-boss-serve']);
   await waitFor(docker, name, async () => (await serviceState(docker, name)) === 'false', 'The factory service did not stop.');
   await dockerCall(docker, ['pause', `hf-${name}`]);
 }
@@ -328,7 +332,7 @@ async function quiesce(docker, name) {
 async function resume(docker, name) {
   const container = await inspect(docker, 'container', `hf-${name}`);
   if (container?.State?.Paused) await dockerCall(docker, ['unpause', `hf-${name}`]);
-  await dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']);
+  await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']);
 }
 
 async function createBackup(name, docker, io) {
@@ -349,7 +353,7 @@ async function takeQuiescedBackup(name, docker, io) {
     if (!/archive helper cleanup failed/i.test(error.message)) {
       const container = await inspect(docker, 'container', `hf-${name}`).catch(() => null);
       if (container?.State?.Paused) await dockerCall(docker, ['unpause', `hf-${name}`]).catch(() => {});
-      await dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']).catch(() => {});
+      await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']).catch(() => {});
     }
     throw error;
   }
@@ -413,7 +417,7 @@ async function rollbackService(name, docker, io, original, backup, acceptDataLos
   await dockerCall(docker, ['unpause', `hf-${name}`]);
   await gitText(docker, name, ['reset', '--keep', original.commit]);
   const before = await snapshot(docker, name).catch(() => original.state);
-  await dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']);
+  await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']);
   return waitForCleanTick(docker, name, before, io.updateTimeoutMs ?? 30_000);
 }
 
@@ -465,7 +469,7 @@ async function updateService(name, factory, docker, owner, flags, initial) {
     await assertUpdateStillSafe(docker, name, 'service', false);
     mergeStarted = true;
     await runStep('git merge', '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
-    await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, 's6-svc', '-u', '/run/service/herdr-boss-serve']));
+    await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']));
     const health = await waitForCleanTick(docker, name, initial, factory.io.updateTimeoutMs ?? 30_000);
     updateRecord(name, factory, health);
     fs.rmSync(pendingFile(factory.io.env, name), { force: true });

@@ -98,8 +98,8 @@ function updateFixture() {
       if (failNextSnapshots > 0) { failNextSnapshots -= 1; return { code: 1, stdout: '', stderr: 'simulated snapshot read failure' }; }
       return ok({ updatedAt: f.state?.updatedAt ?? new Date(tickAt).toISOString(), workers: f.state?.workers ?? 0, locks: f.state?.locks ?? [], handoffs: f.state?.handoffs ?? [], errors: f.state?.errors ?? [], orchestrators: f.state?.orchestrators ?? [], bossPane: f.state?.bossPane ?? false });
     }
-    if (args[0] === 'exec' && args.includes('s6-svc')) { serviceUp = args.includes('-u'); if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; } return ok(); }
-    if (args[0] === 'exec' && args.includes('s6-svstat')) return ok(serviceUp ? 'true' : 'false');
+    if (args[0] === 'exec' && args.includes('/command/s6-svc')) { serviceUp = args.includes('-u'); if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; } return ok(); }
+    if (args[0] === 'exec' && args.includes('/command/s6-svstat')) return ok(serviceUp ? 'true' : 'false');
     if (args[0] === 'exec' && args.includes('git')) {
       if (args.includes('rev-parse')) return ok(currentCommit);
       if (args.includes('remote') && args.includes('get-url')) return remoteUrl ? ok(`${remoteUrl}\n`) : { code: 2, stdout: '', stderr: 'error: No such remote' };
