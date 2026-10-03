@@ -1,10 +1,14 @@
 # 22: Interactive host setup guide in the dashboard
 
-**What to build:** A dashboard page under Factories, "Add a host", walks a user through the preparation of a new factory host. The Owner's reference artifact (an interactive checklist that collected values and produced the host tables) defines the content.
+**What to build:** A dashboard page under Factories, "Add a host", walks a user through the preparation of a new factory host. The Owner's reference artifact (an interactive checklist that collected values and produced the host tables, kept outside the repository) defines the content and wording. Do not copy any private value from it into the repository.
 
 **Blocked by:** 09: Host tool core with the local transport; 10: Factory wizard and harness login; 11: The ssh transport and the Windows host runbook.
 
-**Status:** ready-for-agent (the reference artifact comes from the Owner)
+**Status:** ready-for-agent (not started before 2026-10-04)
+
+**Windows with WSL2 steps (the guide covers at least these, in this order):** BIOS; update Windows; never sleep; active hours; install WSL; install Ubuntu; turn on systemd; limit memory and CPU (collects the thread count); add the Docker repository; install Docker; configure and test Docker; put the Mac on Tailscale (collects the Mac name); turn on MagicDNS and HTTPS (collects the tailnet name); write the Tailscale access policy; install Tailscale in Ubuntu (collects the Tailscale address); make the SSH key on the Mac (collects the fingerprint line); add the public key to Ubuntu; install the SSH server; let SSH start after Tailscale (systemd ordering); tell the Mac which key to use (SSH config entry); create the boot task; test from the Mac; reboot test; collect the machine facts; answers and the final table.
+
+The BIOS and Windows update steps use plain words. Treat `systemd-binfmt.service` as the only accepted failed unit when the guide checks the systemd state.
 
 - [ ] The user picks the host type: Windows with WSL2 first, then Linux, then Mac with OrbStack. Each type has its own checklist page.
 - [ ] Each step shows what to do and why in plain words, the exact commands with copy buttons, the expected result, a done checkbox, and a "something went wrong" panel with the three most common errors and their fixes.
