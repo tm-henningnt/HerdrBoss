@@ -46,12 +46,16 @@ function helpNote(page) {
   return /^help\/[a-z0-9-]+$/.test(page.name) ? `<p class="docs-note">This text also shows in the Help panel of the ${esc(page.title.replace(/ help$/i, ''))} page.</p>` : '';
 }
 
+// The page named here holds the interactive explainer. The page code mounts public/explainer.js into the element that this adds.
+export const EXPLAINER_PAGE = 'explainer';
+const explainerMount = (page) => (page.name === EXPLAINER_PAGE ? '<div class="explainer" data-explainer></div>' : '');
+
 export const docsPageTitle = (page) => (page ? `${page.title} · Docs · Herdr Boss` : 'Docs · Herdr Boss');
 
 // state: { tree, name, page, error }. page is the answer of the page route. error is a message for a page that did not load.
 export function docsViewHtml({ tree, name, page, error }) {
   let body;
-  if (page) body = `<article class="docs-page md" data-docs-page="${esc(page.name)}">${page.html}${helpNote(page)}${pagerHtml(tree, page.name)}<p class="docs-source">Source: <code>${esc(page.source)}</code></p></article>${tocHtml(page)}`;
+  if (page) body = `<article class="docs-page md" data-docs-page="${esc(page.name)}">${page.html}${explainerMount(page)}${helpNote(page)}${pagerHtml(tree, page.name)}<p class="docs-source">Source: <code>${esc(page.source)}</code></p></article>${tocHtml(page)}`;
   else if (error) body = `<article class="docs-page md"><h1>Page not found</h1><p>${esc(error)}</p><p><a href="/docs">Go to the Docs front page</a>.</p></article>`;
   else body = '<article class="docs-page md" aria-busy="true"><p class="docs-loading">Loading…</p></article>';
   return `<div class="docs"><aside class="docs-side"><button type="button" class="docs-nav-toggle quiet" data-docs-nav-toggle aria-expanded="false" aria-controls="docs-nav">Pages</button><nav id="docs-nav" class="docs-nav" aria-label="Docs pages">${docsNavHtml(tree, name)}</nav></aside><div class="docs-main">${body}</div></div>`;
