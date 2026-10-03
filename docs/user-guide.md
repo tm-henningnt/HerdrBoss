@@ -2444,8 +2444,13 @@ The Fleet page starts a poll when it has no factory row. It starts at most one s
 The head office reads the registered factories every 30 seconds.
 A factory outage keeps the last good summary.
 The page shows the age and marks that factory offline.
+An offline health cell is red. It shows the reason: host unreachable, request timeout, read credential refusal, or contract mismatch.
+**Last seen** shows the time of the last successful poll. The summary age continues to increase during an outage.
+Before the first successful poll, the page shows **Never seen**. The registered software and kit revisions remain visible.
 A duplicate factory ID gets a warning.
 The head office refuses the duplicate summary.
+
+Connect a registered container factory with `herdr-boss factory connect NAME`. Run it for one factory at a time. The command sets up Tailscale Serve, imports the private read credential, and enables polling. It reuses an existing matching HTTP or HTTPS forward. The container port stays on loopback. A dashboard request still needs Owner access. If the factory user cannot configure Serve, the command prints two Owner command choices and exits 3. Run one choice in the WSL Owner terminal. Run `factory connect NAME` again to resume. Use `herdr-boss factory connect --check NAME` for one check. Its one-line result holds the name, state, and summary age only. See `docs/cli.md`, section Container factories.
 
 The factory table shows projects, the highest quota reading, spend today, Owner items, and software and kit revisions.
 A different software version or kit revision gets a drift label.

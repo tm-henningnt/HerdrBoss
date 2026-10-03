@@ -16,11 +16,18 @@ function factoryRecords(file) {
   if (body.schema !== 1 || body.contractVersion !== '1.0.0' || validate(body.factories, registrySchema.properties.factories, { schemaFile }).length) throw new Error('registry-invalid');
   if (new Set(body.factories.map((row) => row.name)).size !== body.factories.length) throw new Error('registry-invalid');
   // The poller needs no host connection record. Never read registry.json.
-  return body.factories.map(({ factoryId, name, dashboardUrl }) => ({ factoryId, name, dashboardUrl: new URL(dashboardUrl).origin }));
+  return body.factories.map(({ factoryId, name, dashboardUrl, version, kitRevision }) => ({ factoryId, name, version, kitRevision, dashboardUrl: new URL(dashboardUrl).origin }));
+}
+const pollError = (code) => Object.assign(new Error(code), { code });
+export function fleetPollError(error) {
+  if (['unreachable', 'timeout', 'auth', 'contract-mismatch'].includes(error?.code)) return error.code;
+  if (['TimeoutError', 'AbortError'].includes(error?.name) || ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(error?.code || error?.cause?.code)) return 'timeout';
+  return 'unreachable';
 }
 async function fetchSummary(url, token, signal, fetchImpl) {
   const response = await fetchImpl(`${url}/api/fleet/summary`, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, redirect: 'error', signal });
-  if (!response.ok || !response.headers.get('content-type')?.startsWith('application/json')) throw new Error('poll-failed');
+  const refusal = [401, 403].includes(response.status) ? 'auth' : !response.ok ? 'unreachable' : !response.headers.get('content-type')?.startsWith('application/json') || !response.body ? 'contract-mismatch' : null;
+  if (refusal) { await response.body?.cancel().catch(() => {}); throw pollError(refusal); }
   const reader = response.body.getReader();
   const chunks = []; let bytes = 0;
   try {
@@ -31,8 +38,18 @@ async function fetchSummary(url, token, signal, fetchImpl) {
       if (bytes > MAX_SUMMARY_BYTES) throw new Error('summary-too-large');
       chunks.push(Buffer.from(value));
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw pollError('contract-mismatch'); }
   } finally { await reader.cancel().catch(() => {}); }
+}
+
+// The host tool and the head office use the same authenticated HTTP boundary.
+export async function pollFleetSummary(record, token, { fetchImpl = fetch, signal = AbortSignal.timeout(5000), now = Date.now } = {}) {
+  if (!FLEET_READ_TOKEN.test(token)) throw pollError('auth');
+  const body = await fetchSummary(record.dashboardUrl, token, signal, fetchImpl);
+  let accepted;
+  try { accepted = acceptFleetSummary(body, record.dashboardUrl); } catch { throw pollError('contract-mismatch'); }
+  if (accepted.summary.factoryId !== record.factoryId || Date.parse(accepted.summary.generatedAt) > now() + 60000) throw pollError('contract-mismatch');
+  return accepted;
 }
 
 export function createFleetPoller({ dir, registryFile = path.join(process.env.HERDR_FACTORIES_DIR || path.join(process.env.HOME || os.homedir(), '.herdr-factories'), 'fleet.json'), localSummary, enabled = () => true, credentials = () => ({}), now = () => Date.now(), fetchImpl = fetch, schedule = setTimeout, cancel = clearTimeout, timeoutMs = 5000 } = {}) {
@@ -49,13 +66,14 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
       const row = Array.isArray(saved) && saved.find((item) => item.name === record.name);
       if (!row) continue;
       const { summary, drift } = acceptFleetSummary(row.summary, record.dashboardUrl);
-      if (summary.factoryId === record.factoryId) cache.set(record.name, { ...record, summary, drift, status: 'offline', error: 'not-polled', remote: true });
+      const lastSeenAt = Number.isFinite(Date.parse(row.lastSeenAt)) && Date.parse(row.lastSeenAt) <= now() ? row.lastSeenAt : null;
+      if (summary.factoryId === record.factoryId) cache.set(record.name, { ...record, summary, drift, lastSeenAt, status: 'offline', error: 'not-polled', remote: true });
     }
   } catch { registryError = 'registry-invalid'; }
 
   const snapshot = () => [...cache.values()].sort((a, b) => Number(!!a.remote) - Number(!!b.remote) || a.name.localeCompare(b.name)).map((row) => ({ ...row, ageSeconds: row.summary ? Math.max(0, Math.floor((now() - Date.parse(row.summary.generatedAt)) / 1000)) : null }));
   const save = () => {
-    writeFleetFile(cacheFile, [...cache.values()].filter((row) => row.summary && row.remote).map(({ name, summary }) => ({ name, summary })));
+    writeFleetFile(cacheFile, [...cache.values()].filter((row) => row.summary && row.remote).map(({ name, summary, lastSeenAt }) => ({ name, summary, lastSeenAt })));
     const day = new Date(now()).toISOString().slice(0, 10);
     const daily = readFleetFile(dailyFile, {});
     daily[day] = snapshot().filter((row) => row.summary).map((row) => ({ factoryId: row.summary.factoryId, projects: row.summary.projects.length, needsOwner: row.summary.ownerItems.needsOwner }));
@@ -68,7 +86,7 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
       local = await localSummary();
       acceptFleetSummary(local, local.dashboardUrl);
       for (const [name, row] of cache) if (!row.remote) cache.delete(name);
-      cache.set(local.name, { name: local.name, factoryId: local.factoryId, dashboardUrl: local.dashboardUrl, summary: local, status: local.health.status, remote: false, error: null, drift: null });
+      cache.set(local.name, { name: local.name, factoryId: local.factoryId, dashboardUrl: local.dashboardUrl, summary: local, lastSeenAt: new Date(now()).toISOString(), status: local.health.status, remote: false, error: null, drift: null });
       if (registryError === 'local-summary-unavailable') registryError = null;
     } catch { registryError = 'local-summary-unavailable'; localFailed = true; }
     // A failed local summary leaves the previous local row in the cache. Keep its identity as factory zero.
@@ -102,15 +120,16 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
         const token = tokens[record.factoryId];
         if (!FLEET_READ_TOKEN.test(token)) throw new Error('read-credential-missing');
         const body = await fetchSummary(record.dashboardUrl, token, AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]), fetchImpl);
-        const { summary, drift } = acceptFleetSummary(body, record.dashboardUrl);
+        let summary, drift;
+        try { ({ summary, drift } = acceptFleetSummary(body, record.dashboardUrl)); } catch { throw pollError('contract-mismatch'); }
         if (identities.has(summary.factoryId) && identities.get(summary.factoryId) !== record.name) throw new Error('duplicate-factory-id');
         if (summary.factoryId !== record.factoryId) throw new Error('factory-id-mismatch');
         if (Date.parse(summary.generatedAt) > now() + 60000) throw new Error('summary-time-invalid');
         identities.set(summary.factoryId, record.name);
-        cache.set(record.name, { ...record, summary, drift, remote: true, status: summary.health.status, error: null });
+        cache.set(record.name, { ...record, summary, drift, lastSeenAt: new Date(now()).toISOString(), remote: true, status: summary.health.status, error: null });
       } catch (error) {
         const allowed = ['duplicate-factory-id', 'factory-id-mismatch', 'read-credential-missing', 'summary-too-large', 'summary-time-invalid'];
-        cache.set(record.name, { ...base, status: 'offline', error: allowed.includes(error.message) ? error.message : 'poll-failed' });
+        cache.set(record.name, { ...base, status: 'offline', error: allowed.includes(error.message) ? error.message : fleetPollError(error) });
       }
     }
     if (!stopped) save();

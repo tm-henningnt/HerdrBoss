@@ -15,6 +15,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory host remove NAME',
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
+  '       factory connect [--check] NAME',
 ].join('\n');
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
@@ -293,6 +294,10 @@ export async function factoryCommand(args, io = {}) {
   const { isInsideContainer } = await import('./factory-core.js');
   if ((context.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
   const [sub, ...rest] = args;
+  if (sub === 'connect') {
+    const { factoryConnectCommand } = await import('./factory-connect.js');
+    return factoryConnectCommand(rest, context);
+  }
   if (['new', 'build', 'start', 'stop', 'status', 'list', 'configure', 'login'].includes(sub)) {
     const { factoryCoreCommand } = await import('./factory-core.js');
     return factoryCoreCommand(args, context);

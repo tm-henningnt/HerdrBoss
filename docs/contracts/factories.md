@@ -107,6 +107,13 @@ Poll every 30 seconds.
 The read credential permits the summary and health routes only.
 Refuse other routes with 403.
 Keep the previous credential valid for 10 minutes after rotation.
+The head office poll result is local dashboard data. It is not an exchanged summary contract.
+It adds `lastSeenAt`, the UTC time of the last successful summary poll.
+A failed poll keeps that time and the last good summary.
+Before a successful poll, that time is unavailable.
+Use the public error codes `unreachable`, `timeout`, `auth`, and `contract-mismatch` for HTTP poll failures.
+Keep identity and registry refusal codes separate.
+Do not include the rejected response body or transport error text.
 The target summary size is 5 to 20 KB.
 The schema does not set a minimum byte size.
 

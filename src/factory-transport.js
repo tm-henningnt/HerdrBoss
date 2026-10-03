@@ -1,5 +1,6 @@
 // Both transports accept Docker arguments and return a captured result. No shell parses an argument.
 import { spawn as nodeSpawn } from 'node:child_process';
+import { sshArguments, shellQuote } from './factory-host.js';
 
 export function hostUnreachable() {
   const error = new Error('The factory host is unreachable.');
@@ -21,12 +22,12 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
   delete childEnv.DOCKER_HOST;
   delete childEnv.DOCKER_CONTEXT;
   return {
-    async run(args, { timeout = context ? 15_000 : 30_000 } = {}) {
+    async run(args, { timeout = context ? 15_000 : 30_000, input } = {}) {
       return new Promise((resolve, reject) => {
         let child;
         try {
           child = spawn('docker', [...(selected ? ['--context', selected] : []), ...args], {
-            env: childEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+            env: childEnv, shell: false, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
           });
         } catch { reject(new Error('Docker could not start.')); return; }
         let stdout = '';
@@ -40,6 +41,7 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
         }, timeout);
         child.stdout.on('data', (chunk) => { stdout += chunk; });
         child.stderr.on('data', (chunk) => { stderr += chunk; });
+        if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
         child.once('error', () => { clearTimeout(timer); clearTimeout(killTimer); reject(new Error('Docker could not start.')); });
         child.once('close', (code) => {
           clearTimeout(timer);
@@ -51,4 +53,32 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
       });
     },
   };
+}
+
+// Capture private provisioning output. The caller prints only public state codes.
+export function createHostTransport(host, { spawn = nodeSpawn, env = process.env } = {}) {
+  if (!host?.address || !host?.user || !host?.keyFile) throw new Error('The factory connection needs an SSH host record.');
+  return { async run(args, { timeout = 15000 } = {}) {
+    return new Promise((resolve, reject) => {
+      let child;
+      try { child = spawn('ssh', sshArguments(host, args.map(shellQuote)), { env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); }
+      catch { reject(hostUnreachable()); return; }
+      let stdout = '', stderr = '', expired = false, overflow = false, killTimer;
+      const stop = () => { child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 1000); };
+      const timer = setTimeout(() => { expired = true; stop(); }, timeout);
+      const append = (kind, chunk) => {
+        if (kind === 'stdout') stdout += chunk; else stderr += chunk;
+        if (!overflow && Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > 128 * 1024) { overflow = true; stop(); }
+      };
+      child.stdout.on('data', (chunk) => append('stdout', chunk));
+      child.stderr.on('data', (chunk) => append('stderr', chunk));
+      child.once('error', () => { clearTimeout(timer); clearTimeout(killTimer); reject(hostUnreachable()); });
+      child.once('close', (code) => {
+        clearTimeout(timer); clearTimeout(killTimer);
+        if (expired || code === 255) reject(hostUnreachable());
+        else if (overflow) reject(new Error('The host result exceeds the size limit.'));
+        else resolve({ code: code ?? 1, stdout, stderr });
+      });
+    });
+  } };
 }
