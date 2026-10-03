@@ -27,6 +27,7 @@ Read this file before you choose a lane for a new kind of task, when `herdr-boss
 - `worker start` enforces both limits, including when `--force` is set.
 - Keep the load average visible when its backstop is disabled.
 - Do not apply a fixed limit of your own.
+- The lock lane guard (`locks.guard`; Settings page, Locks section) is separate from the machine guard (`machine.guardEnabled`). It holds a queued short-lane suite while the 5-minute load is above 231 percent of the cores, swap is above 96 percent, or free memory is below 40 percent. The suite waits until the load drops.
 
 ## Test thread flags
 

@@ -193,3 +193,7 @@ Summary: Add the docs rule: a change of behavior changes the docs and the page h
 ## 4facf6b20cc0
 Impact: useful
 Summary: Shorten the review pack rules in the orchestrator skill to stay within the word limit; the content is the same as in revisions 1c6764de0c20 and a525a7ad7655.
+
+## 96799c500e9a
+Impact: useful
+Summary: Replace "There is no load threshold" with the lock lane guard rule: a queued short-lane job waits while the 5-minute load is above 231 percent of the cores, set in Settings, Locks (`locks.guard`).

@@ -7,7 +7,7 @@ import { POLICY_DEFAULTS } from '../src/control.js';
 import { Engine } from '../src/engine.js';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { readLockLaneDurationPredictions } from '../src/kit/lock-lanes.js';
-import { acquireProjectLock, readLockTakeoverNotices, releaseProjectLock } from '../src/kit/locks.js';
+import { acquireProjectLock, readLockQueue, readLockTakeoverNotices, releaseProjectLock } from '../src/kit/locks.js';
 import { temporaryRepo } from './helpers/kit-fixture.js';
 
 const START = Date.parse('2026-10-01T10:00:00.000Z');
@@ -277,4 +277,41 @@ test('removing an old mutation guard does not release a live suite holder', (t) 
   f.wait();
   assert.equal(JSON.parse(fs.readFileSync(f.file)).ownerPane, 'ws:holder');
   assert.equal(fs.existsSync(guard), false);
+});
+
+test('the queue read names the lane guard and its limit for a short ticket that waits on machine load', (t) => {
+  const f = fixture(t);
+  f.history();
+  f.holder();
+  for (let i = 0; i < 3; i++) fs.appendFileSync(path.join(f.dataDir, 'lock-ledger.jsonl'), JSON.stringify({
+    event: 'release', at: new Date(START - i * MINUTE).toISOString(), name: 'full-suite',
+    project: f.options().config.slug, kind: 'suite', lane: 'short', holdMs: MINUTE,
+  }) + '\n');
+  const settings = structuredClone(POLICY_DEFAULTS.locks);
+  fs.writeFileSync(path.join(f.dataDir, 'policy.json'), JSON.stringify({ locks: settings }));
+  fs.writeFileSync(path.join(f.dataDir, 'machine-samples.jsonl'), JSON.stringify({ at: new Date(START).toISOString(), l5: 24.5, cpus: 10 }) + '\n');
+  let queue = null;
+  f.wait({ waitSeconds: 60, pause: () => {
+    queue ??= readLockQueue({ dataDir: f.dataDir, livePanes: new Set(['ws:holder', 'ws:waiter']), pidAlive: () => true,
+      processInfo: () => ({ alive: true, start: 'invented-start' }), now: () => START });
+    f.advance(30_000);
+  } });
+  const ticket = queue.find((entry) => entry.lane === 'short');
+  assert.ok(ticket, 'a short ticket is queued');
+  assert.equal(ticket.waitReason, 'waits: lane guard, 5-minute load 245% exceeds 231%');
+});
+
+test('the queue read gives no wait reason for a long ticket at a high load', (t) => {
+  const f = fixture(t);
+  f.history();
+  f.holder();
+  fs.writeFileSync(path.join(f.dataDir, 'machine-samples.jsonl'), JSON.stringify({ at: new Date(START).toISOString(), l5: 30, cpus: 10 }) + '\n');
+  let queue = null;
+  f.wait({ waitSeconds: 60, pause: () => {
+    queue ??= readLockQueue({ dataDir: f.dataDir, livePanes: new Set(['ws:holder', 'ws:waiter']), pidAlive: () => true,
+      processInfo: () => ({ alive: true, start: 'invented-start' }), now: () => START });
+    f.advance(30_000);
+  } });
+  assert.ok(queue.length > 0);
+  assert.ok(queue.every((entry) => entry.waitReason === undefined));
 });

@@ -1377,13 +1377,25 @@ export function readLockQueue({
   const slots = lockAdmissionCapacity(configuredSlotLimit, holders, live);
   const admissionMode = [...holders, ...live].some(isLegacyLockEntry) ? 'legacy-exclusive' : slots === 1 ? 'exclusive' : 'lanes';
   const lanes = new Map();
+  const longHolder = holders.some((record) => record.lane !== 'short');
+  let guardWait;
+  const guardWaitText = () => {
+    if (guardWait === undefined) {
+      const guard = settings.guard;
+      const reason = longHolder && guard.enabled !== false ? machineGuardReason(latestMachineSample(dataDir, now), guard, { now }) : null;
+      guardWait = reason ? `waits: lane guard, ${reason.replace(/^load /, '5-minute load ')}` : null;
+    }
+    return guardWait;
+  };
   return live.map((ticket) => {
     const lane = ticketLane(ticket, slots);
     const position = (lanes.get(lane) ?? 0) + 1;
     lanes.set(lane, position);
     const waitMs = Math.max(0, timeValue(now) - Date.parse(ticket.createdAt));
+    const waitReason = lane === 'short' ? guardWaitText() : null;
     return {
       ...ticket,
+      ...(waitReason ? { waitReason } : {}),
       lane,
       position,
       waitMs,
