@@ -1076,6 +1076,14 @@ The Settings page has the same pools editor. See [Resource pools](#resource-pool
 
 `worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed, lent, or free count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
 
+## Factory hosts
+
+A factory host is a machine that runs factories. The host registry lists the hosts that `herdr-boss factory` can reach. Each entry has a name, an address, a user, and the path of an SSH key file. The registry is in `~/.herdr-factories/registry.json` and holds no key content.
+
+Add a host with `herdr-boss factory host add`. Give the fields as JSON on stdin so that the address stays out of the shell history. List the hosts with `herdr-boss factory host list`. The list shows the name and the user only.
+
+Run a command on a host with `herdr-boss factory ssh HOST -- COMMAND...`. Run Docker on a host with `herdr-boss factory docker HOST -- ARGS...`. Herdr Boss masks the address, the host name, every IP address, and the key file path in the output. See `docs/cli.md`, section Factory hosts.
+
 ## Orchestrator handover
 
 When an orchestrator's quota comes near its reserve, Herdr Boss recommends a successor. The Boss pane uses the same handover path by its `boss` label. Its quota notice goes to the Owner. The Boss workspace stays out of project shares and project notices.
