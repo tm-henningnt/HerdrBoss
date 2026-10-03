@@ -2,6 +2,7 @@ import { fleetView, fleetMailbox, fleetSettingsFromForm } from './fleet.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
+import { orchestratorFocus, workerListHtml } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
@@ -1679,8 +1680,25 @@ function agentProfile(p, s) {
   return `<div class="agent-profile">
     <div class="agent-profile-main"><span class="st ${esc(p.status || 'unknown')}" aria-hidden="true"></span><strong>${esc(name)}</strong>${isOrchestrator ? `<span class="pill">${p.label === 'boss' ? 'boss' : 'orch'}</span>` : ''}${p.name && p.agent ? `<span class="agent-kind">${esc(p.agent)}</span>` : ''}<span class="agent-state ${staleWorker ? 'stale' : ''}">${esc(p.status || 'unknown')}${elapsed ? ` · ${elapsed}` : ''}</span></div>
     <p class="agent-profile-task">${esc(task)}</p>
+    ${isOrchestrator && p.label !== 'boss' && orchestratorFocus(s, p.workspace) ? `<p class="agent-profile-focus"><b>Focus</b> ${esc(orchestratorFocus(s, p.workspace))}</p>` : ''}
     <div class="agent-profile-meta"><span>Pane <code>${esc(p.id)}</code></span><span>Tab <code>${esc(p.tab || '–')}</code></span>${processes.length ? `<span title="${esc(processes.map((x) => `${x.kind} PID ${x.pid}`).join('\n'))}">${processes.length} tracked process${processes.length === 1 ? '' : 'es'}</span>` : ''}${staleWorker ? '<span class="stale">Idle over 2h</span>' : ''}</div>
   </div>`;
+}
+
+// The worker list on the Agents page. open and showAll hold row keys. briefs holds the brief of an opened row.
+// The filter lives in this tab only.
+const workerUi = { open: new Set(), showAll: new Set(), briefs: {}, filter: { project: '', state: '' } };
+async function loadWorkerBrief(key) {
+  const slash = key.indexOf('/');
+  if (key.startsWith('pane/') || slash < 1) { workerUi.briefs[key] = { status: 'missing' }; return; }
+  workerUi.briefs[key] = { status: 'loading' };
+  try {
+    const response = await fetch(`/api/worker-brief?project=${encodeURIComponent(key.slice(0, slash))}&name=${encodeURIComponent(key.slice(slash + 1))}`);
+    workerUi.briefs[key] = response.ok ? { status: 'ok', data: await response.json() } : { status: 'missing' };
+  } catch {
+    workerUi.briefs[key] = { status: 'missing' };
+  }
+  lastRender = ''; render(true);
 }
 
 function agentInventory(s) {
@@ -1699,9 +1717,9 @@ function agentInventory(s) {
     const mode = !project && excluded ? 'Not a project' : project?.effectiveMode === 'paused' ? 'Paused' : project?.idle ? 'Idle' : 'Active';
     return `<section class="workspace-row"><header class="workspace-row-head"><div class="workspace-title"><h2>${slug ? `<a href="/projects/${esc(slug)}">${esc(w.label)}</a>` : esc(w.label)}</h2><span class="mono">${esc(w.id)}</span>${!project && excluded ? '<span class="tag">Not a project</span>' : ''}</div><div class="workspace-context"><span>${mode}</span><span>${work.length} worker${work.length === 1 ? '' : 's'}</span>${slug ? `<a href="/projects/${esc(slug)}">Project details →</a>` : ''}</div></header>
       <div class="workspace-row-body"><div class="workspace-role"><h3>Orchestrator</h3>${orch ? `${agentProfile(orch, s)}${slug && orch.label !== 'boss' ? goalSetBlock(s, slug, (s.projects || []).find((x) => x.slug === slug)?.goal) : ''}` : '<div class="missing-orch">No labeled orchestrator. Label its Herdr pane <code>orch</code> to supervise this project.</div>'}</div>
-      <div class="workspace-role workspace-workers"><h3>Workers <span>${work.length}</span></h3>${work.length ? `<ul>${work.map((p) => `<li>${agentProfile(p, s)}</li>`).join('')}</ul>` : '<p class="workspace-empty">No worker agents in this workspace.</p>'}</div></div></section>`;
+</div></section>`;
   }).join('');
-  return `${summary}<div class="workspace-list">${rows || '<div class="calm-state">No Herdr workspaces are open.</div>'}</div>`;
+  return `${summary}${workerListHtml(s, { ...workerUi, now: Date.now() }, { esc, dur, markdown: safeMarkdownHtml })}<div class="workspace-list">${rows || '<div class="calm-state">No Herdr workspaces are open.</div>'}</div>`;
 }
 
 // The status of a card for the counts: the computed state when the service sent one, else the published status.
@@ -4786,11 +4804,12 @@ function orgWorkers(s, panes, published, ownerId) {
   const toggle = isPhone() ? `<button type="button" class="quiet org-worker-count" data-org-workers="${esc(ownerId)}" aria-expanded="${open}" aria-controls="${listId}">${open ? `Hide ${count}` : `Show ${count}`}</button>` : '';
   return `${toggle}<ul class="org-workers" id="${listId}" ${open ? '' : 'hidden'}>${panes.map((pane) => {
     const task = orgWorkerTask(published, pane);
+    const row = (s.workerView?.rows || []).find((item) => item.pane === pane.id);
     const name = pane.name || pane.agent || pane.id;
     return `<li>${orgNode({
       id: `${ownerId}:${pane.id}`, role: pane.label || 'worker', name, status: pane.status, className: 'org-worker', agent: pane.agent || null, quota: orgQuotaMeter(s, pane.agent),
-      summary: [pane.agent || NOT_REPORTED, pane.status || NOT_REPORTED, task?.id ? `Task ${task.id}` : 'Task not reported'],
-      facts: orgAgentFacts(s, pane, [['Agent name', pane.name || NOT_REPORTED], ['Task ID', task?.id || NOT_REPORTED], ['Task title', task?.title || NOT_REPORTED], ['Task status', task ? STATUS_LABEL[task.status || 'todo'] || task.status : NOT_REPORTED]]),
+      summary: [row?.title, pane.agent || NOT_REPORTED, row?.now || pane.status || NOT_REPORTED, task?.id ? `Task ${task.id}` : 'Task not reported'],
+      facts: orgAgentFacts(s, pane, [['Work', row?.title || NOT_REPORTED], ['Doing now', row?.now || NOT_REPORTED], ['Agent name', pane.name || NOT_REPORTED], ['Task ID', task?.id || NOT_REPORTED], ['Task title', task?.title || NOT_REPORTED], ['Task status', task ? STATUS_LABEL[task.status || 'todo'] || task.status : NOT_REPORTED]]),
     })}</li>`;
   }).join('')}</ul>`;
 }
@@ -6515,8 +6534,12 @@ const HELP = {
     <p>The Boss can run <code>herdr-boss messages relay ID... --by boss</code> to mark queued Owner messages as relayed. Herdr Boss never sends a relayed message. The thread shows its relay time and any reply time.</p>
     <p>The Boss and the orchestrators reply with <code>herdr-boss say</code>. The Boss can post a longer report with <code>herdr-boss mail post</code>. The page shows each message and each report as formatted Markdown. You cannot message a worker. Send a worker request to its orchestrator.</p>
     <p>The open panel reads the thread again every 10 seconds. A read-only preview shows the threads and refuses a send.</p>
-    <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The page does not read a task from a pane title. It shows no pane output, messages, or secrets.</p>
-    <h3>List</h3><p>Every Herdr workspace with its orchestrator and workers, live from Herdr.</p>
+    <h3>Data limits</h3><p><b>Not reported</b> means that the current state does not hold the value. Herdr Boss does not receive the model of a running agent. The Chart does not read a task from a pane title. It shows no messages or secrets. A worker node shows one plain action line from the pane, see <b>List</b>.</p>
+    <h3>List</h3><p>The <b>Workers</b> table shows one row for each worker, and the workspaces below it show each orchestrator. On a phone, each worker is one card.</p>
+    <p>A worker row shows the title of the work, the board card title when the worker has a task ID, the project, the agent and model, the state, and how long the worker runs. The title is the first line of the task text that the orchestrator gave to <code>worker start</code>.</p>
+    <p>The <b>Doing now</b> column shows the last action of the agent, for example <b>Running tests in test/factory</b>, <b>Editing src/render.ts</b>, or <b>Waiting for the lock</b>. Herdr Boss reads the pane screen of a working worker every 30 seconds, removes the terminal codes, and masks secrets. When the screen shows no action, the line reads <b>Working (no output for N minutes)</b>. A finished worker shows the result (<b>Merged</b>, <b>Collected, not merged</b>, <b>Needs rework</b>, or <b>Abandoned</b>) and the first paragraph of its report.</p>
+    <p>Select a row to open it. The panel shows the scope, the report path, and the brief of the worker as formatted Markdown. The brief is read-only. The panel shows the first 25 lines. Select <b>Show all</b> for the rest. Herdr Boss masks secrets in the brief and keeps a copy in the worker record for 30 days, so the brief stays readable after the worktree is removed.</p>
+    <p>The filter above the table selects one project and one state: <b>Working</b>, <b>Waiting</b> (idle or blocked), or <b>Finished</b>. The filter applies to this tab only. An orchestrator row shows its focus: the phase and the cards on Doing from the published status.</p>
     <p>A status dot shows working, blocked, failed, idle, or done. Failed means the last visible worker output matched a known provider error, including <b>Free usage exceeded</b>. Herdr Boss reads only the last eight visible lines: on every tick while a worker is working, and when a worker first appears idle or done or changes into either state. A worker can show failed while Herdr still reports it working; the engine then does not count it as a running worker. The failed status clears when a later read shows no known failure, or when a different worker uses the pane. Herdr Boss sends the matched error label, worker name, and pane ID to the project orchestrator. Blocked workers get a notice after five minutes. Idle and done agents are ready for input; they have not always finished their task. Rows with the <b>orch</b> or <b>boss</b> label are orchestrators.</p>
     <p>An orchestrator that stays idle gets a nudge when its published status still has an actionable task: status <b>todo</b>, <b>doing</b>, or <b>review</b> with every task in its <b>blocked by</b> list done. The project must be in <b>auto</b> or <b>active</b> mode, no other worker in that workspace may work, be blocked, or have failed, and the idle period must reach the configured idle minutes. The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work. One key per project and task keeps the normal notice cooldown in charge; a different next task prompts again.</p>`],
   browsers: ['Browsers', `
@@ -8564,6 +8587,39 @@ document.addEventListener('click', (e) => {
   const button = e.target.closest?.('[data-agents-view]');
   if (!button) return;
   setAgentsView(button.dataset.agentsView);
+  lastRender = ''; render(true);
+});
+
+document.addEventListener('click', (e) => {
+  const toggle = e.target.closest?.('[data-worker-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.workerToggle;
+    if (workerUi.open.has(key)) workerUi.open.delete(key);
+    else {
+      workerUi.open.add(key);
+      if (!workerUi.briefs[key] || workerUi.briefs[key].status === 'missing') loadWorkerBrief(key);
+    }
+    lastRender = ''; render(true);
+    document.querySelector(`[data-worker-toggle="${CSS.escape(key)}"]`)?.focus();
+    return;
+  }
+  const all = e.target.closest?.('[data-worker-brief-all]');
+  if (all) {
+    const key = all.dataset.workerBriefAll;
+    if (workerUi.showAll.has(key)) workerUi.showAll.delete(key); else workerUi.showAll.add(key);
+    lastRender = ''; render(true);
+    document.querySelector(`[data-worker-brief-all="${CSS.escape(key)}"]`)?.focus();
+    return;
+  }
+  const chip = e.target.closest?.('[data-worker-state]');
+  if (chip) {
+    workerUi.filter.state = chip.dataset.workerState;
+    lastRender = ''; render(true);
+  }
+});
+document.addEventListener('change', (e) => {
+  if (!e.target.matches?.('[data-worker-project]')) return;
+  workerUi.filter.project = e.target.value;
   lastRender = ''; render(true);
 });
 

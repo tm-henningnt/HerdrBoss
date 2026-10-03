@@ -20,6 +20,7 @@ import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '.
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
 import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
+import { briefCopy, firstParagraph, titleFromTask } from '../worker-view.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1598,6 +1599,8 @@ function startWorkerOnce(name, options, {
         ...(effortSource ? { effortSource } : {}),
         issue: options.issue == null ? null : Number(options.issue),
         ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
+        ...(titleFromTask(task) ? { title: titleFromTask(task) } : {}),
+        briefCopy: briefCopy(brief, now),
         worktree,
         branch,
         base,
@@ -1985,6 +1988,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       ledgerWritten = true;
       run.finishedAt = entry.endedAt;
       run.outcome = entry.outcome;
+      const reportSummary = firstParagraph(reportMd);
+      if (reportSummary) run.reportSummary = reportSummary;
       run.collectedAt = run.collectedAt || entry.endedAt;
       writeJsonAtomic(file, run);
       if (run.leases?.length) {

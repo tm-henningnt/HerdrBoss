@@ -490,6 +490,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         }
         return send(res, 200, maskBrowserState(engine.state || {}));
       }
+      if (p === '/api/worker-brief' && req.method === 'GET') {
+        const brief = typeof engine.readWorkerBrief === 'function' ? engine.readWorkerBrief(url.searchParams.get('project'), url.searchParams.get('name')) : null;
+        return brief ? send(res, 200, brief) : send(res, 404, { error: 'No brief is stored for this worker.' });
+      }
       if (p === '/api/chats' && req.method === 'GET') {
         const projects = engine.state?.control?.projects || {};
         const writable = new Map([['boss', { title: 'Boss' }]]);

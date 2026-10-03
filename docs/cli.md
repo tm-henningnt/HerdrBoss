@@ -987,7 +987,7 @@ Codex handover and `project new --start` use the same browser arguments. A worke
 | Option | Meaning |
 |---|---|
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
-| `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. |
+| `--task TEXT` or `--task-file FILE` | Required. The work order for the brief. Write the first line as a plain title: what the worker does and for which ticket. The Agents page shows the first line as the title of the worker. Herdr Boss saves the title as `title` and a masked copy of the brief as `briefCopy` in the run record. The copy keeps its text for 30 days after the run ends. |
 | `--allow PATH` | A repository path that the worker may change. Repeat for each path. The worker can write its own `.worker/` folder without this option. |
 | `--planner` | Create a planner session for the new worker pane and label the pane `planner`. See [Planner sessions](#planner-sessions). |
 | `--read-only` | Allow changes in the worker's own folder only. Use this option when the task changes no repository file. Do not use it with `--allow`. |
@@ -1041,7 +1041,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | Command | Action |
 |---|---|
 | `worker list` | Unfinished run records with the live agent status. |
-| `worker collect NAME [--keep-pane] [--allow PATH]... [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. The `--record` flag is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
+| `worker collect NAME [--keep-pane] [--allow PATH]... [--outcome done\|partial\|failed --gate-passed\|--gate-failed] [--defects N] [--rework N] [--model-result first-time\|rework\|failed] [--model-reason TEXT]` | Check the worker report and its changed paths, report configured stale-artifact warnings, append the run to the ledger, record usage, and release its leases. Recording needs the outcome, one gate result, and any supplied defect or rework counts. It sets `collectedAt` and `finishedAt` after a successful collect, and it saves the first paragraph of `report.md` as `reportSummary`. A successful collect schedules the pane to close after `workers.paneCloseDelayMinutes` (2 minutes by default). `--keep-pane` skips that close. A refused collect closes nothing. The `--record` flag is accepted for compatibility. After success, merge the branch, then prune safe worktrees. |
 | `worker collect NAME --no-record` | Read and print the report summary. Do not write a ledger entry, close the run record, or schedule the pane to close. Use this option when you only need to inspect the report. Do not combine it with `--record`: the command refuses both flags. |
 | `worker park NAME --reason TEXT` | Mark a worker that waits on purpose. Idle notices skip it. |
 | `worker unpark NAME` | Clear the park mark. |

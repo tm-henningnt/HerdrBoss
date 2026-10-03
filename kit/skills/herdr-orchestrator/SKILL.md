@@ -154,6 +154,8 @@ Use `--read-only` for a task that changes no repository file.
 
 Always give `--task-id` with the published task id.
 
+Write the first line of `--task` or of the task file as a plain title: what the worker does and for which ticket, for example `FT15 Factory updates: service and image tiers`. The Agents page shows this line as the title of the worker. Do not start it with a role, a path, or a command.
+
 - Read [the Herdr control surface](reference/herdr-control.md) for the options of `worker start`.
 - Verify the name, branch, worktree, pane, and brief.
 - Check that the worker's pane uses the intended worktree before sending more instructions.
