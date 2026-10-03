@@ -160,6 +160,13 @@ function docsView() {
   document.title = docsPageTitle(page);
   return docsViewHtml({ tree: docs.tree, name, page, error: page ? '' : docs.errors.get(key) || '' });
 }
+// The explainer page loads its module only when the page shows. A render that replaces the element mounts it again at the same step.
+function docsAfterRender() {
+  const root = document.querySelector('[data-explainer]');
+  if (!root || root.dataset.mounted) return;
+  root.dataset.mounted = '1';
+  import('/explainer.js').then((mod) => { if (root.isConnected) mod.mountExplainer(root); }, () => { root.textContent = 'The explainer did not load.'; });
+}
 // Docs text changes when a file changes. A reload of the page reads it again.
 const DENIAL_RANGE_KEY = 'herdr-boss.denialRange';
 function loadDenialRange() {
@@ -7667,6 +7674,7 @@ function render(force = false) {
     if (route === 'analytics') denialScrollToEnd();
   }
   if (route === 'reviews') reviewsAfterRender();
+  if (route === 'docs') docsAfterRender();
   syncSettingPopup();
   if (route === 'agents' && agentsViewMode() === 'chart') orgMotion(state);
   else orgEventMark = null;

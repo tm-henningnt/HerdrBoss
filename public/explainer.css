@@ -1,0 +1,48 @@
+/* The explainer page of the Docs section. The boxes use the colour tokens of the dashboard, so both themes work. */
+.explainer { margin: 18px 0 8px; display: grid; gap: 16px; min-width: 0; }
+.explainer:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.ex-factory, .ex-panes { position: relative; display: grid; gap: 8px; min-width: 0; border: 1.5px dashed var(--line); border-radius: 12px; padding: 24px 10px 10px; background: var(--panel-2); transition: border-color 160ms, background-color 160ms; }
+.ex-panes { padding-top: 24px; background: var(--panel); }
+.ex-factory.is-active, .ex-panes.is-active { border-color: var(--accent); border-style: solid; background: color-mix(in srgb, var(--accent) 7%, var(--panel-2)); }
+.ex-frame-label { position: absolute; top: 6px; left: 12px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.is-active > .ex-frame-label { color: var(--accent); }
+.ex-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.ex-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ex-box { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--faint); font-size: 13.5px; line-height: 1.25; text-align: center; overflow-wrap: anywhere; transition: border-color 160ms, background-color 160ms, color 160ms; }
+.ex-panes .ex-box { background: var(--panel-2); }
+.ex-box.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--text); font-weight: 650; animation: ex-pop 220ms ease-out; }
+.ex-fleet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0 10px; }
+.ex-fleet .ex-box { border-style: dashed; background: transparent; }
+.ex-fleet.is-active .ex-box { border-color: var(--accent); color: var(--text); }
+@keyframes ex-pop { from { transform: scale(0.96); opacity: 0.6; } to { transform: none; opacity: 1; } }
+
+.ex-panel { display: grid; gap: 14px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.ex-text { min-height: 8.5em; }
+.ex-title { margin: 0 0 6px; font-size: 17px; line-height: 1.3; }
+.ex-text p { margin: 0; font-size: 15px; line-height: 1.6; animation: ex-in 200ms ease-out; }
+@keyframes ex-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ex-controls { display: grid; gap: 12px; }
+.ex-progress { display: flex; align-items: center; gap: 12px; }
+.ex-count { flex: none; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.ex-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.ex-bar span { display: block; height: 100%; background: var(--accent); transition: width 200ms; }
+.ex-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ex-buttons button { min-height: 44px; font-size: 15px; }
+.ex-buttons button:disabled { opacity: 0.4; cursor: default; }
+/* The root prefix outranks the dark-theme button color of style.css, so the numbers keep readable text in both themes. */
+.ex-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+:root:root .ex-steps button { border-color: var(--line); background: var(--panel-2); color: var(--text); min-width: 40px; min-height: 40px; padding: 0 6px; border-radius: 20px; font-size: 13px; font-variant-numeric: tabular-nums; }
+:root:root .ex-steps button[aria-current="step"] { border-color: var(--accent); background: var(--accent); color: var(--bg); font-weight: 650; }
+.ex-hint { margin: 0; color: var(--faint); font-size: 12.5px; }
+.explainer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 560px) {
+  .ex-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ex-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ex-box { padding: 9px 4px; font-size: 13px; }
+  .ex-panel { padding: 12px; }
+  .ex-text { min-height: 13em; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ex-box, .ex-box.is-active, .ex-text p, .ex-factory, .ex-panes, .ex-bar span { animation: none; transition: none; }
+}
