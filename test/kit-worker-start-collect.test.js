@@ -1570,7 +1570,7 @@ function openCodeFixture(t, name) {
     exit: () => { registered = false; },
     start: (override = herdr, options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
       config: f.config, models: loadModels(), herdr: override, env: f.env, rulesFile: f.rulesFile,
-      wait: () => {}, output: () => {},
+      wait: () => {}, output: () => {}, probeModel: () => false,
     }),
     herdr,
   };
@@ -2378,14 +2378,17 @@ function blockedLaunchFixture(t, name, blockedModel, phrase) {
   const launched = [];
   const closedPanes = [];
   let showing = false;
+  let blockedLaunches = 0;
   const modelOfStart = (args) => args[args.indexOf('-m') + 1];
   const herdr = (args) => {
     if (args[0] === 'agent' && args[1] === 'start') {
       const model = modelOfStart(args);
       launched.push(model);
       showing = model === blockedModel;
+      if (showing) blockedLaunches++;
     }
-    if (args[0] === 'pane' && args[1] === 'read' && showing) return { text: `opencode\n${phrase}\n` };
+    // Each blocked launch prints the phrase again.
+    if (args[0] === 'pane' && args[1] === 'read' && showing) return { text: `opencode\n${`${phrase}\n`.repeat(blockedLaunches)}` };
     if (args[0] === 'pane' && args[1] === 'close') { closedPanes.push(args[2]); showing = false; }
     return fixture.herdr(args);
   };
@@ -2397,13 +2400,14 @@ function blockedLaunchFixture(t, name, blockedModel, phrase) {
   return { ...fixture, herdr, launched, closedPanes, records, startWith: (options = {}) => fixture.start(herdr, options) };
 }
 
+// The last value is the number of launches of the blocked model. "Did you mean this?" gets 3 launches, then a failing probe.
 const LAUNCH_BLOCK_CASES = [
-  ['Did you mean this?', 'Did you mean this?', true],
-  ['not available in your country', 'This model is not available in your country', true],
-  ['Rate limit exceeded', 'Error: rate limit exceeded', false],
+  ['Did you mean this?', 'Did you mean this?', true, 3],
+  ['not available in your country', 'This model is not available in your country', true, 1],
+  ['Rate limit exceeded', 'Error: rate limit exceeded', false, 1],
 ];
 
-for (const [phrase, paneText, untilReenabled] of LAUNCH_BLOCK_CASES) {
+for (const [phrase, paneText, untilReenabled, launches] of LAUNCH_BLOCK_CASES) {
   test(`OpenCode start with --model fails once on "${phrase}", closes the pane, and marks the model`, (t) => {
     const model = 'opencode/mimo-v2.6-flash-free';
     const f = blockedLaunchFixture(t, `opencode-block-${untilReenabled ? 'hold' : 'rate'}-${phrase.length}`, model, paneText);
@@ -2412,7 +2416,7 @@ for (const [phrase, paneText, untilReenabled] of LAUNCH_BLOCK_CASES) {
       assert.doesNotMatch(error.message, /failed after 3 launch attempts/);
       return true;
     });
-    assert.deepEqual(f.launched, [model], 'the same model is not launched again');
+    assert.deepEqual(f.launched, Array(launches).fill(model), 'the same model is launched only as often as the phrase allows');
     assert.equal(f.closedPanes.length, 1);
     const [record] = f.records();
     assert.equal(record.model, model);
@@ -2429,10 +2433,10 @@ for (const [phrase, paneText, untilReenabled] of LAUNCH_BLOCK_CASES) {
     const blocked = loadModels().kinds.opencode.defaultModel;
     const f = blockedLaunchFixture(t, `opencode-fallback-${untilReenabled ? 'hold' : 'rate'}-${phrase.length}`, blocked, paneText);
     const run = f.startWith();
-    assert.equal(f.launched.length, 2);
-    assert.equal(f.launched[0], blocked);
-    assert.notEqual(f.launched[1], blocked);
-    assert.equal(run.model, f.launched[1]);
+    assert.equal(f.launched.length, launches + 1);
+    assert.deepEqual(f.launched.slice(0, launches), Array(launches).fill(blocked));
+    assert.notEqual(f.launched.at(-1), blocked);
+    assert.equal(run.model, f.launched.at(-1));
     assert.equal(run.modelSource, 'fallback');
     assert.equal(f.closedPanes.length, 1, 'the blocked pane is closed');
     assert.equal(f.records().length, 1);
