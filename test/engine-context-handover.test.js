@@ -258,6 +258,19 @@ test('the context threshold is a policy value', { timeout: 30000 }, (t) => {
   assert.equal(prepares(above).length, 1);
 });
 
+test('the context threshold counts tokens, not a share of a model window', { timeout: 30000 }, (t) => {
+  // 280K tokens is 28% of a 1M window and 140% of a 200K window. The policy value of 300K tokens decides in both cases.
+  for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5[1m]']) {
+    const below = run(t, { tokens: 280000, model, steps: boundary() });
+    assert.deepEqual(prepares(below), [], `280K tokens stays below the 300K limit for ${model}`);
+  }
+  const edge = run(t, { tokens: 300000, steps: boundary() });
+  assert.deepEqual(prepares(edge), [], 'exactly 300K tokens does not exceed the limit');
+  const above = run(t, { tokens: 300001, steps: boundary() });
+  assert.equal(prepares(above).length, 1);
+  assert.match(above.logs.find(({ message }) => /^Prepared a fresh/.test(message)).message, /300001 tokens, above the limit of 300000 tokens/);
+});
+
 test('a pane that goes from working to idle after a new publish is a boundary', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000,
@@ -828,29 +841,42 @@ test('a ghost suggestion in an idle successor input does not block readiness', {
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys').length, 0);
 });
 
-test('real unsent successor input gets a second Enter after the delay and one Boss notice in a later tick', { timeout: 30000 }, (t) => {
+test('real unsent successor input gets verified Enter retries after the delay and one Boss notice after the last', { timeout: 30000 }, (t) => {
+  const typed = '❯ run the prepared handover';
   const out = run(t, {
     tokens: 400000, memory: tracked,
     handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
-    steps: [
-      { at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-      { at: at(2), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-      { at: at(3), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-      { at: at(4), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: '❯ run the prepared handover' },
-    ],
+    steps: [1, 2, 3, 4, 5, 6].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: typed })),
   });
   const enters = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'send-keys');
-  assert.deepEqual(enters.map(({ args }) => args), [
-    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
-    ['agent', 'send-keys', 'w-alpha:p9', 'enter'],
-  ], 'the engine sends at most two Enters in total');
+  assert.deepEqual(enters.map(({ args }) => args), Array(4).fill(['agent', 'send-keys', 'w-alpha:p9', 'enter']), 'the engine sends the first Enter and at most 3 retries');
   assert.ok(out.records[0].inputEnterSentAt);
   assert.ok(out.records[0].inputEnterRetryAt);
+  assert.equal(out.records[0].inputEnterRetries, 3);
   assert.ok(out.records[0].inputNoticeAt);
   assert.equal(out.records[0].readyAt, undefined);
-  assert.deepEqual(bossNotes(out).map(({ step }) => step), [2], 'the notice goes out one tick after the retry, not with it');
+  assert.deepEqual(bossNotes(out).map(({ step }) => step), [4], 'the notice goes out one tick after the last retry, not with it');
   assert.match(bossNotes(out)[0].args[3], /ctx-1.*w-alpha:p9/);
   assert.match(bossNotes(out)[0].args[3], /herdr agent read w-alpha:p9/);
+});
+
+test('a successor input that stays typed after a wrapped-prompt screen scrolled its marker off still gets Enter', { timeout: 30000 }, (t) => {
+  const tall = [...Array.from({ length: 14 }, (_, i) => `  line ${i} of a bootstrap prompt that wraps`), '➜  Project git:(main)  Sonnet 5.5 ctx:6%', '⏵⏵ auto mode on (shift+tab to cycle)'].join('\n');
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: tall }],
+  });
+  assert.deepEqual(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys').map(({ args }) => args), [['agent', 'send-keys', 'w-alpha:p9', 'enter']]);
+});
+
+test('a dim paste placeholder in the successor input gets Enter', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 400000, memory: tracked,
+    handoffs: [unreadyRecord({ seenWorkingAt: undefined })],
+    steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor, bossPane), published: { alpha: status(1) }, screen: successorScreen.replace('❯ ', '❯ \x1b[2m[Pasted text #1 +30 lines]\x1b[0m') }],
+  });
+  assert.equal(out.herdrCalls.filter(({ args }) => args[1] === 'send-keys').length, 1);
 });
 
 test('a successor input that is cleared before the second wait gets the retry and no Boss notice', { timeout: 30000 }, (t) => {

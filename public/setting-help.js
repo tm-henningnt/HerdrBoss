@@ -500,7 +500,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'autoHandoverContextTokens', 'Hand over at context tokens', {
-    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the orchestrator pane is not working. It reads the context size only for Claude. A pane that it sees for the first time waits for its next boundary.',
+    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the orchestrator pane is not working. It reads the context size only for Claude. It compares a token count with this value, not a percent of the model window. A pane that it sees for the first time waits for its next boundary.',
     default: '300000', unit: 'Tokens', range: '50000 to 2000000',
     raise: 'A higher value keeps a long context for longer.',
     lower: 'A lower value hands over sooner and keeps the context short.',

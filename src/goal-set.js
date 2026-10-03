@@ -87,6 +87,28 @@ export function hasTypedText(rawLine) {
   return false;
 }
 
+const CLAUDE_FOOTER = /(?:auto mode|accept edits|plan mode|bypass permissions|\? for shortcuts|shift\+tab to cycle)/i;
+const CLAUDE_DIALOG = /(?:^❯?\s*\d+[.)]\s|Esc to cancel|Enter to confirm|Do you (?:want|trust))/i;
+const PASTE_PLACEHOLDER = /^❯\s+\[(?:Pasted text|Image) #\d+/;
+
+// The input line of a Claude pane: 'typed' (text waits for Enter), 'empty' (the prompt is empty or shows a ghost
+// suggestion), or 'none' (no input line, for example a blank pane or a dialog).
+// A dim paste placeholder is typed text. A wrapped prompt taller than the pane scrolls its marker line off the
+// screen. Then the footer is visible, no dialog is on screen, and a line of text stands above the footer.
+export function claudeInputState(screen) {
+  const rawLines = String(screen ?? '').split(/\r?\n/);
+  const lines = rawLines.map((line) => stripAnsi(line).trim());
+  let at = -1;
+  lines.forEach((line, index) => { if (/^❯/.test(line) && !/^❯\s+\d+[.)]/.test(line)) at = index; });
+  if (at >= 0) {
+    if (!/^❯\s+\S/.test(lines[at])) return 'empty';
+    return PASTE_PLACEHOLDER.test(lines[at]) || hasTypedText(rawLines[at]) ? 'typed' : 'empty';
+  }
+  const footerAt = lines.findIndex((line) => CLAUDE_FOOTER.test(line));
+  if (footerAt < 0 || lines.some((line) => CLAUDE_DIALOG.test(line))) return 'none';
+  return lines.slice(0, footerAt).some((line) => line && !/^[─━│╭╰╮╯\s]+$/.test(line) && !/^(?:➜|※|✻)/.test(line)) ? 'typed' : 'none';
+}
+
 // What on the screen stops the command: a dialog, or typed text in the input line. Null when the prompt is empty and ready.
 // The text can carry escape sequences. A ghost suggestion in the input line counts as an empty input line.
 export function screenBlocker(kind, text) {

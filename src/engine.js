@@ -26,7 +26,7 @@ import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, 
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
 import { goalDelivery, goalOnScreen, paneText, sendGoalPrompt } from './goal.js';
-import { hasTypedText, screenBlocker, stripAnsi } from './goal-set.js';
+import { claudeInputState, screenBlocker } from './goal-set.js';
 import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-handover.js';
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
@@ -63,6 +63,7 @@ const GOAL_WAIT_MS = 10 * 60 * 1000;
 const AUTO_READY_MS = 120 * 1000;
 const SUCCESSOR_INPUT_READ_MS = 15_000;
 const INPUT_ENTER_READY_DELAY_MS = 20_000;
+const INPUT_ENTER_MAX_RETRIES = 3;
 const AUTO_READY_EXPIRY_MS = 30 * 60 * 1000;
 const AUTO_READY_EXPIRY_REASON = 'successor not ready after 30 minutes';
 const UNREADY_SUCCESSOR_NOTICE_MS = 10 * 60 * 1000;
@@ -2243,15 +2244,12 @@ export class Engine extends EventEmitter {
       const input = await this.successorInputScreen(item, target, now);
       if (input.error) continue;
       const screen = input.screen;
-      const rawLines = String(screen).split(/\r?\n/);
-      const visibleLines = rawLines.map((line) => stripAnsi(line).trim());
       let typedInput = false;
       if (target.agent === 'claude') {
-        let inputAt = -1;
-        visibleLines.forEach((line, index) => { if (/^❯/.test(line) && !/^❯\s+\d+[.)]/.test(line)) inputAt = index; });
+        const inputState = claudeInputState(screen);
         // A blank pane and dialog choices are not a successor input prompt.
-        if (inputAt < 0) continue;
-        typedInput = /^❯\s+\S/.test(visibleLines[inputAt]) && hasTypedText(rawLines[inputAt]);
+        if (inputState === 'none') continue;
+        typedInput = inputState === 'typed';
       } else typedInput = screenBlocker(target.agent, screen) === 'input';
       if (typedInput) {
         const current = listHandoffs();
@@ -2270,23 +2268,24 @@ export class Engine extends EventEmitter {
           }
           continue;
         }
-        // The first Enter did not submit the input. Wait the same delay, then send the one retry.
-        if (now - Date.parse(latest.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) continue;
-        if (!latest.inputEnterRetryAt) {
+        // The last Enter did not submit the input. The screen read of this tick is the check. Wait the same delay
+        // after each Enter, then send the next retry, up to INPUT_ENTER_MAX_RETRIES retries.
+        if (now - Date.parse(latest.inputEnterRetryAt || latest.inputEnterSentAt) < INPUT_ENTER_READY_DELAY_MS) continue;
+        const retries = latest.inputEnterRetries ?? (latest.inputEnterRetryAt ? 1 : 0);
+        if (retries < INPUT_ENTER_MAX_RETRIES) {
           latest.inputEnterRetryAt = new Date(now).toISOString();
+          latest.inputEnterRetries = retries + 1;
           saveHandoffs(current);
           try {
             checkHerdrResponse(await this.herdrRunner('herdr', ['agent', 'send-keys', target.id, 'enter']));
-            this.log('handoff', `Sent the one Enter retry to submit unsent input in successor pane ${target.id} for handoff ${item.id}`, { project: item.project, pane: target.id });
+            this.log('handoff', `Sent Enter retry ${retries + 1} of ${INPUT_ENTER_MAX_RETRIES} to submit unsent input in successor pane ${target.id} for handoff ${item.id}`, { project: item.project, pane: target.id });
           } catch (error) {
             this.log('error', `Enter retry for unsent successor input in handoff ${item.id} failed: ${String(error.stderr || error.message).slice(0, 200)}`, { project: item.project, pane: target.id });
           }
           continue;
         }
-        // The retry did not submit the input either. Wait the same delay again, then read the screen. The typedInput
-        // result of this tick is that read. Tell the Boss once only when the input line still holds typed text.
+        // The last retry did not submit the input either. Tell the Boss once, and only when the screen of this tick still holds typed text.
         if (latest.inputNoticeAt) continue;
-        if (now - Date.parse(latest.inputEnterRetryAt) < INPUT_ENTER_READY_DELAY_MS) continue;
         const notified = await this.retryOperation(latest, now, 'input', 'the unsent input notice', () => this.promptHandoverBoss(herdr,
           `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}: the bootstrap prompt is typed in the input line and Enter did not submit it. Read the pane with herdr agent read ${item.newPane}, then submit the prompt by hand or close the pane and prepare a new successor.`), { project: item.project, pane: item.newPane });
         if (notified) {
@@ -2401,7 +2400,7 @@ export class Engine extends EventEmitter {
           { timeout: 300000 }));
         this.memory.contextHandovers[prepared.id] = { pane: pane.id, at: now, tokens: usage.tokens, sourceModel: model };
         entry.armed = false;
-        this.log('handoff', `Prepared a fresh ${orch.kind} successor for ${name} at a task boundary: context is ${usage.tokens} tokens; awaiting readiness`, { project: project.slug, pane: prepared.newPane });
+        this.log('handoff', `Prepared a fresh ${orch.kind} successor for ${name} at a task boundary: context is ${usage.tokens} tokens, above the limit of ${policy.autoHandoverContextTokens} tokens; awaiting readiness`, { project: project.slug, pane: prepared.newPane });
       } catch (e) {
         this.log('error', `Context handover preparation for ${name} failed: ${String(e.stderr || e.message).slice(0, 300)}`);
       }
