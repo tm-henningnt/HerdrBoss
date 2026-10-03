@@ -226,6 +226,14 @@ Usage more than the tolerance above the curve gives `hold`.
 The threshold edges count as `normal`.
 This result is guidance only.
 
+Fleet guidance uses this comparison for Codex when quota history or a reset credit is available.
+The Codex lane says `Use now` at or below the planned curve.
+It says `ahead of plan` above the curve by up to the tolerance.
+It says `hold` above the curve by more than the tolerance.
+Reserve, exhaustion, and trickle states keep priority over these labels.
+With no quota history and no available credit, keep the existing linear lane guidance.
+This comparison does not change worker admission, the reserve rule, or credit use.
+
 ### History helpers
 
 Call `hourlyBurnP90(readings, { now, provider, window })`.

@@ -1459,6 +1459,10 @@ function useNowList(lanes) {
     if (!lane) continue;
     if (lane.unmetered) { if (lane.state === 'open') free.push('free models'); continue; }
     if (lane.ignored) { if (lane.state === 'open') ignored.push(kind(provider)); continue; }
+    if (provider === 'codex' && lane.planGuidance && ['open', 'pace'].includes(lane.state)) {
+      if (lane.planGuidance.laneState === 'Use now') below.push([Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent), kind(provider)]);
+      continue;
+    }
     if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) below.push([lane.roomPercent, kind(provider)]);
     else if (lane.state === 'trickle' && lane.allowancePercent - (lane.usedTodayPercent ?? 0) > 0) trickle.push(kind(provider));
     else if (lane.state === 'open') open.push(kind(provider));
@@ -1474,8 +1478,13 @@ function guidanceSummary(s) {
   const use = useNowList(s.lanes);
   parts.push(`Use now: ${use.length ? use.join(', ') : 'no metered lane'}`);
   const held = { pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted' };
-  const slow = Object.entries(s.lanes || {}).filter(([, lane]) => lane && !lane.unmetered && !lane.ignored && held[lane.state]);
+  const slow = Object.entries(s.lanes || {}).filter(([provider, lane]) => lane && !lane.unmetered && !lane.ignored
+    && held[lane.state] && !(provider === 'codex' && lane.planGuidance && !['reserve', 'exhausted'].includes(lane.state)));
   if (slow.length) parts.push(slow.map(([provider, lane]) => `${PROVIDERS[provider] || provider} ${held[lane.state]}`).join(', '));
+  const codexPlan = s.lanes?.codex?.planGuidance;
+  if (codexPlan && !s.lanes.codex.ignored && !['reserve', 'exhausted', 'trickle'].includes(s.lanes.codex.state) && codexPlan.laneState !== 'Use now') {
+    parts.push(`Codex ${codexPlan.laneState}`);
+  }
   const count = (severity) => (s.alerts || []).filter((a) => a.severity === severity).length;
   const critical = count('critical'), warn = count('warn'), advice = (s.advice || []).length;
   if (critical) parts.push(`${critical} critical`);
@@ -1487,16 +1496,21 @@ function guidanceSummary(s) {
 // The state of each lane in plain words, for the body of the Overview guidance.
 function laneLine(provider, lane) {
   const name = provider === 'unmetered' ? 'Free models' : PROVIDERS[provider] || provider;
-  const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
+  const plan = provider === 'codex' ? lane.planGuidance : null;
+  const planReplacesPace = plan && !lane.ignored && ['open', 'pace'].includes(lane.state);
+  const used = Number.isFinite(lane.usedPercent) ? ` · ${lane.usedPercent}% used${planReplacesPace
+    ? ` of ${Number.isInteger(plan.plannedPercent) ? plan.plannedPercent : Number(plan.plannedPercent.toFixed(1))}% planned · tolerance ${plan.tolerancePoints} points`
+    : Number.isFinite(lane.expectedPercent) ? ` of ${lane.expectedPercent}% expected` : ''}${lane.window ? ` (${esc(lane.window)})` : ''}` : '';
   const reading = lane.reading;
   const readingAge = Number.isFinite(reading?.ageMinutes) ? `${reading.ageMinutes} min old` : 'age unknown';
   const readingText = Number.isFinite(reading?.usedPercent) && (Number.isFinite(reading?.ageMinutes) || reading.stale)
     ? ` · last reading ${reading.usedPercent}% ${esc(String(reading.window || 'quota').toLowerCase())}, ${readingAge}${reading.stale ? ' · stale' : ''}`
     : '';
-  const text = lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
+  const text = planReplacesPace ? plan.laneState : lane.ignored ? 'open, quota ignored' : lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0 ? 'below pace'
     : ({ open: 'open', pace: 'ahead of pace', reserve: 'near exhaustion', exhausted: 'exhausted', trickle: 'trickle', closed: 'closed', unknown: 'no quota data' })[lane.state] || lane.state;
-  const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
-  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${readingText}</span></li>`;
+  const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : planReplacesPace ? plan.laneState === 'Use now' ? 'ok' : 'warn' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
+  const planAside = plan && !planReplacesPace ? ` · plan ${plan.laneState}` : '';
+  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}</span></li>`;
 }
 
 // The current guidance on the Overview: the same rules as the bulletin, collapsed by default under a one-line summary.
@@ -6171,7 +6185,7 @@ const HELP = {
   fleet: ['Fleet', '<p>The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. Spend shows USD by day, role, and harness.</p><p>Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.</p>'],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
-    <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p>
+    <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that orchestrators read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p><p>When quota history or a reset credit is available, the Codex lane compares current use with its planned curve. The lane says <b>Use now</b>, <b>ahead of plan</b>, or <b>hold</b>. The plan changes guidance only.</p>
     <h3>Needs your decision</h3><p>The line under the guidance shows the number of open tasks that wait for you, with a link to each project. It shows only when a task waits for you.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: quotas, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the current guidance at its rules. <b>Adjust policy</b> opens the Allocation page.</p>
     <h3>Handovers</h3><p>When no handover waits for review, <b>Project continuity</b> is one line under <b>Needs attention</b>. Otherwise it lists the prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover.</p>
@@ -6308,7 +6322,7 @@ const HELP = {
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the quota warning below the critical value. After a save, each field shows the stored value. When the stored value differs from the typed value, the status line names both values. Rows without inputs are read-only: port, host, provider kinds, and orchestrator label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
-    <h3>Quota plan</h3><p>Set the Codex burst pace, the credit threshold, the reserve margin, the planning horizon, the guidance tolerance, and the slow scenario factor. The service posts one Mailbox approval item when a credit is due or expires within 48 hours. The item compares applying now with waiting for the planned time. The service sends one warning in the 24 hours before an available credit expires. Apply credits in the Codex app. Herdr Boss never applies a reset credit. This plan does not change worker starts.</p>
+    <h3>Quota plan</h3><p>Set the Codex burst pace, the credit threshold, the reserve margin, the planning horizon, the guidance tolerance, and the slow scenario factor. With quota history or an available reset credit, the Codex lane compares use with the planned curve. It says <b>Use now</b> at or below the curve, <b>ahead of plan</b> within the tolerance, and <b>hold</b> above the tolerance. Near-exhaustion, exhausted, and trickle states keep priority. With no quota history and no available reset credit, the lane keeps linear guidance. The plan changes guidance only. Herdr Boss never applies a reset credit or changes worker admission from this plan. The service posts one Mailbox approval item when a credit is due or expires within 48 hours. The item compares applying now with waiting for the planned time. The service sends one warning in the 24 hours before an available credit expires. Apply credits in the Codex app.</p>
     <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
     <h3>Factory hosts</h3><p>Private host connections stay outside this page because they hold an address, key path, or Docker context name. Manage them with <code>herdr-boss factory host add|list|remove</code>. Use <code>--docker-context</code> for an existing Docker context. The host tool creates and controls factories with <code>factory new|build|start|stop|status|list</code>. Use <code>factory configure NAME --resume</code> to check the container, volumes, Herdr server, and service. The health check uses container loopback. The factory hostname keeps its login requirement. A host timeout shows <code>host-unreachable</code>. Exit 3 waits for Owner logins at an Owner terminal. Factory creation controls are in the host CLI in this release. See the CLI guide for the limits and Owner steps.</p>
     <h3>Harness readiness</h3><p>This read-only table shows the status of each harness entry that orchestration needs. A row shows the status, the area, and the item. The status is <code>ok</code>, <code>missing</code>, or <code>bad</code>. The table shows no file path and no setting value. Herdr Boss reads these entries at each service start and then every 10 minutes. Run <code>herdr-boss harness sync</code> to see the changes to make.</p>

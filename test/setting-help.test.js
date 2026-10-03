@@ -71,6 +71,8 @@ test('quota plan settings share the Quota plan help group and documented default
   const help = app.slice(app.indexOf('const HELP ='));
   assert.match(help, /Mailbox approval item when a credit is due or expires within 48 hours/);
   assert.match(help, /warning in the 24 hours before an available credit expires/);
+  assert.match(SETTING_HELP['quotaPlan.tolerance']?.what, /above the planned curve/);
+  assert.match(app, /the Codex lane compares current use with its planned curve/i);
 });
 
 test('worker and browser maintenance settings have editable rows and help text', () => {

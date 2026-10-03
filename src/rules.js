@@ -1,6 +1,6 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
 import { dashboardUrl } from './config.js';
-import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
+import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, quotaPlanLaneText, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
 import { blockedWorkerAlerts } from './worker-failures.js';
 import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
@@ -27,6 +27,15 @@ export function fmtTime(iso) {
   const sameDay = d.toDateString() === new Date().toDateString();
   const t = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   return sameDay ? t : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} ${t}`;
+}
+
+export function codexPlanLine(guidance) {
+  if (!guidance) return null;
+  const state = guidance.usageGuidance || 'normal';
+  const credit = guidance.nextCredit;
+  if (!credit) return `Codex plan: ${state}, no reset credit is due within the plan.`;
+  const percent = Number.isInteger(credit.usedPercent) ? String(credit.usedPercent) : Number(credit.usedPercent.toFixed(1)).toString();
+  return `Codex plan: ${state}, credit ${credit.label} due about ${fmtTime(credit.applyAt)} when usage reaches ${percent} percent`;
 }
 
 // Broadcast alerts go only to orchestrators whose workspace has a working or blocked non-orchestrator agent.
@@ -456,6 +465,8 @@ export function renderBulletin(snap, evaluation, cfg) {
     L.push(useNow.length
       ? `Use now: ${useNow.map(({ provider, reason }) => `${provider} (${reason})`).join(', ')}`
       : 'Use now: no metered lane; use unmetered models or wait.');
+    const planLine = codexPlanLine(snap.lanes.codex?.planGuidance);
+    if (planLine) L.push(planLine);
     for (const [provider, lane] of Object.entries(snap.lanes)) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
@@ -466,12 +477,15 @@ export function renderBulletin(snap, evaluation, cfg) {
         continue;
       }
       const back = lane.backOnPaceAt ? ` Back ${lane.state === 'reserve' ? 'at reset' : 'on pace if unused'} about ${fmtTime(lane.backOnPaceAt)}.` : '';
-      const text = lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
+      const planText = provider === 'codex' && lane.planGuidance ? quotaPlanLaneText(lane.planGuidance) : '';
+      const planReplacesPace = planText && !lane.ignored && ['open', 'pace'].includes(lane.state);
+      const text = planReplacesPace ? `${planText}.` : lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
         : lane.state === 'exhausted' ? `exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || '?'}.`
           : lane.state === 'trickle' ? `trickle (${lane.window} ${lane.usedPercent}% used, ahead of pace): about ${lane.allowancePercent.toFixed(1)}%/day, ${(lane.usedTodayPercent || 0).toFixed(1)}% used today.`
         : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window${lane.expectedPercent != null && Number.isFinite(lane.tolerancePoints) ? `, tolerance ${lane.tolerancePoints} points` : ''}.${back}`;
       const goals = goalSummary(lane.goals);
-      L.push(`- ${providerName(provider)}: ${text}${goals ? ` ${goals}.` : ''}${lane.state === 'pace' && snap.leastOverProvider === provider ? ' Every metered provider is over pace; this one is the least over, and worker start allows it.' : ''}`);
+      const planAside = planText && !planReplacesPace ? ` Plan guidance: ${planText}.` : '';
+      L.push(`- ${providerName(provider)}: ${text}${planAside}${goals ? ` ${goals}.` : ''}${lane.state === 'pace' && snap.leastOverProvider === provider ? ' Every metered provider is over pace; this one is the least over, and worker start allows it.' : ''}`);
     }
   }
   const m = snap.machine;

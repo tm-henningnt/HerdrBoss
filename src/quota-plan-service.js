@@ -260,7 +260,7 @@ function buildInput({ provider, quotas, now, settings, state, burstPace, horizon
     usedCredits: state.usedCredits, settings: { tolerance: settings.tolerance },
   };
   const inputsDigest = createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
-  return { input, inputsDigest, historicalP90, availableCredits, row, window, currentTime };
+  return { input, inputsDigest, historicalP90, historyAvailable: readings.length > 0, availableCredits, row, window, currentTime };
 }
 
 function addPlan(state, view) {
@@ -275,7 +275,7 @@ function addPlan(state, view) {
 
 function calculate(options, built = buildInput(options)) {
   const existing = options.state.current;
-  if (existing?.inputsDigest === built.inputsDigest && !options.force) {
+  if (existing?.inputsDigest === built.inputsDigest && !options.force && typeof existing.historyAvailable === 'boolean') {
     const plannedUsageNow = plannedUsageAt(existing.plan, built.currentTime);
     return { ...existing, now: new Date(built.currentTime).toISOString(), plannedUsageNow, skipped: true };
   }
@@ -292,6 +292,7 @@ function calculate(options, built = buildInput(options)) {
     horizon: plan.horizon,
     inputsDigest: built.inputsDigest,
     historicalP90: built.historicalP90,
+    historyAvailable: built.historyAvailable,
     plannedUsageNow: plannedUsageAt(plan, built.currentTime),
     guidance: usageGuidance(plan, built.currentTime, built.window.usedPercent, options.settings.tolerance),
     credits: plan.credits,
@@ -389,7 +390,7 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
       assertProvider(provider);
       const state = loadState();
       const current = state.current?.provider === provider ? state.current : null;
-      if (!current) return { provider, at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, plannedUsageNow: null, guidance: null, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
+      if (!current) return { provider, at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, historyAvailable: false, plannedUsageNow: null, guidance: null, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
       const currentTime = time(now, 'now');
       return {
         ...current,
@@ -403,8 +404,13 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
     },
     summary({ provider = 'codex', now = clock() } = {}) {
       const view = this.get({ provider, now });
-      const nextCreditAt = view.plan?.credits?.find((credit) => credit.applyAt)?.applyAt ?? null;
-      return { nextCreditAt, state: view.guidance?.state ?? 'unavailable', plannedUsageNow: view.plannedUsageNow };
+      const hasPlan = view.historyAvailable || view.historicalP90 > 0 || view.credits.length > 0;
+      const nextCreditAt = hasPlan ? view.plan?.credits?.find((credit) => credit.applyAt)?.applyAt ?? null : null;
+      return {
+        nextCreditAt,
+        state: hasPlan && view.guidance ? view.guidance.state : 'unavailable',
+        plannedUsageNow: hasPlan ? view.plannedUsageNow : null,
+      };
     },
     announce({ provider = 'codex', at, kind = 'full', refundPercent = 0, now = clock(), quotas } = {}) {
       const announcement = validateAnnouncement({ provider, at, kind, refundPercent, now });

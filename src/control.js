@@ -819,6 +819,12 @@ export function useNowLanes(lanes) {
       if (lane.state === 'open') ignored.push({ ...entry, reason: 'open, quota ignored' });
       continue;
     }
+    if (provider === 'codex' && lane.planGuidance && ['open', 'pace'].includes(lane.state)) {
+      if (lane.planGuidance.laneState !== 'Use now') continue;
+      const roomPercent = Math.max(0, lane.planGuidance.plannedPercent - lane.planGuidance.usedPercent);
+      belowPace.push({ ...entry, roomPercent, reason: 'below plan' });
+      continue;
+    }
     if (lane.state === 'open' && Number.isFinite(lane.roomPercent) && lane.roomPercent > 0) {
       belowPace.push({ ...entry, roomPercent: lane.roomPercent, reason: 'below pace' });
     } else if (lane.state === 'trickle') {
@@ -832,6 +838,44 @@ export function useNowLanes(lanes) {
   }
   belowPace.sort((a, b) => b.roomPercent - a.roomPercent || a.provider.localeCompare(b.provider));
   return [...free, ...belowPace, ...ignored, ...trickle, ...open].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
+}
+
+function creditLabel(index) {
+  let value = index + 1, label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return label;
+}
+
+// The plan changes Codex guidance only. Keep laneStatus and worker admission rules unchanged.
+export function codexPlanGuidance(plan, tolerance = 5) {
+  if (!plan || (!plan.historyAvailable && !(plan.historicalP90 > 0) && !plan.credits?.length)
+    || !Number.isFinite(plan.usedPercent) || !Number.isFinite(plan.plannedUsageNow)) return null;
+  const difference = plan.usedPercent - plan.plannedUsageNow;
+  const laneState = difference > tolerance ? 'hold' : difference > 0 ? 'ahead of plan' : 'Use now';
+  const scheduledIndex = (plan.plan?.credits || []).findIndex((credit) => credit.applyAt);
+  const scheduledCredit = scheduledIndex >= 0 ? plan.plan.credits[scheduledIndex] : null;
+  return {
+    laneState,
+    usageGuidance: plan.guidance?.state ?? 'unavailable',
+    usedPercent: plan.usedPercent,
+    plannedPercent: plan.plannedUsageNow,
+    tolerancePoints: tolerance,
+    nextCredit: scheduledCredit ? {
+      label: creditLabel(scheduledIndex),
+      applyAt: scheduledCredit.applyAt,
+      usedPercent: scheduledCredit.usedPercent,
+    } : null,
+  };
+}
+
+export function quotaPlanLaneText(guidance) {
+  if (!guidance) return '';
+  const percent = (value) => Number.isInteger(value) ? String(value) : Number(value.toFixed(1)).toString();
+  return `${guidance.laneState} (${percent(guidance.usedPercent)}% used, ${percent(guidance.plannedPercent)}% planned, tolerance ${percent(guidance.tolerancePoints)} points)`;
 }
 
 // When no metered provider is open or under its trickle allowance, the least-over provider that is only ahead of pace may start.

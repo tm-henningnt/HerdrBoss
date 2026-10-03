@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { goalSummary, mergeModels, modelEnabled, providerFor, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
+import { goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine, refreshKitIfRequired, safeRefreshKit } from './agents-check.js';
@@ -427,7 +427,10 @@ export function describeLane(provider, lane, now = Date.now()) {
   const readingText = Number.isFinite(reading?.usedPercent) && (Number.isFinite(reading?.ageMinutes) || reading.stale)
     ? `; last reading ${reading.usedPercent}% ${String(reading.window || 'quota').toLowerCase()}, ${readingAge}${reading.stale ? ', stale' : ''}`
     : '';
-  const suffix = `${goals ? `; ${goals}` : ''}${readingText}`;
+  const planText = provider === 'codex' ? quotaPlanLaneText(lane?.planGuidance) : '';
+  const planReplacesPace = planText && !lane?.ignored && ['open', 'pace'].includes(lane?.state);
+  const suffix = `${goals ? `; ${goals}` : ''}${readingText}${planText && !planReplacesPace ? `; plan guidance: ${planText}` : ''}`;
+  if (planReplacesPace) return `${provider} ${planText}${suffix}`;
   if (lane?.state === 'open' && lane.onPace) {
     const { usedPercent, expectedPercent, tolerancePoints } = lane.onPace;
     return `${provider} on pace (${usedPercent}% used, expected ${expectedPercent}%, tolerance ${tolerancePoints} points)${suffix}`;
