@@ -72,6 +72,8 @@ function updateFixture() {
   let imagePresent = true;
   const oldCommit = 'a'.repeat(40), newCommit = 'b'.repeat(40);
   let currentCommit = oldCommit, schema = 1, failUpdated = false, migrateOnUpdate = false, failNewImageCreate = false, failNewImageStart = false, failSchemaReadAfterStart = false, schemaUnreadableAfterStart = false;
+  const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
+  let remoteUrl = expectedOrigin, failFetch = false, failMerge = false;
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
   const ok = (value = '') => ({ code: 0, stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
@@ -100,7 +102,11 @@ function updateFixture() {
     if (args[0] === 'exec' && args.includes('s6-svstat')) return ok(serviceUp ? 'true' : 'false');
     if (args[0] === 'exec' && args.includes('git')) {
       if (args.includes('rev-parse')) return ok(currentCommit);
+      if (args.includes('remote') && args.includes('get-url')) return remoteUrl ? ok(`${remoteUrl}\n`) : { code: 2, stdout: '', stderr: 'error: No such remote' };
+      if (args.includes('remote') && args.includes('add')) { remoteUrl = args.at(-1); return ok(); }
+      if (args.includes('fetch')) return failFetch ? { code: 128, stdout: '', stderr: 'fatal: unable to access https://user:secret@example.invalid/' } : ok();
       if (args.includes('merge-base')) return ok();
+      if (args.includes('merge') && failMerge) return { code: 128, stdout: '', stderr: 'fatal' };
       if (args.includes('merge')) { currentCommit = newCommit; if (migrateOnUpdate) schema = 2; if (failSnapshotAfterMerge > 0) failNextSnapshots = failSnapshotAfterMerge; return ok(); }
       if (args.includes('reset')) { currentCommit = oldCommit; return ok(); }
       return ok();
@@ -145,7 +151,8 @@ function updateFixture() {
   } };
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
-  return { ...f, docker, volumePaths, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+  f.io.originUrl = expectedOrigin;
+  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
@@ -424,5 +431,104 @@ test('image update distinguishes an unreadable schema from a schema increase', a
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'image'], f.io), /schema.*unreadable.*--accept-data-loss/i);
     const pending = JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json'), 'utf8'));
     assert.equal(pending.schemaState, 'unreadable');
+  } finally { f.cleanup(); }
+});
+
+function gitCalls(f) { return f.calls.filter(({ args }) => args[0] === 'exec' && args.includes('git')); }
+
+test('service update runs every git call as the factory user with its home', async () => {
+  const f = updateFixture();
+  try {
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const calls = gitCalls(f);
+    assert.ok(calls.length >= 4);
+    for (const { args } of calls) {
+      const user = args.indexOf('--user');
+      assert.equal(args[user + 1], 'factory');
+      assert.equal(args[args.indexOf('-e') + 1], 'HOME=/home/factory');
+      assert.ok(user > 0 && user < args.indexOf('hf-demo'));
+      assert.ok(args.indexOf('-e') < args.indexOf('hf-demo'));
+    }
+    assert.equal(calls.some(({ args }) => args.includes('safe.directory')), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update sets origin to the public repository when the factory repo has none', async () => {
+  const f = updateFixture();
+  try {
+    f.remoteUrl = null;
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.equal(f.remoteUrl, f.expectedOrigin);
+    const names = gitCalls(f).map(({ args }) => args.slice(args.indexOf('git') + 3).join(' '));
+    assert.ok(names.indexOf(`remote add origin ${f.expectedOrigin}`) < names.indexOf('fetch origin main'));
+    assert.ok(f.calls.some(({ args }) => args.includes('merge') && args.includes('--ff-only') && args.includes('FETCH_HEAD')));
+  } finally { f.cleanup(); }
+});
+
+test('service update strips credentials from the origin URL it sets', async () => {
+  const f = updateFixture();
+  try {
+    f.remoteUrl = null;
+    f.io.originUrl = 'https://user:secret@example.invalid/org/herdr-boss.git';
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.equal(f.remoteUrl, 'https://example.invalid/org/herdr-boss.git');
+    assert.equal(JSON.stringify(f.calls).includes('secret'), false);
+    assert.equal(f.output.join('').includes('secret'), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update refuses a host repository URL that is not HTTPS', async () => {
+  const f = updateFixture();
+  try {
+    f.remoteUrl = null;
+    f.io.originUrl = 'git@example.invalid:org/herdr-boss.git';
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /not an HTTPS URL/i);
+    assert.equal(f.calls.some(({ args }) => ['pause', 'stop'].includes(args[0])), false);
+    assert.equal(f.remoteUrl, null);
+  } finally { f.cleanup(); }
+});
+
+test('service update refuses an origin that differs from the expected URL and hides credentials', async () => {
+  const f = updateFixture();
+  try {
+    f.remoteUrl = 'https://user:secret@example.invalid/other/fork.git';
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), (error) => {
+      assert.match(error.message, /origin.*differs/i);
+      assert.match(error.message, /example\.invalid\/other\/fork\.git/);
+      assert.match(error.message, /example\.invalid\/org\/herdr-boss\.git/);
+      assert.equal(error.message.includes('secret'), false);
+      return true;
+    });
+    assert.equal(gitCalls(f).some(({ args }) => args.includes('fetch')), false);
+    assert.equal(f.calls.some(({ args }) => ['pause', 'stop'].includes(args[0])), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update accepts an origin that matches except for credentials and the .git suffix', async () => {
+  const f = updateFixture();
+  try {
+    f.remoteUrl = 'https://user:secret@example.invalid/org/herdr-boss';
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+  } finally { f.cleanup(); }
+});
+
+test('service update names the fetch step and the remote when the fetch fails', async () => {
+  const f = updateFixture();
+  try {
+    f.failFetch = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), (error) => {
+      assert.match(error.message, /git fetch/i);
+      assert.match(error.message, /cannot reach the remote/i);
+      assert.equal(error.message.includes('secret'), false);
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('service update names the merge step when the merge fails', async () => {
+  const f = updateFixture();
+  try {
+    f.failMerge = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge/i);
   } finally { f.cleanup(); }
 });
