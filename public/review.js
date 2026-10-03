@@ -154,7 +154,7 @@ export function itemChip(item, pack) {
     case 'denied': return { tone: 'crit', label: 'Denied', icon: 'close' };
     case 'accepted': return { tone: 'ok', label: 'Accepted', icon: 'check' };
     case 'live': return { tone: 'warn', label: 'Live check', icon: 'live' };
-    case 'note': return { tone: 'info', label: 'Note', icon: 'note' };
+    case 'note': return { tone: 'info', label: answer.note ? 'Note' : 'Info', icon: 'note' };
     case 'answered': {
       if (answer.choice !== null && answer.choice !== undefined) {
         const choice = (manifestItem(pack, item.id)?.choices || []).find((entry) => entry.id === answer.choice);

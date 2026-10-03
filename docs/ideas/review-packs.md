@@ -150,7 +150,11 @@ Each choice may have `recommended: true`. At most one choice of an item has it. 
 
 Every item also has the built-in answer **Ask later**. It needs no entry in `ask`. It stores the decision `skip`. The item stays open and moves to the end of the pack. The section list shows the chip **Ask later**. The result lists the item as `open` with `skipped: true`. A decision, a choice, a rating, or a live check on the item removes the mark. A new version that changes the item removes it too.
 
-An item is **answered** when it has a decision, a choice, or a rating, or when its `ask` holds only `note` and the note is not empty. A **Needs live check** item stays open until the Owner sets it to done or decides the item.
+An item that needs a decision has both `accept` and `deny` in `ask`. This includes an item with `verifiedBy: "agent-verified"`: the Owner confirms or rejects the evidence. The validator adds `accept` and `deny` to an agent-verified item whose `ask` has none of `choice`, `rating`, and `live`, and it warns with the rule `ask`. The server and the viewer apply the same rule to a stored pack, so an old pack with `ask: ["note"]` on an agent-verified item shows **Accept** and **Deny**.
+
+An item whose `ask` holds only `note` is information. The Owner cannot decide it. It has the state `note` with or without a note, and it never counts as open and never blocks the submit.
+
+An item is **answered** when it has a decision, a choice, or a rating. A **Needs live check** item stays open until the Owner sets it to done or decides the item.
 
 The section state comes from its items: **Denied** when one item is denied, **Needs live check** when one item waits for a live check, **Accepted** when all items are answered and none is denied, and **Open** otherwise. The pack state uses the same rule over all items. The submit screen proposes a verdict from the pack state: **Approve** for Accepted, **Request changes** for Denied, and **Comment** for the other states. The Owner can change the verdict.
 

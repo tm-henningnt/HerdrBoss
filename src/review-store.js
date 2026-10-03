@@ -9,6 +9,7 @@ import path from 'node:path';
 import { SLUG } from './projects.js';
 import { openSqliteStore, databaseFile } from './sqlite-store.js';
 import { validatePack } from './review-pack.js';
+import { effectiveAsk, isInfoOnly } from '../public/review-ask.js';
 import { redactSecrets } from './redact.js';
 import { RESULT_SCHEMA, VERDICTS, proposeVerdict, buildResult, boundResult, resultMarkdown } from './review-result.js';
 
@@ -142,16 +143,17 @@ const hasVerdict = (fields) => Boolean(fields) && (DECISIONS.includes(fields.dec
 
 // The state of one item: accepted, denied, answered, note, live, changed, or open.
 // A stale answer shows no verdict. It is `changed` when it held a verdict before the content changed, and `open` otherwise.
+// An info-only item (ask holds no question except a note) has state `note`, with or without a note. It is never open.
 function itemState(spec, answer) {
+  if (isInfoOnly(spec)) return 'note';
   if (!answer) return 'open';
   if (answer.stale) return hasVerdict(answer.previous) ? 'changed' : 'open';
-  const ask = spec.ask || [];
+  const ask = effectiveAsk(spec);
   if (answer.decision === 'deny') return 'denied';
   if (answer.decision === 'accept') return 'accepted';
   if (answer.choice !== null || answer.rating !== null) return 'answered';
   if (answer.live === 'pending') return 'live';
   if (answer.live === 'done' && !ask.some((name) => DECIDING.includes(name)) && ask.includes('live')) return 'answered';
-  if (ask.length === 1 && ask[0] === 'note' && answer.note.trim()) return 'note';
   return 'open';
 }
 
@@ -435,7 +437,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
     const spec = parseJson(entry.spec, { ask: [] });
     const answer = answers.has(entry.item) ? answerShape(answers.get(entry.item), entry.hash) : null;
     const state = itemState(spec, answer);
-    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: spec.ask, ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state, skipped: state === 'open' && answer?.decision === SKIP, stale: answer?.stale ?? false, ...(reopened.has(entry.item) ? { reopened: true } : {}), ...(reopenUsed.has(entry.item) ? { reopenUsed: true, ...(reopenUsed.get(entry.item) ? { reopenUsedOpId: reopenUsed.get(entry.item) } : {}) } : {}), answer };
+    return { id: entry.item, section: entry.section, title: spec.title, type: spec.type, ask: effectiveAsk(spec), ...reviewFields(spec), hash: entry.hash, position: entry.position, spec, state, skipped: state === 'open' && answer?.decision === SKIP, stale: answer?.stale ?? false, ...(reopened.has(entry.item) ? { reopened: true } : {}), ...(reopenUsed.has(entry.item) ? { reopenUsed: true, ...(reopenUsed.get(entry.item) ? { reopenUsedOpId: reopenUsed.get(entry.item) } : {}) } : {}), answer };
   });
   // A skipped item moves to the end of the pack. The skipped items keep the order in which they were skipped.
   const skippedAt = (item) => item.answer?.updatedAt ?? '';
@@ -671,7 +673,7 @@ function checkPins(value) {
 
 // Apply the patch to the fields of an answer, checked against the questions of the item.
 function applyPatch(fields, patch, spec) {
-  const ask = spec.ask || [];
+  const ask = effectiveAsk(spec);
   const has = (name) => Object.hasOwn(patch, name);
   if (has('decision')) {
     if (patch.decision !== null && patch.decision !== SKIP && !DECISIONS.includes(patch.decision)) throw invalid('The decision must be accept, deny, skip, or null.');

@@ -95,7 +95,7 @@ test('skip leaves the item open, flags it, and moves it to the end of the pack',
   assert.equal(skipped.state, 'open');
   assert.equal(skipped.skipped, true);
   assert.equal(pack.items[0].skipped, false);
-  assert.equal(pack.derived.counts.open, 4, 'a skipped item is still open work');
+  assert.equal(pack.derived.counts.open, 3, 'a skipped item is still open work');
   assert.equal(pack.derived.counts.accepted, 0);
 });
 
@@ -143,10 +143,10 @@ test('the result carries the session and round, the choice label, and the skippe
   const schedule = result.items.find((item) => item.id === 'schedule');
   assert.equal(schedule.state, 'open');
   assert.equal(schedule.skipped, true);
-  assert.deepEqual(result.openItems, ['naming', 'remarks', 'schedule']);
+  assert.deepEqual(result.openItems, ['naming', 'schedule']);
   assert.equal(result.items.find((item) => item.id === 'naming').skipped, undefined);
   const markdown = resultMarkdown(result);
-  assert.match(markdown, /## Open items\n\n- naming\n- remarks\n- schedule/);
+  assert.match(markdown, /## Open items\n\n- naming\n- schedule/);
   assert.match(markdown, /schedule[^\n]*skipped/i);
   assert.match(markdown, /Session ps-abc12345, round 2/);
 });

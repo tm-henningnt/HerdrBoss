@@ -181,3 +181,7 @@ Summary: Never prune or remove Docker resources on a shared daemon unless they c
 ## 2e0a5d394ccc
 Impact: useful
 Summary: Start each worker task with a plain title (what, for which ticket), because the Agents page shows it as the worker title.
+
+## 1c6764de0c20
+Impact: useful
+Summary: Give every review item that needs a decision accept and deny, agent-verified items included; an item with only note in ask is information and never counts as open.

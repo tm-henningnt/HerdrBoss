@@ -794,15 +794,14 @@ test('planner publish --carry-open copies open items from the latest submitted p
   } });
   const published = cli('review', 'publish', 'shop', nextFolder, '--carry-open');
   assert.equal(published.status, 0, output(published));
-  assert.match(published.stdout, /carried 3 open items/i);
+  assert.match(published.stdout, /carried 2 open items/i);
   const next = getPack({ dir: data, slug: 'shop', pack: 'next-pack' });
   const specs = new Map(next.manifest.sections.flatMap((section) => section.items.map((entry) => [entry.id, entry])));
   assert.equal(next.manifest.session, getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).manifest.session);
-  assert.deepEqual(next.items.map((entry) => entry.id).sort(), ['cart-themes', 'error-copy', 'live-form', 'new-image', 'release-notes']);
+  assert.deepEqual(next.items.map((entry) => entry.id).sort(), ['cart-themes', 'error-copy', 'live-form', 'new-image']);
   assert.equal(next.items.find((entry) => entry.id === 'error-copy').title, 'New error question', 'a duplicate id in the new pack is not copied twice');
   assert.equal(specs.get('error-copy').text, 'Keep this new text.', 'the new pack keeps its own duplicate');
   assert.equal(specs.get('live-form').url, 'https://staging.example.test/checkout', 'the carried link stays');
-  assert.equal(specs.get('release-notes').text, 'Notes for the release.', 'the carried item text stays');
   const carriedImage = specs.get('cart-themes');
   const carriedAnswer = next.items.find((entry) => entry.id === 'cart-themes').answer;
   assert.equal(carriedAnswer.note, note, 'the changed item keeps the Owner note');

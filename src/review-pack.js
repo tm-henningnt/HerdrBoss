@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { safeUrl } from '../public/markdown.js';
+import { effectiveAsk } from '../public/review-ask.js';
 import { SLUG } from './projects.js';
 import { scanText } from './secret-scan.js';
 
@@ -658,6 +659,11 @@ export function validatePack(folder, options = {}) {
     }
     if (!out.fallbackFrom && source.body !== undefined) out.body = checkBody(source.body, `${where}.body`, id);
     checkAsk(source, where, out);
+    const asked = effectiveAsk(out);
+    if (asked.length !== out.ask.length) {
+      warn('ask', 'Agent-verified item ' + (id || '(unknown)') + ' needs accept and deny in ask. Herdr Boss added them.', { where });
+      out.ask = asked;
+    }
     return out;
   };
 

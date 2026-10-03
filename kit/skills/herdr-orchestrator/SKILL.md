@@ -89,7 +89,7 @@ Read each file in the skill folder when its step comes:
 
 - Make a pack when the Owner needs evidence for a UI, document, design, API, or data decision. Do not make a pack for a question that one Mailbox line answers.
 - Run interaction checks yourself. Include before and after screenshots as evidence. Put one shared-space test app per scenario, named after its item.
-- Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you.
+- Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you. Give every item that needs a decision accept and deny in ask, agent-verified items included.
 - Send only items needing a human decision to the Owner: taste, business meaning, or a final call.
 - Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with --force when the Owner asked. Record passed, issues, or not-run in designPass.
 - Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
