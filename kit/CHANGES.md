@@ -177,3 +177,7 @@ Summary: Publish the status with --sync at task boundaries, so the card states c
 ## 7aa9adf4d8a8
 Impact: useful
 Summary: Never prune or remove Docker resources on a shared daemon unless they carry the label herdr-factory-spike=<worker>; use a dedicated builder or context.
+
+## 2e0a5d394ccc
+Impact: useful
+Summary: Start each worker task with a plain title (what, for which ticket), because the Agents page shows it as the worker title.
