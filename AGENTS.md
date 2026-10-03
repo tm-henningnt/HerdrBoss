@@ -32,7 +32,7 @@ Decide implementation, product, and design details, naming, thresholds, test des
 ## Integrate and release
 
 1. Review each worker diff. A worker runs only the changed test files, as the worker brief says. Do not run the full suite in the worker worktree.
-2. Merge the branch in a separate integration worktree, never in the `main` checkout. The CLI and the dashboard run straight from `main`, so a conflict marker there breaks `herdr-boss` for every project. Resolve conflicts in the integration worktree. Run the full suite there once: `herdr-boss suite -- npm test`. Then move `main` forward with `git merge --ff-only`.
+2. Merge the branch in a separate integration worktree, never in the `main` checkout. The CLI and the dashboard run straight from `main`, so a conflict marker there breaks `herdr-boss` for every project. Resolve conflicts in the integration worktree. Run the docs gate there: `node scripts/docs-gate.js --base main`. The gate must pass. Run the full suite there once: `herdr-boss suite -- npm test`. Then move `main` forward with `git merge --ff-only`.
 3. On `main`, run `herdr-boss suite --reuse -- npm test`. The command reuses the pass of the same tree and runs no second suite.
 4. Restart the service: `launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss`.
 5. Check that it serves: `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4477/api/state` must print `200` within 30 seconds.

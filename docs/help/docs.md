@@ -20,6 +20,10 @@ A picture comes from `docs/images/`. Write its path in the Markdown, relative to
 
 The Help panel of a dashboard page can show text from `docs/help/`. The Docs page lists the same files under **Page help**. A change in the file changes both places.
 
+## Docs gate
+
+A change of behavior needs a change of the docs or of the page help in the same branch. The check `node scripts/docs-gate.js` enforces this rule. See `docs/reference/docs-gate.md`.
+
 ## Access
 
 The Docs page follows the access rule of the dashboard. A request from this computer needs no login. A request from another computer needs the access token. The service serves `README.md` and the files in `docs/` only.

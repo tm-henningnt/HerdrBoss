@@ -106,6 +106,8 @@ The task can list decisions already made. Do not reopen them.
 
 When you change a shared contract, such as copy, a schema, or a public API, update every snapshot and test assertion that it reaches in the same change.
 
+When you change behavior that a user can see or use, change the docs and the page help in the same branch. Read the docs rules in the project instructions to find the files. If the project has a docs gate command, run it before you report. When a change has no effect on behavior, such as a test, a refactor, or a typo, add the trailer `Docs-Exempt: <reason>` to a commit message, or add an entry to the exemption file that the project names. Put the result of the docs gate in the report.
+
 In tests, wait for a condition. Do not wait for a fixed time.
 
 Quote the heredoc delimiter (`<<'EOF'`) when the body holds Markdown, backticks, or `$`.

@@ -29,5 +29,6 @@ Read this file when you record a worker run, check the ledger, or decide which e
 - Keep per-item evidence visible inside the batch report.
 - Mine existing tests and prior evidence before adding a new experiment.
 - Mark every unverified tier in the report.
+- Treat docs evidence as a gate. Each review pack and each worker report for a change of behavior names the docs files and the page help files that changed, or the recorded `Docs-Exempt: <reason>`. A pack without this evidence is not complete.
 - Keep a red acceptance item red when its environment or human gate is unavailable.
 - Use an independent reviewer for reviewable human-gate evidence when project policy permits it.
