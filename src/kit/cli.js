@@ -27,7 +27,7 @@ const USAGE = `Kit commands:
   worker scope add <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list
   push [git push arguments]
-  suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes
+  suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] -- <command...> | suite --list-passes
   worktree prune [--apply] [--no-archive]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
@@ -305,21 +305,21 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
   if (command === 'suite') {
     // The options come before --. Everything after -- is the command.
-    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] -- <command...> | suite --list-passes';
+    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] -- <command...> | suite --list-passes';
     if (argv[0] === '--list-passes') {
       if (argv.length !== 1) fail(usage);
       return listSuitePasses({ dataDir: lockDataDir, output, herdr, pidAlive, now });
     }
     const separator = argv.indexOf('--');
     if (separator < 0 || separator === argv.length - 1) fail(usage);
-    const { positional, flags } = parseArgs(argv.slice(0, separator), { boolean: ['--reuse'], repeat: ['--keep'] });
+    const { positional, flags } = parseArgs(argv.slice(0, separator), { boolean: ['--reuse', '--skip-docs'], repeat: ['--keep'] });
     if (positional.length) fail(usage);
-    knownFlags(flags, ['wait', 'keep', 'reuse']);
+    knownFlags(flags, ['wait', 'keep', 'reuse', 'skipdocs']);
     if (flags.wait !== undefined && !/^\d+$/.test(flags.wait)) fail('--wait must be a whole non-negative number of seconds.');
     const waitSeconds = flags.wait === undefined ? SUITE_WAIT_SECONDS : Number(flags.wait);
     if (!Number.isSafeInteger(waitSeconds)) fail('--wait must be a whole non-negative number of seconds.');
     return runSuite(argv.slice(separator + 1), {
-      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, output, now, pause, pidAlive, stdio: suiteStdio, rulesFile,
+      config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, skipDocs: flags.skipdocs ?? false, output, now, pause, pidAlive, stdio: suiteStdio, rulesFile,
     });
   }
   if (command === 'worker') {
