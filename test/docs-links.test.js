@@ -12,10 +12,6 @@ const PENDING_GUIDE_PAGES = new Set([
   'docs/guide/answer.md',
   'docs/guide/review.md',
   'docs/guide/cost.md',
-  'docs/guide/phone.md',
-  'docs/guide/project.md',
-  'docs/guide/factory.md',
-  'docs/guide/trouble.md',
   'docs/concepts.md',
   'docs/getting-started-prompt.md',
 ]);
