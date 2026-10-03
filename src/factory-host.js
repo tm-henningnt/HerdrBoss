@@ -30,8 +30,10 @@ export const FACTORY_HOST_USAGE = [
 ].join('\n');
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
+export const HOST_NAME = NAME;
 const ADDRESS = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,31}$/;
+export const HOST_USER = USER;
 const HOST_FIELDS = ['address', 'user', 'keyFile', 'dockerContext', 'runtime', 'personalOnly', 'codexSandbox'];
 const HOST_RUNTIMES = ['orbstack', 'colima', 'docker-engine', 'docker-engine-wsl2'];
 const CODEX_SANDBOXES = ['user-namespaces', 'unavailable'];

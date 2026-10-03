@@ -60,7 +60,7 @@ test('docs mode renders headings from h1, with ids, and leaves the default rende
 test('help text lives in docs/help and not in app.js', () => {
   const app = read('public/app.js');
   const files = /const HELP_FILES = \[([^\]]*)\]/.exec(app)[1].match(/'([a-z0-9-]+)'/g).map((t) => t.slice(1, -1));
-  assert.deepEqual(files, ['board', 'browsers', 'docs', 'fleet']);
+  assert.deepEqual(files, ['add-host', 'board', 'browsers', 'docs', 'fleet']);
   const help = app.slice(app.indexOf('const HELP = {'), app.indexOf('const HELP_FILES'));
   for (const topic of files) {
     const md = read(`docs/help/${topic}.md`);
