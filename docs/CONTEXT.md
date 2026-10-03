@@ -1,6 +1,6 @@
 # Herdr Boss factories
 
-The language of Herdr Boss factories: how the Owner runs, reaches, and supervises several Herdr Boss installations. The design is in [ideas/factories.md](ideas/factories.md). The decisions are in [adr/](adr/).
+The language of Herdr Boss factories: how the Owner runs, reaches, and supervises several Herdr Boss installations. For the plain words of the user docs, read the [glossary](glossary.md). The design is in [ideas/factories.md](ideas/factories.md). The decisions are in [adr/](adr/).
 
 ## Language
 
