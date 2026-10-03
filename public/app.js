@@ -2,6 +2,8 @@ import { fleetView, fleetMailbox, fleetSettingsFromForm } from './fleet.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
 import { patchHtml } from './keyed.js';
+import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
+import { installTableHints } from './table-hint.js';
 import { orchestratorFocus, workerListHtml } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
@@ -1350,7 +1352,7 @@ function browserResources(s) {
     const preview = browserPreviewOpen.has(p.slug) && browserAnswers(b);
     const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === 'project-browsers' && candidate.project === p.slug);
     const leaseLine = lease ? `<p class="browser-lease"><span class="mono">Leased port :${esc(lease.item)}</span> · CDP <span class="mono">http://127.0.0.1:${esc(lease.item)}</span> · <a href="/allocation#lease-project-browsers-${esc(lease.item)}">View lease</a></p>` : '';
-    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${browserAnswers(b) ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${browserAnswers(b) ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen saved tabs</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}<br>${esc(b.profile)}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
+    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${browserAnswers(b) ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${browserAnswers(b) ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen saved tabs</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}${copyFieldHtml(`http://127.0.0.1:${b.port}`, esc, 'Copy the connection address')}<br>${esc(b.profile)}${copyFieldHtml(b.profile, esc, 'Copy the profile path')}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
       ${leaseLine}
       ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
       ${b?.profileVerified && b.notResponding && !b.responsive ? browserNotRespondingBlock(p.slug, b) : ''}
@@ -2975,6 +2977,19 @@ function markdownBlock(source, className = '') {
   return `<div class="md${className ? ` ${className}` : ''}">${safeMarkdownHtml(source)}</div>`;
 }
 
+// The Markdown source of a message, for its Copy action. The Chat, the Mailbox, and the Messages panel keep their own lists.
+function messageSourceText(id) {
+  const lists = [chat.messages, chat.pending, mailbox.conversationRecords, messagePanel.records];
+  for (const list of lists) {
+    const record = (list || []).find((item) => item.id === id);
+    if (record) return String(record.text ?? '');
+  }
+  return null;
+}
+
+installCopy(document, { messageText: messageSourceText });
+installTableHints();
+
 function messageState(m) {
   if (m.from !== 'owner') return m.action ? `Action: ${m.action}` : '';
   const delivery = mailDeliveryState(m);
@@ -3013,7 +3028,7 @@ function messageItem(m) {
   const kind = m.kind === 'nudge' ? 'Nudge' : m.kind === 'status-request' ? 'Status request' : m.kind === 'report' ? 'Report' : '';
   const state = messageState(m);
   const body = messageBody(m);
-  return `<li class="msg msg-${esc(m.from)} msg-${esc(m.status || 'new')}"><div class="msg-head"><strong>${esc(sender)}</strong>${kind ? `<span class="pill">${esc(kind)}</span>` : ''}<time datetime="${esc(m.at)}">${esc(clock(m.at))}</time></div>${body}${state ? `<p class="msg-state">${esc(state)}</p>` : ''}</li>`;
+  return `<li class="msg msg-${esc(m.from)} msg-${esc(m.status || 'new')}"><div class="msg-head"><strong>${esc(sender)}</strong>${kind ? `<span class="pill">${esc(kind)}</span>` : ''}<time datetime="${esc(m.at)}">${esc(clock(m.at))}</time>${m.text ? messageCopyHtml(m.id, esc) : ''}</div>${body}${state ? `<p class="msg-state">${esc(state)}</p>` : ''}</li>`;
 }
 
 function messageDialog() {
@@ -3512,7 +3527,7 @@ function mailConversationMessage(s, record, barItem) {
   const status = delivery ? `<p class="mail-message-state">${esc(delivery)}${owner && record.repliedAt ? ` · replied ${esc(clock(record.repliedAt))}` : ''}</p>` : '';
   const controls = item && item.closedAt ? mailDoneLine(item) : item && item === barItem ? '' : item && item.kind === 'review' ? reviewOpenLinkHtml(item, esc) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
   const suggestion = item ? mailSuggestionHtml(item, { esc, busy: mailbox.busy }) : '';
-  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong></header>${messageBody(record)}${status}${suggestion}${controls}</article></li>`;
+  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong>${record.text ? messageCopyHtml(record.id, esc) : ''}</header>${messageBody(record)}${status}${suggestion}${controls}</article></li>`;
 }
 
 async function loadMailboxConversation(thread, conversation) {
@@ -4120,7 +4135,7 @@ function chatBubble(record, startOfRun = false) {
   const retry = record.local && record.error ? `<p class="chat-bubble-retry"><button type="button" data-chat-retry="${esc(record.id)}">Retry</button></p>` : '';
   const pictures = messageAttachmentsHtml(record.attachments);
   const label = esc(chatBubbleLabel(sender, { ...record, text }, state));
-  const content = `${text ? `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div>` : ''}${pictures}<p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
+  const content = `${text ? `<div class="chat-bubble-text md">${safeMarkdownHtml(text)}</div>` : ''}${pictures}<p class="chat-bubble-meta"><span class="chat-bubble-time">${esc(clock(record.at))}</span>${record.text && !record.local ? messageCopyHtml(record.id, esc) : ''}${state ? ` <span class="chat-state${tone}">${esc(state)}</span>` : ''}</p>${card}${action}${retry}`;
   // The avatar of the other party shows on the first bubble of a run of messages from that sender.
   if (!owner && startOfRun) return `<li class="chat-entry" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${avatarSlot(record.thread, { title: avatarTitle(record.thread), size: 20 })}<div class="chat-bubble from-agent${card ? ' chat-card' : ''}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</div></li>`;
   return `<li class="chat-bubble${owner ? ' from-owner' : ' from-agent'}${startOfRun ? ' run-start' : ''}${card ? ' chat-card' : ''}" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${label}">${content}</li>`;
@@ -6389,7 +6404,8 @@ const HELP = {
     <h3>Refresh</h3><p>The page reads new data every 30 seconds. It changes only the rows and messages that changed. It keeps the open conversation, the selection, the typed text, the caret, and the scroll position. The refresh waits until 3 seconds after you last type or scroll.</p>
     <p>Select <b>Attach a picture</b> to choose pictures from your device. Attach up to 6 pictures. Each picture can be at most 10 MB. Herdr Boss accepts JPEG, PNG, WebP, GIF, HEIC, and HEIF. It refuses a file that is too large or has an unsupported type before upload. Remove a picture from the strip to leave it out. You can send pictures with text or without text.</p>
     <p>Use the reply box to answer the last agent message. When that message is an open item, its own form replaces the reply box. The page asks you to confirm each send. Herdr Boss delivers the message when the agent is working, idle, or done.</p>
-    <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
+    <h3>Markdown</h3><p>The page shows headings, bold, italic, lists, task lists, tables, code, quotes, rules, and links. A wide table or code block scrolls sideways in its own box. A table shows a shadow at each edge that has more columns, and the shadow follows the scroll position. Long paths, addresses, and tokens wrap. Raw HTML shows as text. A link opens only when it uses <code>http</code>, <code>https</code>, or <code>mailto</code>, or a local path. An external link opens in a new tab.</p>
+    <h3>Copy</h3><p>Each code block has a copy icon in a strip above the code, at the right. Select it to copy the source of the block, without the fence. A tab stays a tab. The icon shows <b>Copied</b> for 1.5 seconds. Each message has a <b>Copy</b> action next to its time. It copies the message text as Markdown source. A folder path, a connection address, and a file or diff in a review pack have a copy icon right after them. A copied diff keeps its <code>+</code> and <code>-</code> markers. If the browser refuses the clipboard, the page selects the text and copies it with the older method.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. Write text or attach a picture. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
     <h3>Phone</h3><p>The Mailbox fills the screen. The page header does not show. Select the menu button at the top left to open the drawer with the folders, the other pages, and Help. The drawer has no Chat entry: use the Chat icon in the slim bar. A dot on the menu button shows unread chats. Select <b>New</b> at the bottom right to write a message. The Needs action icon in the top bar shows the open Needs-you items.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. A decision has its choice buttons, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, <b>Attach a picture</b>, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>

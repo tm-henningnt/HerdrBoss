@@ -1162,7 +1162,8 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .md a { color: color-mix(in srgb, var(--accent) 82%, var(--text)); text-underline-offset: 2px; }
 .md a[target="_blank"]::after { content: "\2197" / ""; margin-left: 1px; font-size: 0.85em; }
-.md .md-table { margin: 8px 0; max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.md .md-table-wrap { position: relative; margin: 8px 0; max-width: 100%; }
+.md .md-table { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; border: 1px solid var(--line); border-radius: 8px; }
 .md .md-table:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md table { border-collapse: collapse; min-width: 100%; font-size: 13px; }
 .md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: normal; }
@@ -1173,11 +1174,71 @@ button.now-task:hover .now-task-title { color: var(--accent); text-decoration: u
 .chat-bubble-text.md { font-size: 13.5px; line-height: 1.45; }
 .chat-bubble-text.md h3, .chat-bubble-text.md h4, .chat-bubble-text.md h5, .chat-bubble-text.md h6 { margin: 8px 0 2px; font-size: 14px; }
 .chat-bubble-text.md p { margin: 4px 0; }
-.chat-bubble-text.md pre, .chat-bubble-text.md .md-table { margin: 6px 0; background: var(--panel); }
+.chat-bubble-text.md .md-code, .chat-bubble-text.md .md-table-wrap { margin: 6px 0; }
+.chat-bubble-text.md pre, .chat-bubble-text.md .md-table { background: var(--panel); }
 @media (max-width: 760px) {
   .md ul, .md ol { padding-left: 18px; }
   .md pre { padding: 8px 10px; }
   .md th, .md td { padding: 5px 8px; }
+}
+/* Copy buttons. The icon is drawn in CSS. The 44 px tap target is a pseudo-element, so the button adds no height. */
+.md-code { display: flex; flex-direction: column; margin: 8px 0; }
+.md .md-code > pre { margin: 0; }
+/* The doubled class beats the global button colors and the 44 px minimum height of the phone layout. */
+/* The button sits in a strip above the code, so it never covers a code line. Its pseudo-element makes the 44 px target: 26 px (28 px less the 1 px borders) plus 9 px on each side. */
+button.copy-btn.copy-btn { position: relative; align-self: flex-end; margin: 0 0 4px; width: 28px; height: 28px; min-width: 28px; min-height: 28px !important; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); cursor: pointer; font: 500 12px var(--sans); line-height: 1; filter: none; }
+.copy-btn::after { content: ""; position: absolute; inset: -9px; }
+.copy-btn:hover, .copy-btn:focus-visible { filter: none; }
+button.copy-btn.copy-btn:hover, button.copy-btn.copy-btn:focus-visible { color: var(--text); border-color: var(--accent); }
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.copy-icon { position: relative; width: 11px; height: 11px; border: 1.5px solid currentColor; border-radius: 2px; transform: translate(2px, 2px); }
+.copy-icon::before { content: ""; position: absolute; left: -5px; top: -5px; width: 11px; height: 11px; border: 1.5px solid currentColor; border-right: 0; border-bottom: 0; border-radius: 2px 0 0 0; }
+/* The Copied label is out of the flow. In a code strip it sits left of the button over the empty strip. Next to a field it sits to the right. */
+.copy-flash { position: absolute; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); padding: 3px 7px; border-radius: 6px; background: var(--text); color: var(--panel); font-size: 12px; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: none; z-index: 2; }
+button.copy-btn.copy-btn[data-state="copied"] { color: var(--accent); border-color: var(--accent); }
+.copy-btn[data-state="copied"] .copy-flash { opacity: 1; visibility: visible; }
+button.copy-btn.copy-inline { align-self: auto; margin: 0 0 0 6px; display: inline-grid; vertical-align: middle; }
+.copy-inline .copy-flash { right: auto; left: calc(100% + 6px); }
+button.copy-btn.copy-btn.copy-msg { align-self: auto; margin: 0; width: auto; padding: 0 8px; border-color: transparent; background: transparent; display: inline-flex; gap: 5px; font-size: 11.5px; }
+.copy-btn.copy-msg .copy-flash { display: none; }
+/* The label of a message button changes from Copy to Copied. A hidden copy of the longer text keeps the width fixed. */
+.copy-text { display: inline-flex; flex-direction: column; }
+.copy-text::after { content: attr(data-done); height: 0; overflow: hidden; visibility: hidden; }
+@media (prefers-reduced-motion: no-preference) { .copy-btn { transition: color 0.12s, border-color 0.12s; } }
+/* Phone: long strings wrap, a table or a code block scrolls inside its own box, headings and list indents shrink. */
+.md, .md p, .md li, .md blockquote, .md a, .md code, .md h3, .md h4, .md h5, .md h6 { overflow-wrap: anywhere; word-break: break-word; }
+.md li > p { margin: 2px 0; }
+/* The scroll hint sits above the table. table-hint.js sets data-more from the scroll position. */
+.md .md-table-wrap::before, .md .md-table-wrap::after { content: ""; position: absolute; top: 1px; bottom: 1px; width: 22px; z-index: 1; pointer-events: none; opacity: 0; }
+.md .md-table-wrap::before { left: 1px; border-radius: 7px 0 0 7px; background: linear-gradient(to right, color-mix(in srgb, var(--text) 34%, transparent), transparent); }
+.md .md-table-wrap::after { right: 1px; border-radius: 0 7px 7px 0; background: linear-gradient(to left, color-mix(in srgb, var(--text) 34%, transparent), transparent); }
+.md .md-table-wrap[data-more="start"]::before, .md .md-table-wrap[data-more="both"]::before, .md .md-table-wrap[data-more="end"]::after, .md .md-table-wrap[data-more="both"]::after { opacity: 1; }
+.md .md-table > table { background: var(--panel); }
+.md th, .md td { word-break: normal; overflow-wrap: normal; }
+.md td { min-width: 6ch; }
+.md td a, .md td code, .md th code { overflow-wrap: normal; word-break: normal; }
+@media (max-width: 500px) {
+  .md { font-size: 13.5px; line-height: 1.45; }
+  .md h3 { font-size: 15px; margin: 10px 0 3px; }
+  .md h4 { font-size: 14px; margin: 8px 0 2px; }
+  .md h5, .md h6 { font-size: 13.5px; margin: 8px 0 2px; }
+  .md p { margin: 4px 0; }
+  .md ul, .md ol { padding-left: 16px; margin: 4px 0; }
+  .md li > ul, .md li > ol { padding-left: 14px; }
+  .md li { margin: 2px 0; }
+  .md blockquote { padding-left: 10px; margin: 6px 0; }
+  .md .md-code { margin: 6px 0; }
+  .md pre { padding: 7px 9px; max-width: 100%; }
+  .md pre code { font-size: 11.5px; line-height: 1.45; }
+  .md code { font-size: 12px; padding: 0 4px; }
+  .md table { font-size: 12.5px; }
+  .md th, .md td { padding: 4px 7px; }
+  .md th, .md td { white-space: nowrap; }
+  .md li > input[type="checkbox"] { width: 15px; height: 15px; }
+  .md .md-table-wrap { margin: 6px 0; }
+  .md hr { margin: 10px 0; }
+  .mail-message { padding: 9px 10px; }
+  .mail-message.from-owner { margin-left: 0; }
 }
 .message-form { display: grid; gap: 6px; padding: 10px 14px 0; border-top: 1px solid var(--line); }
 .message-form label { font-size: 12.5px; color: var(--muted); }
@@ -1306,7 +1367,7 @@ p.wizard-errors { padding-left: 10px; }
 .mail-conversation { display: grid; gap: 10px; margin: 0; padding: 12px; list-style: none; }
 .mail-message { display: grid; gap: 8px; min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
 .mail-message.from-owner { margin-left: clamp(0px, 8%, 55px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
-.mail-message-head { display: grid; gap: 3px; min-width: 0; }
+.mail-message-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .mail-message-head strong { color: var(--muted); font-size: 11.5px; font-weight: 600; overflow-wrap: anywhere; }
 .mail-message .msg-text, .mail-message .msg-report { margin: 0; overflow-wrap: anywhere; }
 .mail-message-state { margin: 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -2758,3 +2819,10 @@ a.chat-row.agent-row:hover, a.chat-row.agent-row:focus-visible { background: var
 .agent-older button { min-height: 36px; padding: 4px 16px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel); color: var(--text); font: 600 13px var(--sans); }
 .agent-all { margin: 0; font-size: 13px; }
 .agent-messages .agent-bubbles { padding: 0; max-width: none; }
+/* Phone: wider bubbles with less padding, so formatted messages keep their width. */
+@media (max-width: 500px) {
+  .chat-bubbles { padding-left: 8px; padding-right: 8px; }
+  .chat-bubbles > .chat-bubble, .chat-bubbles > .chat-report, .chat-bubble { max-width: 94%; }
+  .chat-entry .chat-bubble { max-width: calc(94% - 26px); }
+  .chat-bubbles .chat-bubble { padding: 6px 9px; }
+}

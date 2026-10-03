@@ -273,8 +273,8 @@ test('a diff shows added, removed, and hunk lines with line numbers, in plain mo
   assert.deepEqual(lines.slice(4).map((line) => [line.old, line.new]), [[10, 10], [11, null], [null, 11]]);
   const html = render(packWith({ id: 'd', title: 'D', type: 'diff', src: 'x.diff', ask: ['accept'] }), {}, { '/api/reviews/shop/checkout-redesign/files/2/x.diff': { text } });
   assert.match(html, /class="rv-code rv-diff" role="region" aria-label="Diff: D" tabindex="0"/);
-  assert.match(html, /class="rv-line rv-del"><span class="rv-ln">11<\/span><span class="rv-ln"><\/span><span class="rv-mark">−<\/span><code>old &lt;b&gt;<\/code>/);
-  assert.match(html, /class="rv-line rv-add">/);
+  assert.match(html, /class="rv-line rv-del" data-copy-prefix="-"><span class="rv-ln">11<\/span><span class="rv-ln"><\/span><span class="rv-mark">−<\/span><code>old &lt;b&gt;<\/code>/);
+  assert.match(html, /class="rv-line rv-add" data-copy-prefix="\+">/);
   assert.doesNotMatch(html, /<b>/);
 });
 
@@ -500,4 +500,15 @@ test('the key b asks later, and the other keys keep their action', () => {
   assert.equal(viewerKeyAction({ key: 'b', inField: true }), null);
   assert.equal(viewerKeyAction({ key: 'b', ctrlKey: true }), null);
   assert.equal(viewerKeyAction({ key: 'a' }), 'accept');
+});
+
+test('the copy of a diff gives back the source diff: markers kept, line numbers dropped', async () => {
+  const { copySource } = await import('../public/copy.js');
+  const text = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -10,3 +10,3 @@ intro\n same\n-old <b>\n+new\n\\ No newline at end of file\n';
+  const html = render(packWith({ id: 'd', title: 'D', type: 'diff', src: 'x.diff', ask: ['accept'] }), {}, { '/api/reviews/shop/checkout-redesign/files/2/x.diff': { text } });
+  const unescape = (value) => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const rows = [...html.matchAll(/<div class="rv-line[^"]*"(?: data-copy-prefix="([^"]*)")?>[^]*?<code>([^]*?)<\/code><\/div>/g)].map((m) => ({ getAttribute: (k) => (k === 'data-copy-prefix' ? m[1] ?? null : null), querySelector: () => ({ textContent: unescape(m[2]) }) }));
+  const scope = { querySelector: () => ({ querySelectorAll: () => rows }) };
+  const button = { hasAttribute: (k) => k === 'data-copy-lines', closest: () => scope };
+  assert.equal(copySource(button), text.trimEnd());
 });

@@ -2,6 +2,8 @@
 // It builds the HTML of each step, checks the form, builds the request for the project new routes, and keeps the draft.
 // The routes and the flow are in src/project-new-api.js. The wizard adds no rule: the server checks every value again.
 
+import { copyFieldHtml } from './copy.js';
+
 export const WIZARD_STEPS = ['name', 'folder', 'remote', 'orchestrator', 'review'];
 export const GOAL_LIMIT = 1000;
 export const DRAFT_KEY = 'herdr-boss.project-wizard';
@@ -151,7 +153,7 @@ function stepBody(step, d) {
 
 export function planHtml(plan) {
   if (!plan) return '';
-  return `<p class="wizard-path">Folder: <code>${esc(plan.path)}</code></p><ol class="wizard-plan">${(plan.steps || []).filter((s) => s.status !== 'not-built' && s.detail !== 'not built yet').map((s) => `<li data-step-status="${esc(s.status)}"><b>${esc(s.name)}</b><span>${esc(s.detail)}</span></li>`).join('')}</ol>`;
+  return `<p class="wizard-path">Folder: <code>${esc(plan.path)}</code>${copyFieldHtml(plan.path, esc, 'Copy the folder path')}</p><ol class="wizard-plan">${(plan.steps || []).filter((s) => s.status !== 'not-built' && s.detail !== 'not built yet').map((s) => `<li data-step-status="${esc(s.status)}"><b>${esc(s.name)}</b><span>${esc(s.detail)}</span></li>`).join('')}</ol>`;
 }
 
 function reviewBody(model) {
@@ -189,7 +191,7 @@ export function progressHtml(status, { check = null, busy = false, message = '',
   const buttons = settled
     ? `<div class="wizard-actions">${['waiting', 'failed', 'interrupted'].includes(status.state) || stalled ? `<button type="button" data-wizard="resume"${busy ? ' disabled' : ''}>Resume</button>` : ''}<button type="button" class="quiet" data-wizard="check"${busy ? ' disabled' : ''}>Check</button><button type="button" class="quiet" data-wizard="discard">Start a new form</button>${status.state === 'done' ? `<a class="button-link" href="/projects/${encodeURIComponent(status.slug)}" data-wizard="open">Open project</a>` : ''}</div>` : '';
   return `<div class="wizard-head"><h2 id="wizard-title">New project · ${esc(status.slug)}</h2><button type="button" class="quiet" data-wizard="close">Close</button></div>`
-    + `<div class="wizard-body" data-key="wizard-step"><p class="wizard-state" data-run-state="${esc(status.state)}" role="status"><b>${esc(RUN_LABEL[status.state] || status.state)}</b>${status.path ? ` · <code>${esc(status.path)}</code>` : ''}</p>${waiting}${failed}${steps}${checked}<p class="wizard-hint" role="status">${esc(message)}</p>${buttons}</div>`;
+    + `<div class="wizard-body" data-key="wizard-step"><p class="wizard-state" data-run-state="${esc(status.state)}" role="status"><b>${esc(RUN_LABEL[status.state] || status.state)}</b>${status.path ? ` · <code>${esc(status.path)}</code>${copyFieldHtml(status.path, esc, 'Copy the folder path')}` : ''}</p>${waiting}${failed}${steps}${checked}<p class="wizard-hint" role="status">${esc(message)}</p>${buttons}</div>`;
 }
 
 const clean = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);

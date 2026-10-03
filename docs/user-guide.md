@@ -1887,6 +1887,22 @@ The message panel, the Mailbox, and the Chat show message text as Markdown. The 
 - Block quotes with `>`, and horizontal rules with `---`.
 - Links `[text](url)`, `<url>`, and bare `https://` addresses. An external link opens in a new tab.
 
+Layout on a narrow screen (up to 500 px wide):
+
+- The page does not scroll sideways. A long path, address, token, link, or inline code wraps.
+- A table and a code block scroll sideways in their own box. A table shows a shadow above the table at each edge that has more columns. The shadow follows the scroll position. A table cell keeps a long path or address whole, so the table box scrolls.
+- Headings, list indents, and code use a smaller size. A bubble uses up to 94 percent of the width.
+
+### Copy buttons
+
+`public/copy.js` holds the copy code. One click listener on the page covers each button.
+
+- A fenced code block has a copy icon in a strip above the code, at the right. The strip keeps the icon and the label **Copied** off the code lines. The icon has the label `Copy code` and a tap target of 44 px. It copies the source of the block, without the fence and without line numbers. A tab in the source stays a tab, while the block shows four spaces.
+- Each message in the message panel, the Mailbox, and the Chat has a **Copy** action next to its time. It copies the text of the message as Markdown source.
+- A copy icon sits right after the folder path in the New project wizard, the connection address and the profile path of a browser, and the file name of a file or diff in a review pack. The icon of a file or diff copies the lines of the item without the line numbers. A diff keeps its `+`, `-`, and context markers, so the copy is the source diff. **Copied** shows to the right of the icon.
+- The page copies with `navigator.clipboard` when the browser allows it. Otherwise the page selects a hidden text field with a font size of 16 px, runs `document.execCommand('copy')`, and gives the focus back to the element that had it. The code follows the rules for iPhone Safari: the copy runs in the click handler. Both ways are tested in a desktop Chrome browser. A test on an iPhone and in the home-screen web app has not been done yet.
+- The button shows **Copied** for 1.5 seconds. The label of a message button changes from **Copy** to **Copied** in the same width, so the line does not move. The button has an `aria-label` and takes the keyboard focus.
+
 These safety rules apply:
 
 - Raw HTML shows as text. The page runs no script from a message.
