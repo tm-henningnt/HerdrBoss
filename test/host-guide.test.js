@@ -42,8 +42,8 @@ function makeSpawn(handler) {
     child.stderr = new PassThrough();
     child.kill = () => {};
     const remote = cmd === 'ssh' ? args.slice(args.indexOf('--') + 2).join(' ') : args.filter((arg) => arg !== '--context').slice(1).join(' ');
-    setImmediate(() => {
-      const result = handler({ cmd, args, remote });
+    setImmediate(async () => {
+      const result = await handler({ cmd, args, remote });
       child.stdout.write(result.stdout || '');
       child.stderr.write(result.stderr || '');
       child.stdout.end();
@@ -226,7 +226,7 @@ test('a healthy Windows host passes every check through the ssh and Docker code 
   const docker = calls.filter((call) => call.cmd === 'docker');
   assert.deepEqual(docker.map((call) => call.args.slice(0, 2)), [['--context', 'hf-build-box'], ['--context', 'hf-build-box']]);
   assert.equal(state.checks.docker.command, "herdr-boss factory docker " + label + " -- ps --format '{{.ID}} {{.Status}}'");
-  assert.equal(state.checks.systemd.command, `herdr-boss factory ssh ${label} -- systemctl is-system-running; systemctl --failed --no-legend`);
+  assert.equal(state.checks.systemd.command, `herdr-boss factory ssh ${label} -- 'systemctl is-system-running; systemctl --failed --no-legend'`);
   const saved = JSON.stringify(guide.readGuide(dataDir, label));
   assert.equal(saved.includes(ADDRESS.replace('.ts.net', '')) && saved.includes('hf-build-box'), false, 'a result holds no address and no context name');
 });
@@ -540,4 +540,113 @@ test('a factory command that fails on a host record names the guide, and an unre
   const unrelated = run('host', 'remove');
   assert.equal(unrelated.status, 1);
   assert.doesNotMatch(unrelated.stderr, /Host setup guide/);
+});
+
+test('a value, a step, or a delete during a check is not lost or undone', async () => {
+  const label = newLabel();
+  const c = clock();
+  windowsGuide(label, c.now);
+  writeRegistry({ [label]: registryHost });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { spawn } = makeSpawn(async (call) => { await gate; return HEALTHY(call); });
+  const first = run(label, { spawn, now: c.now });
+  guide.updateGuide(dataDir, label, { values: { role: 'builder' }, done: { bios: true } }, { now: c.now });
+  guide.guideAction(dataDir, label, 'reboot-start', { now: c.now });
+  release();
+  const state = await first;
+  assert.equal(state.values.role, 'builder');
+  assert.equal(state.done.bios, true);
+  assert.equal(state.reboot.status, 'waiting');
+  assert.equal(guide.readGuide(dataDir, label).values.role, 'builder');
+  assert.equal(guide.readGuide(dataDir, label).checks.answers.status, 'pass');
+  // A delete during a check stays a delete.
+  const other = newLabel();
+  windowsGuide(other, c.now);
+  writeRegistry({ [other]: registryHost });
+  let open;
+  const hold = new Promise((resolve) => { open = resolve; });
+  const slow = makeSpawn(async (call) => { await hold; return HEALTHY(call); });
+  const second = run(other, { spawn: slow.spawn, now: c.now });
+  guide.deleteGuide(dataDir, other);
+  open();
+  await assert.rejects(second, (e) => e.status === 404 && /deleted/i.test(e.message));
+  assert.equal(guide.readGuide(dataDir, other), null);
+});
+
+test('the copied command is one quoted argument, so zsh does not expand a glob or split at a semicolon', async () => {
+  const c = clock();
+  const mac = newLabel();
+  guide.updateGuide(dataDir, mac, { type: 'mac-orbstack', values: { memoryGb: '4' } }, { now: c.now });
+  writeRegistry({ [mac]: registryHost });
+  const { spawn } = makeSpawn((call) => (call.cmd === 'ssh' && call.remote.startsWith('grep') ? { stdout: 'PasswordAuthentication yes\n' } : HEALTHY(call)));
+  const state = await run(mac, { spawn, now: c.now });
+  assert.equal(state.checks['sshd-password'].command, `herdr-boss factory ssh ${mac} -- 'grep -ihs '\\''^[[:space:]]*PasswordAuthentication'\\'' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*'`);
+  assert.equal(state.checks.systemd.status, 'skipped');
+  const win = newLabel();
+  windowsGuide(win, c.now);
+  writeRegistry({ [win]: registryHost });
+  const healthy = await run(win, { spawn: makeSpawn(HEALTHY).spawn, now: c.now });
+  assert.equal(healthy.checks['sshd-password'].command, `herdr-boss factory ssh ${win} -- 'sudo -n sshd -T'`);
+});
+
+test('a hung ssh gets SIGTERM, then SIGKILL, in its own process group, and its output is capped', async () => {
+  const label = newLabel();
+  const c = clock();
+  windowsGuide(label, c.now);
+  writeRegistry({ [label]: registryHost });
+  const kills = [];
+  const options = [];
+  const spawn = (cmd, args, opts) => {
+    options.push(opts);
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => { kills.push(signal); if (signal === 'SIGKILL') setImmediate(() => child.emit('close', null)); };
+    return child;
+  };
+  const state = await run(label, { spawn, now: c.now, sshTimeout: 20, killGrace: 20 });
+  assert.equal(state.checks.answers.status, 'fail');
+  assert.match(state.checks.answers.output, /timed out/i);
+  assert.equal(options[0].detached, true);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.deepEqual(kills, ['SIGTERM', 'SIGKILL']);
+  const big = [];
+  const flood = (cmd, args, opts) => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => { big.push(signal); setImmediate(() => child.emit('close', null)); };
+    setImmediate(() => child.stdout.write('x'.repeat(200 * 1024)));
+    return child;
+  };
+  await run(label, { spawn: flood, now: c.now, sshTimeout: 2000, killGrace: 20 });
+  assert.ok(big.includes('SIGTERM'), 'an output over the cap stops the process');
+});
+
+test('a file system failure gives a fixed message with no path', async () => {
+  const broken = path.join(root, 'broken-data');
+  fs.mkdirSync(broken, { recursive: true });
+  fs.writeFileSync(path.join(broken, 'host-guide'), 'not a folder');
+  const api = guide.createHostGuideApi({ dataDir: broken, env, spawn: makeSpawn(HEALTHY).spawn });
+  const result = await api.handle('GET', '/api/host-guide/some-box', async () => ({}), { owner: true });
+  assert.equal(result.status, 500);
+  assert.equal(result.body.error, 'The host guide could not read or write its saved file.');
+  const put = await api.handle('PUT', '/api/host-guide/some-box', async () => ({ type: 'linux' }), { owner: true });
+  assert.equal(put.status, 500);
+  assert.doesNotMatch(JSON.stringify([result, put]), /broken-data|ENOTDIR|ENOENT|\//);
+});
+
+test('an unregistered host keeps the rows of a started terminate and reboot test', async () => {
+  const label = newLabel();
+  const c = clock();
+  windowsGuide(label, c.now);
+  writeRegistry({});
+  guide.guideAction(dataDir, label, 'terminate-start', { now: c.now });
+  guide.guideAction(dataDir, label, 'reboot-start', { now: c.now });
+  const state = await run(label, { spawn: makeSpawn(HEALTHY).spawn, now: c.now });
+  for (const id of ['terminate', 'reboot']) {
+    assert.equal(state.checks[id].status, 'skipped', id);
+    assert.match(state.checks[id].output, /not registered/i);
+  }
 });

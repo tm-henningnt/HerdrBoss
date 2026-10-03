@@ -63,7 +63,7 @@ const STATUS_WORD = { pass: 'Passed', fail: 'Failed', skipped: 'Skipped', pendin
 export function checkRowHtml(check, result) {
   const status = result?.status || 'none';
   const detail = result ? `${result.output ? `<pre class="hg-out">${esc(result.output)}</pre>` : ''}${result.status === 'fail' && result.command ? `<p class="hg-failcmd">Failing command: <code>${esc(result.command)}</code>${copyButton(result.command, 'Copy the failing command')}</p>` : ''}${result.next ? `<p class="hg-next"><strong>Next step:</strong> ${termsHtml(result.next)}</p>` : ''}` : '';
-  return `<li class="hg-check" data-check="${check.id}" data-status="${status}"><span class="hg-check-mark" aria-hidden="true">${MARK[status] || '·'}</span><div><p class="hg-check-title"><strong>${esc(check.title)}</strong> <span class="hg-status">${esc(STATUS_WORD[status] || 'Not run')}</span></p>${detail}</div></li>`;
+  return `<li class="hg-check" data-check="${check.id}" data-status="${esc(status)}"><span class="hg-check-mark" aria-hidden="true">${MARK[status] || '·'}</span><div><p class="hg-check-title"><strong>${esc(check.title)}</strong> <span class="hg-status">${esc(STATUS_WORD[status] || 'Not run')}</span></p>${detail}</div></li>`;
 }
 
 export function testPanelHtml(model) {
@@ -81,7 +81,7 @@ function timedHtml(kind, model) {
   const record = guide[kind];
   const disabled = local || model.busy ? ' disabled' : '';
   const result = guide.checks?.[kind];
-  const line = result ? `<p class="hg-timed-result" data-status="${result.status}"><span aria-hidden="true">${MARK[result.status]}</span> ${esc(result.output)}${result.next ? ` <span class="hg-next">${esc(result.next)}</span>` : ''}</p>` : '';
+  const line = result ? `<p class="hg-timed-result" data-status="${esc(result.status)}"><span aria-hidden="true">${MARK[result.status]}</span> ${esc(result.output)}${result.next ? ` <span class="hg-next">${esc(result.next)}</span>` : ''}</p>` : '';
   const start = kind === 'terminate'
     ? { go: 'I ran the command: start the wait', again: 'Check now', cancel: 'Cancel the test', intro: 'Stop WSL on purpose. The repeating trigger of the boot task starts it again within 5 minutes. The test shows when it did.', warning: 'This stops all WSL work on the host, also the work of other factories. Do it when no work runs.', command: { shell: 'powershell', text: 'wsl --terminate <DISTRO>' } }
     : { go: 'I am restarting the host now', again: 'Check now', cancel: 'Cancel the test', intro: 'Restart the host and do not sign in. The test checks that the host starts the services without you.', warning: 'A restart stops all work on the host. Do it with the host operator when no factory works.' };

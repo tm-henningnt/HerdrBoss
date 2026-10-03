@@ -361,3 +361,19 @@ test('the footer lists the commands that the Owner has not checked, for the show
   assert.doesNotMatch(linux, /orbctl/);
   assert.match(guideHtml(model()), /Restart-Computer/);
 });
+
+test('a status value is escaped in the check row and in the timed result', () => {
+  const hostile = '"><img src=x>';
+  assert.doesNotMatch(checkRowHtml({ id: 'x', title: 'X' }, { id: 'x', status: hostile, output: '', command: '', next: '' }), /<img/);
+  const html = guideHtml(model({ guide: guide({ terminate: { status: 'waiting', startedAt: '2026-10-04T10:00:00Z' }, checks: { terminate: { id: 'terminate', status: hostile, output: 'x', next: '' } } }) }));
+  assert.doesNotMatch(html, /<img src=x>/);
+});
+
+test('a value typed while a check runs stays on the page', async () => {
+  const service = fakeService();
+  const c = createHostGuide({ fetchJson: async (method, url, body) => { if (url.endsWith('/check')) c.setValue('role', 'builder'); return service.fetchJson(method, url, body); }, ...timers() });
+  await c.load();
+  c.setStartLabel('build-box'); await c.start();
+  await c.run('all');
+  assert.equal(c.state.guide.values.role, 'builder');
+});

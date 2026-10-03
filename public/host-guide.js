@@ -34,8 +34,10 @@ export function createHostGuide({ fetchJson, setTimer = setTimeout, clearTimer =
     return response.json;
   }
   const adopt = (body) => {
+    // Keep what the user typed and the service has not saved yet: a value in the queue, or a value with a wrong format.
     const mine = c.guide?.values || {};
-    c.guide = { ...body.state, values: { ...body.state.values, ...Object.fromEntries(Object.entries(mine).filter(([id, value]) => value !== '' && !checkField(id, value).ok)) } };
+    const keep = Object.entries(mine).filter(([id, value]) => id in pending || (value !== '' && !checkField(id, value).ok));
+    c.guide = { ...body.state, values: { ...body.state.values, ...Object.fromEntries(keep) } };
   };
 
   async function load() {

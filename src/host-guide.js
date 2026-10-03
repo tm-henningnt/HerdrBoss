@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { HOST_TYPES, STEPS } from '../public/host-guide-data.js';
 import { HOST_NAME, checkField, fieldsFor, normalizeField } from '../public/host-guide-fields.js';
-import { loadRegistry, maskLine, sshArguments } from './factory-host.js';
+import { loadRegistry, maskLine, shellQuote, sshArguments } from './factory-host.js';
 import { createDockerTransport } from './factory-transport.js';
 import { writePrivate } from './factory-store.js';
 
@@ -19,6 +19,8 @@ export const REBOOT_LIMIT_MS = 30 * 60 * 1000;
 const OUTPUT_LIMIT = 1000;
 const GIB = 1024 ** 3;
 const SSH_TIMEOUT_MS = 15000;
+const KILL_GRACE_MS = 1000;
+const CAPTURE_LIMIT = 64 * 1024;
 const ACTIONS = ['terminate-start', 'terminate-reset', 'reboot-start', 'reboot-reset'];
 const CHECK_IDS = ['all', 'terminate', 'reboot'];
 
@@ -227,19 +229,30 @@ function clip(text) {
 }
 
 // One ssh call with the arguments of the host tool. The result is captured, not printed.
-function runSsh(host, command, spawn) {
+// One ssh call with the arguments of the host tool. The result is captured, not printed.
+// ssh runs in its own process group. A hung call gets SIGTERM, then SIGKILL after a grace time. Each stream is capped.
+function runSsh(host, command, spawn, { timeout = SSH_TIMEOUT_MS, grace = KILL_GRACE_MS } = {}) {
   return new Promise((resolve) => {
     let child;
-    try { child = spawn('ssh', sshArguments(host, [command]), { stdio: ['ignore', 'pipe', 'pipe'], shell: false }); } catch { resolve({ code: 255, stdout: '', stderr: 'ssh could not start.' }); return; }
+    try { child = spawn('ssh', sshArguments(host, [command]), { stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: true }); } catch { resolve({ code: 255, stdout: '', stderr: 'ssh could not start.' }); return; }
     let stdout = '';
     let stderr = '';
     let finished = false;
+    let killTimer;
+    const signal = (name) => {
+      try { if (child.pid) process.kill(-child.pid, name); else child.kill(name); } catch { try { child.kill(name); } catch { /* The process is gone. */ } }
+    };
+    const stop = () => { signal('SIGTERM'); killTimer ||= setTimeout(() => signal('SIGKILL'), grace); };
     const done = (result) => { if (!finished) { finished = true; clearTimeout(timer); resolve(result); } };
-    const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* The process is gone. */ } done({ code: 255, stdout, stderr: `${stderr}\nConnection timed out.` }); }, SSH_TIMEOUT_MS);
-    child.stdout?.on('data', (chunk) => { stdout += chunk; });
-    child.stderr?.on('data', (chunk) => { stderr += chunk; });
-    child.once('error', () => done({ code: 255, stdout, stderr: 'ssh could not start.' }));
-    child.once('close', (code) => done({ code: code ?? 255, stdout, stderr }));
+    const timer = setTimeout(() => { stop(); done({ code: 255, stdout, stderr: `${stderr}\nConnection timed out.` }); }, timeout);
+    const take = (kind, chunk) => {
+      if (kind === 'out') { if (stdout.length < CAPTURE_LIMIT) stdout += chunk; } else if (stderr.length < CAPTURE_LIMIT) stderr += chunk;
+      if (stdout.length >= CAPTURE_LIMIT || stderr.length >= CAPTURE_LIMIT) stop();
+    };
+    child.stdout?.on('data', (chunk) => take('out', chunk));
+    child.stderr?.on('data', (chunk) => take('err', chunk));
+    child.once('error', () => { clearTimeout(killTimer); done({ code: 255, stdout, stderr: 'ssh could not start.' }); });
+    child.once('close', (code) => { clearTimeout(killTimer); done({ code: code ?? 255, stdout, stderr }); });
   });
 }
 
@@ -260,7 +273,7 @@ export const CHECKS = [
 
 const running = new Set();
 
-export async function runGuideChecks(dataDir, label, { env = process.env, spawn = nodeSpawn, now = Date.now, ids = ['all'] } = {}) {
+export async function runGuideChecks(dataDir, label, { env = process.env, spawn = nodeSpawn, now = Date.now, ids = ['all'], sshTimeout = SSH_TIMEOUT_MS, killGrace = KILL_GRACE_MS } = {}) {
   const state = requireGuide(dataDir, label);
   const mode = ids[0] ?? 'all';
   if (!CHECK_IDS.includes(mode)) throw new GuideError(400, `Unknown check. Use ${CHECK_IDS.join(', ')}.`);
@@ -274,7 +287,9 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
     const put = (id, status, extra = {}) => { results[id] = { id, status, at, command: extra.command ?? '', output: clip(extra.output), next: extra.next ?? '' }; return results[id]; };
     const type = state.type;
     const windows = type === 'windows-wsl2';
-    const ssh = (command) => `herdr-boss factory ssh ${label} -- ${command}`;
+    // The copied command is one quoted argument, so the Mac shell does not expand a glob or split at a semicolon.
+    const ssh = (command) => `herdr-boss factory ssh ${label} -- ${shellQuote(command)}`;
+    const runRemote = (target, command) => runSsh(target, command, spawn, { timeout: sshTimeout, grace: killGrace });
     const skipFrom = (ids2, why) => { for (const id of ids2) if (!results[id]) put(id, 'skipped', { output: why }); };
     const order = CHECKS.filter((check) => !check.types || check.types.includes(type)).map((check) => check.id);
     // The timed tests have a row only after the user starts them.
@@ -285,10 +300,13 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
     if (!host) {
       put('registered', 'fail', { command: `herdr-boss factory host list`, output: 'The registry has no SSH record for this label.', next: `Run \`herdr-boss factory host add ${label} --from-file -\`. Type the fields address, user, and keyFile as JSON on the private input. End with Ctrl+D.` });
       if (mode === 'all') skipFrom(skippable, 'Register the host first.');
+      for (const kind of ['terminate', 'reboot']) {
+        if (next[kind] && (mode === 'all' || mode === kind) && (kind === 'reboot' || windows)) put(kind, 'skipped', { output: 'The host is not registered.', next: 'Register the host first.' });
+      }
     } else {
       put('registered', 'pass', { command: 'herdr-boss factory host list', output: 'The registry has this host.' });
       const mask = (text, docker = false) => clip(maskLine(String(text ?? ''), host, docker));
-      const probe = await runSsh(host, 'uname -m', spawn);
+      const probe = await runRemote(host, 'uname -m');
       const denied = probe.code === 255 && DENIED.test(probe.stderr);
       const keyOk = probe.code !== 255;
       const answered = keyOk || denied;
@@ -319,7 +337,7 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
         // systemd.
         if (type === 'mac-orbstack') put('systemd', 'skipped', { output: 'A Mac has no systemd.' });
         else {
-          const result = await runSsh(host, 'systemctl is-system-running; systemctl --failed --no-legend', spawn);
+          const result = await runRemote(host, 'systemctl is-system-running; systemctl --failed --no-legend');
           const [first, ...rest] = result.stdout.split('\n');
           const verdict = result.code === 255 ? { ok: false, detail: mask(result.stderr) } : evaluateSystemd(first, rest.join('\n'));
           put('systemd', verdict.ok ? 'pass' : 'fail', { command: ssh('systemctl is-system-running; systemctl --failed --no-legend'), output: verdict.detail, next: verdict.ok ? '' : 'Read each failed unit with `systemctl --failed --no-legend`. Fix it. Only systemd-binfmt.service is accepted as failed.' });
@@ -341,12 +359,12 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
         // The SSH server takes no password.
         if (type === 'mac-orbstack') {
           const grep = "grep -ihs '^[[:space:]]*PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*";
-          const result = await runSsh(host, grep, spawn);
+          const result = await runRemote(host, grep);
           const lines = result.stdout.split('\n').map((line) => line.trim().toLowerCase()).filter(Boolean);
           const ok = lines.length > 0 && lines.every((line) => /^passwordauthentication\s+no$/.test(line));
           put('sshd-password', ok ? 'pass' : 'fail', { command: ssh(grep), output: ok ? 'PasswordAuthentication is no.' : (lines.join('\n') || 'No PasswordAuthentication line.'), next: ok ? '' : 'Set `PasswordAuthentication no` in a file in /etc/ssh/sshd_config.d. Turn Remote Login off and on.' });
         } else {
-          const result = await runSsh(host, 'sudo -n sshd -T', spawn);
+          const result = await runRemote(host, 'sudo -n sshd -T');
           const off = /^passwordauthentication\s+no\s*$/mi.test(result.stdout);
           const fail = result.code !== 0 && !off;
           put('sshd-password', off ? 'pass' : 'fail', { command: ssh('sudo -n sshd -T'), output: off ? 'passwordauthentication no' : (fail ? mask(result.stderr || result.stdout) : 'passwordauthentication is not no.'), next: off ? '' : 'Run `sudo sshd -T | grep -i passwordauthentication` on the host. Set `PasswordAuthentication no` in /etc/ssh/sshd_config.d/00-herdr-factory.conf. Run `sudo sshd -t`. Reload SSH.' });
@@ -367,7 +385,7 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
         let dockerOk = false;
         if (answered && keyOk) {
           const command = type === 'mac-orbstack' ? 'sysctl -n kern.boottime' : 'cat /proc/uptime';
-          const result = await runSsh(host, command, spawn);
+          const result = await runRemote(host, command);
           if (type === 'mac-orbstack') { const boot = /sec\s*=\s*(\d+)/.exec(result.stdout); uptime = boot ? now() / 1000 - Number(boot[1]) : null; } else uptime = Number.parseFloat(result.stdout);
           const ps = host.dockerContext ? await runDocker(host, ['ps', '--format', '{{.ID}}'], spawn, env) : { code: 1 };
           dockerOk = ps.code === 0;
@@ -383,10 +401,19 @@ export async function runGuideChecks(dataDir, label, { env = process.env, spawn 
         put('reboot', record.status === 'passed' ? 'pass' : waiting ? 'pending' : 'fail', { command: ssh(type === 'mac-orbstack' ? 'sysctl -n kern.boottime' : 'cat /proc/uptime'), output, next: record.status === 'failed' ? (windows ? 'Sign in at the machine. Open Task Scheduler. Read the Last Run Result of the boot task. Check that it runs when no user is signed in.' : 'Go to the machine. Check the power, the network, and that Tailscale and Docker start at boot.') : '' });
       }
     }
-    next.checks = mode === 'all' ? Object.fromEntries(inCheckOrder(results, type)) : { ...next.checks, ...results };
-    next.updatedAt = at;
-    save(dataDir, next);
-    return next;
+    // The check took a while. Read the file again and keep what was saved meanwhile. A deleted guide stays deleted.
+    const fresh = readGuide(dataDir, label);
+    if (!fresh) throw new GuideError(404, 'The guide was deleted during the check.');
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const merged = {
+      ...fresh,
+      checks: mode === 'all' ? Object.fromEntries(inCheckOrder(results, type)) : { ...fresh.checks, ...results },
+      terminate: same(fresh.terminate, state.terminate) ? next.terminate : fresh.terminate,
+      reboot: same(fresh.reboot, state.reboot) ? next.reboot : fresh.reboot,
+      updatedAt: at,
+    };
+    save(dataDir, merged);
+    return merged;
   } finally { running.delete(label); }
 }
 
@@ -431,7 +458,9 @@ export function createHostGuideApi({ dataDir, spawn = nodeSpawn, env = process.e
         return { status: 200, body: view(await runGuideChecks(dataDir, label, { env, spawn, now, ids: [body.check ?? 'all'] })) };
       } catch (error) {
         if (error instanceof GuideError) return { status: error.status, body: { error: error.message } };
-        throw error;
+        // A body error from the server has its own status. Any other error is a file failure: its text can hold a local path.
+        if (Number.isInteger(error?.statusCode)) throw error;
+        return { status: 500, body: { error: 'The host guide could not read or write its saved file.' } };
       }
     },
   };
