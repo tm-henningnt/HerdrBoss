@@ -19,7 +19,7 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
-import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
+import { activeLaunchRecords, detectLaunchBlock, isPaneStartupBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, titleFromTask } from '../worker-view.js';
 
@@ -933,7 +933,8 @@ export function waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait = p
             error.launchBlock = block;
             throw error;
           }
-          const question = interactiveShellQuestion(lines);
+          // A launch phrase from an earlier launch stays on the screen. It is not a question for the Owner.
+          const question = interactiveShellQuestion(launchBlock ? lines.filter((line) => !detectLaunchBlock(line)) : lines);
           if (question) {
             const error = new Error(`Worker pane ${paneId} is waiting at an interactive question: ${question}. Answer it in a shell once, then retry ${retryCommand}.`);
             error.code = 'worker_pane_interactive_question';
@@ -1207,6 +1208,21 @@ function copyLocalOrchestration(mainRoot, worktree) {
 }
 
 // A model that shows a launch block is marked unavailable. A start without --model then picks the next model of the lane.
+// A pane that shows the shell text "Did you mean this?" after a launch gets this many more launches.
+const PANE_RELAUNCHES = 2;
+const PANE_RELAUNCH_DELAY_MS = 15_000;
+const PROBE_TIMEOUT_MS = 60_000;
+
+// True when `opencode run` answers with the model. A failure, a timeout, or an empty answer is false.
+export function probeOpenCodeModel(model, { timeoutMs = PROBE_TIMEOUT_MS, cwd } = {}) {
+  try {
+    const answer = execFileSync('opencode', ['run', '--model', model, 'reply with ok'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs,
+    });
+    return answer.trim().length > 0;
+  } catch { return false; }
+}
+
 export function startWorker(name, options, deps = {}) {
   for (let attempt = 1; ; attempt++) {
     try { return startWorkerOnce(name, options, deps); }
@@ -1234,6 +1250,8 @@ function startWorkerOnce(name, options, {
   leaseOptions = null,
   browserLookup,
   refreshKit = refreshKitIfRequired,
+  launchRetryDelayMs = PANE_RELAUNCH_DELAY_MS,
+  probeModel = probeOpenCodeModel,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -1529,7 +1547,7 @@ function startWorkerOnce(name, options, {
     paneId = placement.paneId;
     for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     // Answer nothing at a launch block. Mark the model, close the TUI, and stop this model.
-    const stopForLaunchBlock = (block) => {
+    const markAndStop = (block) => {
       try {
         markModelUnavailable(bossDir, {
           kind: options.kind, model, provider: providerFor(options.kind, model, policy), untilReenabled: block.untilReenabled,
@@ -1539,6 +1557,15 @@ function startWorkerOnce(name, options, {
       try { herdr(['agent', 'close', name]); } catch { /* The pane cleanup below closes what remains. */ }
       const error = launchBlockedError(model, block, { fallback: modelSource !== 'flag' });
       error.blockedModel = model;
+      throw error;
+    };
+    // The shell text "Did you mean this?" can come from a busy machine. Close the TUI and let the relaunch loop decide.
+    const stopForLaunchBlock = (block) => {
+      if (!isPaneStartupBlock(block)) markAndStop(block);
+      try { herdr(['agent', 'close', name]); } catch { /* The pane cleanup below closes what remains. */ }
+      const error = new Error(`Worker pane ${paneId} shows "${block.phrase}" at launch.`);
+      error.code = 'opencode_pane_startup';
+      error.launchBlock = block;
       throw error;
     };
     const readPaneSnapshot = () => {
@@ -1646,9 +1673,31 @@ function startWorkerOnce(name, options, {
       if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
       return { ...record, recordFile, dryRun: false };
     };
+    // Launch again in the same pane when the shell text shows that the TUI process exited. After the last
+    // launch, `opencode run` decides: an answer means the model works, so nothing is marked.
+    const startWithPaneRelaunch = (attempt = 1) => {
+      for (let launch = 1; ; launch++) {
+        try { return startAndDeliver(attempt); }
+        catch (error) {
+          if (error?.code !== 'opencode_pane_startup') throw error;
+          if (launch > PANE_RELAUNCHES) {
+            let answered = false;
+            try { answered = probeModel(model, { timeoutMs: PROBE_TIMEOUT_MS, cwd: worktree }) === true; } catch { /* A probe that throws did not answer. */ }
+            if (!answered) markAndStop(error.launchBlock);
+            const failure = new Error(`OpenCode pane startup failed for ${model} after ${launch} launch attempts: the pane shows "${error.launchBlock.phrase}", but "opencode run" answers with this model. Herdr Boss did not mark the model. Retry later or when the machine is less busy.`, { cause: error });
+            failure.code = 'opencode_pane_startup_failed';
+            throw failure;
+          }
+          output(`Relaunching OpenCode worker ${name} (${launch + 1}/${PANE_RELAUNCHES + 1}) in ${Math.round(launchRetryDelayMs / 1000)} s: the pane shows "${error.launchBlock.phrase}".`);
+          wait(launchRetryDelayMs);
+          // The pane text of the failed launch stays on screen. Hide it from the next launch.
+          launchBaseline = readPaneSnapshot();
+        }
+      }
+    };
     if (options.kind === 'opencode') {
       return withOpenCodeStartLock(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'),
-        () => retryOpenCodeStart(name, paneId, startAndDeliver, { herdr, output }), { wait, output });
+        () => retryOpenCodeStart(name, paneId, startWithPaneRelaunch, { herdr, output }), { wait, output });
     }
     return startAndDeliver();
   } catch (error) {
