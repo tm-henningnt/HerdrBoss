@@ -1092,7 +1092,9 @@ A factory host is a machine that runs factories. The host registry lists the hos
 
 Add a host with `herdr-boss factory host add`. Give the fields as JSON on stdin so that the address stays out of the shell history. List the hosts with `herdr-boss factory host list`. The list shows the name and the user only.
 
-Run a command on a host with `herdr-boss factory ssh HOST -- COMMAND...`. Run Docker on a host with `herdr-boss factory docker HOST -- ARGS...`. Herdr Boss masks the address, the host name, every IP address, and the key file path in the output. See `docs/cli.md`, section Factory hosts.
+Run a command on a host with `herdr-boss factory ssh HOST -- COMMAND...`. Run Docker on a host with `herdr-boss factory docker HOST -- ARGS...`. Herdr Boss masks the full address before the key file name. It masks the host name, every IP address, the key file path, and tokens that end in `.ts.net`. See `docs/cli.md`, section Factory hosts.
+
+Use [the Windows host runbook](windows-host.md) to set up a Windows factory host. It covers the VM limits, systemd, Docker Engine, key login, Tailscale, the boot task, and recovery without a Windows sign-in.
 
 ## Container factories
 

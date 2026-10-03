@@ -1552,11 +1552,15 @@ The service check measures `/api/health` through container loopback. It also che
 
 The harness, GitHub, and project steps are pending in this release. A normal `configure` exits 3 and writes one Owner instruction file. The Boss can post that file as one Mailbox item. Run login commands at an Owner terminal. Do not send a code or token to a pane or a Mailbox answer. `factory login` and login verification are not part of this slice.
 
-`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. The masking also covers the warning lines of ssh.
+`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. It masks the full address before the key file name. It also masks each token that ends in `.ts.net`. The masking covers the warning lines of ssh.
 
 `factory docker HOST -- ARGS...` uses the registered Docker context when one exists. Otherwise it runs Docker through SSH and quotes each argument for the remote shell. It has no terminal, so `docker run -it` and `docker exec -it` do not work.
 
 A Docker context over SSH stores the address in the Docker context store. To list names only, use `docker context ls --format '{{.Name}}'`. Do not print endpoints. `factory docker` is the supported agent route.
+
+An IPv6 token must have `::` or eight hex groups. Clock times remain visible.
+
+Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker Engine, key login, Tailscale, and the Windows boot task. The image spike uses an approved Docker context. List only its name with `docker context ls --format '{{.Name}}'`. Keep the real name outside reports and the repository.
 
 ## Set the goal of an orchestrator
 

@@ -199,6 +199,29 @@ test('ssh masks a domain host name in a resolver error', async () => {
   } finally { f.cleanup(); }
 });
 
+test('ssh masks a timeout address before an overlapping key basename', async () => {
+  const f = fixture();
+  try {
+    const address = 'box.example.invalid.ts.net';
+    const keyFile = path.join(f.root, 'box');
+    await factoryCommand(['host', 'add', 'spike', '--address', address, '--user', 'builder', '--key-file', keyFile], f.io(fakeSpawn(f.calls)));
+    const spawn = fakeSpawn(f.calls, {
+      stderr: [`ssh: connect to host ${address} port 22: Operation timed out\nIdentity file ${keyFile} not accessible\n`],
+      code: 255,
+    });
+    assert.equal(await factoryCommand(['ssh', 'spike', '--', 'true'], f.io(spawn)), 255);
+    assert.equal(f.errText(), 'ssh: connect to host <host> port 22: Operation timed out\nIdentity file <key> not accessible\n');
+  } finally { f.cleanup(); }
+});
+
+test('maskLine masks tailnet tokens and keeps an overlapping key path private', () => {
+  const tailnet = 'other.example.invalid.ts.net';
+  const host = { address: 'box.example.invalid', name: 'box', keyFile: '/fixture/box' };
+  assert.equal(maskLine(`ssh: connect to host ${tailnet} port 22: Operation timed out`, host), 'ssh: connect to host <host> port 22: Operation timed out');
+  assert.equal(maskLine(`ssh: connect to host box.${tailnet} port 22: Operation timed out`, host), 'ssh: connect to host <host> port 22: Operation timed out');
+  assert.equal(maskLine(`Identity file ${host.keyFile} not accessible`, host), 'Identity file <key> not accessible');
+});
+
 test('a spawn failure prints a masked message and exits 255', async () => {
   const f = fixture();
   try {
@@ -361,4 +384,12 @@ test('the docker passthrough allows a command longer than the probe timeout', as
     child.emit('close', 0);
     assert.equal(await pending, 0);
   } finally { mock.timers.reset(); f.cleanup(); }
+});
+
+test('maskLine preserves clock times and requires a compressed or eight-group IPv6 token', () => {
+  const host = { address: 'example.invalid', keyFile: '/fixture/key' };
+  assert.equal(maskLine('2026-10-03 00:55:42 UTC, elapsed 01:02', host), '2026-10-03 00:55:42 UTC, elapsed 01:02');
+  assert.equal(maskLine('connect to fe80::1', host), 'connect to <host>');
+  assert.equal(maskLine('connect to 2001:db8:0:1:2:3:4:5', host), 'connect to <host>');
+  assert.equal(maskLine('value 1:2:3:4:5:6:7', host), 'value 1:2:3:4:5:6:7');
 });
