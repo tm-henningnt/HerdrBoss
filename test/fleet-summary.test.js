@@ -139,3 +139,75 @@ test('published project fields and public alert codes reach the summary without 
   assert.deepEqual(result.body.alerts, [{ code: 'machine-pressure', severity: 'error' }]);
   assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE alert|private\/fixture|invented-secret/);
 });
+
+test('rows that the contract refuses are dropped and the summary still builds', async () => {
+  const { buildFleetSummary } = await import('../src/fleet-summary.js');
+  const settings = { factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'http://localhost:4477', headOffice: false, shareItemTitles: true, accounts: [] };
+  const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true, clockOffsetSeconds: null };
+  const slugs = ['2fa-app', 'ends-', 'a--b', 'good-app'];
+  const body = buildFleetSummary({ settings, health, now: Date.parse('2026-10-03T03:00:00Z'),
+    state: { kit: { current: 'abcdef012345' }, machine: {}, quotas: [], alerts: [{ key: 'x', severity: 'info', projectSlug: '2fa-app' }],
+      projects: [...slugs.map((slug) => ({ slug, tasks: [] })), { slug: 'phase-app', phase: '2 build', tasks: [] }, { slug: 'age-app', statusAgeSeconds: 1.5, tasks: [] }] },
+    ownerItems: slugs.map((id) => ({ id, action: 'decide' })),
+    reviewPacks: [...slugs, `${'a'.repeat(63)}-`].map((id) => ({ id, waitingItems: 1 })) });
+  assert.deepEqual(validateFile(body, schemaFile), []);
+  assert.deepEqual(body.projects.map((project) => project.slug), ['good-app', 'phase-app', 'age-app']);
+  assert.equal(body.projects[1].phase, 'unknown');
+  assert.equal(body.projects[2].statusAgeSeconds, 1);
+  assert.deepEqual(body.ownerItems.rows.map((row) => row.id), ['good-app']);
+  assert.deepEqual(body.reviewPacks.map((pack) => pack.id), ['good-app']);
+});
+
+async function withFleetFile(name, text, body) {
+  const file = path.join(root, name);
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  fs.writeFileSync(file, text);
+  try { await body(); } finally { if (before === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, before); }
+}
+
+test('a corrupt factory identity does not stop the dashboard', async (t) => {
+  await withFleetFile('factory-identity.json', '{"factoryId":"Bad"}', async () => {
+    const { port } = await start(t);
+    const settings = await request(port, '/api/fleet/settings');
+    assert.equal(settings.status, 200);
+    assert.equal(typeof settings.body.error, 'string');
+    assert.equal(settings.body.factoryId, null);
+    assert.equal(settings.body.headOffice, false);
+    assert.equal((await request(port, '/api/fleet')).body.registryError, 'fleet-settings-invalid');
+  });
+});
+
+test('an invalid fleet setting gives the defaults and an error field', async (t) => {
+  for (const [name, text] of [['fleet-settings.json', '{"name":"factory-zero","dashboardUrl":"http://Factory.local","headOffice":false,"shareItemTitles":true}'], ['fleet-settings.json', '{broken']]) {
+    await withFleetFile(name, text, async () => {
+      const { port } = await start(t);
+      const settings = await request(port, '/api/fleet/settings');
+      assert.equal(settings.status, 200, JSON.stringify(settings.body));
+      assert.equal(typeof settings.body.error, 'string');
+      assert.equal(typeof settings.body.name, 'string');
+      assert.equal(typeof settings.body.dashboardUrl, 'string');
+      assert.deepEqual(settings.body.accounts, []);
+    });
+  }
+});
+
+test('the Fleet route starts no more than one poll in 30 seconds when no factory row exists', async (t) => {
+  let now = Date.parse('2026-10-03T03:00:00Z'), calls = 0;
+  await withFleetFile('fleet-settings.json', '{"name":"factory-zero","dashboardUrl":"http://Factory.local","headOffice":false,"shareItemTitles":true}', async () => {
+    const cfg = { ...loadConfig(), host: '127.0.0.1', port: 0, tickSeconds: 3600, allowedHosts: ['*.localhost'] };
+    const engine = new EventEmitter();
+    engine.state = { updatedAt: new Date(now).toISOString(), herdr: { panes: [] }, errors: [], kit: { current: 'abcdef012345' }, machine: {}, projects: [], quotas: [] };
+    engine.tick = async () => engine.state; engine.log = () => {};
+    const app = serve(cfg, { liveDataDir: root, createEngine: () => engine, fleet: { now: () => now }, health: async () => { calls += 1; return { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true, clockOffsetSeconds: null }; } });
+    t.after(() => app.close());
+    if (!app.server.listening) await once(app.server, 'listening');
+    const port = app.server.address().port;
+    await request(port, '/api/fleet');
+    const first = calls;
+    await request(port, '/api/fleet'); await request(port, '/api/fleet');
+    assert.equal(calls, first);
+    now += 31000;
+    await request(port, '/api/fleet');
+    assert.equal(calls, first + 1);
+  });
+});

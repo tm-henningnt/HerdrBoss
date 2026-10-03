@@ -39,3 +39,17 @@ test('invalid initialization does not create an identity and a factory ID cannot
   assert.notEqual(initialize({ ...good, factoryId: 'factory-b' }).status, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(isolated, 'factory-identity.json'))).factoryId, 'factory-a');
 });
+
+test('read-token set removes the matching export file inside the private folder and keeps other files', () => {
+  const token = 'hf_read_' + 'c'.repeat(64);
+  fs.mkdirSync(privateDir, { recursive: true });
+  const inside = path.join(privateDir, 'test-export-remove.json');
+  fs.writeFileSync(inside, JSON.stringify(token), { mode: 0o600 });
+  assert.equal(run(['read-token', 'set', 'factory-c', '--from-file', inside]).status, 0);
+  assert.equal(fs.existsSync(inside), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(privateDir, 'fleet-remotes.json')))['factory-c'], token);
+  const outside = path.join(root, 'outside-export.json');
+  fs.writeFileSync(outside, JSON.stringify(token));
+  assert.equal(run(['read-token', 'set', 'factory-c', '--from-file', outside]).status, 0);
+  assert.equal(fs.existsSync(outside), true);
+});

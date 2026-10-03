@@ -271,6 +271,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const fleetPoller = createFleetPoller({ dir: DATA_DIR, localSummary: localFleetSummary,
     enabled: () => !readOnlyPreview && fleetSettings.read().headOffice,
     credentials: () => readFleetFile(path.join(fleet.privateDir || PRIVATE_ACCESS_DIR, 'fleet-remotes.json'), {}), ...fleet });
+  const fleetClock = fleet.now || Date.now;
+  const FLEET_ROUTE_POLL_MS = 30000;
+  let lastRoutePoll = 0;
   let closed = false;
   let timer;
   let tickPromise;
@@ -438,14 +441,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       const rawToken = /^\/api\/reviews\/([^/]+)\/([^/]+)\/raw-token$/.exec(p);
       if (rawToken) return reviewRaw.issue(req, res, ...rawToken.slice(1, 3).map((part) => { try { return decodeURIComponent(part); } catch { return ''; } }), url);
       if (p === '/api/reviews' || p.startsWith('/api/reviews/')) return await reviewApi.handle(req, res, url);
-      if (p === '/api/fleet/settings' && req.method === 'GET') return send(res, 200, fleetSettings.read());
+      if (p === '/api/fleet/settings' && req.method === 'GET') return send(res, 200, fleetSettings.view());
       if (p === '/api/fleet/settings' && req.method === 'PUT') {
-        try { fleetSettings.write(await jsonBody(req)); return send(res, 200, fleetSettings.read()); }
+        try { fleetSettings.write(await jsonBody(req)); return send(res, 200, fleetSettings.view()); }
         catch { return send(res, 400, { error: 'The fleet settings are invalid.' }); }
       }
       if (p === '/api/fleet/summary' && req.method === 'GET') return send(res, 200, await localFleetSummary());
       if (p === '/api/fleet' && req.method === 'GET') {
-        if (!fleetPoller.view().factories.length) await fleetPoller.poll();
+        // An empty view starts a poll at most once in 30 seconds.
+        if (!fleetPoller.view().factories.length && (fleetClock() - lastRoutePoll >= FLEET_ROUTE_POLL_MS || lastRoutePoll === 0)) { lastRoutePoll = fleetClock(); await fleetPoller.poll(); }
         return send(res, 200, fleetPoller.view());
       }
       if (p === '/api/health' && req.method === 'GET') {

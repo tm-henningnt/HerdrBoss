@@ -127,3 +127,35 @@ test('renaming factory zero keeps one local row', async () => {
   assert.equal(poller.view().factories[0].name, 'renamed-zero');
   await poller.stop();
 });
+
+test('a local summary failure stays visible when head office is on and keeps the local identity reserved', async () => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'local-fail-fleet.json');
+  registry(registryFile, [factory('factory-b', 'http://192.0.2.1')]);
+  let fail = false;
+  const poller = createFleetPoller({ dir: path.join(root, 'local-fail-cache'), registryFile, enabled: () => true,
+    localSummary: async () => { if (fail) throw new Error('down'); return { ...fixture, factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'http://localhost:4477' }; },
+    credentials: () => ({ 'factory-b': 'hf_read_' + 'b'.repeat(64) }),
+    fetchImpl: async () => new Response(JSON.stringify({ ...fixture, factoryId: 'factory-zero', name: 'factory-b', dashboardUrl: 'http://192.0.2.1' }), { headers: { 'content-type': 'application/json' } }), now: () => Date.parse(fixture.generatedAt) });
+  fail = true;
+  await poller.poll();
+  assert.equal(poller.view().registryError, 'local-summary-unavailable');
+  assert.equal(poller.view().factories.length, 1);
+  fail = false; await poller.poll();
+  assert.equal(poller.view().registryError, null);
+  fail = true; await poller.poll();
+  assert.equal(poller.view().registryError, 'local-summary-unavailable');
+  const remote = poller.view().factories.find((row) => row.name === 'factory-b');
+  assert.equal(remote.error, 'duplicate-factory-id');
+  await poller.stop();
+});
+
+test('a throwing enabled check reports a settings error code and not a cache write failure', async () => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'enabled-fleet.json'); registry(registryFile, []);
+  const poller = createFleetPoller({ dir: path.join(root, 'enabled-cache'), registryFile, enabled: () => { throw new Error('bad settings'); },
+    localSummary: async () => ({ ...fixture, factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'http://localhost:4477' }), now: () => Date.parse(fixture.generatedAt) });
+  await poller.poll();
+  assert.equal(poller.view().registryError, 'fleet-settings-invalid');
+  await poller.stop();
+});

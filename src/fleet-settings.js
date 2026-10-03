@@ -22,16 +22,28 @@ export function validateFleetSettings(body) {
 export function createFleetSettings({ dir, cfg = {} }) {
   const file = path.join(dir, 'fleet-settings.json');
   const identityFile = path.join(dir, 'factory-identity.json');
-  let identity = readFleetFile(identityFile, null);
-  if (!identity) {
-    identity = { factoryId: `factory-${randomUUID()}` };
-    writeFleetFile(identityFile, identity);
-  }
-  if (typeof identity.factoryId !== 'string' || !SLUG.test(identity.factoryId)) throw new Error('The factory identity is invalid.');
-  const defaults = { name: cfg.fleet?.name || 'factory-zero', dashboardUrl: cfg.fleet?.dashboardUrl || `http://localhost:${cfg.port || 4477}`, headOffice: cfg.fleet?.headOffice === true, shareItemTitles: cfg.fleet?.profile !== 'client' };
   const accountsFile = path.join(dir, 'fleet-accounts.json');
-  return { accountsFile,
-    read: () => ({ factoryId: identity.factoryId, ...validateFleetSettings({ ...defaults, ...readFleetFile(file, {}) }), accounts: validateAccounts(readFleetFile(accountsFile, [])) }),
-    write: (body) => { const { accounts, ...settings } = body || {}; const valid = validateFleetSettings(settings); if (accounts !== undefined) validateAccounts(accounts); writeFleetFile(file, valid); if (accounts !== undefined) writeFleetFile(accountsFile, accounts); },
+  const defaults = { name: cfg.fleet?.name || 'factory-zero', dashboardUrl: cfg.fleet?.dashboardUrl || `http://localhost:${cfg.port || 4477}`, headOffice: cfg.fleet?.headOffice === true, shareItemTitles: cfg.fleet?.profile !== 'client' };
+  // A bad identity file never throws here. The first read reports it.
+  let identity = null, identityError = null;
+  try {
+    identity = readFleetFile(identityFile, null);
+    if (!identity) {
+      identity = { factoryId: `factory-${randomUUID()}` };
+      writeFleetFile(identityFile, identity);
+    }
+    if (typeof identity.factoryId !== 'string' || !SLUG.test(identity.factoryId)) throw new Error('The factory identity is invalid.');
+  } catch (error) { identityError = error; identity = null; }
+  const read = () => {
+    if (identityError) throw identityError;
+    return { factoryId: identity.factoryId, ...validateFleetSettings({ ...defaults, ...readFleetFile(file, {}) }), accounts: validateAccounts(readFleetFile(accountsFile, [])) };
+  };
+  return { accountsFile, read,
+    // Return the settings, or the defaults with an error text when a file or a setting is invalid.
+    view: () => {
+      try { return read(); }
+      catch (error) { return { factoryId: identity?.factoryId ?? null, ...defaults, accounts: [], error: error.message }; }
+    },
+    write: (body) => { if (identityError) throw identityError; const { accounts, ...settings } = body || {}; const valid = validateFleetSettings(settings); if (accounts !== undefined) validateAccounts(accounts); writeFleetFile(file, valid); if (accounts !== undefined) writeFleetFile(accountsFile, accounts); },
   };
 }

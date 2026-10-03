@@ -2413,6 +2413,8 @@ The dashboard uses these routes. A request from another host needs the access to
 Factory zero can hold the head office role.
 Open **Fleet** to see the available factory summaries.
 Turn on **Poll registered factories** in **Fleet settings**.
+If a fleet file or a fleet setting is invalid, the dashboard still starts. **Fleet settings** shows the default values and an error text. Correct the value and save it.
+The Fleet page starts a poll when it has no factory row. It starts at most one such poll in 30 seconds.
 The head office reads the registered factories every 30 seconds.
 A factory outage keeps the last good summary.
 The page shows the age and marks that factory offline.

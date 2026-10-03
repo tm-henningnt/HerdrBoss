@@ -2,16 +2,19 @@
 import { fleetQuotas } from './fleet-quotas.js';
 import { assertFleetSummary } from './fleet-contract.js';
 
-const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Same pattern and length as $defs/slug in common.v1.schema.json.
+const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const isSlug = (value) => typeof value === 'string' && value.length <= 64 && SLUG.test(value);
 const KIT = /^[a-f0-9]{12,64}$/;
 const number = (value, max = Infinity) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max ? value : null;
+const integer = (value, max) => number(value, max) === null ? null : Math.floor(value);
 const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const states = ['ready', 'doing', 'review', 'blocked', 'done', 'paused', 'transferred', 'unknown'];
-const slug = (value, fallback = 'unknown') => typeof value === 'string' && SLUG.test(value) ? value : fallback;
+const slug = (value, fallback = 'unknown') => isSlug(value) ? value : fallback;
 export function buildFleetSummary({ settings, state = {}, health, ownerItems = [], reviewPacks = [], spend = [], now = Date.now() }) {
   const machine = state.machine || {};
   const kitRevision = KIT.test(health.kitRevision) ? health.kitRevision : state.kit?.current;
-  const projects = (state.projects || []).filter((project) => typeof project.slug === 'string' && SLUG.test(project.slug)).map((project) => {
+  const projects = (state.projects || []).filter((project) => isSlug(project.slug)).map((project) => {
     const tasks = project.tasks || [];
     const taskState = (task) => task.state || task.status;
     const completion = (task) => task.source?.kind === 'commit' ? task.source.at : task.updated;
@@ -21,13 +24,13 @@ export function buildFleetSummary({ settings, state = {}, health, ownerItems = [
     const status = states.includes(publishedState) ? publishedState : taskStates.includes('blocked') ? 'blocked' : taskStates.includes('review') ? 'review' : taskStates.includes('doing') ? 'doing' : tasks.length && taskStates.every((state) => state === 'done') ? 'done' : tasks.length ? 'ready' : 'unknown';
     const phase = typeof project.phase === 'string' ? project.phase.toLowerCase().replace(/\s+/g, '-') : null;
     return { slug: project.slug, phase: slug(phase), status,
-      statusAgeSeconds: number(project.statusAgeSeconds) ?? (Number.isFinite(updated) ? Math.max(0, Math.floor((now - updated) / 1000)) : null),
+      statusAgeSeconds: integer(project.statusAgeSeconds, Number.MAX_SAFE_INTEGER) ?? (Number.isFinite(updated) ? Math.max(0, Math.floor((now - updated) / 1000)) : null),
       kitRevision: KIT.test(project.kitRevision) ? project.kitRevision : kitRevision,
       board: { doing: tasks.filter((task) => taskState(task) === 'doing').length, review: tasks.filter((task) => taskState(task) === 'review').length,
         blocked: tasks.filter((task) => taskState(task) === 'blocked').length,
         done7d: tasks.filter((task) => taskState(task) === 'done' && Date.parse(completion(task)) >= now - 7 * 86400000).length } };
   });
-  const rows = ownerItems.filter((item) => SLUG.test(item.id) && ['decide', 'approve', 'answer'].includes(item.action) && !item.closedAt).map((item) => ({
+  const rows = ownerItems.filter((item) => isSlug(item.id) && ['decide', 'approve', 'answer'].includes(item.action) && !item.closedAt).map((item) => ({
     id: item.id, kind: item.action,
     ...(settings.shareItemTitles && typeof item.title === 'string' && item.title.trim() ? { title: [...item.title.trim()].slice(0, 160).join('') } : {}),
   }));
@@ -50,7 +53,7 @@ export function buildFleetSummary({ settings, state = {}, health, ownerItems = [
     projects, quotas: fleetQuotas(state.quotas, settings.accounts, settings.factoryId), spend,
     alerts,
     shareItemTitles: settings.shareItemTitles, ownerItems: { total: count(ownerItems.length), needsOwner: rows.length, rows },
-    reviewPacks: reviewPacks.filter((pack) => SLUG.test(pack.id)).map((pack) => ({ id: pack.id, waitingItems: count(pack.waitingItems) })),
+    reviewPacks: reviewPacks.filter((pack) => isSlug(pack.id)).map((pack) => ({ id: pack.id, waitingItems: count(pack.waitingItems) })),
   });
 }
 export function fleetSpend(summary) {

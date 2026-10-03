@@ -1603,7 +1603,7 @@ The `--from-file -` option reads JSON from standard input.
 
 - `herdr-boss fleet account --from-file FILE`: Read `harness`, `identity`, `hmacKey`, and `scope`. Use at least 32 bytes for `hmacKey`. Use the same identity spelling and HMAC key on factories that share an account. `scope` is a list of factory IDs. The command stores only the HMAC digest and scope. It does not store the identity or HMAC key.
 - `herdr-boss fleet read-token rotate --out-file FILE`: Create a read credential. Save it as a JSON string in a new file inside the private Herdr Boss configuration folder. The file has mode 0600. The command prints no credential. The previous credential stays valid for 10 minutes.
-- `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel.
+- `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel. Delete the export file on the source factory after the transfer. When `FILE` is inside the private Herdr Boss configuration folder, the command deletes `FILE` after the import. The command never deletes a file outside that folder.
 
 The read credential permits only `GET /api/fleet/summary` and `GET /api/health`.
 It returns 403 for every other route or method.

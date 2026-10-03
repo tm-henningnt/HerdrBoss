@@ -64,7 +64,11 @@ export async function fleetCommand(args, { dir = DATA_DIR, privateDir = PRIVATE_
     const records = readFleetFile(file, {});
     records[factoryId] = token;
     writeFleetFile(file, records);
-    stdout.write('Factory read credential saved.\n');
+    // Delete the export file after the import. Never delete a file outside the private folder.
+    const source = rest[3] === '-' ? null : path.resolve(rest[3]);
+    const inside = source && (() => { const relative = path.relative(resolveAlias(privateDir), resolveAlias(source)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); })();
+    if (inside) fs.rmSync(source, { force: true });
+    stdout.write(inside ? 'Factory read credential saved. The export file is deleted.\n' : 'Factory read credential saved.\n');
     return 0;
   }
   throw new Error(USAGE);

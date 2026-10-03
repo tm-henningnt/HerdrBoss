@@ -63,32 +63,37 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
     writeFleetFile(dailyFile, Object.fromEntries(days.map((key) => [key, daily[key]])));
   };
   const run = async () => {
-    let local;
+    let local, localFailed = false;
     try {
       local = await localSummary();
       acceptFleetSummary(local, local.dashboardUrl);
       for (const [name, row] of cache) if (!row.remote) cache.delete(name);
       cache.set(local.name, { name: local.name, factoryId: local.factoryId, dashboardUrl: local.dashboardUrl, summary: local, status: local.health.status, remote: false, error: null, drift: null });
-    } catch { registryError = 'local-summary-unavailable'; }
-    if (!enabled()) {
+      if (registryError === 'local-summary-unavailable') registryError = null;
+    } catch { registryError = 'local-summary-unavailable'; localFailed = true; }
+    // A failed local summary leaves the previous local row in the cache. Keep its identity as factory zero.
+    const self = local || [...cache.values()].find((row) => !row.remote);
+    let headOffice = false;
+    try { headOffice = enabled(); } catch { registryError = 'fleet-settings-invalid'; }
+    if (!headOffice) {
       for (const row of cache.values()) if (row.remote) { row.status = 'offline'; row.error = 'head-office-disabled'; }
       return;
     }
-    try { records = factoryRecords(registryFile); registryError = null; }
+    try { records = factoryRecords(registryFile); registryError = localFailed ? 'local-summary-unavailable' : null; }
     catch { registryError = 'registry-invalid'; return; }
-    if (local && records.some((record) => record.name === local.name && (record.factoryId !== local.factoryId || record.dashboardUrl !== new URL(local.dashboardUrl).origin))) {
+    if (self && records.some((record) => record.name === self.name && (record.factoryId !== self.factoryId || record.dashboardUrl !== new URL(self.dashboardUrl).origin))) {
       registryError = 'duplicate-factory-name'; return;
     }
     const kept = new Set(records.map((record) => record.name));
     for (const [name, row] of cache) if (row.remote && !kept.has(name)) cache.delete(name);
-    const identities = new Map(local ? [[local.factoryId, local.name]] : []);
+    const identities = new Map(self ? [[self.factoryId, self.name]] : []);
     // Keep each accepted remote identity reserved through an outage.
     for (const [name, row] of cache) if (row.remote && row.summary) identities.set(row.summary.factoryId, name);
     let tokens = {};
     try { tokens = credentials(); } catch { /* Missing private credentials give a public failure code. */ }
     for (const record of records) {
       if (stopped) break;
-      if (record.factoryId === local?.factoryId && new URL(record.dashboardUrl).origin === new URL(local.dashboardUrl).origin) continue;
+      if (self && record.factoryId === self.factoryId && new URL(record.dashboardUrl).origin === new URL(self.dashboardUrl).origin) continue;
       const old = cache.get(record.name);
       const previous = old?.remote && old.dashboardUrl === record.dashboardUrl ? old : null;
       const base = { ...record, ...(previous || {}), remote: true };
