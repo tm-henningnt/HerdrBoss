@@ -61,7 +61,7 @@ test('the Now model is empty for a project without a workspace or tasks', () => 
 });
 
 test('the guidance summary names the Use now lanes, the lanes over pace, and the rule counts', () => {
-  const { guidanceSummary } = load(['watchLabelText', 'useNowList', 'guidanceSummary'], { PROVIDERS: { claude: 'Claude', codex: 'Codex' } });
+  const { guidanceSummary } = load(['watchLabelText', 'validPlan', 'useNowList', 'guidanceSummary'], { PROVIDERS: { claude: 'Claude', codex: 'Codex' } });
   const lanes = { claude: { state: 'pace' }, codex: { state: 'open', roomPercent: 12 }, unmetered: { state: 'open', unmetered: true } };
   assert.equal(guidanceSummary({ lanes, alerts: [{ severity: 'warn' }, { severity: 'info' }], advice: [], night: { active: false } }), 'Use now: free models, codex · Claude ahead of pace · 1 warning');
   assert.equal(guidanceSummary({ lanes: {}, alerts: [], advice: ['x'], night: { active: true } }), 'Watch on · Use now: no metered lane · 1 advice');
@@ -69,7 +69,7 @@ test('the guidance summary names the Use now lanes, the lanes over pace, and the
 });
 
 test('the Use now list follows the bulletin order: free models, below pace by room, ignored, trickle, open', () => {
-  const { useNowList } = load(['useNowList']);
+  const { useNowList } = load(['validPlan', 'useNowList']);
   const lanes = {
     claude: { state: 'open' },
     codex: { state: 'open', roomPercent: 5 },
