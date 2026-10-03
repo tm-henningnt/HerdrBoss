@@ -72,3 +72,4 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 - `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
 - Close only browser sessions that the worker owns.
 - Close Chrome with `herdr-boss browser close <slug>` or CDP `Browser.close`. Never send a signal to Chrome yourself.
+- When a worker changed a file outside its scope and the orchestrator approved that file by message, run `herdr-boss worker collect <name> --accept-scope FILE[,FILE] --reason TEXT`. Use it only for files that you reviewed. The command passes only the listed outside files, refuses every other outside file, and records the files and the reason as a Scope exception in the run record and the printed report.

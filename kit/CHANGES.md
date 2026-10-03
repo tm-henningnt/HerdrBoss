@@ -197,3 +197,7 @@ Summary: Shorten the review pack rules in the orchestrator skill to stay within 
 ## 96799c500e9a
 Impact: useful
 Summary: Replace "There is no load threshold" with the lock lane guard rule: a queued short-lane job waits while the 5-minute load is above 231 percent of the cores, set in Settings, Locks (`locks.guard`).
+
+## fa883d81b25f
+Impact: useful
+Summary: Add `worker collect --accept-scope FILE[,FILE] --reason TEXT`, which passes only the listed files outside the allowed scope and records the files and the reason as a Scope exception.
