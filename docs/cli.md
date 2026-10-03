@@ -270,7 +270,7 @@ herdr-boss project paths [--json]
 | Flag | Meaning |
 |---|---|
 | `--group DIR` | The group folder. The project folder is `DIR/<slug>`. |
-| `--path DIR` | The project folder. Give `--group` or `--path`. There is no default folder. |
+| `--path DIR` | The project folder. Give `--group` or `--path`. A normal install has no default folder. In a factory, the default group is `/home/factory/work`. The command creates it. |
 | `--remote` | `none` (default), `gh`, or a Git URL. `gh` creates a GitHub repository after an Owner decision. A URL is https, ssh, or git, or `user@host:path`. A URL must not hold a user name or a password. A GitHub remote adds the CI workflow templates. |
 | `--visibility` | `private` (default) or `public`. `public` needs a remote that is not `none`. With `--remote gh`, `public` only offers the choice `Create public` to the Owner. |
 | `--org NAME` | The organization for `--remote gh`. Without it, the repository belongs to the `gh` login. |
@@ -364,7 +364,7 @@ The module `src/project-new.js` exports `runProjectNew(options)`. The command ca
 |---|---|
 | `slug` | Required. Must match `[a-z0-9][a-z0-9-]{0,63}`. |
 | `group` | The group folder. The project folder is `<group>/<name>`. |
-| `path` | The project folder. Use `group` or `path`, never both. There is no default. |
+| `path` | The project folder. Use `group` or `path`, never both. A normal install has no default. In a factory, the default group is `/home/factory/work`. |
 | `name` | The project name. The default is the slug. |
 | `goal` | One line for the README. |
 | `remote` | `none` (default), `gh`, or a Git URL. `runProjectNew` refuses a URL that is not valid or that holds credentials, before any change. |
@@ -436,7 +436,7 @@ The `workspace` step runs only with `--start`. It spends model quota. Nothing el
 2. The step runs `herdr workspace create --cwd PATH --label <slug> --no-focus`. The label equals the slug, so Herdr Boss maps the workspace to the project. The step writes the workspace ID into the field `workspace` of the published status.
 3. The step runs `herdr pane rename PANE orch` for the root pane.
 4. The step runs `herdr agent start <slug>-orch --kind K --pane PANE -- ARGS`. The arguments come from `handoffTarget()`. A Codex orchestrator also gets the `-c shell_environment_policy.set.*` arguments of a handover.
-5. The step watches the pane for a folder trust prompt. See the paragraph after this list.
+5. In a factory, the step first marks the project folder as trusted for Claude and Codex in the home of the factory user. It uses the same helper as `factory login`. The agent then starts without a trust dialog. The step watches the pane for a folder trust prompt. See the paragraph after this list.
 6. The step delivers the Owner goal. The goal is the text of `--goal`, or else the Settings value **Default orchestrator goal**. By default, Claude and Codex get the goal as plain text in the first prompt. Turn on `goals.autoCommand` to send `/goal TEXT` to Claude instead. When this setting is on, the step reads the pane and fails when the goal does not show after three checks.
 7. The step sends the first prompt with `deliverPrompt()`. The prompt tells the orchestrator to read `AGENTS.md`, `docs/orchestration/memory.md`, and `docs/orchestration/herdr-boss.md`, and to start with the task `Set up the project`.
 
@@ -1725,7 +1725,7 @@ The `configure` wizard checks the container, volumes, Herdr server, and service.
 
 For Claude, the command sets `hasCompletedOnboarding` and each folder's `hasTrustDialogAccepted` in `~/.claude.json`. It adds the `dark` theme only when no theme is set. For Codex, it sets each folder's `trust_level` to `trusted` in `~/.codex/config.toml`. It also sets `notice.hide_full_access_warning` to `true`. The command merges these values into the existing files as the factory user. It keeps other keys and writes with mode `0600`. It does not read or change credential files. A state file that cannot be merged makes the command fail. Use TOML tables for the Codex project and notice settings; inline tables are not supported.
 
-Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. A live Boss without a startup dialog prints its state and exits 0. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
+Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. The command also sets the Git identity of the factory user: `user.name` is `Herdr Factory` and `user.email` is `factory@localhost.invalid`. It sets each value only when the value is missing. `factory login` sets the same values after it prepares the first-run state. The first commit of `project new` needs this identity. A live Boss without a startup dialog prints its state and exits 0. In that case the command sets no identity. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
 
 The command reads the Boss pane with `herdr pane read --source detection`. If that read fails, it reads the pane again without `--source`. If both reads fail, the command cannot check for a dialog. It then trusts the result of the prompt script: it fails only when the script reports no ready or unsent prompt.
 

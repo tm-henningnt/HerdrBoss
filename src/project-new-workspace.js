@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadPolicy } from './control.js';
+import { trustProjectFolder } from './factory-role.js';
 import { cleanGoal, goalDelivery, goalPromptText, goalShown } from './goal.js';
 import { handoffTarget, successorAgentArgs } from './handoff.js';
 import { loadModels } from './kit/config.js';
@@ -168,6 +169,8 @@ export function workspaceStep(inputs, context) {
   const hooks = { waitForPane: waitForWorkerPane, waitForReady: waitForAgentReady, readText: readAgentText, ...context.hooks };
   const { policy, target } = loadTarget(context, context.kind);
   const cwd = fs.realpathSync(inputs.path);
+  // A new folder is not trusted. In a factory no one answers the trust dialog, so the agent would stay not ready.
+  if (context.factory) trustProjectFolder([inputs.path, cwd], context.home ?? (context.env ?? process.env).HOME);
   const name = orchestratorName(inputs.slug);
   const ids = context.ids;
 

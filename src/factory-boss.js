@@ -4,6 +4,7 @@ import { maskLine } from './factory-host.js';
 import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
+import { FACTORY_GIT_IDENTITY } from './factory-role.js';
 import { verifyHarnessLogin } from './factory-wizard.js';
 import { waitForAgentReady } from './kit/workers.js';
 
@@ -321,6 +322,17 @@ async function prepareFactoryHarness(docker, name, harness, roots) {
   if (result.code !== 0) throw new Error('The harness first-run state could not be prepared. Check the factory configuration.');
 }
 
+// Set the Git identity of the factory user once. An identity that exists stays as it is.
+async function ensureFactoryGitIdentity(docker, name) {
+  for (const [key, value] of Object.entries(FACTORY_GIT_IDENTITY)) {
+    const prefix = ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', `hf-${name}`, 'git', 'config', '--global'];
+    const current = await docker.run([...prefix, '--get', key]);
+    if (current.code === 0 && current.stdout.trim()) continue;
+    const set = await docker.run([...prefix, key, value]);
+    if (set.code !== 0) throw new Error('The Git identity of the factory user could not be set. Check the factory configuration.');
+  }
+}
+
 async function installFactoryKits(docker, name, roots) {
   for (const cwd of roots) {
     const check = await docker.run(kitCommand(name, cwd, ['check', 'agents']));
@@ -449,7 +461,10 @@ export async function factoryLoginCommand(args, io) {
     const result = await docker.run(['exec', '-it', '--user', 'factory', record.containerName, ...command], { interactive: true, timeout: LOGIN_TIMEOUT_MS });
     const verified = await verifyHarnessLogin(docker, name, harness);
     const ok = result.code === 0 && verified;
-    if (ok) await prepareFactoryHarness(docker, name, harness, await readFactoryRoots(docker, name));
+    if (ok) {
+      await prepareFactoryHarness(docker, name, harness, await readFactoryRoots(docker, name));
+      await ensureFactoryGitIdentity(docker, name);
+    }
     io.stdout.write(`${ok ? 'ok' : 'failed'}\n`);
     return ok ? 0 : 1;
   } catch {
@@ -496,6 +511,7 @@ export async function factoryBossStart(args, io) {
   }
   const roots = await readFactoryRoots(docker, name);
   await prepareFactoryHarness(docker, name, harness, roots);
+  await ensureFactoryGitIdentity(docker, name);
   await installFactoryKits(docker, name, roots);
   const bossPane = await ensureBossPane(docker, name, existing);
   const result = await startBossPrompt(docker, name, harness, bossPane, { resumeExisting, diagnosticHost });

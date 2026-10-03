@@ -1,7 +1,7 @@
 // The command line of `herdr-boss project new` and `herdr-boss project check`.
 // Exit codes: 0 done, 1 usage or refusal (thrown), 2 not built, 3 waiting for an Owner decision, 4 project check found a missing item.
 import { verifyMessageCaller } from './messages.js';
-import { FIXABLE_STEPS, runProjectNew, runProjectStep } from './project-new.js';
+import { FIXABLE_STEPS, factoryRole, runProjectNew, runProjectStep } from './project-new.js';
 import { checkProject, formatCheck } from './project-new-check.js';
 
 export const PROJECT_NEW_USAGE = 'Usage: project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]';
@@ -18,7 +18,7 @@ const REMOTE_URL = /^(https?:\/\/|ssh:\/\/|git:\/\/|git@)[^\s]+$/;
 function usageError(message) { return new Error(`${message} ${PROJECT_NEW_USAGE}`); }
 
 // Turn the arguments after `project new` into the options of runProjectNew. Throws with the usage line on a bad flag.
-export function parseProjectNewArgs(args) {
+export function parseProjectNewArgs(args, { factory = false } = {}) {
   const flags = {};
   const positional = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -33,7 +33,7 @@ export function parseProjectNewArgs(args) {
   }
   if (positional.length !== 1) throw usageError('Give exactly one slug.');
   if ('--group' in flags && '--path' in flags) throw usageError('Give only one of --group and --path.');
-  if (!('--group' in flags) && !('--path' in flags)) throw usageError('Give --group DIR or --path DIR. There is no default folder.');
+  if (!factory && !('--group' in flags) && !('--path' in flags)) throw usageError('Give --group DIR or --path DIR. There is no default folder.');
   const remote = flags['--remote'] ?? 'none';
   if (remote !== 'gh' && remote !== 'none') {
     // Never echo the value: a URL can hold a credential.
@@ -132,7 +132,7 @@ export function projectCommand(args, { env = process.env, herdr, dataDir, log = 
   if (action !== 'new') throw new Error(PROJECT_USAGE);
   // The caller check runs first: a worker pane must not reach any other step.
   verifyProjectCaller(env, herdr);
-  const options = parseProjectNewArgs(rest);
+  const options = parseProjectNewArgs(rest, { factory: factoryRole({ env, factory: flowOptions.factory }) });
   // A decision belongs to the dashboard routes. The command line always asks in the Mailbox.
   const { decision: _decision, ...allowedFlow } = flowOptions; // eslint-disable-line no-unused-vars
   const result = runProjectNew({ ...options, dataDir, herdr, hooks, env, ...allowedFlow });

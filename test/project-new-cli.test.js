@@ -197,3 +197,12 @@ test('cli: the help lists project new and project check', () => {
     assert.match(result.stdout, /project check <slug>/);
   } finally { f.cleanup(); }
 });
+
+test('in a factory the parser needs neither --group nor --path, and a Mac install keeps the refusal', () => {
+  const parsed = parseProjectNewArgs(['demo', '--remote', 'none'], { factory: true });
+  assert.equal(parsed.slug, 'demo');
+  assert.equal(parsed.group, undefined);
+  assert.equal(parsed.path, undefined);
+  assert.throws(() => parseProjectNewArgs(['demo'], { factory: false }), /--group DIR or --path DIR/);
+  assert.throws(() => parseProjectNewArgs(['demo']), /--group DIR or --path DIR/);
+});
