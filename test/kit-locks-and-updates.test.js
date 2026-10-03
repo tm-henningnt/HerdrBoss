@@ -235,8 +235,8 @@ test('the orchestrator skill stays short and links each reference file', () => {
   const dir = path.resolve('kit/skills/herdr-orchestrator');
   const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
   const words = skill.split(/\s+/).filter(Boolean).length;
-  // The upper bound grew with the review pack section. The skill keeps its length limit.
-  assert.ok(words >= 2300 && words <= 3000, `SKILL.md has ${words} words`);
+  // The upper bound grew with the review pack section and the task title rule. The skill keeps its length limit.
+  assert.ok(words >= 2300 && words <= 3050, `SKILL.md has ${words} words`);
   assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
   assert.match(skill, /Use `--read-only` for a task that changes no repository file\./);
   const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md', 'git-and-worktrees.md'];
