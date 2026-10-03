@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { openMessageStore } from '../src/message-store.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const NOW = Date.now();
@@ -66,10 +67,17 @@ test('quota announce stores, lists, and removes resets; credit used records Owne
   assert.equal(run(env, ['quota', 'announce', '--list']).status, 0);
   const removed = run(env, ['quota', 'announce', '--remove', id]);
   assert.equal(removed.status, 0, removed.stderr);
-  run(env, ['quota', 'credit', 'used', 'credit-a']);
+  const messages = openMessageStore({ dir: env.data });
+  const prompt = messages.append({
+    thread: 'boss', from: 'boss', to: 'owner', kind: 'reply', text: 'Apply credit-a.', action: 'approve',
+    replyTo: null, status: 'new', quotaCreditProvider: 'codex', quotaCreditId: 'credit-a', quotaCreditExpiresAt: at(400),
+  }, { now: NOW });
+  const marked = run(env, ['quota', 'credit', 'used', 'credit-a']);
+  assert.equal(marked.status, 0, marked.stderr);
   const saved = JSON.parse(fs.readFileSync(path.join(env.data, 'quota-plan.json'), 'utf8'));
   assert.equal(saved.announcements.length, 0);
   assert.ok(saved.usedCredits.some((item) => item.id === 'credit-a'));
+  assert.ok(messages.all().find((item) => item.id === prompt.id).closedAt);
 });
 
 test('quota plan CLI refuses an unknown provider with a clear error', (t) => {

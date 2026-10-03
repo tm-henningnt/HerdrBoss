@@ -68,6 +68,10 @@ Use `herdr-boss quota announce codex --at TIME [--kind full|partial] [--refund N
 
 Use `herdr-boss quota credit used ID` after the Owner confirms that they applied a credit. Herdr Boss never applies a reset credit. A plan is guidance only. It does not change worker admission or dispatch.
 
+The service posts one `approve` Mailbox item for a credit when usage reaches the effective threshold and its planned time has arrived, or when the credit expires within 48 hours. The item states the measured usage, current time, exact expiry, and the fast and slow point difference between applying now and waiting for the planned time. Each open item blocks another item for the same credit. The `quota credit used` command closes the item. A usage drop greater than 30 points also closes the open credit item with the earliest expiry and marks that credit used.
+
+The service adds one `warn` notice when an available credit enters its 24-hour expiry period. The notice uses the normal delivery path and appears once for that credit and expiry. Herdr Boss never applies the credit. The Owner applies it in the Codex app.
+
 The service refreshes the plan after each good quota reading. It skips a write when the inputs have not changed. It reads the current Codex quota, the sanitized reset credit fields, and the last 14 days of `quota-history.jsonl`. It stores events, used credit IDs, and up to 50 plan records in `quota-plan.json` in the data directory. The service writes this file atomically.
 
 `GET /api/quota-plan/codex` returns the plan, burst table, credits, announcements, and observed resets. `POST /api/quota-plan/codex/announce` accepts an announced reset with the same time and refund rules. Only the Owner can use this route. `/api/state` includes a small `quotaPlanSummary` object for dashboard use.
@@ -890,15 +894,15 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Quota plan (Advanced)
 
-- Controls: The Codex reset credit plan and the usage curve that guides it.
-- Effect: Quota plan guidance only. It does not change worker starts or apply a credit.
+- Controls: The Codex reset credit plan, Owner prompts, expiry notices, and usage curve.
+- Effect: Quota plan guidance, Mailbox items, and expiry notices. It does not change worker starts or apply a credit.
 - Safe to change: Safe to change. Herdr Boss shows estimates and never applies a reset credit.
 - Restart: No restart. Select Save in Quota plan settings.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Burst pace | `quotaPlan.burstPace` | The points per hour that a burst may use before the plan schedules a reset credit. | 1 | Percentage points per hour | 0.1 to 10 | A higher pace reaches the apply threshold sooner when demand stays the same. | A lower pace reaches the apply threshold later. | Select Save in the group. The change takes effect at once. |
-| Credit apply threshold | `quotaPlan.applyThreshold` | The used percent at which the plan may schedule a reset credit. | 95 | Percent used | 50 to 100 | A higher threshold saves more quota before the planned reset. | A lower threshold schedules the reset sooner. | Select Save in the group. The change takes effect at once. |
+| Credit apply threshold | `quotaPlan.applyThreshold` | The used percent at which the plan may schedule a reset credit and ask the Owner to apply it. | 95 | Percent used | 50 to 100 | A higher threshold saves more quota before the planned reset. | A lower threshold schedules the reset sooner. | Select Save in the group. The change takes effect at once. |
 | Reserve margin | `quotaPlan.margin` | The percent points that the plan keeps below full quota use. | 0 | Percentage points | 0 to 50 | A higher margin lowers the effective credit apply threshold. | A lower margin permits a higher apply threshold. | Select Save in the group. The change takes effect at once. |
 | Planning horizon | `quotaPlan.horizon` | The time at which the plan stops. Use the last credit expiry or enter an ISO time. | last-expiry | End time | last-expiry or an ISO time | A later time includes more planned quota use. | An earlier time limits the plan to a shorter period. | Select Save in the group. The change takes effect at once. |
 | Plan guidance tolerance | `quotaPlan.tolerance` | The points below or above the planned curve that keep actual use in the normal state. | 5 | Percentage points | 0 to 50 | A higher tolerance keeps guidance normal across a wider gap. | A lower tolerance changes guidance after a smaller gap. | Select Save in the group. The change takes effect at once. |

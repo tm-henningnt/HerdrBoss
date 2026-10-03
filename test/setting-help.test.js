@@ -53,6 +53,8 @@ test('every service setting has an explanation', () => {
 test('quota plan settings share the Quota plan help group and documented defaults', () => {
   const group = SETTING_GROUPS.find((item) => item.id === 'quota-plan');
   assert.equal(group?.title, 'Quota plan');
+  assert.match(group?.affects || '', /Mailbox items.*expiry notices/);
+  assert.match(SETTING_HELP['quotaPlan.applyThreshold']?.what || '', /ask the Owner/);
   for (const [setting, value, range] of [
     ['quotaPlan.burstPace', '1', '0.1 to 10'],
     ['quotaPlan.applyThreshold', '95', '50 to 100'],
@@ -66,6 +68,9 @@ test('quota plan settings share the Quota plan help group and documented default
     assert.equal(SETTING_HELP[setting]?.range, range);
   }
   assert.match(app, /<h3>Quota plan<\/h3><p>Set the Codex burst pace/);
+  const help = app.slice(app.indexOf('const HELP ='));
+  assert.match(help, /Mailbox approval item when a credit is due or expires within 48 hours/);
+  assert.match(help, /warning in the 24 hours before an available credit expires/);
 });
 
 test('worker and browser maintenance settings have editable rows and help text', () => {

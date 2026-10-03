@@ -430,7 +430,10 @@ async function quotaCommand(args, cfg) {
   }
   if (action === 'credit' && args[1] === 'used' && args.length === 3) {
     await verifyQuotaMutationCaller();
-    service.markCreditUsed({ provider: 'codex', id: args[2], quotas, now: currentNow });
+    const { openMessageStore } = await import('./message-store.js');
+    const mailboxService = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan,
+      messageStore: openMessageStore({ dir: DATA_DIR }) });
+    mailboxService.markCreditUsed({ provider: 'codex', id: args[2], quotas, now: currentNow });
     console.log(`Marked Codex credit ${args[2]} used.`);
     return;
   }
