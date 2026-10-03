@@ -1076,6 +1076,28 @@ The Settings page has the same pools editor. See [Resource pools](#resource-pool
 
 `worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed, lent, or free count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
 
+## Factory hosts
+
+A factory host is a machine that runs factories. The host registry lists the hosts that `herdr-boss factory` can reach. Each entry has a name, an address, a user, and the path of an SSH key file. The registry is in `~/.herdr-factories/registry.json` and holds no key content.
+
+Add a host with `herdr-boss factory host add`. Give the fields as JSON on stdin so that the address stays out of the shell history. List the hosts with `herdr-boss factory host list`. The list shows the name and the user only.
+
+Run a command on a host with `herdr-boss factory ssh HOST -- COMMAND...`. Run Docker on a host with `herdr-boss factory docker HOST -- ARGS...`. Herdr Boss masks the address, the host name, every IP address, and the key file path in the output. See `docs/cli.md`, section Factory hosts.
+
+## Container factories
+
+Create a personal factory with `herdr-boss factory new NAME`. Use `--host HOST` for a remote host connection. Add its Docker context with `factory host add HOST --docker-context CONTEXT`. The tool stores this name in the private connection file. The fleet file refers to that connection by name only.
+
+Each factory has four labeled volumes, its own hostname, and loopback ports. The image holds tools and a public seed checkout. The volumes hold the service data, home, work, and code. The host tool does not mount the Mac home or the Docker socket.
+
+Use `factory start`, `factory stop`, `factory status`, and `factory list` to control and check the factories. A host timeout shows `host-unreachable`. A stopped container and an unhealthy container have different states. Unknown readings stay unknown.
+
+`factory new` checks the container, volumes, Herdr server, and service. Use `factory configure NAME --resume` to check them again. The flow stops when a check fails. A container safety failure disables Codex for that factory. The next steps need Owner logins. Exit code 3 means the wizard waits for those logins. The Boss gets one instruction file for a Mailbox item. Use an Owner terminal for a login. Keep all codes and tokens out of agent panes.
+
+The service health check uses container loopback. A request with the factory hostname still needs a login. Its response of 401 confirms that the host rule accepts that name.
+
+The private host connections stay outside the dashboard because they hold private connection fields. The host tool controls the container resources. This release has no dashboard controls for factory creation. See `docs/cli.md`, section Container factories.
+
 ## Orchestrator handover
 
 When an orchestrator's quota comes near its reserve, Herdr Boss recommends a successor. The Boss pane uses the same handover path by its `boss` label. Its quota notice goes to the Owner. The Boss workspace stays out of project shares and project notices.

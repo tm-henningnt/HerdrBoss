@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "minimumFactoryVersion": "0.1.0",
+  "hosts": [{ "hostId": "host-a", "runtime": "docker-engine-wsl2", "personalOnly": false, "codexSandbox": "user-namespaces", "transport": "ssh", "connectionRef": "host-a", "keyFile": "/example/id" }],
+  "factories": []
+}

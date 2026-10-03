@@ -1467,6 +1467,67 @@ Herdr Boss derives a Herdr-safe agent name from each handoff record ID. Use the 
 
 If a `needs-inspection` record still has a pane in the current Herdr pane list, repeat `handoff prepare` for the same source pane, target kind, and mode. It waits for readiness and starts the successor in that pane. It keeps the existing handoff record and pane. If the pane does not become ready, the record stays `needs-inspection` and the command reports the readiness error. If a successful current pane list proves that the pane is absent, the record expires and prepare can create a new successor.
 
+## Factory hosts
+
+Warning: the registry holds the address, the user, and the key file path of each host. Do not paste them into a chat, a report, or a commit.
+
+### Commands
+
+```
+herdr-boss factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]
+herdr-boss factory host add NAME --docker-context CONTEXT
+herdr-boss factory host list
+herdr-boss factory host remove NAME
+herdr-boss factory ssh HOST -- COMMAND...
+herdr-boss factory docker HOST -- ARGS...
+```
+
+`factory host add` stores the name, the address, the user, and the key file path in `registry.json`. The folder is `~/.herdr-factories`. Set `HERDR_FACTORIES_DIR` to use another folder. Herdr Boss creates the folder with mode 700 and the file with mode 600. The key file path is a path only. Herdr Boss never reads the key file. Only `ssh -i` reads it.
+
+To keep the address out of the shell history, give the fields as JSON with `--from-file FILE`, with `--from-file -`, or on stdin. The fields are `address`, `user`, and `keyFile`. A flag overrides the same field in the JSON. The name uses lower case letters, digits, and hyphens.
+
+`factory host list` prints the name and the user of each host. It never prints the address or the key file path. `factory host remove NAME` deletes the host.
+
+`--docker-context` stores a Docker context name in the private connection record. With this option alone, `host add` updates an existing record and keeps its SSH fields. A new context record needs no key path. `factory docker` uses `docker --context` when this field exists. It keeps the earlier SSH method when the field is absent. Output also masks the context name.
+
+## Container factories
+
+Run the host tool outside a container. The minimum factory version is `0.1.0`. The first release creates personal factories only. It refuses client factories on a personal-use runtime.
+
+```sh
+herdr-boss factory new NAME [--host HOST] [--profile personal] [--image TAG] [--dashboard-port PORT] [--ssh-port PORT]
+herdr-boss factory build NAME [--host HOST] [--image TAG]
+herdr-boss factory start NAME
+herdr-boss factory stop NAME [--now]
+herdr-boss factory status NAME [--json]
+herdr-boss factory list [--json]
+herdr-boss factory configure NAME [--resume] [--step STEP]
+```
+
+If `NAME` names a private host connection, `new` uses that host. Otherwise it uses local Docker. Use `--host` to select a host explicitly. The local host needs no connection record.
+
+`new` creates four named volumes, creates the container, starts it, and checks through the service step. Each created resource has the factory label and the worker label. The dashboard and SSH ports bind to loopback only. The first dashboard port is 4478. The first SSH port is 2222. The tool assigns different ports to factories on the same host. Each factory has the hostname `NAME.localhost`.
+
+The local factory has a 4 GB memory limit. A remote factory has an 8 GB limit. Both have four CPUs, a process limit of 512, 1 GB of shared memory, and bounded Docker logs. No host folder or Docker socket is mounted. No capability is added.
+
+The default image tag is `herdr-boss-factory:<pins hash>`. The tool reuses that image when it exists. Otherwise it builds the pinned image in a temporary folder. The seed checkout comes from `HEAD`. Uncommitted source changes do not enter the image. Each host has a dedicated builder and a labeled BuildKit container. The builder uses the remote driver with `docker-container://`. Its name stays in the private connection store. The tool does not change the current Docker context or the selected builder. It leaves the builder container intact.
+
+The private connection file is `registry.json`. The fleet file is `fleet.json`. Each factory has `factory.json` and `flow.json` in its own folder. The tool writes files with mode 600. The fleet file holds a connection reference, with no address, key path, or Docker context name. Do not put these runtime files in a repository.
+
+`status` shows the container state, health, service schema, kit revision, factory version, image build date, pins hash, active worker count, and disk use. An unavailable reading is `null`. A remote timeout reports `host-unreachable`. This state differs from a stopped or unhealthy container. Normal remote Docker calls have a 15-second limit. Builds have a longer limit. A service check retries only while it fails.
+
+`configure` checks `container`, `volumes`, `herdr`, and `service` in order. It checks finished steps again before it skips their work. `--resume` retains the flow record. `--step service` stops after the service check and exits 0. The container check rejects host mounts, added capabilities, a privileged container, and a missing Codex security profile. A failed safety check disables Codex in that factory policy.
+
+The service check measures `/api/health` through container loopback. It also checks the factory hostname. A hostname response of 401 means the host rule accepts the name and requires a login. The wizard keeps that login requirement.
+
+The harness, GitHub, and project steps are pending in this release. A normal `configure` exits 3 and writes one Owner instruction file. The Boss can post that file as one Mailbox item. Run login commands at an Owner terminal. Do not send a code or token to a pane or a Mailbox answer. `factory login` and login verification are not part of this slice.
+
+`factory ssh HOST -- COMMAND...` refuses a name that is not in the registry. It runs `ssh -i KEY -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new USER@ADDRESS COMMAND...`. It starts ssh with an argument list and no local shell. The remote shell reads the command words as ssh joins them. The command prints the stdout and the stderr of ssh and exits with the exit code of ssh. An ssh failure has the exit code 255. The command masks the address, the host name, every IP address, and the key file path in each output line and each error as `<host>` and `<key>`. The masking also covers the warning lines of ssh.
+
+`factory docker HOST -- ARGS...` uses the registered Docker context when one exists. Otherwise it runs Docker through SSH and quotes each argument for the remote shell. It has no terminal, so `docker run -it` and `docker exec -it` do not work.
+
+A Docker context over SSH stores the address in the Docker context store. To list names only, use `docker context ls --format '{{.Name}}'`. Do not print endpoints. `factory docker` is the supported agent route.
+
 ## Set the goal of an orchestrator
 
 ### Command

@@ -1,0 +1,393 @@
+import './helpers/test-env.js';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { factoryCommand } from '../src/factory-host.js';
+import { validateFile } from './factory/schema-check.js';
+
+const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', herdrReachable: true, tickAgeSeconds: 1, clockOffsetSeconds: null };
+const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'fa1' };
+const mounts = ['home', 'data', 'work', 'code'].map((kind) => ({ Type: 'volume', Name: `hf-demo-${kind}`, Destination: {
+  home: '/home/factory', data: '/home/factory/.herdr-boss', work: '/home/factory/work', code: '/home/factory/herdr-boss',
+}[kind] }));
+
+function fixture(name = 'demo') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-core-'));
+  const calls = [];
+  const output = [];
+  const volumes = new Map();
+  const factoryLabels = { ...labels, 'herdr-factory': name };
+  const factoryMounts = mounts.map((mount) => ({ ...mount, Name: mount.Name.replace('hf-demo-', `hf-${name}-`) }));
+  let container;
+  let imageAvailable = true;
+  let buildSnapshot;
+  const docker = { async run(args, options) {
+    calls.push({ args, options });
+    const json = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
+    const missing = (kind) => ({ code: 1, stdout: '', stderr: `Error: No such ${kind}` });
+    if (args[0] === 'image' && args[1] === 'inspect') return imageAvailable ? json([{ Config: { Labels: {
+      'org.opencontainers.image.created': '2026-10-03T00:00:00Z', 'org.herdr-boss.pins-sha256': 'a'.repeat(64),
+    } } }]) : missing('image');
+    if (args[0] === 'buildx' && args[1] === 'inspect') return args.includes('--format') ? { code: 125, stdout: '', stderr: 'unknown flag: --format' } : { code: 1, stdout: '', stderr: 'failed to find instance: no such file or directory' };
+    if (args[0] === 'buildx' && args[1] === 'build') {
+      const context = args.at(-1);
+      buildSnapshot = { checksums: fs.readFileSync(path.join(context, 'checksums.txt'), 'utf8'), seedGit: fs.existsSync(path.join(context, 'seed', '.git')), context };
+      imageAvailable = true;
+      return json({});
+    }
+    if (args[0] === 'volume' && args[1] === 'inspect') return volumes.has(args[2]) ? json([volumes.get(args[2])]) : missing('volume');
+    if (args[0] === 'volume' && args[1] === 'create') { const volumeName = args.at(-1); volumes.set(volumeName, { Name: volumeName, Labels: factoryLabels }); return json(volumeName); }
+    if (args[0] === 'container' && args[1] === 'inspect') return args[2].startsWith('herdr-factory-buildkit-') ? missing('container') : container ? json([container]) : missing('container');
+    if (args[0] === 'container' && args[1] === 'create') {
+      container = { Config: { Labels: factoryLabels }, HostConfig: { Privileged: false, CapAdd: null, SecurityOpt: ['seccomp=example-profile', 'systempaths=unconfined'] }, Mounts: factoryMounts, State: { Status: 'created', Running: false } };
+      return json('example-container-id');
+    }
+    if (args[0] === 'start') { container.State = { Status: 'running', Running: true, Health: { Status: 'healthy' } }; return json('hf-demo'); }
+    if (args[0] === 'stop') { container.State = { Status: 'exited', Running: false }; return json('hf-demo'); }
+    if (args[0] === 'exec' && args.includes('curl')) return args.includes('%{http_code}') ? { code: 0, stdout: '200', stderr: '' } : json(health);
+    if (args[0] === 'exec' && args.includes('herdr')) return json({ result: { panes: [] } });
+    if (args[0] === 'exec' && args.includes('node')) return json({ workers: 0 });
+    if (args[0] === 'exec' && args.includes('df')) return { code: 0, stdout: 'Filesystem 1024-blocks Used Available Capacity Mounted on\nvolume 10000 1000 9000 10% /home/factory\n', stderr: '' };
+    return json({});
+  } };
+  const io = { env: { HOME: root, HERDR_BOSS_DIR: path.join(root, 'data'), HERDR_FACTORIES_DIR: path.join(root, 'factories'), TMPDIR: root },
+    isContainer: () => false, transportFactory: () => docker,
+    stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => output.push(value) } };
+  return { root, calls, io, docker, volumes, output, get container() { return container; }, set imageAvailable(value) { imageAvailable = value; }, get buildSnapshot() { return buildSnapshot; }, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test('new starts a factory with four labeled volumes, loopback ports and bounded resources', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assert.equal(f.volumes.size, 4);
+    const create = f.calls.find(({ args }) => args[0] === 'container' && args[1] === 'create').args;
+    for (const value of ['herdr-factory=demo', 'herdr-factory-spike=fa1', '127.0.0.1:4478:4477', '127.0.0.1:2222:22', '4', '4g', '1g', '512', 'max-size=10m', 'max-file=3']) assert.ok(create.includes(value), value);
+    assert.equal(create.includes('--privileged'), false);
+    assert.equal(create.includes('--cap-add'), false);
+    assert.equal(create.join(' ').includes('/var/run/docker.sock'), false);
+    assert.equal(f.container.State.Running, true);
+    const fleetFile = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const fleet = JSON.parse(fs.readFileSync(fleetFile, 'utf8'));
+    assert.deepEqual(validateFile(fleet, new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url).pathname), []);
+    assert.equal(fleet.factories[0].name, 'demo');
+    assert.equal(fleet.factories[0].hostname, 'demo.localhost');
+    assert.equal(fs.statSync(fleetFile).mode & 0o777, 0o600);
+    assert.equal(JSON.stringify(fleet).includes('keyFile'), false);
+    const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+    assert.equal(flow.state, 'service-ready');
+    assert.ok(f.calls.some(({ args }) => args.includes('Host: demo.localhost')));
+  } finally { f.cleanup(); }
+});
+
+test('status, list, stop and start control only the labeled factory and report measured state', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['status', 'demo', '--json'], f.io), 0);
+    const status = JSON.parse(f.output.join(''));
+    assert.equal(status.state, 'running');
+    assert.equal(status.health, 'healthy');
+    assert.equal(status.schema, 1);
+    assert.equal(status.kitRevision, 'abcdef012345');
+    assert.equal(status.version, '0.1.0');
+    assert.equal(status.imageBuildDate, '2026-10-03T00:00:00Z');
+    assert.equal(status.pinsHash, 'a'.repeat(64));
+    assert.equal(status.workers, 0);
+    assert.deepEqual(status.disk, { totalKiB: 10000, usedKiB: 1000, availableKiB: 9000 });
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['list'], f.io), 0);
+    assert.match(f.output.join(''), /demo/);
+    assert.equal(await factoryCommand(['stop', 'demo'], f.io), 0);
+    assert.equal(f.container.State.Running, false);
+    assert.equal(await factoryCommand(['start', 'demo'], f.io), 0);
+    assert.equal(f.container.State.Running, true);
+    f.container.Config.Labels = {};
+    const before = f.calls.length;
+    await assert.rejects(factoryCommand(['stop', 'demo', '--now'], f.io), /label/);
+    assert.equal(f.calls.slice(before).some(({ args }) => args[0] === 'stop'), false);
+  } finally { f.cleanup(); }
+});
+
+test('new builds a missing image with pins and a dedicated builder without changing the checkout', async () => {
+  const f = fixture();
+  try {
+    f.imageAvailable = false;
+    assert.equal(await factoryCommand(['new', 'demo'], f.io), 0);
+    const create = f.calls.find(({ args }) => args[0] === 'buildx' && args[1] === 'create').args;
+    assert.ok(create.includes('herdr-factory-local'));
+    assert.ok(create.includes('remote'));
+    assert.ok(create.includes('docker-container://herdr-factory-buildkit-local'));
+    const builderContainer = f.calls.find(({ args }) => args[0] === 'run').args;
+    assert.ok(builderContainer.includes('herdr-factory-spike=fa1'));
+    assert.ok(builderContainer.includes('herdr-factory-builder=local'));
+    assert.equal(create.includes('--use'), false);
+    const build = f.calls.find(({ args }) => args[0] === 'buildx' && args[1] === 'build').args;
+    for (const value of ['--load', 'herdr-factory-local', 'herdr-factory-spike=fa1', 'herdr-factory=demo']) assert.ok(build.includes(value), value);
+    assert.ok(build.some((value) => value.startsWith('BASE_IMAGE=debian:trixie-slim@sha256:')));
+    assert.ok(build.some((value) => value === 'NODE_VERSION=26.10.0'));
+    assert.ok(f.buildSnapshot.seedGit);
+    assert.match(f.buildSnapshot.checksums, /herdr-linux-x86_64/);
+    assert.equal(fs.existsSync(f.buildSnapshot.context), false);
+    const connections = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'registry.json'), 'utf8'));
+    assert.equal(connections.hosts.local.builderName, 'herdr-factory-local');
+  } finally { f.cleanup(); }
+});
+
+test('a remote factory uses a private context through a public connection reference', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context'], f.io);
+    let selected;
+    f.io.transportFactory = (host) => { selected = host; return f.docker; };
+    await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    assert.equal(selected.dockerContext, 'example-context');
+    assert.equal(selected.transport, 'docker-context');
+    const fleet = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
+    assert.deepEqual(validateFile(fleet, new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url).pathname), []);
+    assert.equal(fleet.hosts[0].connectionRef, 'host-a');
+    assert.equal(JSON.stringify(fleet).includes('example-context'), false);
+    assert.equal(JSON.stringify(fleet).includes('address'), false);
+    assert.equal(f.output.join('').includes('example-context'), false);
+  } finally { f.cleanup(); }
+});
+
+test('configure records checked steps, resumes a failed service and waits once for Owner logins', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    const run = f.docker.run.bind(f.docker);
+    let failService = true;
+    f.docker.run = async (args, options) => {
+      if (args[0] === 'exec' && args.includes('curl') && failService) return { code: 22, stdout: '', stderr: 'service is not ready' };
+      return run(args, options);
+    };
+    assert.equal(await factoryCommand(['configure', 'demo'], f.io), 1);
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json');
+    let flow = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(flow.steps.find((step) => step.name === 'container').status, 'done');
+    assert.equal(flow.steps.find((step) => step.name === 'service').status, 'failed');
+    assert.equal(flow.codexEnabled, true);
+    failService = false;
+    assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);
+    flow = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(flow.steps.slice(0, 4).map((step) => step.name), ['container', 'volumes', 'herdr', 'service']);
+    assert.ok(flow.steps.slice(0, 4).every((step) => step.status === 'done'));
+    assert.equal(flow.steps[4].name, 'harness-claude');
+    assert.equal(flow.steps[4].status, 'waiting');
+    const instruction = fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'owner-instructions.md'), 'utf8');
+    assert.match(instruction, /Owner terminal/);
+    assert.doesNotMatch(instruction, /example-context|token=/);
+    assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);
+    assert.equal(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'owner-instructions.md'), 'utf8'), instruction);
+    f.container.HostConfig.Privileged = true;
+    assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 1);
+    flow = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(flow.codexEnabled, false);
+    assert.equal(flow.steps[0].status, 'failed');
+    assert.ok(f.calls.some(({ args }) => args.includes('node') && args.some((value) => value.includes('allowedKinds'))));
+  } finally { f.cleanup(); }
+});
+
+test('a remote timeout is host unreachable, separate from a stopped or unhealthy container', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context'], f.io);
+    await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    f.docker.run = async () => { const error = new Error('private endpoint example.invalid'); error.code = 'ETIMEDOUT'; throw error; };
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['status', 'demo', '--json'], f.io), 0);
+    const status = JSON.parse(f.output.join(''));
+    assert.equal(status.state, 'host-unreachable');
+    assert.equal(status.health, 'host-unreachable');
+    assert.equal(status.workers, null);
+    assert.equal(status.version, null);
+    assert.equal(f.output.join('').includes('example.invalid'), false);
+    assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 1);
+    const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+    assert.equal(flow.state, 'host-unreachable');
+    assert.equal(flow.steps[0].detail, 'The factory host is unreachable.');
+  } finally { f.cleanup(); }
+});
+
+test('a health timeout after container inspection still reports host unreachable', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    const run = f.docker.run.bind(f.docker);
+    f.docker.run = async (args, options) => {
+      if (args[0] === 'exec' && args.includes('curl')) { const error = new Error('private endpoint'); error.code = 'ETIMEDOUT'; throw error; }
+      return run(args, options);
+    };
+    f.output.length = 0;
+    await factoryCommand(['status', 'demo', '--json'], f.io);
+    assert.equal(JSON.parse(f.output.join('')).state, 'host-unreachable');
+  } finally { f.cleanup(); }
+});
+
+test('creation refuses client profiles, invalid ports, containers and foreign volumes before mutation', async () => {
+  for (const args of [['new', 'demo', '--profile', 'client'], ['new', 'demo', '--dashboard-port', '2222', '--ssh-port', '2222'], ['new', '../demo'], ['new', 'demo-']]) {
+    const f = fixture();
+    try { await assert.rejects(factoryCommand(args, f.io)); assert.equal(f.calls.length, 0); }
+    finally { f.cleanup(); }
+  }
+  const f = fixture();
+  try {
+    await assert.rejects(factoryCommand(['new', 'demo'], { ...f.io, isContainer: () => true }), /inside a container/);
+    f.volumes.set('hf-demo-home', { Name: 'hf-demo-home', Labels: { 'herdr-factory': 'another-factory' } });
+    await assert.rejects(factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), /label/);
+    assert.equal(f.calls.some(({ args }) => args[0] === 'start' || args[0] === 'volume' && args[1] === 'create'), false);
+  } finally { f.cleanup(); }
+});
+
+test('minimum versions use numeric comparison and a corrupt fleet file stays unchanged', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const fleet = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fleet.minimumFactoryVersion = '0.10.0';
+    fleet.factories[0].version = '0.9.0';
+    fs.writeFileSync(file, JSON.stringify(fleet));
+    const before = f.calls.length;
+    await assert.rejects(factoryCommand(['stop', 'demo'], f.io), /minimum version 0.10.0/);
+    assert.equal(f.calls.slice(before).some(({ args }) => args[0] === 'stop'), false);
+    fs.writeFileSync(file, '{broken');
+    await assert.rejects(factoryCommand(['list'], f.io), /cannot be read/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+  } finally { f.cleanup(); }
+});
+
+test('the wizard accepts Docker effective systempaths fields when the option is normalized away', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    f.container.HostConfig.SecurityOpt = ['seccomp=example-profile'];
+    f.container.HostConfig.MaskedPaths = [];
+    f.container.HostConfig.ReadonlyPaths = [];
+    assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 0);
+    f.container.HostConfig.MaskedPaths = ['/proc/kcore'];
+    assert.equal(await factoryCommand(['configure', 'demo', '--step', 'container'], f.io), 1);
+  } finally { f.cleanup(); }
+});
+
+test('resume reloads stored host settings when the live service still rejects the factory hostname', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io);
+    const run = f.docker.run.bind(f.docker);
+    let restarted = false;
+    f.docker.run = async (args, options) => {
+      if (args.includes('s6-svc')) return { code: 127, stdout: '', stderr: 'executable file not found' };
+      if (args.includes('/command/s6-svc')) restarted = true;
+      if (args.includes('Host: demo.localhost') && !restarted) return { code: 0, stdout: '403', stderr: '' };
+      return run(args, options);
+    };
+    assert.equal(await factoryCommand(['configure', 'demo', '--resume', '--step', 'service'], f.io), 0);
+    assert.equal(restarted, true);
+  } finally { f.cleanup(); }
+});
+
+test('the service check preserves hostname authentication and measures health over container loopback', async () => {
+  const f = fixture();
+  try {
+    const run = f.docker.run.bind(f.docker);
+    f.docker.run = async (args, options) => {
+      if (args.includes('node') && args.some((value) => value.includes('allowedHosts'))) return { code: 0, stdout: '{"changed":false}', stderr: '' };
+      if (args.includes('Host: demo.localhost')) return { code: args.includes('-fsS') ? 22 : 0, stdout: '401', stderr: '' };
+      return run(args, options);
+    };
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assert.equal(f.calls.some(({ args }) => args.includes('/command/s6-svc')), false);
+    const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+    assert.equal(flow.steps[3].health.status, 200);
+    assert.equal(flow.steps[3].hostname.status, 401);
+  } finally { f.cleanup(); }
+});
+
+test('the service configuration script writes valid JSON and preserves other settings', async () => {
+  const f = fixture();
+  try {
+    const config = path.join(f.root, 'config.json');
+    fs.writeFileSync(config, JSON.stringify({ chromePath: '/usr/bin/chromium', allowedHosts: [] }));
+    const run = f.docker.run.bind(f.docker);
+    f.docker.run = async (args, options) => {
+      if (args.includes('node') && args.some((value) => value.includes('allowedHosts'))) {
+        const script = args[args.indexOf('-e') + 1].replace('/home/factory/.herdr-boss/config.json', config);
+        return { code: 0, stdout: execFileSync(process.execPath, ['-e', script, 'demo.localhost'], { encoding: 'utf8' }), stderr: '' };
+      }
+      return run(args, options);
+    };
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(config, 'utf8')), { chromePath: '/usr/bin/chromium', allowedHosts: ['demo.localhost'] });
+  } finally { f.cleanup(); }
+});
+
+test('list retains the legacy fleet forms and rejects missing identifiers', async () => {
+  const f = fixture();
+  try {
+    const original = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/factory-registry.valid.local-and-ssh.json', import.meta.url), 'utf8'));
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(original));
+    assert.equal(await factoryCommand(['list', '--json'], f.io), 0);
+    assert.deepEqual(JSON.parse(f.output.join('')), original);
+    const invalid = structuredClone(original);
+    delete invalid.factories[0].factoryId;
+    fs.writeFileSync(file, JSON.stringify(invalid));
+    await assert.rejects(factoryCommand(['list'], f.io), /invalid/);
+    assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(invalid));
+  } finally { f.cleanup(); }
+});
+
+test('parallel creation on different hosts retains both factories in the fleet registry', async () => {
+  const first = fixture('alpha');
+  const second = fixture('bravo');
+  try {
+    second.io.env = first.io.env;
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-a'], first.io);
+    await factoryCommand(['host', 'add', 'host-b', '--docker-context', 'example-b'], first.io);
+    let signalStarted;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    let releaseStart;
+    const released = new Promise((resolve) => { releaseStart = resolve; });
+    const run = first.docker.run.bind(first.docker);
+    first.docker.run = async (args, options) => {
+      if (args[0] === 'start') { signalStarted(); await released; }
+      return run(args, options);
+    };
+    const alpha = factoryCommand(['new', 'alpha', '--host', 'host-a', '--image', 'example-factory:test'], first.io);
+    await started;
+    try { assert.equal(await factoryCommand(['new', 'bravo', '--host', 'host-b', '--image', 'example-factory:test'], second.io), 0); }
+    finally { releaseStart(); }
+    assert.equal(await alpha, 0);
+    const fleet = JSON.parse(fs.readFileSync(path.join(first.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
+    assert.deepEqual(fleet.factories.map((record) => record.name).sort(), ['alpha', 'bravo']);
+    assert.deepEqual(fleet.hosts.map((record) => record.hostId).sort(), ['host-a', 'host-b']);
+  } finally { first.cleanup(); second.cleanup(); }
+});
+
+test('the host identifier can differ from its private connection reference', async () => {
+  const f = fixture();
+  try {
+    await factoryCommand(['host', 'add', 'host-a', '--docker-context', 'example-context'], f.io);
+    await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const fleet = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fleet.hosts[0].hostId = 'fleet-host';
+    fleet.factories[0].hostId = 'fleet-host';
+    fs.writeFileSync(file, JSON.stringify(fleet));
+    const recordFile = path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'factory.json');
+    const local = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    local.hostId = 'fleet-host';
+    fs.writeFileSync(recordFile, JSON.stringify(local));
+    let selected;
+    f.io.transportFactory = (host) => { selected = host; return f.docker; };
+    assert.equal(await factoryCommand(['status', 'demo', '--json'], f.io), 0);
+    assert.equal(selected.dockerContext, 'example-context');
+  } finally { f.cleanup(); }
+});

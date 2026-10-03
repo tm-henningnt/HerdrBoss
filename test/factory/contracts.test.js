@@ -13,6 +13,17 @@ const contracts = [
 ];
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 
+test('factory registry keeps inline SSH records and accepts private connection references', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const file = `${schemaDir}/factory-registry.v1.schema.json`;
+  const oldForm = readJson(`${exampleDir}/factory-registry.valid.local-and-ssh.json`);
+  const referenceForm = readJson(`${exampleDir}/factory-registry.valid.connection-ref.json`);
+  assert.deepEqual(validateFile(oldForm, file), []);
+  assert.deepEqual(validateFile(referenceForm, file), []);
+  referenceForm.hosts[0].keyFile = '/example/id';
+  assert.ok(validateFile(referenceForm, file).length > 0);
+});
+
 test('every contract has valid and invalid examples', async t => {
   const { validateFile } = await import('./schema-check.js');
   const files = readdirSync(exampleDir).filter(file => file.endsWith('.json'));

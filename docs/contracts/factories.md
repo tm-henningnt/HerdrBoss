@@ -323,8 +323,15 @@ The file holds `minimumFactoryVersion`, `hosts`, and `factories`.
 A host record holds its ID, runtime, personal-use flag, and Codex sandbox setting.
 A `local` host has no remote address.
 An `ssh` host also holds its address and Docker context name.
+An `ssh` host can instead hold `connectionRef`.
+This field names a record in the private connection store.
+This add-only form keeps the address, key path, and context name outside the fleet file.
+The earlier forms stay valid.
 The address is a DNS name or a single-label tailnet name.
 Neither record holds an SSH key, key path, or credential.
+The private connection store is `registry.json` in the host tool folder.
+The fleet registry is `fleet.json` in that folder.
+Do not send the private connection store to a head office.
 A factory record binds its ID and name to a host and profile.
 It holds the dashboard base URL, software version, and kit revision.
 A container factory also has its container name, loopback ports, and image metadata.
@@ -347,6 +354,8 @@ Keep the worktree and project root settings local to each factory.
 
 **Example files:** `factory-registry.valid.local-and-ssh.json`,
 `factory-registry.valid.single-label-host.json`,
+`factory-registry.valid.connection-ref.json`,
+`factory-registry.invalid.connection-ref-key.json`,
 `factory-registry.invalid.port-range.json`,
 `factory-registry.invalid.credential-path.json`,
 `factory-registry.invalid.address-user-info.json`, and
