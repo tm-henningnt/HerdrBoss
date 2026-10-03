@@ -22,7 +22,8 @@ const includeDir = (env) => path.join(sshDir(env), 'herdr-boss.d');
 const conffile = (env, name) => path.join(includeDir(env), `${alias(name)}.conf`);
 const failure = (message) => Object.assign(new Error(message), { attach: true });
 // A failed step names itself and shows the masked output of its command.
-const stepFailure = (step, result, host) => {
+const stepFailure = (step, result, host, name) => {
+  if (/host identification has changed|host key verification failed/i.test(`${result.stderr || ''}${result.stdout || ''}`)) return failure(`The host key of ${alias(name)} changed. If you rebuilt the factory, remove the old line with: ssh-keygen -R ${alias(name)}`);
   const detail = maskLine(`${result.stderr || ''}${result.stdout || ''}`.trim(), { ...host, name: host.hostId }).slice(0, 400);
   return failure(`${step} step failed.${detail ? ` ${detail}` : ''}`);
 };
@@ -59,6 +60,7 @@ const configText = (name, record, host) => [
   '  User factory',
   `  IdentityFile ${quote(host.keyFile)}`,
   '  IdentitiesOnly yes',
+  `  HostKeyAlias ${alias(name)}`,
   `  ProxyJump ${alias(name)}-jump`,
   '  StrictHostKeyChecking accept-new',
   '',
@@ -111,9 +113,9 @@ const keyId = (line) => line.trim().split(/\s+/).slice(0, 2).join(' ');
 const parseList = (stdout) => { try { const value = JSON.parse(stdout); return Array.isArray(value) ? value : []; } catch { return []; } };
 const machineId = (entry) => entry?.id ?? entry?.profile_id ?? entry?.profileId;
 
-async function listMachines(run, env, host) {
+async function listMachines(run, env, host, name) {
   const result = await run('herdr', ['machine', 'list', '--json'], { env });
-  if (result.code !== 0) throw stepFailure('machine list', result, host);
+  if (result.code !== 0) throw stepFailure('machine list', result, host, name);
   return parseList(result.stdout);
 }
 
@@ -146,14 +148,14 @@ async function attach(name, io, run) {
   }
 
   const previous = readPrivate(factoryFile(io.env, name, ATTACH_FILE), null);
-  let machines = await listMachines(run, io.env, host);
+  let machines = await listMachines(run, io.env, host, name);
   // Reuse a machine by its recorded ID or by the same target. Never add a second one.
   let entry = machines.find((item) => previous?.machineId && machineId(item) === previous.machineId) || machines.find((item) => item?.target === alias(name));
   if (!entry) {
     if (machines.some((item) => item?.label === name)) throw failure(`A saved Herdr machine already uses the label ${name} for another target. Rename or remove it first.`);
     const added = await run('herdr', ['machine', 'add', '--label', name, alias(name)], { env: io.env, timeout: 60000 });
-    if (added.code !== 0) throw stepFailure('add', added, host);
-    machines = await listMachines(run, io.env, host);
+    if (added.code !== 0) throw stepFailure('add', added, host, name);
+    machines = await listMachines(run, io.env, host, name);
     entry = machines.find((item) => item?.target === alias(name));
   } else out.write('The Herdr machine exists. Attach reuses it.\n');
   const label = entry?.label || name;
@@ -161,10 +163,10 @@ async function attach(name, io, run) {
   save('pending');
 
   const status = await run('herdr', ['machine', 'status', label, '--json'], { env: io.env, timeout: 30000 });
-  if (status.code !== 0 || /"(?:status|state)"\s*:\s*"(?:fail|error|offline|unreach|auth)/i.test(status.stdout)) throw stepFailure('status', status, host);
+  if (status.code !== 0 || /"(?:status|state)"\s*:\s*"(?:fail|error|offline|unreach|auth)/i.test(status.stdout)) throw stepFailure('status', status, host, name);
   // The API path works inside a Herdr pane. `herdr --remote` does not, because a nested Herdr is off by default.
   const api = await run('herdr', ['--machine', label, 'workspace', 'list'], { env: io.env, timeout: 30000 });
-  if (api.code !== 0) throw stepFailure('api check', api, host);
+  if (api.code !== 0) throw stepFailure('api check', api, host, name);
   save('attached');
   if (io.env.HERDR_ENV) out.write('The optional remote attach check is skipped inside a Herdr pane.\n');
   else {
@@ -186,10 +188,10 @@ async function undo(name, io, run) {
   const { host } = managedFactory(io.env, name);
   const removed = [];
   if (record?.machineId) {
-    const machines = await listMachines(run, io.env, host);
+    const machines = await listMachines(run, io.env, host, name);
     if (machines.some((item) => machineId(item) === record.machineId)) {
       const result = await run('herdr', ['machine', 'remove', record.machineId], { env: io.env });
-      if (result.code !== 0) throw stepFailure('remove', result, host);
+      if (result.code !== 0) throw stepFailure('remove', result, host, name);
       removed.push('Herdr machine');
     }
   }

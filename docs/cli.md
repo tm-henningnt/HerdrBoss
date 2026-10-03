@@ -1602,14 +1602,14 @@ The command checks that the tailnet health route requires Owner access before it
 
 The command does these steps. Each step has a check.
 
-1. It writes the SSH include file `~/.ssh/herdr-boss.d/hf-NAME.conf` with mode 600. The file defines the alias `hf-NAME`. The alias jumps through the factory host on the tailnet to the loopback SSH port of the factory, as the user `factory`. The host details come from the private host record.
+1. It writes the SSH include file `~/.ssh/herdr-boss.d/hf-NAME.conf` with mode 600. The file defines the alias `hf-NAME`. The alias jumps through the factory host on the tailnet to the loopback SSH port of the factory, as the user `factory`. The block of the alias sets `HostKeyAlias hf-NAME`, so each factory has its own line in `known_hosts` although all factories use the loopback address and port 2222. The first contact uses `StrictHostKeyChecking accept-new`. The jump block keeps the real host key. Attach rewrites the include file at each run, so an old file gets the alias. Attach never edits `known_hosts`. The host details come from the private host record.
 2. It adds the line `Include ~/.ssh/herdr-boss.d/*.conf` at the top of `~/.ssh/config`. It prints the line first and saves the old file as `~/.ssh/config.herdr-boss.bak`. It adds the line once for all factories. It adds nothing when the line exists.
 3. It reads the public key of the key file in the host record. It adds that key to `/home/factory/.ssh/authorized_keys` in the container only when the key is missing.
 4. It reads `herdr machine list --json`. It reuses a machine that has the target `hf-NAME`. Otherwise it runs `herdr machine add --label NAME hf-NAME`. A saved machine with the label `NAME` and another target stops the command.
 5. It runs `herdr machine status NAME --json`. It then runs `herdr --machine NAME workspace list`. The second command is the required API check. It works inside a Herdr pane.
 6. Outside a Herdr pane, it also runs `TERM=xterm-256color herdr --remote hf-NAME` with an 8-second limit. This check is optional. A failure does not change the exit code. Inside a Herdr pane the check is skipped, because a nested Herdr is off by default.
 
-Exit code 0 means that all checks passed. Exit code 1 means that a step failed. The message names the step (`add`, `status`, or `api check`) and shows the masked output of the failing command. It holds no address, host name, key path, or key content. Run the command again after you fix the cause. It keeps one include file and one machine.
+Exit code 0 means that all checks passed. Exit code 1 means that a step failed. The message names the step (`add`, `status`, or `api check`) and shows the masked output of the failing command. It holds no address, host name, key path, or key content. When ssh reports a changed host key, the message says: `The host key of hf-NAME changed. If you rebuilt the factory, remove the old line with: ssh-keygen -R hf-NAME`. Run the command again after you fix the cause. It keeps one include file and one machine.
 
 The output has the alias, the sidebar label, and the detach command. Herdr shows the factory in the sidebar under the label `NAME`.
 

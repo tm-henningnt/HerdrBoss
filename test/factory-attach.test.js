@@ -16,7 +16,7 @@ function fixture(t, { authorized = '' } = {}) {
   const record = (name, port) => ({ factoryId: name, name, hostId: 'example-host', kind: 'container', containerName: `hf-${name}`, hostname: `${name}.localhost`, ports: { dashboard: port, ssh: port - 2256 }, profile: 'personal', dashboardUrl: `http://${name}.localhost:${port}`, version: '0.1.0', kitRevision: 'abcdef012345', image: { builtAt: '2026-10-03T00:00:00Z', pinsHash: 'a'.repeat(64) } });
   writeFleet(env, { schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId: 'example-host', transport: 'ssh', connectionRef: 'example-host', runtime: 'docker-engine-wsl2', personalOnly: true, codexSandbox: 'user-namespaces' }], factories: [record('win1', 4478), record('win2', 4479)] });
   for (const name of ['win1', 'win2']) writePrivate(factoryFile(env, name), { name, hostId: 'example-host', ports: { dashboard: 4478, ssh: 2222 } });
-  const state = { authorized, machines: [], failStatus: false, failRemote: false, failAdd: false, nextId: 1, remoteTimeout: false, failApi: false, nested: false };
+  const state = { authorized, machines: [], failStatus: false, failRemote: false, failAdd: false, nextId: 1, remoteTimeout: false, changedKey: false, failApi: false, nested: false };
   const calls = [], output = [];
   const docker = { async run(args, options) {
     calls.push({ type: 'docker', args, options });
@@ -34,6 +34,7 @@ function fixture(t, { authorized = '' } = {}) {
     if (group === '--remote' && state.nested) return { code: 1, stdout: '', stderr: 'nested herdr is disabled by default' };
     if (group === '--remote') return state.failRemote ? { code: 1, stdout: '', stderr: 'refused example.invalid refused' } : { code: 0, stdout: '', stderr: '', timedOut: state.remoteTimeout };
     if (action === 'list') return { code: 0, stdout: JSON.stringify(state.machines), stderr: '' };
+    if (state.changedKey && (action === 'add' || action === 'status' || group === '--machine')) return { code: 1, stdout: '', stderr: '@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nOffending key in /Users/x/.ssh/known_hosts:3\nHost key for [127.0.0.1]:2222 has changed (example.invalid)' };
     if (action === 'add') {
       if (state.failAdd) return { code: 1, stdout: '', stderr: 'refused example.invalid add failed' };
       state.machines.push({ id: `m${state.nextId++}`, label: args[args.indexOf('--label') + 1], target: args.at(-1), enabled: true });
@@ -216,4 +217,34 @@ test('attach records its state in the private factory folder for the Fleet page'
   assert.equal(attachState(f.env, 'win2'), 'not-attached');
   await factoryCommand(['attach', 'win1', '--undo'], f.io);
   assert.equal(attachState(f.env, 'win1'), 'not-attached');
+});
+
+test('the factory Host block has a unique HostKeyAlias, the jump block keeps the real host key', async (t) => {
+  const f = fixture(t);
+  await factoryCommand(['attach', 'win1'], f.io);
+  await factoryCommand(['attach', 'win2'], f.io);
+  const block = (name) => fs.readFileSync(path.join(f.ssh, 'herdr-boss.d', `hf-${name}.conf`), 'utf8').split(/\n\n/);
+  const [jump1, host1] = block('win1');
+  const [, host2] = block('win2');
+  assert.match(host1, /HostKeyAlias hf-win1/);
+  assert.match(host2, /HostKeyAlias hf-win2/);
+  assert.match(host1, /StrictHostKeyChecking accept-new/);
+  assert.doesNotMatch(jump1, /HostKeyAlias/);
+  assert.doesNotMatch(block('win1').join(''), /StrictHostKeyChecking no|UserKnownHostsFile/);
+});
+
+test('attach rewrites an include file of the old form on the next run', async (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.ssh, 'herdr-boss.d'), { recursive: true });
+  fs.writeFileSync(path.join(f.ssh, 'herdr-boss.d', 'hf-win1.conf'), 'Host hf-win1\n  HostName 127.0.0.1\n');
+  assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  assert.match(fs.readFileSync(path.join(f.ssh, 'herdr-boss.d', 'hf-win1.conf'), 'utf8'), /HostKeyAlias hf-win1/);
+});
+
+test('a changed host key gives a plain message with the alias and the ssh-keygen command, and no address', async (t) => {
+  const f = fixture(t);
+  f.state.changedKey = true;
+  assert.equal(await factoryCommand(['attach', 'win1'], f.io), 1);
+  assert.match(text(f), /The host key of hf-win1 changed\. If you rebuilt the factory, remove the old line with: ssh-keygen -R hf-win1/);
+  assert.doesNotMatch(text(f), /example\.invalid|127\.0\.0\.1|known_hosts|2222/);
 });
