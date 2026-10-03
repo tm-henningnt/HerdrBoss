@@ -1,6 +1,6 @@
 # Harness setup
 
-Herdr Boss orchestration needs settings in each agent harness on the machine. This page gives each setting, the reason for it, its file, who applies it, and its risk. The templates are in [`kit/templates/harness/`](../kit/templates/harness/).
+Herdr Boss orchestration needs settings in each agent harness on the machine. This page gives each setting, the reason for it, its file, who applies it, and its risk. The templates are in [`claude-automode.json`](../kit/templates/harness/claude-automode.json), [`codex-herdr.rules`](../kit/templates/harness/codex-herdr.rules), [`codex-sandbox.toml`](../kit/templates/harness/codex-sandbox.toml), [`opencode-worker-agent.json`](../kit/templates/harness/opencode-worker-agent.json), and [`pi-herdr-guard.ts`](../kit/templates/harness/pi-herdr-guard.ts).
 
 `herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds missing Codex writable roots and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
 
@@ -243,7 +243,7 @@ Herdr Boss counts denials and permission prompts in the harness logs. Each recor
 | OpenCode | `~/.local/share/opencode/log/*.log` | `permission:asked:<type>`: a `message=asking` line. `permission:unanswered:<type>`: an `asking` line with no `message=replied` line for its `id=` within 10 minutes. `permission:<type>`: a permission evaluation whose final matching rule denies the action for the `worker` agent. The model and agent come from the session log. |
 | Pi | `~/.pi/agent/sessions/<folder>/*.jsonl` | `guard:<class>`: a tool result blocked by the Herdr guard. The model comes from the latest model change or assistant message. The classes are `outside-worktree`, `protected-path`, `rm-rf`, `denied-command`, and `other`. |
 
-The project comes from the `cwd` of a Claude record and of a Codex session. OpenCode takes it from the `cwd=` field of another line with the same `run=` value. Pi takes it from the session folder name. The dashboard shows the counts on the Analytics page. See [the user guide](user-guide.md#denials-and-permission-prompts).
+The project comes from the `cwd` of a Claude record and of a Codex session. OpenCode takes it from the `cwd=` field of another line with the same `run=` value. Pi takes it from the session folder name. The dashboard shows the counts on the Analytics page. See [the Reference](reference/locks.md#denials-and-permission-prompts).
 
 ## Known limits
 

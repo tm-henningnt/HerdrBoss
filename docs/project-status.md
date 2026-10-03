@@ -156,7 +156,7 @@ Herdr Boss also computes the state of each task from facts. The facts are commit
 
 To make the computed state match the published state, publish the status again. The overlay never writes the status file. See [Board state from facts](board.md).
 
-The rules are in [Live task state](user-guide.md#live-task-state).
+The rules are in [Live task state](reference/dashboard.md#live-task-state).
 
 ## Remove a project
 
