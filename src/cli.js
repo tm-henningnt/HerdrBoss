@@ -538,6 +538,7 @@ async function main() {
     case 'lanes': {
       const { describeLane, describeMachine, describeUnmetered } = await import('./kit/workers.js');
       const { useNowLanes } = await import('./control.js');
+      const { codexPlanLine } = await import('./rules.js');
       const rules = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rules.json'), 'utf8'));
       let project = null;
       try {
@@ -551,6 +552,8 @@ async function main() {
       console.log(useNow.length
         ? `Use now: ${useNow.map(({ provider, reason }) => `${provider} (${reason})`).join(', ')}`
         : 'Use now: no metered lane; use unmetered models or wait.');
+      const planLine = codexPlanLine(lanes.codex?.planGuidance);
+      if (planLine) console.log(planLine);
       if (!Object.keys(lanes).length) throw new Error('No lane data yet. Wait for the next Herdr Boss tick.');
       for (const [provider, lane] of Object.entries(lanes)) {
         if (lane.unmetered) {

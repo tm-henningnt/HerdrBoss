@@ -66,6 +66,8 @@ test('quota plan settings share the Quota plan help group and documented default
     assert.equal(SETTING_HELP[setting]?.range, range);
   }
   assert.match(app, /<h3>Quota plan<\/h3><p>Set the Codex burst pace/);
+  assert.match(SETTING_HELP['quotaPlan.tolerance']?.what, /above the planned curve/);
+  assert.match(app, /the Codex lane compares current use with its planned curve/i);
 });
 
 test('worker and browser maintenance settings have editable rows and help text', () => {

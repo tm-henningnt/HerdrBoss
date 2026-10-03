@@ -810,10 +810,10 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('quota-plan', 'quotaPlan.tolerance', 'Plan guidance tolerance', {
-    what: 'The points below or above the planned curve that keep actual use in the normal state.',
+    what: 'The points above the planned curve that keep Codex out of hold guidance.',
     default: '5', unit: 'Percentage points', range: '0 to 50',
-    raise: 'A higher tolerance keeps guidance normal across a wider gap.',
-    lower: 'A lower tolerance changes guidance after a smaller gap.',
+    raise: 'A higher tolerance lets actual use stay above the curve before the lane says hold.',
+    lower: 'A lower tolerance makes the lane say hold after a smaller gap.',
     apply: 'service',
   }),
   S('quota-plan', 'quotaPlan.slowFactor', 'Slow scenario factor', {
