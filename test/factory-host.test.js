@@ -259,3 +259,49 @@ test('maskLine masks compressed IPv6 addresses', () => {
     assert.ok(!out.includes(ip), out);
   }
 });
+
+test('docker uses the registered Docker context without a shell and masks its private name', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    const file = path.join(f.dir, 'registry.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    registry.hosts.box.dockerContext = 'example-context';
+    fs.writeFileSync(file, JSON.stringify(registry));
+    const code = await factoryCommand(['docker', 'box', '--', 'ps', '--format', '{{.Names}} x'], f.io(fakeSpawn(f.calls, {
+      stdout: ['ok\n'], stderr: ['context example-context: host 192.0.2.1\n'], code: 7,
+    })));
+    assert.equal(code, 7);
+    assert.equal(f.calls[0].command, 'docker');
+    assert.deepEqual(f.calls[0].args, ['--context', 'example-context', 'ps', '--format', '{{.Names}} x']);
+    assert.equal(f.calls[0].options.shell, false);
+    assert.equal(f.calls[0].options.env.DOCKER_CONTEXT, 'example-context');
+    assert.equal(f.errText().includes('example-context'), false);
+    assert.equal(f.errText().includes(ADDRESS), false);
+  } finally { f.cleanup(); }
+});
+
+test('host add accepts a context name without reading a key or printing the context', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['host', 'add', 'box', '--docker-context', 'example-context'], f.io(fakeSpawn(f.calls))), 0);
+    const record = JSON.parse(fs.readFileSync(path.join(f.dir, 'registry.json'), 'utf8')).hosts.box;
+    assert.deepEqual(record, { transport: 'docker-context', dockerContext: 'example-context' });
+    assert.equal(f.text().includes('example-context'), false);
+    await assert.rejects(factoryCommand(['host', 'add', 'bad', '--docker-context', '-bad'], f.io(fakeSpawn(f.calls))), /context/i);
+    assert.equal(fs.statSync(path.join(f.dir, 'registry.json')).mode & 0o777, 0o600);
+  } finally { f.cleanup(); }
+});
+
+test('host add updates only the context of an existing SSH record', async () => {
+  const f = fixture();
+  try {
+    await addHost(f);
+    assert.equal(await factoryCommand(['host', 'add', 'box', '--docker-context', 'example-context'], f.io(fakeSpawn(f.calls))), 0);
+    const host = JSON.parse(fs.readFileSync(path.join(f.dir, 'registry.json'), 'utf8')).hosts.box;
+    assert.equal(host.address, ADDRESS);
+    assert.equal(host.keyFile, f.keyFile);
+    assert.equal(host.dockerContext, 'example-context');
+    await assert.rejects(factoryCommand(['host', 'list'], { ...f.io(fakeSpawn(f.calls)), isContainer: () => true }), /inside a container/);
+  } finally { f.cleanup(); }
+});

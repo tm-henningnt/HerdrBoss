@@ -10,6 +10,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 export const FACTORY_HOST_USAGE = [
   'Usage: factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]',
+  '       factory host add NAME --docker-context CONTEXT',
   '       factory host list',
   '       factory host remove NAME',
   '       factory ssh HOST -- COMMAND...',
@@ -19,7 +20,7 @@ export const FACTORY_HOST_USAGE = [
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const ADDRESS = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,31}$/;
-const HOST_FIELDS = ['address', 'user', 'keyFile'];
+const HOST_FIELDS = ['address', 'user', 'keyFile', 'dockerContext'];
 const SSH_FAILED = 255;
 const MASK_HOST = '<host>';
 const MASK_KEY = '<key>';
@@ -71,6 +72,7 @@ export function maskLine(line, host) {
     if (typeof value === 'string' && value) text = text.split(value).join(mask);
   };
   replace(host.keyFile, MASK_KEY);
+  replace(host.dockerContext, '<context>');
   if (host.keyFile) replace(path.basename(host.keyFile), MASK_KEY);
   if (host.address) text = text.replace(new RegExp(escapeRegExp(host.address), 'gi'), MASK_HOST);
   if (host.name) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.name)}(?![A-Za-z0-9_-])`, 'gi'), MASK_HOST);
@@ -112,7 +114,7 @@ function expandHome(file, env) {
 
 async function hostFields(flags, io) {
   const fromFile = flags['--from-file'];
-  const given = ['--address', '--user', '--key-file'].some((flag) => flag in flags);
+  const given = ['--address', '--user', '--key-file', '--docker-context'].some((flag) => flag in flags);
   let json = {};
   if (fromFile !== undefined || !given) {
     if (fromFile === undefined && io.stdin.isTTY) throw usageError('Give --address, --user, and --key-file, or JSON on stdin.');
@@ -127,28 +129,41 @@ async function hostFields(flags, io) {
     address: flags['--address'] ?? json.address,
     user: flags['--user'] ?? json.user,
     keyFile: flags['--key-file'] ?? json.keyFile,
+    dockerContext: flags['--docker-context'] ?? json.dockerContext,
   };
 }
 
 // Messages never repeat a value: an address or a key path can be secret.
 function validateHost(fields, env) {
-  const { address, user, keyFile } = fields;
+  const { address, user, keyFile, dockerContext } = fields;
+  if (dockerContext !== undefined) {
+    if (typeof dockerContext !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(dockerContext)) throw usageError('The Docker context name is invalid.');
+    if (address === undefined && user === undefined && keyFile === undefined) return { transport: 'docker-context', dockerContext };
+  }
   if (typeof address !== 'string' || !ADDRESS.test(address)) throw usageError('The address is missing or has characters that a host address cannot have.');
   if (typeof user !== 'string' || !USER.test(user)) throw usageError('The user is missing or has characters that a user name cannot have.');
   if (typeof keyFile !== 'string' || !keyFile) throw usageError('The key file path is missing.');
   const expanded = expandHome(keyFile, env);
   if (!path.isAbsolute(expanded) || expanded.includes('\0')) throw usageError('The key file path must be absolute.');
-  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh' };
+  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh', ...(dockerContext ? { dockerContext } : {}) };
 }
 
 async function hostCommand(args, io) {
   const [action, ...rest] = args;
   if (action === 'add') {
-    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file'], 'host name');
+    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file', '--docker-context'], 'host name');
     if (!NAME.test(name)) throw usageError('The host name must use lower case letters, digits, and hyphens, up to 31 characters.');
     const host = validateHost(await hostFields(flags, io), io.env);
     const registry = loadRegistry(io.env);
-    if (Object.hasOwn(registry.hosts, name)) throw new Error('The host is already in the registry. Remove it first.');
+    if (Object.hasOwn(registry.hosts, name)) {
+      if (Object.keys(flags).length === 1 && flags['--docker-context']) {
+        registry.hosts[name] = { ...registry.hosts[name], dockerContext: host.dockerContext };
+        saveRegistry(io.env, registry);
+        io.stdout.write(`Updated host ${name}.\n`);
+        return 0;
+      }
+      throw new Error('The host is already in the registry. Remove it first.');
+    }
     registry.version = 1;
     registry.hosts[name] = host;
     saveRegistry(io.env, registry);
@@ -158,7 +173,7 @@ async function hostCommand(args, io) {
   if (action === 'list') {
     if (rest.length) throw usageError('`factory host list` takes no argument.');
     const entries = Object.entries(loadRegistry(io.env).hosts);
-    io.stdout.write(entries.length ? `${entries.map(([name, host]) => `${name}  ${host.user}`).join('\n')}\n` : 'No hosts.\n');
+    io.stdout.write(entries.length ? `${entries.map(([name, host]) => `${name}  ${host.user || 'docker-context'}`).join('\n')}\n` : 'No hosts.\n');
     return 0;
   }
   if (action === 'remove') {
@@ -228,15 +243,31 @@ function splitCommand(args, name) {
 // `args` are the words after `factory`. `io` holds env, spawn, stdin, stdout, and stderr, so a test injects a fake transport.
 export async function factoryCommand(args, io = {}) {
   const context = { env: process.env, spawn: nodeSpawn, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, ...io };
+  const { isInsideContainer } = await import('./factory-core.js');
+  if ((context.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
   const [sub, ...rest] = args;
+  if (['new', 'build', 'start', 'stop', 'status', 'list', 'configure', 'login'].includes(sub)) {
+    const { factoryCoreCommand } = await import('./factory-core.js');
+    return factoryCoreCommand(args, context);
+  }
   if (sub === 'host') return hostCommand(rest, context);
   if (sub === 'ssh') {
     const { hostName, command } = splitCommand(rest, 'factory ssh');
-    return runSsh(findHost(context.env, hostName), command, context);
+    const host = findHost(context.env, hostName);
+    if (!host.address || !host.user || !host.keyFile) throw new Error('The host has no SSH connection record.');
+    return runSsh(host, command, context);
   }
   if (sub === 'docker') {
     const { hostName, command } = splitCommand(rest, 'factory docker');
-    return runSsh(findHost(context.env, hostName), ['docker', ...command.map(shellQuote)], context);
+    const host = findHost(context.env, hostName);
+    if (host.dockerContext) {
+      const { createDockerTransport } = await import('./factory-transport.js');
+      const result = await createDockerTransport(host, context).run(command);
+      context.stdout.write(maskLine(result.stdout, host));
+      context.stderr.write(maskLine(result.stderr, host));
+      return result.code;
+    }
+    return runSsh(host, ['docker', ...command.map(shellQuote)], context);
   }
   throw usageError('Unknown or missing factory command.');
 }

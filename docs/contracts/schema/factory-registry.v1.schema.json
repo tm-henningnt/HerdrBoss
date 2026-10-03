@@ -101,6 +101,19 @@
               "dockerContext"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "hostId": { "$ref": "common.v1.schema.json#/$defs/slug" },
+              "runtime": { "enum": ["orbstack", "colima", "docker-engine", "docker-engine-wsl2"] },
+              "personalOnly": { "type": "boolean" },
+              "codexSandbox": { "enum": ["user-namespaces", "unconfined", "unavailable"] },
+              "transport": { "const": "ssh" },
+              "connectionRef": { "$ref": "common.v1.schema.json#/$defs/slug" }
+            },
+            "required": ["hostId", "runtime", "personalOnly", "codexSandbox", "transport", "connectionRef"],
+            "additionalProperties": false
           }
         ]
       },
