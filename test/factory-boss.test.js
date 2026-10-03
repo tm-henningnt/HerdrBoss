@@ -36,6 +36,7 @@ function fixture({
   promptStderr = 'private prompt error',
   containerHostname = 'fixture-node',
   paneReadCode = 0,
+  detectionReadCode = paneReadCode,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-boss-'));
   const env = {
@@ -105,7 +106,7 @@ function fixture({
         return { code: 0, stdout: JSON.stringify({ workspaces }), stderr: '' };
       }
       if (args.includes('pane') && args.includes('list')) return { code: 0, stdout: JSON.stringify({ panes }), stderr: '' };
-      if (args.includes('pane') && args.includes('read')) return { code: paneReadCode, stdout: JSON.stringify({ text: paneText }), stderr: '' };
+      if (args.includes('pane') && args.includes('read')) return { code: args.includes('--source') ? detectionReadCode : paneReadCode, stdout: JSON.stringify({ text: paneText }), stderr: '' };
       if (script.includes('inspectBossPromptText') && script.includes('readAgentText')) {
         return { code: 0, stdout: JSON.stringify(currentResumePromptProbe), stderr: '' };
       }
@@ -628,8 +629,30 @@ test('a failed Boss pane capture still reports masked prompt stderr and an unkno
   } finally { f.cleanup(); }
 });
 
-test('Boss start reports an unavailable dialog check when the prompt script claims readiness', async () => {
+test('Boss start succeeds when the detection pane read fails but a plain pane read works', async () => {
+  const f = fixture({ detectionReadCode: 1, paneReadCode: 0, paneText: 'Boss prompt answered' });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    const reads = f.dockerCalls.filter(({ args }) => args.includes('pane') && args.includes('read'));
+    assert.ok(reads.some(({ args }) => args.includes('--source')));
+    assert.ok(reads.some(({ args }) => !args.includes('--source')));
+  } finally { f.cleanup(); }
+});
+
+test('Boss start names a dialog that only the plain pane read shows', async () => {
+  const f = fixture({ detectionReadCode: 1, paneText: 'Choose the text style', promptOutcome: 'not-ready' });
+  try { await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /theme dialog in pane ws-boss:p-new/); }
+  finally { f.cleanup(); }
+});
+
+test('Boss start trusts a ready outcome when no pane read works and shows no dialog', async () => {
   const f = fixture({ paneReadCode: 1, promptOutcome: 'ready' });
+  try { assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0); }
+  finally { f.cleanup(); }
+});
+
+test('Boss start fails with capture unavailable when no pane read works and the prompt did not reach ready', async () => {
+  const f = fixture({ paneReadCode: 1, promptOutcome: 'not-ready' });
   try { await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /capture unavailable/); }
   finally { f.cleanup(); }
 });
