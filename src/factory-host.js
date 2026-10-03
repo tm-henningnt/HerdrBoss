@@ -131,6 +131,9 @@ export function maskLine(line, host, docker = false) {
     return text;
   };
   let text = maskHosts(line);
+  // The SSH user and the SSH port of a host record (`sshPort`) never reach a terminal.
+  if (host.user) text = text.replace(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(host.user)}(?![A-Za-z0-9_-])`, 'g'), '<user>');
+  if (host.sshPort) text = text.replace(new RegExp(`(?<![0-9])${escapeRegExp(String(host.sshPort))}(?![0-9])`, 'g'), '<port>');
   if (docker) text = text.replace(NAME_LINE, '$1<host>').replace(ENDPOINT, '<endpoint>').replace(TAILNET, MASK_HOST);
   const replace = (value, mask) => {
     if (typeof value === 'string' && value) text = text.split(value).join(mask);
