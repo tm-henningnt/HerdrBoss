@@ -43,7 +43,7 @@ export function hostFor(env, name, explicit) {
   const connection = registry.hosts[hostId];
   if (!connection) throw new Error('The host is not in the private connection store.');
   if (!connection.dockerContext) throw new Error('Add a Docker context to the private host record first.');
-  return { ...connection, hostId, transport: 'docker-context', runtime: connection.runtime || 'docker-engine-wsl2', personalOnly: connection.personalOnly ?? false, codexSandbox: connection.codexSandbox || 'user-namespaces' };
+  return { ...connection, hostId, transport: 'docker-context', runtime: connection.runtime || 'docker-engine-wsl2', personalOnly: connection.personalOnly ?? false, codexSandbox: connection.codexSandbox || 'unavailable' };
 }
 
 export function transportFor(host, io) {
@@ -78,18 +78,23 @@ export async function inspect(docker, kind, name) {
 }
 
 // Check the settings of a factory container. The check does not need a running container.
-export function configSafetyError(container, name) {
+export function configSafetyError(container, name, codexSandbox = 'user-namespaces') {
   const config = container?.HostConfig;
   if (config?.Privileged !== false) return 'The factory container is privileged or its safety record is missing.';
   if (config.CapAdd?.length) return 'The factory container adds a capability.';
   if (config.Devices?.length) return 'The factory container maps a host device.';
   if ([config.PidMode, config.NetworkMode, config.IpcMode, config.UsernsMode].some((mode) => mode === 'host')) return 'The factory container shares a host namespace.';
   const security = config.SecurityOpt;
-  if (Array.isArray(security) && security.some((option) => /^apparmor[=:]unconfined$/.test(option))) return 'The factory container has no AppArmor profile.';
+  if (security != null && !Array.isArray(security)) return 'The factory container has no approved Codex security profile.';
+  const securityOptions = security || [];
+  if (securityOptions.some((option) => /^apparmor[=:]unconfined$/.test(option))) return 'The factory container has no AppArmor profile.';
   // Docker translates systempaths=unconfined to these two empty lists.
   const effectiveSystempaths = Array.isArray(config.MaskedPaths) && config.MaskedPaths.length === 0 && Array.isArray(config.ReadonlyPaths) && config.ReadonlyPaths.length === 0;
-  const systempaths = security?.some((option) => /^systempaths[=:]unconfined$/.test(option)) || effectiveSystempaths;
-  if (!Array.isArray(security) || !systempaths || !security.some((option) => /^seccomp[=:]/.test(option) && !/^seccomp[=:]unconfined$/.test(option))) return 'The factory container has no approved Codex security profile.';
+  const systempaths = securityOptions.some((option) => /^systempaths[=:]unconfined$/.test(option)) || effectiveSystempaths;
+  const customSeccomp = securityOptions.some((option) => /^seccomp[=:]/.test(option) && !/^seccomp[=:]unconfined$/.test(option));
+  if (securityOptions.some((option) => /^seccomp[=:]unconfined$/.test(option))) return 'The factory container has no approved Codex security profile.';
+  if (codexSandbox === 'user-namespaces' && (!systempaths || !customSeccomp)) return 'The factory container has no approved Codex security profile.';
+  if (codexSandbox !== 'user-namespaces' && (systempaths || customSeccomp)) return 'The factory container has no approved Codex security profile.';
   if (!Array.isArray(container.Mounts) || container.Mounts.length !== 4) return 'The factory container must have four named volumes only.';
   for (const [kind, target] of Object.entries(VOLUMES)) {
     if (!container.Mounts.some((mount) => mount.Type === 'volume' && mount.Name === `hf-${name}-${kind}` && mount.Destination === target)) return 'The factory container has a host mount or an unexpected volume.';
@@ -119,7 +124,13 @@ export function managedFactory(env, name) {
   if (local.name !== name || local.hostId !== record.hostId) throw new Error('The factory records do not agree.');
   const fleetHost = fleet.hosts.find((item) => item.hostId === record.hostId);
   const connectionName = fleetHost.transport === 'local' ? 'local' : fleetHost.connectionRef || fleetHost.hostId;
-  const host = { ...hostFor(env, name, connectionName), runtime: fleetHost.runtime, personalOnly: fleetHost.personalOnly, codexSandbox: fleetHost.codexSandbox };
+  const registered = loadRegistry(env).hosts[connectionName] || {};
+  const host = {
+    ...hostFor(env, name, connectionName),
+    runtime: registered.runtime ?? fleetHost.runtime,
+    personalOnly: registered.personalOnly ?? fleetHost.personalOnly,
+    codexSandbox: registered.codexSandbox ?? fleetHost.codexSandbox,
+  };
   return { fleet, record, local, host };
 }
 
@@ -258,14 +269,14 @@ async function newFactory(args, io) {
   if (!existing) {
     const create = ['container', 'create', '--name', `hf-${name}`, '--hostname', `${name}.localhost`, '--label', `${FACTORY_LABEL}=${name}`, '--label', spikeLabel,
       '--restart', 'unless-stopped', '--cpus', '4', '--memory', host.transport === 'local' ? '4g' : '8g', '--memory-swap', host.transport === 'local' ? '4g' : '8g', '--pids-limit', '512', '--shm-size', '1g',
-      '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '-p', `127.0.0.1:${record.ports.dashboard}:4477`, '-p', `127.0.0.1:${record.ports.ssh}:22`,
-      '--security-opt', `seccomp=${path.join(FACTORY_ROOT, 'seccomp-codex.json')}`, '--security-opt', 'systempaths=unconfined'];
+      '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '-p', `127.0.0.1:${record.ports.dashboard}:4477`, '-p', `127.0.0.1:${record.ports.ssh}:22`];
+    if (host.codexSandbox === 'user-namespaces') create.push('--security-opt', `seccomp=${path.join(FACTORY_ROOT, 'seccomp-codex.json')}`, '--security-opt', 'systempaths=unconfined');
     for (const [kind, target] of Object.entries(VOLUMES)) create.push('--mount', `type=volume,source=hf-${name}-${kind},target=${target}`);
     create.push(record.imageTag);
     await dockerCall(docker, create);
   }
   // Check the container settings before the first start and before each resumed start.
-  const unsafe = configSafetyError(existing || await inspect(docker, 'container', `hf-${name}`), name);
+  const unsafe = configSafetyError(existing || await inspect(docker, 'container', `hf-${name}`), name, host.codexSandbox);
   if (unsafe) throw new Error(unsafe);
   await dockerCall(docker, ['start', `hf-${name}`]);
   const health = await readHealth(docker, name);
@@ -274,12 +285,15 @@ async function newFactory(args, io) {
   updateFleet(io.env, (current) => {
     assertVersion(health.version, effectiveMinimum(current));
     if (current.factories.some((item) => item.name === name)) throw new Error('The factory is already registered.');
-    if (!current.hosts.some((item) => item.hostId === host.hostId)) current.hosts.push(hostRecord);
+    const registeredHost = current.hosts.find((item) => item.hostId === host.hostId);
+    if (registeredHost) Object.assign(registeredHost, hostRecord);
+    else current.hosts.push(hostRecord);
     current.factories.push({ factoryId: name, name, hostId: host.hostId, profile: 'personal', dashboardUrl: `http://${name}.localhost:${record.ports.dashboard}`, version: health.version, kitRevision: health.kitRevision, kind: 'container', containerName: `hf-${name}`, hostname: `${name}.localhost`, ports: record.ports, image: imageMeta });
   });
   writePrivate(file, { ...record, stage: 'ready' });
   const { configureFactory } = await import('./factory-wizard.js');
   const configured = await configureFactory([name, '--step', 'service'], io);
+  io.stdout.write(tailnetPolicyText(name, host.personalOnly));
   if (configured !== 0) return configured;
   io.stdout.write(`Created factory ${name}. Health /api/health: 200.\n`);
   return 0;
@@ -287,7 +301,17 @@ async function newFactory(args, io) {
 
 // Print the contract fields of a host only. An old inline record also holds an address and a Docker context.
 const HOST_CONTRACT_FIELDS = ['hostId', 'runtime', 'personalOnly', 'codexSandbox', 'transport', 'connectionRef'];
-const publicFleet = (fleet) => ({ ...fleet, hosts: fleet.hosts.map((host) => Object.fromEntries(HOST_CONTRACT_FIELDS.filter((key) => key in host).map((key) => [key, host[key]]))) });
+const publicFleet = (fleet, env) => {
+  const connections = loadRegistry(env).hosts;
+  return {
+    ...fleet,
+    hosts: fleet.hosts.map((host) => {
+      const connection = connections[host.connectionRef || host.hostId] || {};
+      const current = { ...host, ...Object.fromEntries(['runtime', 'personalOnly', 'codexSandbox'].filter((key) => key in connection).map((key) => [key, connection[key]])) };
+      return Object.fromEntries(HOST_CONTRACT_FIELDS.filter((key) => key in current).map((key) => [key, current[key]]));
+    }),
+  };
+};
 
 export async function factoryCoreCommand(args, io) {
   if ((io.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
@@ -318,8 +342,33 @@ export async function factoryCoreCommand(args, io) {
     const { positional, flags } = parse(args.slice(1), [], ['--json']);
     if (positional.length) throw new Error('Factory list takes no argument.');
     const fleet = readFleet(io.env);
-    io.stdout.write(flags['--json'] ? `${JSON.stringify(publicFleet(fleet))}\n` : `${fleet.factories.map((record) => `${record.name}  ${record.kind}  ${record.profile}  ${record.version}`).join('\n') || 'No factories.'}\n`);
+    io.stdout.write(flags['--json'] ? `${JSON.stringify(publicFleet(fleet, io.env))}\n` : `${fleet.factories.map((record) => `${record.name}  ${record.kind}  ${record.profile}  ${record.version}`).join('\n') || 'No factories.'}\n`);
     return 0;
   }
   throw new Error('Unknown factory command.');
+}
+
+function tailnetPolicyText(name, personalOnly) {
+  const tag = `tag:hf-${name}`;
+  const grants = [
+    { src: ['autogroup:member'], dst: [tag], ip: ['tcp:443'] },
+    { src: ['tag:hf-head-office'], dst: [tag], ip: ['tcp:443'] },
+    ...(!personalOnly ? [{ src: [tag], dst: ['tag:hf-head-office'], ip: ['tcp:443'] }] : []),
+  ];
+  const grantLine = (grant) => `{"src": ${JSON.stringify(grant.src)}, "dst": ${JSON.stringify(grant.dst)}, "ip": ${JSON.stringify(grant.ip)}}`;
+  return [
+    `Tag: ${tag}`,
+    'Head office tag: tag:hf-head-office',
+    'Host tag: tag:hf-host',
+    '// Paste these lines into the tailnet policy file. Then approve the tag when the factory joins.',
+    '// tag:hf-head-office and tag:hf-host need existing tagOwners entries in the policy.',
+    '"tagOwners": {',
+    `  "${tag}": ["autogroup:admin"]`,
+    '},',
+    '"grants": [',
+    ...grants.map((grant, index) => `  ${grantLine(grant)}${index < grants.length - 1 ? ',' : ''}`),
+    ']',
+    `tailscale up --advertise-tags=${tag}`,
+    '',
+  ].join('\n');
 }

@@ -15,6 +15,51 @@ Use the host tool outside a container. Store connection fields in the private co
 
 WSL can stop without a Windows reboot. The repeating trigger starts it again. A startup trigger alone does not cover that stop. Use the private connection store for the distribution and host fields.
 
+Use `tag:hf-host` for a Windows host, `tag:hf-<factory slug>` for a factory, and `tag:hf-head-office` for the head office. The Owner approves each factory tag when it joins the tailnet. `factory new` prints these labels:
+
+```text
+Tag: tag:hf-NAME
+Head office tag: tag:hf-head-office
+Host tag: tag:hf-host
+```
+
+Replace `NAME` with the validated factory slug. The tool prints the policy comment and lines, then the host command. Paste the policy lines into the tailnet policy file. Run the printed command on the host. Herdr Boss does not change the tailnet policy or run that command.
+
+The tool prints these comment lines immediately before the policy block:
+
+```text
+// Paste these lines into the tailnet policy file. Then approve the tag when the factory joins.
+// tag:hf-head-office and tag:hf-host need existing tagOwners entries in the policy.
+```
+
+The printed policy block uses this shape:
+
+```json
+"tagOwners": {
+  "tag:hf-NAME": ["autogroup:admin"]
+},
+"grants": [
+  {"src": ["autogroup:member"], "dst": ["tag:hf-NAME"], "ip": ["tcp:443"]},
+  {"src": ["tag:hf-head-office"], "dst": ["tag:hf-NAME"], "ip": ["tcp:443"]}
+]
+```
+
+When the host is not personal-only, the tool also prints this grant:
+
+```json
+{"src": ["tag:hf-NAME"], "dst": ["tag:hf-head-office"], "ip": ["tcp:443"]}
+```
+
+The factory tag grants TCP port 443 to Owner devices and the head office. It grants TCP port 443 from the factory to the head office only when the host is not personal-only. Port 443 is the HTTPS port of Tailscale Serve on the host. Serve publishes the factory dashboard through the host.
+
+The printed host command has this form:
+
+```sh
+tailscale up --advertise-tags=tag:hf-NAME
+```
+
+Set the host Codex sandbox setting after the Windows check. Use `user-namespaces` when the custom seccomp profile and `systempaths=unconfined` start the Codex sandbox. Otherwise use `unavailable`. The host tool then keeps Docker's default seccomp profile and excludes Codex from factories on that host.
+
 ## Host outage
 
 Connect each registered container factory with `herdr-boss factory connect NAME`. Check it with `herdr-boss factory connect --check NAME`. Connect one factory at a time. The command uses Tailscale Serve. It reuses an existing matching HTTP or HTTPS forward. The forward goes to the container loopback port. The dashboard access rule stays in force. See `cli.md`, section Container factories, for resume and permission rules.

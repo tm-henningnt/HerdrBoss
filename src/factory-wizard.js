@@ -6,9 +6,9 @@ import { isHostUnreachable } from './factory-transport.js';
 
 export const FACTORY_STEPS = Object.freeze(['container', 'volumes', 'herdr', 'service', 'harness-claude', 'harness-codex', 'harness-other', 'github', 'project']);
 
-function safetyError(container, name) {
+function safetyError(container, name, codexSandbox) {
   if (!container?.State?.Running) return 'The factory container is stopped.';
-  return configSafetyError(container, name);
+  return configSafetyError(container, name, codexSandbox);
 }
 
 async function codexGate(docker, name, enabled) {
@@ -17,17 +17,23 @@ async function codexGate(docker, name, enabled) {
   try { return JSON.parse(raw); } catch { throw new Error('The Codex safety gate returned no result.'); }
 }
 
-async function containerStep(docker, name, flow) {
+async function containerStep(docker, name, flow, host) {
   const container = await inspect(docker, 'container', `hf-${name}`);
   if (!container) { flow.codexEnabled = false; throw new Error('The factory container is missing.'); }
   assertOwned(container, name);
-  const error = safetyError(container, name);
+  const error = safetyError(container, name, host.codexSandbox);
   if (error) {
     flow.codexEnabled = false;
     if (!container.State?.Running) throw new Error(error);
     const result = await codexGate(docker, name, false);
     flow.codexDisabledByWizard ||= result.codexWasAllowed === true;
     throw new Error(error);
+  }
+  if (host.codexSandbox !== 'user-namespaces') {
+    const result = await codexGate(docker, name, false);
+    flow.codexDisabledByWizard ||= result.codexWasAllowed === true;
+    flow.codexEnabled = false;
+    return;
   }
   if (flow.codexDisabledByWizard) { await codexGate(docker, name, true); flow.codexDisabledByWizard = false; }
   flow.codexEnabled = true;
@@ -87,7 +93,7 @@ export async function configureFactory(args, io) {
     step.status = 'running';
     writePrivate(file, flow);
     try {
-      if (step.name === 'container') await containerStep(docker, name, flow);
+      if (step.name === 'container') await containerStep(docker, name, flow, host);
       if (step.name === 'volumes') {
         for (const kind of Object.keys(VOLUMES)) {
           const volume = await inspect(docker, 'volume', `hf-${name}-${kind}`);
@@ -111,7 +117,9 @@ export async function configureFactory(args, io) {
         });
       }
       step.status = 'done';
-      step.detail = 'The check passed.';
+      step.detail = step.name === 'container' && host.codexSandbox !== 'user-namespaces'
+        ? 'Codex is disabled because this host has no tested sandbox setting.'
+        : 'The check passed.';
       writePrivate(file, flow);
     } catch (error) {
       step.status = 'failed';

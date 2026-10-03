@@ -1,6 +1,6 @@
 // The command line of `herdr-boss factory host add|list|remove`, `factory ssh`, and `factory docker`.
 // The registry of hosts is `registry.json` in ~/.herdr-factories (HERDR_FACTORIES_DIR overrides the folder).
-// It holds the name, address, user, and key file path of each host. It never holds key content.
+// It holds connection fields and host settings. It never holds key content.
 // Output from ssh passes through maskLine, so the address, the host name, an IP, and the key path never reach a terminal.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,8 +9,9 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
 export const FACTORY_HOST_USAGE = [
-  'Usage: factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-]',
-  '       factory host add NAME --docker-context CONTEXT',
+  'Usage: factory host add NAME --address ADDR --user USER --key-file PATH [--from-file FILE|-] [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]',
+  '       factory host add NAME --docker-context CONTEXT [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]',
+  '       factory host add NAME [--runtime RUNTIME] [--personal-only true|false] [--codex-sandbox user-namespaces|unavailable]  (update an existing host)',
   '       factory host list',
   '       factory host remove NAME',
   '       factory ssh HOST -- COMMAND...',
@@ -28,7 +29,9 @@ export const FACTORY_HOST_USAGE = [
 const NAME = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const ADDRESS = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,31}$/;
-const HOST_FIELDS = ['address', 'user', 'keyFile', 'dockerContext'];
+const HOST_FIELDS = ['address', 'user', 'keyFile', 'dockerContext', 'runtime', 'personalOnly', 'codexSandbox'];
+const HOST_RUNTIMES = ['orbstack', 'colima', 'docker-engine', 'docker-engine-wsl2'];
+const CODEX_SANDBOXES = ['user-namespaces', 'unavailable'];
 const SSH_FAILED = 255;
 const DOCKER_PASSTHROUGH_TIMEOUT_MS = 1_800_000;
 const MASK_HOST = '<host>';
@@ -173,7 +176,7 @@ function expandHome(file, env) {
 
 async function hostFields(flags, io) {
   const fromFile = flags['--from-file'];
-  const given = ['--address', '--user', '--key-file', '--docker-context'].some((flag) => flag in flags);
+  const given = ['--address', '--user', '--key-file', '--docker-context', '--runtime', '--personal-only', '--codex-sandbox'].some((flag) => flag in flags);
   let json = {};
   if (fromFile !== undefined || !given) {
     if (fromFile === undefined && io.stdin.isTTY) throw usageError('Give --address, --user, and --key-file, or JSON on stdin.');
@@ -182,45 +185,68 @@ async function hostFields(flags, io) {
     try { json = JSON.parse(raw); } catch { throw new Error('The host JSON is not valid.'); }
     if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('The host JSON must be an object.');
     const extra = Object.keys(json).filter((key) => !HOST_FIELDS.includes(key));
-    if (extra.length) throw new Error(`The host JSON has unknown fields: ${extra.join(', ')}. Use address, user, keyFile.`);
+    if (extra.length) throw new Error(`The host JSON has unknown fields: ${extra.join(', ')}. Use address, user, keyFile, runtime, personalOnly, codexSandbox.`);
   }
   return {
     address: flags['--address'] ?? json.address,
     user: flags['--user'] ?? json.user,
     keyFile: flags['--key-file'] ?? json.keyFile,
     dockerContext: flags['--docker-context'] ?? json.dockerContext,
+    runtime: flags['--runtime'] ?? json.runtime,
+    personalOnly: flags['--personal-only'] ?? json.personalOnly,
+    codexSandbox: flags['--codex-sandbox'] ?? json.codexSandbox,
   };
 }
 
 // Messages never repeat a value: an address or a key path can be secret.
 function validateHost(fields, env) {
-  const { address, user, keyFile, dockerContext } = fields;
+  const { address, user, keyFile, dockerContext, runtime, personalOnly, codexSandbox } = fields;
+  const settings = {};
+  if (runtime !== undefined) {
+    if (!HOST_RUNTIMES.includes(runtime)) throw usageError('The host runtime is invalid.');
+    settings.runtime = runtime;
+  }
+  if (personalOnly !== undefined) {
+    if (typeof personalOnly === 'boolean') settings.personalOnly = personalOnly;
+    else if (personalOnly === 'true' || personalOnly === 'false') settings.personalOnly = personalOnly === 'true';
+    else throw usageError('The personal-only setting must be true or false.');
+  }
+  if (codexSandbox !== undefined) {
+    if (!CODEX_SANDBOXES.includes(codexSandbox)) throw usageError('The Codex sandbox setting must be user-namespaces or unavailable.');
+    settings.codexSandbox = codexSandbox;
+  }
   if (dockerContext !== undefined) {
     if (typeof dockerContext !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(dockerContext)) throw usageError('The Docker context name is invalid.');
-    if (address === undefined && user === undefined && keyFile === undefined) return { transport: 'docker-context', dockerContext };
+    if (address === undefined && user === undefined && keyFile === undefined) return { transport: 'docker-context', dockerContext, ...settings };
   }
+  if (address === undefined && user === undefined && keyFile === undefined) return settings;
   if (typeof address !== 'string' || !ADDRESS.test(address)) throw usageError('The address is missing or has characters that a host address cannot have.');
   if (typeof user !== 'string' || !USER.test(user)) throw usageError('The user is missing or has characters that a user name cannot have.');
   if (typeof keyFile !== 'string' || !keyFile) throw usageError('The key file path is missing.');
   const expanded = expandHome(keyFile, env);
   if (!path.isAbsolute(expanded) || expanded.includes('\0')) throw usageError('The key file path must be absolute.');
-  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh', ...(dockerContext ? { dockerContext } : {}) };
+  return { address, user, keyFile: path.normalize(expanded), transport: 'ssh', ...(dockerContext ? { dockerContext } : {}), ...settings };
 }
 
 async function hostCommand(args, io) {
   const [action, ...rest] = args;
   if (action === 'add') {
-    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file', '--docker-context'], 'host name');
+    const { flags, name } = parseFlags(rest, ['--address', '--user', '--key-file', '--from-file', '--docker-context', '--runtime', '--personal-only', '--codex-sandbox'], 'host name');
     if (!NAME.test(name)) throw usageError('The host name must use lower case letters, digits, and hyphens, up to 31 characters.');
+    if (name === 'local') throw usageError('The host name local is reserved.');
     const host = validateHost(await hostFields(flags, io), io.env);
+    const privateConnectionFlags = ['--address', '--user', '--key-file', '--from-file'].some((flag) => flag in flags);
     let updated = false;
     updateRegistry(io.env, (registry) => {
       if (Object.hasOwn(registry.hosts, name)) {
-        if (Object.keys(flags).length !== 1 || !flags['--docker-context']) throw new Error('The host is already in the registry. Remove it first.');
-        registry.hosts[name] = { ...registry.hosts[name], dockerContext: host.dockerContext };
+        if (privateConnectionFlags) throw new Error('The host is already in the registry. Remove it first.');
+        const hasSetting = ['runtime', 'personalOnly', 'codexSandbox'].some((field) => field in host);
+        if (!host.dockerContext && !hasSetting) throw new Error('The host is already in the registry. Remove it first.');
+        registry.hosts[name] = { ...registry.hosts[name], ...(host.dockerContext ? { dockerContext: host.dockerContext } : {}), ...Object.fromEntries(['runtime', 'personalOnly', 'codexSandbox'].filter((field) => field in host).map((field) => [field, host[field]])) };
         updated = true;
         return;
       }
+      if (!host.transport) throw usageError('A new host needs SSH fields or a Docker context.');
       registry.version = 1;
       registry.hosts[name] = host;
     });
