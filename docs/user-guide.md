@@ -868,9 +868,9 @@ Use `herdr-boss quota plan codex` to view the plan. Use `--what-if TIME` to chan
 
 Herdr Boss never applies a reset credit. The Owner applies it in the Codex app. Use `herdr-boss quota credit used ID` only after the Owner confirms the application.
 
-The service posts one approval item in the Mailbox when usage reaches the effective threshold and the plan says to apply a credit now. It also posts an item when a credit expires within 48 hours. The item shows usage, the current time, the exact expiry, and the point difference between applying now and waiting for the planned time in the fast and slow forecasts. The service does not post another item while that credit has an open item.
+The service posts one approval item in the Mailbox when usage reaches the effective threshold and the plan says to apply a credit now. It also posts an item when a credit expires within 48 hours. The item shows usage, the current time, the exact expiry, and the point difference between applying now and waiting for the planned time in the fast and slow forecasts. The service does not post another item for a credit ID and expiry that already has an item, open or closed. A changed expiry allows one new item.
 
-The service closes the item when you run `herdr-boss quota credit used ID`. It also closes the open credit item with the earliest expiry when a quota reading shows a usage drop greater than 30 points. The service marks that credit as used. It sends one warning when an available credit enters the 24 hours before expiry. The warning uses the normal notice path.
+The service closes the item when you run `herdr-boss quota credit used ID`. When a quota reading shows a usage drop greater than 30 points before the regular reset time, the service marks the available credit with the earliest expiry as used. It also closes the open item of that credit. A drop at or after the regular reset time is a natural weekly reset and marks no credit. It sends one warning when an available credit enters the 24 hours before expiry. The warning uses the normal notice path.
 
 Read [Quota reset planner](quota-plan.md) for the calculation and API details.
 

@@ -442,6 +442,15 @@ export function detectedReset(before, after) {
   return Number.isFinite(first) && Number.isFinite(last) && last > first && before.usedPercent - after.usedPercent > 30;
 }
 
+// A drop explains a credit use only before the regular reset time of the earlier reading.
+// A drop at or after that time, less the tolerance, is a natural weekly reset.
+export function dropExplainsCreditUse(before, after, toleranceMinutes = 10) {
+  const regularReset = Date.parse(before?.resetsAt);
+  if (!Number.isFinite(regularReset)) return true;
+  const sampled = typeof after.at === 'number' ? after.at : Date.parse(after.at);
+  return sampled < regularReset - toleranceMinutes * 60000;
+}
+
 // Calculate rates in UTC hourly buckets. Include measured idle intervals.
 export function hourlyBurnP90(readings, { now, provider, window } = {}) {
   const end = time(now, 'now'), start = end - 14 * 24 * HOUR;

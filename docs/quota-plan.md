@@ -249,6 +249,11 @@ The second reading must be later.
 The helper returns true only for a drop greater than 30 points.
 It does not identify which credit or provider event caused the drop.
 
+Call `dropExplainsCreditUse(before, after, toleranceMinutes = 10)` for a detected drop.
+The helper returns true when the sample time of `after` is before the regular reset time of `before`, less the tolerance.
+A drop at or after that time is a natural weekly reset.
+The helper returns true when `before` has no reset time.
+
 ## Herdr Boss service
 
 `src/quota-plan-service.js` reads the Codex quota rows from `state.json`.
@@ -262,6 +267,7 @@ The existing `resetCredits` count remains in the quota row.
 The service reads matching provider and window rows from the last 14 days of `quota-history.jsonl`.
 It passes those readings to `hourlyBurnP90`.
 It records a possible reset when the same window drops by more than 30 points between readings.
+Each record has the cause `credit` or `natural`.
 It then calculates a new plan.
 
 The service stores `quota-plan.json` in the data directory.
@@ -290,13 +296,22 @@ Compare two forecasts through the same horizon.
 The first forecast applies only this credit now.
 The second follows the planned time for this credit.
 Show the point difference for the fast and slow scenarios.
-Do not post another item while an item for the same credit stays open.
+Do not post another item while an item for the same credit ID and expiry exists.
+An item that the Owner closed or dismissed counts as an existing item.
+A changed expiry of the credit allows one new item.
+The service checks and appends the item in one Mailbox store `mutate` call.
+Two replans at nearly the same time post one item.
 
 The Owner applies the credit in the Codex app.
 Herdr Boss never applies it.
 `herdr-boss quota credit used ID` marks the confirmed credit used and closes its open item.
-When a quota reading shows a usage drop greater than 30 points, mark the open credit item with the earliest expiry as used and close it.
+When a quota reading shows a usage drop greater than 30 points before the regular reset time, mark the available credit with the earliest expiry as used.
+Close the open item of that credit when it has one.
+Mark the credit when no item is open.
 This rule treats the drop as evidence that the Owner applied that credit.
+A drop at or after the regular reset time, less 10 minutes, is a natural weekly reset.
+Record it as an observed reset with the cause `natural`.
+Do not mark a credit used for a natural reset.
 
 At the first service tick within 24 hours of an available credit expiry, add a `warn` alert to normal notice delivery.
 Use one alert key for each credit ID and expiry.

@@ -211,3 +211,93 @@ test('an observed usage drop closes and marks the soonest-expiring open credit p
   assert.ok(closed.closedAt);
   assert.ok(service.read().usedCredits.some((credit) => credit.id === 'credit-observed'));
 });
+
+function writeDrop(dir, { beforeAt, afterAt, before, after, resetsAt }) {
+  fs.writeFileSync(path.join(dir, 'quota-history.jsonl'), `${[
+    { at: beforeAt, provider: 'codex', window: 'primary', usedPercent: before, resetsAt },
+    { at: afterAt, provider: 'codex', window: 'primary', usedPercent: after, resetsAt: at(168) },
+  ].map((row) => JSON.stringify(row)).join('\n')}\n`);
+}
+
+test('a natural weekly rollover is recorded and marks no credit used', (t) => {
+  const { dir, service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-roll', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas, now: NOW - HOUR });
+  writeDrop(dir, { beforeAt: at(-3), afterAt: at(0), before: 96, after: 2, resetsAt: at(-1) });
+
+  service.replan({ provider: 'codex', quotas, now: NOW });
+
+  assert.equal(service.read().observedResets.length, 1);
+  assert.deepEqual(service.read().usedCredits, []);
+  assert.equal(messageStore.all().filter((item) => item.quotaCreditId === 'credit-roll' && !item.closedAt).length, 1);
+});
+
+test('the 10-minute tolerance before the regular reset time separates a natural reset from a credit use', (t) => {
+  const { dir, service } = setup(t);
+  const quotas = quota([{ id: 'credit-edge', status: 'available', expiresAt: at(47) }]);
+  writeDrop(dir, { beforeAt: at(-3), afterAt: at(0), before: 96, after: 2, resetsAt: at(0.15) });
+  service.replan({ provider: 'codex', quotas, now: NOW });
+  assert.deepEqual(service.read().usedCredits, [], 'a drop 9 minutes before the reset time is a natural reset');
+
+  const second = setup(t);
+  writeDrop(second.dir, { beforeAt: at(-3), afterAt: at(0), before: 96, after: 2, resetsAt: at(0.5) });
+  second.service.replan({ provider: 'codex', quotas, now: NOW });
+  assert.equal(second.service.read().usedCredits.length, 1, 'a drop 30 minutes before the reset time is a credit use');
+});
+
+test('a usage drop marks the earliest-expiry credit even when it has no open item', (t) => {
+  const { dir, service, messageStore } = setup(t, { withMailbox: true });
+  service.replan({ provider: 'codex', quotas: quota([{ id: 'credit-a', status: 'available', expiresAt: at(47) }]), now: NOW - HOUR });
+  const itemA = messageStore.all().find((item) => item.quotaCreditId === 'credit-a');
+  assert.ok(itemA);
+  writeDrop(dir, { beforeAt: at(-2), afterAt: at(-1), before: 80, after: 40, resetsAt: at(168) });
+
+  service.replan({ provider: 'codex', now: NOW, quotas: quota([
+    { id: 'credit-a', status: 'available', expiresAt: at(47) },
+    { id: 'credit-b', status: 'available', expiresAt: at(30) },
+  ]) });
+
+  assert.deepEqual(service.read().usedCredits.map((credit) => credit.id), ['credit-b']);
+  assert.equal(messageStore.all().find((item) => item.id === itemA.id).closedAt, undefined);
+});
+
+test('a usage drop closes the item of the earliest-expiry credit', (t) => {
+  const { dir, service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-a', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas, now: NOW - HOUR });
+  writeDrop(dir, { beforeAt: at(-2), afterAt: at(-1), before: 80, after: 40, resetsAt: at(168) });
+  service.replan({ provider: 'codex', quotas, now: NOW });
+  assert.ok(messageStore.all().find((item) => item.quotaCreditId === 'credit-a').closedAt);
+  assert.deepEqual(service.read().usedCredits.map((credit) => credit.id), ['credit-a']);
+});
+
+test('a closed credit item is not posted again, and a changed expiry allows one new item', (t) => {
+  const { service, messageStore } = setup(t, { withMailbox: true });
+  const quotas = quota([{ id: 'credit-closed', status: 'available', expiresAt: at(47) }]);
+  service.replan({ provider: 'codex', quotas, now: NOW });
+  const [item] = messageStore.all().filter((message) => message.quotaCreditId === 'credit-closed');
+  messageStore.update(item.id, { closedAt: at(0) }, { now: NOW });
+
+  service.replan({ provider: 'codex', quotas, now: NOW + HOUR });
+  service.replan({ provider: 'codex', quotas, now: NOW + 2 * HOUR });
+  assert.equal(messageStore.all().filter((message) => message.quotaCreditId === 'credit-closed').length, 1);
+
+  const moved = quota([{ id: 'credit-closed', status: 'available', expiresAt: at(46) }]);
+  service.replan({ provider: 'codex', quotas: moved, now: NOW + 3 * HOUR });
+  service.replan({ provider: 'codex', quotas: moved, now: NOW + 4 * HOUR });
+  assert.equal(messageStore.all().filter((message) => message.quotaCreditId === 'credit-closed').length, 2);
+});
+
+test('the credit prompt check and append run in one store mutate', (t) => {
+  const { dir } = setup(t);
+  const real = openMessageStore({ dir, backend: 'json' });
+  // A stale read and a direct append stand for a second replan that races this one.
+  const racing = { ...real, all: () => [], append: () => { throw new Error('append outside mutate'); } };
+  const service = createQuotaPlanService({ dataDir: dir, now: () => NOW, messageStore: racing });
+  const quotas = quota([{ id: 'credit-race', status: 'available', expiresAt: at(47) }]);
+
+  service.replan({ provider: 'codex', quotas, now: NOW });
+  service.replan({ provider: 'codex', quotas, now: NOW + 60000 });
+
+  assert.equal(real.all().filter((item) => item.quotaCreditId === 'credit-race').length, 1);
+});

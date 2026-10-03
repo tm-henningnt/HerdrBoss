@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DATA_DIR } from './config.js';
-import { burstTable, detectedReset, hourlyBurnP90, planQuota, plannedUsageAt, usageGuidance } from './quota-plan.js';
+import { burstTable, detectedReset, dropExplainsCreditUse, hourlyBurnP90, planQuota, plannedUsageAt, usageGuidance } from './quota-plan.js';
+import { newId } from './message-store.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -133,11 +134,8 @@ function markCreditUsed(state, provider, id, now) {
   state.usedCredits = state.usedCredits.slice(-EVENT_HISTORY_LIMIT);
 }
 
-function soonestExpiringCreditMailboxItem(messageStore, provider) {
-  if (!messageStore) return null;
-  return messageStore.all().filter((item) => item?.thread === 'boss' && item.to === 'owner' && item.action === 'approve'
-    && item.quotaCreditProvider === provider && typeof item.quotaCreditId === 'string' && !item.closedAt)
-    .sort((left, right) => Date.parse(left.quotaCreditExpiresAt) - Date.parse(right.quotaCreditExpiresAt))[0] || null;
+function earliestExpiringCredit(credits) {
+  return [...credits].sort((left, right) => Date.parse(left.expires_at) - Date.parse(right.expires_at))[0] || null;
 }
 
 function signedPoints(value) {
@@ -172,11 +170,19 @@ function postDueCreditPrompts(messageStore, provider, built, view, now) {
     const dueByPlan = built.window.usedPercent >= threshold && Number.isFinite(plannedAt) && plannedAt <= now;
     const expiringSoon = expiry > now && expiry - now <= 48 * HOUR;
     if (!dueByPlan && !expiringSoon) continue;
-    if (openCreditMailboxItems(messageStore, provider, credit.id).length) continue;
-    messageStore.append({
-      thread: 'boss', from: 'boss', to: 'owner', kind: 'reply',
-      text: creditPromptText({ credit, built, view, now }), action: 'approve', replyTo: null, status: 'new',
-      quotaCreditProvider: provider, quotaCreditId: credit.id, quotaCreditExpiresAt: credit.expiresAt,
+    // The check and the append share one transaction. An item of any state for this ID and expiry suppresses a new one.
+    messageStore.mutate((records) => {
+      const posted = records.some((item) => creditMailboxItem(item, provider, credit.id)
+        && Date.parse(item.quotaCreditExpiresAt) === expiry);
+      if (!posted) {
+        records.push({
+          id: newId(now), at: new Date(now).toISOString(), thread: 'boss', from: 'boss', to: 'owner', kind: 'reply',
+          text: creditPromptText({ credit, built, view, now }), action: 'approve', replyTo: null, status: 'new',
+          sentAt: null, error: null, relayedAt: null, relayedBy: null,
+          quotaCreditProvider: provider, quotaCreditId: credit.id, quotaCreditExpiresAt: credit.expiresAt,
+        });
+      }
+      return { records, result: null };
     }, { now });
   }
 }
@@ -302,16 +308,17 @@ function observeReset(state, { provider, row, window, currentTime, dataDir }) {
   const history = readHistory(path.join(dataDir, 'quota-history.jsonl'), currentTime)
     .filter((item) => item.provider === provider && item.window === window.key)
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  if (history.length < 2) return false;
+  if (history.length < 2) return null;
   const before = history.at(-2), after = history.at(-1);
-  if (!detectedReset(before, after) || state.observedResets.some((item) => item.provider === provider && item.afterAt === after.at)) return false;
+  if (!detectedReset(before, after) || state.observedResets.some((item) => item.provider === provider && item.afterAt === after.at)) return null;
+  const cause = dropExplainsCreditUse(before, after) ? 'credit' : 'natural';
   state.observedResets.push({
     id: randomUUID(), provider, window: window.key, at: after.at, afterAt: after.at,
     beforeUsedPercent: before.usedPercent, afterUsedPercent: after.usedPercent,
-    dropPercent: before.usedPercent - after.usedPercent,
+    dropPercent: before.usedPercent - after.usedPercent, cause,
   });
   state.observedResets = state.observedResets.slice(-EVENT_HISTORY_LIMIT);
-  return true;
+  return cause;
 }
 
 function validateAnnouncement({ provider, at, kind = 'full', refundPercent = 0, now }) {
@@ -341,13 +348,13 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
     const currentTime = time(now ?? clock(), 'now');
     const row = (quotas || loadQuotas()).find((item) => item.provider === provider && !item.error);
     const window = findWindow(row);
-    let changedByObservation = false;
-    if (window) changedByObservation = observeReset(state, { provider, row, window, currentTime, dataDir: directory });
-    if (changedByObservation) {
-      const prompt = soonestExpiringCreditMailboxItem(messageStore, provider);
-      if (prompt) {
-        markCreditUsed(state, provider, prompt.quotaCreditId, currentTime);
-        closeCreditMailboxItems(messageStore, provider, prompt.quotaCreditId, currentTime);
+    const observedCause = window ? observeReset(state, { provider, row, window, currentTime, dataDir: directory }) : null;
+    const changedByObservation = observedCause !== null;
+    if (observedCause === 'credit') {
+      const credit = earliestExpiringCredit(normalizedCredits(row, state.usedCredits, currentTime));
+      if (credit) {
+        markCreditUsed(state, provider, credit.id, currentTime);
+        closeCreditMailboxItems(messageStore, provider, credit.id, currentTime);
       }
     }
     const calculationOptions = { provider, quotas: quotas || loadQuotas(), now: currentTime, settings: normalizedSettings,
