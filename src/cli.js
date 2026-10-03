@@ -124,6 +124,7 @@ const USAGE = `herdr-boss <command>
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   project paths [--json]  Print the registered paths of other projects.
+  factory host add|list|remove  Keep the registry of factory hosts. Run a command on a host with factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
   goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
                         Exit 0 goal active, 2 pane busy or not an orchestrator, 3 sent but not shown.
   scratch SLUG          Create the durable scratch folder of a project and print its path.
@@ -359,6 +360,12 @@ async function main() {
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
     const code = await goalCommand(args, { env: process.env, herdr: createHerdrRunner(), control: readControl(), policy: loadPolicy(), signal: controller.signal });
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'factory') {
+    const { factoryCommand } = await import('./factory-host.js');
+    const code = await factoryCommand(args);
     if (code) process.exitCode = code;
     return;
   }
