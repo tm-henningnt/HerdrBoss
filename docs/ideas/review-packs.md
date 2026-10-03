@@ -152,6 +152,8 @@ Every item also has the built-in answer **Ask later**. It needs no entry in `ask
 
 An item that needs a decision has both `accept` and `deny` in `ask`. This includes an item with `verifiedBy: "agent-verified"`: the Owner confirms or rejects the evidence. The validator adds `accept` and `deny` to an agent-verified item whose `ask` has none of `choice`, `rating`, and `live`, and it warns with the rule `ask`. The server and the viewer apply the same rule to a stored pack, so an old pack with `ask: ["note"]` on an agent-verified item shows **Accept** and **Deny**.
 
+An item that has `accept` or `deny` in `ask` gets the other one. The validator adds the missing one and warns with the rule `ask`. The viewer and the server apply the same rule in `effectiveAsk()` to a stored pack, so an old item with `ask: ["accept", "note"]` shows **Accept** and **Deny**. An item with `choice`, `rating`, or `live` and with neither `accept` nor `deny` keeps its `ask`. A choice is a full decision.
+
 An item whose `ask` holds only `note` is information. The Owner cannot decide it. It has the state `note` with or without a note, and it never counts as open and never blocks the submit.
 
 An item is **answered** when it has a decision, a choice, or a rating. A **Needs live check** item stays open until the Owner sets it to done or decides the item.
@@ -171,6 +173,13 @@ The section state comes from its items: **Denied** when one item is denied, **Ne
 7. Each named file exists. Each file in the folder is named in the manifest, or the command warns and does not copy it.
 8. A URL (`live`, `liveUrl`, an item `link`, or a `link` item URL) passes `safeUrl()` and uses `https`, or `http` for a loopback or `.test` host.
 9. The limits in [Limits](#limits) hold.
+
+The validator warns, and does not refuse, in these cases. The warning names the item and the field.
+
+- `title` (rule `title`): The title is a file name or a path, such as `limits.md` or `docs/limits`, or it equals the `src`, `path`, `file`, or `body` field of the item. An item can have a file name as its title for a legitimate reason, for example a review of `README.md`. The validator cannot tell this case from a mistake, so it does not refuse.
+- `description`, `expected`, a step, a `body`, or a Markdown `text` (rule `file-name-text`): The value is only a file name. These fields hold text. The viewer shows the file name. Only a `body` or a Markdown `text` that is one `.md` path reads the file, and the validator checks that the file exists.
+
+A Markdown item with `text: "limits.md"` reads `limits.md` as its body, as `body: "limits.md"` does. Before this rule, the viewer showed the text `limits.md`.
 
 ## Publish
 

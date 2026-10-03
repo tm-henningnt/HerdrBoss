@@ -431,6 +431,19 @@ export function validatePack(folder, options = {}) {
     if (!isText(value) || !value.trim() || value.length > TITLE_MAX) { error('title', `${where} must have 1 to ${TITLE_MAX} characters.`, { where }); return undefined; }
     return value;
   };
+  // A text that is one file name or one path, such as limits.md or docs/limits. The viewer shows it as it is.
+  const FILE_NAME = /^(?!https?:)[^\s]+\.(md|markdown|html?|json|txt|csv|diff|patch|png|jpe?g|gif|webp|svg|mp4|webm|pdf|ya?ml|log)$/i;
+  const looksLikeFileName = (value) => isText(value) && (FILE_NAME.test(value.trim()) || /^\.{0,2}\/?[\w.-]+(\/[\w.-]+)+$/.test(value.trim()));
+  const warnFileName = (value, where, id) => {
+    if (looksLikeFileName(value)) warn('file-name-text', `Item ${id || '(unknown)'}: ${where} is only the file name ${value.trim().slice(0, 80)}. The viewer shows the file name, not the file. Write the text.`, { where });
+  };
+  // A title that is a file name, or that equals the file field of the item, shows the Owner a name and no meaning.
+  // A title can be a file name for a legitimate item, such as a review of README.md, so this is a warning.
+  const warnTitle = (title, source, id, where) => {
+    if (!isText(title)) return;
+    const same = ['src', 'path', 'file', 'body'].some((field) => isText(source[field]) && source[field].trim() === title.trim());
+    if (same || looksLikeFileName(title)) warn('title', `Item ${id || '(unknown)'}: The title ${title.trim().slice(0, 80)} is a file name or path. The Owner reads the title in the item list. Write a title that says what the item shows.`, { where });
+  };
   const checkId = (value, where, seen, what) => {
     if (!isText(value) || !SLUG.test(value)) { error('id', `${where} must match [a-z0-9][a-z0-9-]* and have at most 64 characters.`, { where }); return undefined; }
     if (seen) {
@@ -479,6 +492,7 @@ export function validatePack(folder, options = {}) {
       else if (record) error('text-size', `${where}: The Markdown file ${value} is larger than ${limits.markdownBytes} bytes.`, { where, file: value });
       return { src: value };
     }
+    if (/^[^\s]+$/.test(value.trim())) warnFileName(value, where, itemId);
     checkMarkdown(value, where);
     return { text: value };
   };
@@ -537,6 +551,10 @@ export function validatePack(folder, options = {}) {
     const out = { id: checkId(source.id, `${where}.id`, ids, 'item'), title: checkTitle(source.title, `${where}.title`) };
     if (out.id === 'summary') error('id', `${where}.id must not be summary.`, { where });
     const id = out.id;
+    warnTitle(out.title, source, id, where);
+    if (isText(source.description) && source.description.split(/\r?\n/).filter((line) => line.trim()).every((line) => looksLikeFileName(line))) warnFileName(source.description.trim().split(/\r?\n/)[0], `${where}.description`, id);
+    warnFileName(source.expected, `${where}.expected`, id);
+    if (Array.isArray(source.steps)) source.steps.forEach((step, index) => warnFileName(step, `${where}.steps[${index}]`, id));
     const missing = ['description', 'steps', 'expected', 'link'].filter((field) => source[field] === undefined);
     if (missing.length) warn('item-guidance', 'Item ' + (id || '(unknown)') + ' needs ' + missing.join(', ') + '.', { where });
     if (source.verifiedBy === undefined) hasUnmarkedItem = true;
@@ -614,7 +632,8 @@ export function validatePack(folder, options = {}) {
       case 'markdown':
         if (source.text !== undefined) {
           if (!isText(source.text)) error('field', `${where}.text must be text.`, { where });
-          else { checkMarkdown(source.text, `${where}.text`); out.text = source.text; }
+          else if (/^[^\s]+\.md$/i.test(source.text)) out.body = checkBody(source.text, `${where}.text`, id);
+          else { checkMarkdown(source.text, `${where}.text`); out.text = source.text; warnFileName(source.text, `${where}.text`, id); }
         } else if (source.body === undefined) error('field', `${where} needs text or body.`, { where });
         break;
       case 'table':
@@ -661,7 +680,7 @@ export function validatePack(folder, options = {}) {
     checkAsk(source, where, out);
     const asked = effectiveAsk(out);
     if (asked.length !== out.ask.length) {
-      warn('ask', 'Agent-verified item ' + (id || '(unknown)') + ' needs accept and deny in ask. Herdr Boss added them.', { where });
+      warn('ask', 'Item ' + (id || '(unknown)') + ' needs accept and deny in ask. Herdr Boss added the missing one.', { where });
       out.ask = asked;
     }
     return out;
