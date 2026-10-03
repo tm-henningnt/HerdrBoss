@@ -2,6 +2,7 @@ import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { serve } from '../src/server.js';
 import { DATA_DIR, loadConfig } from '../src/config.js';
@@ -25,6 +26,8 @@ test('quota plan routes expose the current plan and refuse workers on the Owner 
   engine.log = () => {};
   engine.tick = async () => engine.state;
   engine.herdrRunner = async () => '';
+  const history = { at: at(-2), provider: 'codex', window: 'primary', usedPercent: 8, resetsAt: at(168), privateField: 'must-not-leak' };
+  fs.writeFileSync(path.join(DATA_DIR, 'quota-history.jsonl'), `${JSON.stringify(history)}\n${JSON.stringify({ ...history, window: 'secondary', usedPercent: 77 })}\n`);
   engine.quotaPlanService = createQuotaPlanService({ dataDir: DATA_DIR });
   engine.quotaPlanService.replan({ provider: 'codex', quotas, now: NOW });
   const app = serve(cfg, { liveDataDir: DATA_DIR, createEngine: () => engine });
@@ -43,6 +46,9 @@ test('quota plan routes expose the current plan and refuse workers on the Owner 
   assert.equal(body.provider, 'codex');
   assert.ok(body.plan.fast);
   assert.deepEqual(body.announcements, []);
+  assert.equal(body.windowKey, 'primary');
+  assert.deepEqual(body.history.map(({ at: sampledAt, usedPercent }) => ({ at: sampledAt, usedPercent })), [{ at: history.at, usedPercent: history.usedPercent }]);
+  assert.doesNotMatch(JSON.stringify(body.history), /must-not-leak/);
 
   const announceUrl = `${url}/api/quota-plan/codex/announce`;
   const payload = { at: at(72), kind: 'partial', refundPercent: 12 };

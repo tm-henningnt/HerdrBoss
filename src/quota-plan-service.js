@@ -253,7 +253,7 @@ function buildInput({ provider, quotas, now, settings, state, burstPace, horizon
     ...(whatIf ? { whatIf } : {}),
   };
   const digestInput = {
-    provider, usedPercent: input.usedPercent, resetsAt: input.resetsAt, windowHours: input.windowHours,
+    provider, windowKey: window.key, usedPercent: input.usedPercent, resetsAt: input.resetsAt, windowHours: input.windowHours,
     credits: input.credits, historicalP90, burstPace: input.burstPace, slowBurnRate: input.slowBurnRate,
     applyThreshold: input.applyThreshold, margin: input.margin, horizon: input.horizon ?? 'last-expiry',
     announcedResets: input.announcedResets, whatIf: input.whatIf ?? null,
@@ -284,6 +284,7 @@ function calculate(options, built = buildInput(options)) {
   const atNow = new Date(built.currentTime).toISOString();
   const view = {
     provider: options.provider,
+    windowKey: built.window.key,
     at: atNow,
     now: atNow,
     usedPercent: built.window.usedPercent,
@@ -390,11 +391,16 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
       assertProvider(provider);
       const state = loadState();
       const current = state.current?.provider === provider ? state.current : null;
-      if (!current) return { provider, at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, historyAvailable: false, plannedUsageNow: null, guidance: null, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
+      if (!current) return { provider, windowKey: null, history: [], at: null, now: iso(now), usedPercent: null, resetsAt: null, windowHours: null, horizon: null, inputsDigest: null, historicalP90: 0, historyAvailable: false, plannedUsageNow: null, guidance: null, credits: [], plan: null, burstTable: [], announcements: state.announcements.filter((item) => item.provider === provider), observedResets: state.observedResets.filter((item) => item.provider === provider), usedCredits: state.usedCredits.filter((item) => item.provider === provider) };
       const currentTime = time(now, 'now');
+      const history = current.windowKey ? readHistory(path.join(dataDir, 'quota-history.jsonl'), currentTime)
+        .filter((row) => row.provider === provider && row.window === current.windowKey && Number.isFinite(row.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100)
+        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+        .map((row) => ({ at: row.at, provider, window: current.windowKey, usedPercent: row.usedPercent, ...(typeof row.resetsAt === 'string' ? { resetsAt: row.resetsAt } : {}) })) : [];
       return {
         ...current,
         now: iso(currentTime),
+        history,
         plannedUsageNow: plannedUsageAt(current.plan, currentTime),
         guidance: usageGuidance(current.plan, currentTime, current.usedPercent, normalizedSettings.tolerance),
       };
