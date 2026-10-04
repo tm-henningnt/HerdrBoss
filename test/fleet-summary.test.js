@@ -182,6 +182,15 @@ test('the fleet summary emits sourced optional fields and keeps unknown readings
     logins: [{ harness: 'codex', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }] });
   assert.deepEqual(unknownWithoutWait.pending, []);
 
+  const closedLoginWait = mailbox.find((item) => item.id === 'login-wait');
+  const unknownWithClosedWait = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'claude', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [closedLoginWait] });
+  assert.deepEqual(unknownWithClosedWait.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
+
+  const passedWithClosedWait = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'claude', login: 'logged-in', checkedAt: '2026-10-02T10:00:00Z' }], ownerItems: [closedLoginWait] });
+  assert.deepEqual(passedWithClosedWait.pending, []);
+
   const repeatedExpiry = buildFleetSummary({ settings, state: {}, health, now,
     logins: [{ harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [
       { ...mailbox.find((item) => item.id === 'login-wait'), at: '2026-09-28T09:00:00Z' },

@@ -25,7 +25,7 @@ function pendingLogins(logins, mailbox, name) {
     const matches = mailbox.filter((item) => item?.from === 'boss' && item?.to === 'owner' && item?.thread === 'boss'
       && item?.kind === 'reply' && item?.action === 'answer' && typeof item?.text === 'string' && item.text.startsWith(prefix));
     const open = matches.filter((item) => !item.closedAt && item.closedBy !== 'boss');
-    if (row.login === 'unknown' && open.length === 0) return [];
+    if (row.login === 'unknown' && matches.length === 0) return [];
     const current = open.length ? open : matches;
     const since = current.map((item) => isoTime(item.at)).filter(Boolean).sort()[0] ?? null;
     return [{ step: `login-${row.harness}`, since }];
