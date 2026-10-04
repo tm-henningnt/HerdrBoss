@@ -364,7 +364,7 @@ function publishCommand(args, ctx) {
   let judgePass;
   if (flags['--judge-pass'] !== undefined) {
     judgePass = flags['--judge-pass'];
-    if (typeof judgePass !== 'string' || !judgePass.trim() || judgePass.length > JUDGE_MAX || /[\r\n]/.test(judgePass)) throw new ReviewCliError(`The judge pass must be one line of 1 to ${JUDGE_MAX} characters. ${USAGE.publish}`);
+    if (typeof judgePass !== 'string' || !judgePass.trim() || judgePass.length > JUDGE_MAX || /[\x00-\x1f\x7f]/.test(judgePass)) throw new ReviewCliError(`The judge pass must be one line of 1 to ${JUDGE_MAX} characters. ${USAGE.publish}`);
     refuseSecret(judgePass, 'judge pass');
     judgePass = judgePass.trim();
   }
