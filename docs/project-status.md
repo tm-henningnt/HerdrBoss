@@ -98,7 +98,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `doneIds` | string[] | Written by `herdr-boss publish`. The IDs of the done tasks that `doneCount` counts. At most 5000 IDs. |
 | `doneCountBase` | integer | Written by `herdr-boss publish`. The part of `doneCount` that has no ID. The value is from 0 to 1000000. |
 | `tasks[].parent` | string | The ID of the parent task. The specs section counts the work under each spec by this field. |
-| `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. |
+| `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. A task with `epic` only groups other tasks, and the idle-orchestrator nudge skips it. |
 | `tasks[].group` | string | The `id` of a group in `groups[]`. |
 | `tasks[].frontier` | string | `current` or `next`. Set it when the project defines its frontier itself. When no task has this field, the Boss derives it: current work is open and has no open blocker; next work waits only on current work. |
 | `tasks[].url` | string | An `http` or `https` link to the issue. |

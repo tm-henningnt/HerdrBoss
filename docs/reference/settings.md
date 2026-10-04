@@ -33,7 +33,7 @@ An idle-orchestrator nudge reads the published project status file. Herdr Boss s
 
 A task is actionable when its status is `todo`, `doing`, or `review` and every ID in its `blockedBy` list is `done` in the same project. An unknown blocker stays unresolved. A task with status `blocked` is never actionable. Herdr Boss picks one actionable task: current frontier first, then a task without a frontier value, then next frontier. Status-file order decides a tie.
 
-A task in a group with `"held": true` is not actionable. The nudge then names the next actionable task outside the held group, or sends no notice.
+A task in a group with `"held": true` is not actionable. A task with `kind` `epic` and a task that waits on the Owner are not actionable. The nudge then names the next actionable task outside the held group, or sends no notice.
 
 The notice names the task ID and title. Resume an idle or done worker on that task, or start suitable work yourself. Check **Use now** when the project has a free effective slot. If it lists a lane, start ready work on that lane's harness. The notice uses one key per project and task, so the normal notice cooldown limits repeats. A different next task gets a new key and can prompt again.
 

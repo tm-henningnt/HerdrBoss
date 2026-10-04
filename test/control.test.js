@@ -1866,6 +1866,29 @@ test('a task is actionable only when every blocker is done in the same project',
   assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: explicitly }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } }), [], 'a blocked task is not actionable');
 });
 
+test('the nudge skips an epic card and a task that waits on the Owner', () => {
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const epic = nudgeFixture({ tasks: [
+    { id: '80', title: 'Release 1.0', status: 'todo', kind: 'epic' },
+    { id: '74', title: 'Parse event log', status: 'todo', kind: 'impl' },
+  ] });
+  assert.match(nudgeAlerts(epic, since)[0].key, /:74$/, 'an epic card is skipped and the next task is named');
+  const epicOnly = nudgeFixture({ tasks: [{ id: '80', title: 'Release 1.0', status: 'todo', kind: 'epic' }] });
+  assert.deepEqual(nudgeAlerts(epicOnly, since), [], 'an epic card alone sends no notice');
+
+  const owner = nudgeFixture({ tasks: [
+    { id: '76', title: 'Choose the export format', status: 'todo', waitingOn: 'owner', ask: 'PNG or SVG?', mailboxId: 'm1727' },
+    { id: '74', title: 'Parse event log', status: 'todo' },
+  ] });
+  assert.match(nudgeAlerts(owner, since)[0].key, /:74$/, 'an Owner wait is skipped and the next task is named');
+  const ownerOnly = nudgeFixture({ tasks: [{ id: '76', title: 'Choose the export format', status: 'todo', waitingOn: 'owner', ask: 'PNG or SVG?', mailboxId: 'm1727' }] });
+  assert.deepEqual(nudgeAlerts(ownerOnly, since), [], 'an Owner wait alone sends no notice');
+
+  const normal = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), since);
+  assert.equal(normal.length, 1, 'a normal ready task still notifies');
+  assert.match(normal[0].key, /:74$/);
+});
+
 test('the nudge skips paused and idle projects and the Boss workspace', () => {
   const tasks = [{ id: '74', title: 'Parse event log', status: 'todo' }];
   const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };

@@ -61,7 +61,8 @@ const OPEN_TASK_STATUS = new Set(['todo', 'doing', 'review']);
 const FRONTIER_RANK = { current: 0, next: 2 };
 
 // Open work whose blockers are all done in the same status file. An unknown blocker stays unresolved.
-// A task in a held group is not actionable.
+// A task in a held group is not actionable. An epic card only groups other tasks, and a task that waits
+// on the Owner needs an Owner answer; the orchestrator cannot start either one now.
 // The current frontier wins, then work without a frontier value, then the next frontier. File order breaks a tie.
 function actionableTask(tasks, groups) {
   const list = Array.isArray(tasks) ? tasks : [];
@@ -70,6 +71,7 @@ function actionableTask(tasks, groups) {
   let best = null;
   for (const task of list) {
     if (!task || !OPEN_TASK_STATUS.has(task.status) || held.has(task.group)) continue;
+    if (task.kind === 'epic' || task.waitingOn === 'owner') continue;
     if (!(task.blockedBy || []).every((id) => byId.get(id)?.status === 'done')) continue;
     const rank = FRONTIER_RANK[task.frontier] ?? 1;
     if (!best || rank < best.rank) best = { task, rank };
