@@ -5,6 +5,7 @@ import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardCo
 import { patchHtml } from './keyed.js';
 import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
 import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
+import { showImportFallback } from './docs-fallback.js';
 import { installTableHints } from './table-hint.js';
 import { orchestratorFocus, workerListHtml } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
@@ -211,11 +212,16 @@ function docsView() {
   return docsViewHtml({ tree: docs.tree, name, page, error: page ? '' : docs.errors.get(key) || '' });
 }
 // The explainer page loads its module only when the page shows. A render that replaces the element mounts it again at the same step.
+// A Mermaid diagram loads the vendored library only when the page has a diagram.
 function docsAfterRender() {
   const root = document.querySelector('[data-explainer]');
-  if (!root || root.dataset.mounted) return;
-  root.dataset.mounted = '1';
-  import('/explainer.js').then((mod) => { if (root.isConnected) mod.mountExplainer(root); }, () => { root.textContent = 'The explainer did not load.'; });
+  if (root && !root.dataset.mounted) {
+    root.dataset.mounted = '1';
+    import('/explainer.js').then((mod) => { if (root.isConnected) mod.mountExplainer(root); }, () => { root.textContent = 'The explainer did not load.'; });
+  }
+  const diagrams = document.querySelectorAll('[data-mermaid]:not([data-mermaid-drawn])');
+  if (!diagrams.length) return;
+  import('/docs-diagrams.js').then((mod) => mod.mountDiagrams(diagrams), () => showImportFallback(diagrams));
 }
 // The Add a host page keeps its own DOM. The render gives it one empty element, so a refresh of the state never replaces it.
 // The module loads when the page shows. A render that replaces the element mounts it again.

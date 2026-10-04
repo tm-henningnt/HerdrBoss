@@ -22,8 +22,12 @@
 .docs-page img.md-image { display: inline-block; max-width: 100%; height: auto; margin: 6px 0; border: 1px solid var(--line); border-radius: 8px; }
 .docs-page img[src$="#only-dark"] { display: none; }
 .docs-diagram { margin: 12px 0; padding: 4px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.docs-diagram summary { min-height: 32px; padding: 6px 0; color: var(--muted); font-size: 13px; cursor: pointer; }
-.docs-diagram .md-code { margin-top: 0; }
+.docs-diagram-view { overflow-x: auto; padding: 8px 0; }
+.docs-diagram-view[hidden] { display: none; }
+.docs-diagram-view svg { display: block; height: auto; min-width: 560px; }
+.docs-diagram-error { margin: 8px 0; color: var(--muted); font-size: 13px; }
+.docs-diagram-source summary { min-height: 32px; padding: 6px 0; color: var(--muted); font-size: 13px; cursor: pointer; }
+.docs-diagram-source .md-code { margin-top: 0; }
 .docs-note { padding: 8px 12px; border-left: 2px solid var(--accent); background: var(--panel); color: var(--muted); font-size: 13.5px; border-radius: 0 6px 6px 0; }
 .docs-source { margin-top: 28px; color: var(--faint); font-size: 12px; }
 .docs-loading { color: var(--muted); }
