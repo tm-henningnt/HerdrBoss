@@ -773,14 +773,19 @@ function branchExists(root, branch) {
   }
 }
 
-function addExclude(worktree) {
-  const exclude = git(worktree, ['rev-parse', '--git-path', 'info/exclude']).trim();
-  const file = path.isAbsolute(exclude) ? exclude : path.resolve(worktree, exclude);
+// Add each missing entry to the Git exclude of a folder. Fail hard when Git or the file is unavailable.
+export function addGitExclude(folder, entries) {
+  const exclude = git(folder, ['rev-parse', '--git-path', 'info/exclude']).trim();
+  const file = path.isAbsolute(exclude) ? exclude : path.resolve(folder, exclude);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const lines = current.split(/\r?\n/);
-  const missing = ['/.worker/', '/.orchestration/local/', `/${OPEN_CODE_CONFIG_NAME}`].filter((entry) => !lines.includes(entry));
+  const missing = entries.filter((entry) => !lines.includes(entry));
   if (missing.length) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, 'utf8');
+}
+
+function addExclude(worktree) {
+  addGitExclude(worktree, ['/.worker/', '/.orchestration/local/', `/${OPEN_CODE_CONFIG_NAME}`]);
 }
 
 function writeJsonAtomic(file, value) {

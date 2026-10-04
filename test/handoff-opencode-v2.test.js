@@ -77,3 +77,32 @@ catch (error) { console.log(JSON.stringify({ ok: false, code: error.code, messag
   assert.match(records[0].promptError, /Unrecognized flag: -m/);
   assert.equal(fs.existsSync(path.join(f.root, 'unavailable-models.json')), false, 'a refused flag marks no model');
 });
+
+test('an existing opencode.json in the project folder is refused and never overwritten', (t) => {
+  const f = handoffFixture(t);
+  execFileSync('git', ['init', '-q'], { cwd: f.project });
+  fakeOpenCode(f.root, { acceptFlags: false });
+  const file = path.join(f.project, 'opencode.json');
+  const owned = '{\n  "mcp": { "keep": true }\n}\n';
+  fs.writeFileSync(file, owned);
+  assert.throws(() => runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'opencode', '--mode', 'fresh'], f.env), (error) => {
+    const text = String(error.stderr);
+    assert.match(text, /opencode\.json/);
+    assert.match(text, /will not overwrite|another --to kind/);
+    return true;
+  });
+  assert.equal(fs.readFileSync(file, 'utf8'), owned, 'the project file is unchanged');
+  const calls = fs.existsSync(f.callsFile) ? fs.readFileSync(f.callsFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+  assert.equal(calls.some((args) => args[0] === 'tab' && args[1] === 'create'), false, 'no tab is created');
+  assert.equal(calls.some((args) => args[0] === 'agent' && args[1] === 'start'), false, 'no agent starts');
+});
+
+test('the config written for a v2 successor is removed when the handoff fails to start', (t) => {
+  const f = handoffFixture(t, { busyAttempts: 2 });
+  execFileSync('git', ['init', '-q'], { cwd: f.project });
+  fakeOpenCode(f.root, { acceptFlags: false });
+  assert.throws(() => runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'opencode', '--mode', 'fresh'], f.env), (error) => /Inspect it before retrying/.test(String(error.stderr)));
+  assert.equal(fs.existsSync(path.join(f.project, 'opencode.json')), false, 'the config that the handoff wrote is removed');
+  const exclude = fs.readFileSync(path.join(f.project, '.git', 'info', 'exclude'), 'utf8');
+  assert.match(exclude, /^\/opencode\.json$/m, 'the git exclude stays');
+});

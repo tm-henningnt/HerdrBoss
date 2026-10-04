@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR } from './config.js';
-import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
+import { alertBossForOpus, addGitExclude, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
 import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
@@ -325,37 +325,57 @@ export function successorAgentArgs(item, launchArgs, env, { browserLookup, outpu
   return [...launchArgs, ...envArgs, ...browserArgs];
 }
 
-// A v2 OpenCode TUI reads the model and the worker agent from a project config file. Write the file into the
-// successor working folder and keep it out of the Git index. The file holds no secret.
-function writeOpenCodeSuccessorConfig(item, { output = console.error } = {}) {
-  fs.writeFileSync(path.join(item.cwd, OPEN_CODE_CONFIG_NAME), openCodeConfigText(item.model), { mode: 0o600 });
-  try {
-    const relative = call('git', ['rev-parse', '--git-path', 'info/exclude'], item.cwd).trim();
-    const file = path.isAbsolute(relative) ? relative : path.resolve(item.cwd, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-    const entry = `/${OPEN_CODE_CONFIG_NAME}`;
-    if (!current.split(/\r?\n/).includes(entry)) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}${entry}\n`, 'utf8');
-  } catch (error) {
-    output(`Warning: could not add ${OPEN_CODE_CONFIG_NAME} to the git exclude: ${String(error.message).slice(0, 200)}`);
-  }
+// A v2 OpenCode TUI reads the model and the worker agent from a project config file.
+function openCodeConfigPath(cwd) { return path.join(cwd, OPEN_CODE_CONFIG_NAME); }
+
+// A handoff successor runs in the project folder. Never overwrite a config that the project owns.
+// Only a config that an earlier handoff wrote (or this record wrote) may be replaced.
+function assertOpenCodeConfigFree(cwd) {
+  const file = openCodeConfigPath(cwd);
+  if (!fs.existsSync(file) || listHandoffs().some((record) => record.openCodeConfigFile === file)) return file;
+  throw new Error(`The folder ${cwd} already holds ${OPEN_CODE_CONFIG_NAME}. handoff prepare will not overwrite it. Move that file aside, or start the successor with another --to kind.`);
 }
 
-// The pane shows a refused launch flag when the capability detection was wrong. Fail loudly and keep the record.
-function openCodeLaunchError(item) {
+// Write the project config for a v2 OpenCode TUI and keep it out of the Git index. The file holds no secret.
+function writeOpenCodeSuccessorConfig(item) {
+  const file = assertOpenCodeConfigFree(item.cwd);
+  addGitExclude(item.cwd, [`/${OPEN_CODE_CONFIG_NAME}`]);
+  fs.writeFileSync(file, openCodeConfigText(item.model), { mode: 0o600 });
+  item.openCodeConfigFile = file;
+  return file;
+}
+
+// Remove the config that this handoff wrote when the start fails, so a later prepare can write it again.
+function removeOpenCodeConfigFile(file) {
+  try { fs.rmSync(file, { force: true }); } catch { /* Keep the start error. */ }
+}
+
+const OPEN_CODE_FLAG_TIMEOUT_MS = 5_000;
+const OPEN_CODE_FLAG_INTERVAL_MS = 250;
+
+function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+// A wrong capability answer shows the refused flag shortly after the agent start. Poll the pane, then accept.
+function openCodeLaunchError(item, { wait = pause, timeoutMs = OPEN_CODE_FLAG_TIMEOUT_MS, intervalMs = OPEN_CODE_FLAG_INTERVAL_MS } = {}) {
   if (item.toKind !== 'opencode') return null;
-  let text;
-  try { text = herdr(['pane', 'read', item.newPane, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']).text; }
-  catch { return null; }
-  const flag = unsupportedOpenCodeFlag(text);
-  if (!flag) return null;
-  const error = new Error(`OpenCode refused the launch flag ${flag}: the pane shows "Unrecognized flag: ${flag} in command opencode". The installed OpenCode TUI does not accept this flag. Inspect pane ${item.newPane} with "herdr agent read ${item.newPane}", then retry handoff prepare.`);
-  error.code = 'opencode_unsupported_flag';
-  error.unsupportedFlag = flag;
-  return error;
+  const attempts = Math.max(1, Math.ceil(timeoutMs / intervalMs));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let text;
+    try { text = herdr(['pane', 'read', item.newPane, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']).text; }
+    catch { return null; }
+    const flag = unsupportedOpenCodeFlag(text);
+    if (flag) {
+      const error = new Error(`OpenCode refused the launch flag ${flag}: the pane shows "Unrecognized flag: ${flag} in command opencode". The installed OpenCode TUI does not accept this flag. Inspect pane ${item.newPane} with "herdr agent read ${item.newPane}", then retry handoff prepare.`);
+      error.code = 'opencode_unsupported_flag';
+      error.unsupportedFlag = flag;
+      return error;
+    }
+    if (attempt < attempts) wait(intervalMs);
+  }
+  return null;
 }
 
-export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup, output = console.error, tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags } = {}) {
+export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup, tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags } = {}) {
   // Refuse a caller value that Codex cannot receive before any record or tab changes.
   if (toKind === 'codex') successorAgentArgs({ toKind }, [], env);
   const currentPanes = expireMissingSuccessors();
@@ -412,6 +432,8 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     const goal = ownerGoal(plan.project, plan.boss);
     const captured = captureGoal(plan, goal, loadPolicy());
     const name = `handoff-${plan.project}`.slice(0, 23) + `-${Date.now().toString(36).slice(-6)}`;
+    // A v2 OpenCode successor needs a project config. Refuse an existing project file before any tab changes.
+    if (plan.toKind === 'opencode' && tuiSupportsModelFlags({ env }) === false) assertOpenCodeConfigFree(plan.cwd);
     const created = herdr(['tab', 'create', '--workspace', plan.workspace, '--label', 'Orchestrator Next', '--cwd', plan.cwd,
       '--env', 'DISABLE_UPDATE_PROMPT=true', '--env', 'DISABLE_AUTO_UPDATE=true', '--no-focus']);
     const newPane = created.root_pane?.pane_id;
@@ -428,47 +450,53 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   const agentArgs = successorAgentArgs(item, launchArgs, env, { browserLookup, tuiSupportsModelFlags });
   // The capability answer is cached for the process, so this check runs opencode --help at most once.
   const openCodeConfig = item.toKind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
-  if (openCodeConfig) writeOpenCodeSuccessorConfig(item, { output });
+  const openCodeConfigFile = openCodeConfig ? writeOpenCodeSuccessorConfig(item) : null;
   const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...agentArgs]
     : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...agentArgs]
       : agentArgs;
-  const readinessOptions = { retryCommand: 'handoff prepare', timeoutMs: HANDOFF_READY_TIMEOUT_MS };
-  try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
-  catch (e) {
-    item.status = 'needs-inspection';
-    item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${e.message}` : e.message;
-    save(records);
-    if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${e.message}`);
-    throw e;
-  }
   const agentName = handoffAgentName(item.id);
-  const startArgs = ['agent', 'start', agentName, '--kind', item.toKind, '--pane', item.newPane, '--', ...args];
-  try { herdr(startArgs); }
-  catch (startError) {
-    if (!isAgentPaneBusy(startError)) {
-      item.status = 'needs-inspection'; item.promptError = startError.message; save(records);
-      throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${startError.message}`);
-    }
+  try {
+    const readinessOptions = { retryCommand: 'handoff prepare', timeoutMs: HANDOFF_READY_TIMEOUT_MS };
     try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
-    catch (readinessError) {
+    catch (e) {
       item.status = 'needs-inspection';
-      item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${readinessError.message}` : readinessError.message;
+      item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${e.message}` : e.message;
       save(records);
-      if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${readinessError.message}`);
-      throw readinessError;
+      if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${e.message}`);
+      throw e;
     }
+    const startArgs = ['agent', 'start', agentName, '--kind', item.toKind, '--pane', item.newPane, '--', ...args];
     try { herdr(startArgs); }
-    catch (retryError) {
-      item.status = 'needs-inspection'; item.promptError = retryError.message; save(records);
-      throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${retryError.message}`);
+    catch (startError) {
+      if (!isAgentPaneBusy(startError)) {
+        item.status = 'needs-inspection'; item.promptError = startError.message; save(records);
+        throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${startError.message}`);
+      }
+      try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
+      catch (readinessError) {
+        item.status = 'needs-inspection';
+        item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${readinessError.message}` : readinessError.message;
+        save(records);
+        if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${readinessError.message}`);
+        throw readinessError;
+      }
+      try { herdr(startArgs); }
+      catch (retryError) {
+        item.status = 'needs-inspection'; item.promptError = retryError.message; save(records);
+        throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${retryError.message}`);
+      }
     }
-  }
-  const flagError = openCodeLaunchError(item);
-  if (flagError) {
-    item.status = 'needs-inspection';
-    item.promptError = flagError.message;
-    save(records);
-    throw flagError;
+    const flagError = openCodeLaunchError(item, { wait });
+    if (flagError) {
+      item.status = 'needs-inspection';
+      item.promptError = flagError.message;
+      save(records);
+      throw flagError;
+    }
+  } catch (error) {
+    // A failed start must not leave our OpenCode config in the project folder.
+    if (openCodeConfigFile) removeOpenCodeConfigFile(openCodeConfigFile);
+    throw error;
   }
   item.status = 'prepared';
   delete item.promptError;
