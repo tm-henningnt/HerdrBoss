@@ -4,14 +4,14 @@ This page explains the parts of Herdr Boss. Each part has a short text and a dia
 
 ## The Boss
 
-The *Boss* is the one agent that watches all projects. It talks to you in the *Chat*. It also tells the project leads about changes that affect them.
+The *Boss* is the one agent that watches all projects. It talks to you in the *Chat*.
 
 ```mermaid
 flowchart LR
     you([You]) <--> chat[Chat]
     chat <--> boss[Boss]
-    boss --> leadA[Project lead: Shop]
-    boss --> leadB[Project lead: Recipes]
+    boss --> leadA["Project lead: Shop"]
+    boss --> leadB["Project lead: Recipes"]
 ```
 
 You talk to the Boss in the Chat, and the Boss supervises each project lead.
@@ -37,17 +37,17 @@ To create a project and its project lead, read [I want to add a project](guide/p
 
 ## Workers
 
-A *worker* is an agent that does one task for a project lead. Each worker makes its changes in its own *worktree* on its own *branch*. The project lead reviews the result and *merges* it.
+A *worker* is an agent that does one task for a project lead. Each worker makes its changes in its own *worktree* on its own *branch*. The Board shows a finished change that waits to be *merged*.
 
 ```mermaid
 flowchart LR
     lead[Project lead] -- brief --> worker[Worker]
     worker --> tree[Worktree and branch]
     worker -- report --> lead
-    lead -- merge --> main[Main line of the project]
+    tree -- merge --> main[Main line of the project]
 ```
 
-The project lead sends a brief to a worker, the worker reports back, and the project lead merges the result.
+The project lead sends a brief to a worker, the worker reports back, and the finished change waits to be merged.
 
 To see each worker and what it does now, read [I want to see what is happening](guide/see.md#see-what-each-agent-does).
 
@@ -72,7 +72,7 @@ To add a factory, read [I want to add a factory](guide/factory.md).
 
 ## Review packs
 
-A *review pack* is a set of *items* with evidence. A project lead sends a pack when it has finished a part of the work. You accept, reject, or comment on each item. A *live check* opens the real result so that you can try it.
+A *review pack* is a set of *items* with evidence. A project lead sends a pack when it has finished a part of the work. You accept, deny, or comment on each item. A *live check* opens the real result so that you can try it.
 
 ```mermaid
 flowchart LR
@@ -101,7 +101,7 @@ flowchart LR
     go --> reset
 ```
 
-Herdr Boss starts new workers while you are on pace and holds them when you are ahead of the pace.
+Herdr Boss starts new workers while you are on pace and holds them when you are ahead of the pace. A window longer than 7 days that is ahead of the pace uses a daily allowance instead. See the [settings reference](reference/settings.md).
 
 To read the limits and to choose how to use them, read [I want to limit the cost](guide/cost.md).
 
@@ -130,7 +130,7 @@ A *Watch* tells the Boss that you are away. The Boss makes the routine decisions
 flowchart LR
     you([You]) -- start Watch --> boss[Boss]
     boss -- routine decisions --> leads[Project leads]
-    boss -- ends at the end time --> back[You are back]
+    boss -- "at the stop time" --> back[You are back]
     back --> you
 ```
 
