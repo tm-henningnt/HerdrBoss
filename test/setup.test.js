@@ -187,6 +187,7 @@ test('finished setup saves pacing, verifies every step, and resumes without repe
   const options = { ...f.options, pacing: 'unpaced', ask: async () => 'yes' };
   assert.equal((await runSetup(options)).exitCode, 0);
   const state = readSetupState(f.dataDir);
+  assert.equal(state.revision, SETUP_STEPS.length);
   assert.ok(Object.values(state.steps).every((step) => step.status === 'done'));
   const policy = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'policy.json')));
   assert.equal(policy.providerModes.claude, 'ignore');
@@ -195,6 +196,7 @@ test('finished setup saves pacing, verifies every step, and resumes without repe
   assert.deepEqual(f.commands.map(([command]) => command), ['open']);
   f.commands.length = 0;
   assert.equal((await runSetup({ ...options, resume: true, ask: () => { throw new Error('do not ask again'); } })).exitCode, 0);
+  assert.equal(readSetupState(f.dataDir).revision, state.revision + SETUP_STEPS.length);
   assert.deepEqual(f.commands, []);
   f.values.disk = { bavail: 0, bsize: 1 };
   assert.equal((await runSetup({ ...options, resume: true })).waitingStep, 'check');
@@ -233,7 +235,8 @@ test('step failures and hostile saved fields cannot disclose secrets or execute 
   assert.ok(!f.lines.join('\n').includes(unsafe));
   assert.deepEqual(f.commands, []);
   fs.writeFileSync(file, '{invalid');
-  await assert.rejects(setupCommand(['--resume'], f.options), /Check the data folder and setup.json/);
+  assert.equal(await setupCommand(['--resume'], f.options), 3);
+  assert.equal(readSetupState(f.dataDir).revision, 3);
 });
 
 test('F1 setup refuses escaping progress, policy and policy-log destinations before probes or actions', async (t) => {
@@ -255,48 +258,55 @@ test('F1 setup refuses escaping progress, policy and policy-log destinations bef
   }
 });
 
-test('F2 overlapping setup runs refuse the competitor without reading or replacing progress', async (t) => {
+test('setup revisions refuse an older overlapping run without erasing newer progress', async (t) => {
   const f = fixture(t);
   f.project();
   let enter;
   const entered = new Promise((resolve) => { enter = resolve; });
   let release;
   const consent = new Promise((resolve) => { release = resolve; });
-  const first = runSetup({ ...f.options, runner: async ({ id }) => id === 'node' ? '' : f.values[id], ask: async () => { enter(); return consent; } });
+  const olderLines = [];
+  const first = runSetup({ ...f.options, output: (line) => olderLines.push(line), runner: async ({ id }) => id === 'node' ? '' : f.values[id], ask: async () => { enter(); return consent; } });
   await entered;
+  let newerProgress;
+  let olderResult;
   try {
-    const owner = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'setup.lock'), 'utf8'));
-    assert.equal(owner.pid, process.pid);
-    assert.equal(owner.startMarker, `${process.pid}@${os.hostname()}`);
-    const before = fs.readFileSync(path.join(f.dataDir, 'setup.json'));
+    const olderRevision = readSetupState(f.dataDir).revision;
     const alias = path.join(f.home, 'data-alias');
     fs.symlinkSync(f.dataDir, alias);
-    const second = await runSetup({ ...f.options, dataDir: alias, pacing: 'paced', ask: async () => 'yes' });
-    assert.equal(second.exitCode, 1);
-    assert.equal(f.lines.at(-1), 'Setup is already running for this data folder.');
-    assert.deepEqual(fs.readFileSync(path.join(f.dataDir, 'setup.json')), before);
-    assert.deepEqual(f.requests, []);
-    assert.deepEqual(f.commands, []);
-  } finally { release('no'); await first; }
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
-  assert.equal((await runSetup({ ...f.options, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+    const second = await runSetup({ ...f.options, dataDir: alias, pacing: 'unpaced', ask: async () => 'yes' });
+    assert.equal(second.exitCode, 0);
+    const newer = readSetupState(f.dataDir);
+    assert.ok(newer.revision > olderRevision);
+    assert.ok(Object.values(newer.steps).every((step) => step.status === 'done'));
+    assert.equal(newer.pacing, 'unpaced');
+    newerProgress = fs.readFileSync(path.join(f.dataDir, 'setup.json'));
+  } finally { release('no'); olderResult = await first; }
+  assert.equal(olderResult.exitCode, 1);
+  assert.equal(olderLines.at(-1), 'Another setup run changed the progress. Run setup --resume.');
+  assert.equal(olderLines.filter((line) => line === 'Another setup run changed the progress. Run setup --resume.').length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(f.dataDir, 'setup.json')), newerProgress);
 });
 
-test('F5 setup resumes after a lock owner exits without cleanup', async (t) => {
+test('setup crash leaves saved progress and no setup lock to clean up', async (t) => {
   const f = fixture(t);
   f.project();
-  const source = `import { takeSetupLock } from ${JSON.stringify(new URL('../src/setup-lock.js', import.meta.url).href)};
-    if (!takeSetupLock(${JSON.stringify(f.dataDir)})) throw new Error('Fixture could not acquire its lock');
-    process.exit(23);`;
+  const source = `import { runSetup } from ${JSON.stringify(new URL('../src/setup.js', import.meta.url).href)};
+    const values = ${JSON.stringify({ ...f.values, node: '' })};
+    await runSetup({ home: ${JSON.stringify(f.home)}, dataDir: ${JSON.stringify(f.dataDir)},
+      env: ${JSON.stringify(f.options.env)}, runner: async ({ id }) => values[id],
+      output: () => {}, ask: async () => process.exit(23) });
+    throw new Error('Fixture did not reach the prompt');`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-'], {
     input: source, encoding: 'utf8', env: { ...process.env, ...f.options.env },
   });
   assert.equal(child.error, undefined);
   assert.equal(child.status, 23, child.stderr);
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), true);
-  assert.equal((await runSetup({ ...f.options, resume: true, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
   assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+  const before = readSetupState(f.dataDir).revision;
+  assert.ok(before > 0);
+  assert.equal((await runSetup({ ...f.options, resume: true, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
+  assert.equal(readSetupState(f.dataDir).revision, before + SETUP_STEPS.length);
 });
 
 test('F1 setup revalidates destinations after a terminal prompt yields', async (t) => {
@@ -315,27 +325,46 @@ test('F1 setup revalidates destinations after a terminal prompt yields', async (
       assert.equal(code, 1);
       assert.equal(fs.readFileSync(sentinel, 'utf8'), '{}\n');
       assert.equal(fs.statSync(sentinel).mode & 0o777, 0o644);
-      assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
       assert.deepEqual(f.commands, []);
     });
   }
 });
 
-test('F2 setup releases its lock on waiting, refusal, completed and thrown paths', async (t) => {
-  const f = fixture(t);
-  f.values.node = '';
-  let lockedDuringPrompt = false;
-  assert.equal((await runSetup({ ...f.options, ask: async () => {
-    lockedDuringPrompt = fs.existsSync(path.join(f.dataDir, 'setup.lock'));
-    return null;
-  } })).exitCode, 3);
-  assert.equal(lockedDuringPrompt, true);
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
-  assert.equal((await runSetup({ ...f.options, ask: async () => 'no' })).exitCode, 1);
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
-  fs.writeFileSync(path.join(f.dataDir, 'setup.json'), '{invalid');
-  await assert.rejects(runSetup(f.options));
-  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+test('setup revisions start at zero for missing, legacy and corrupt progress', async (t) => {
+  for (const [name, text] of [
+    ['missing', null], ['legacy', '{"schema":"herdr-boss.setup/1","steps":{}}'],
+    ['invalid JSON', '{invalid'], ['invalid schema', '{"revision":99,"steps":{}}'],
+    ['invalid state', '{"schema":"herdr-boss.setup/1","revision":99,"steps":{"tools":{"status":"unsafe"}}}'],
+    ['invalid revision', '{"schema":"herdr-boss.setup/1","revision":-1,"steps":{}}'],
+  ]) {
+    await t.test(name, async (t) => {
+      const f = fixture(t);
+      fs.mkdirSync(f.dataDir);
+      if (text !== null) fs.writeFileSync(path.join(f.dataDir, 'setup.json'), text);
+      f.values.node = '';
+      assert.equal((await runSetup(f.options)).exitCode, 3);
+      assert.equal(readSetupState(f.dataDir).revision, 3);
+    });
+  }
+});
+
+test('setup revisions treat progress removed or corrupted during a prompt as revision zero', async (t) => {
+  for (const kind of ['missing', 'corrupt']) {
+    await t.test(kind, async (t) => {
+      const f = fixture(t);
+      f.values.node = '';
+      const file = path.join(f.dataDir, 'setup.json');
+      const result = await runSetup({ ...f.options, ask: async () => {
+        if (kind === 'missing') fs.unlinkSync(file);
+        else fs.writeFileSync(file, '{invalid');
+        return 'no';
+      } });
+      assert.equal(result.exitCode, 1);
+      assert.equal(f.lines.at(-1), 'Another setup run changed the progress. Run setup --resume.');
+      if (kind === 'missing') assert.equal(fs.existsSync(file), false);
+      else assert.equal(fs.readFileSync(file, 'utf8'), '{invalid');
+    });
+  }
 });
 
 test('F3 setup accepts a registered Git worktree and rejects invalid or missing Git metadata', async (t) => {

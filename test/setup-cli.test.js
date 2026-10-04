@@ -103,10 +103,12 @@ test('fresh CLI setup stops at tools with exit 3 and stores only named progress'
   assert.ok(!result.stdout.includes('invented private probe error'));
   assert.deepEqual(fs.readdirSync(data), ['setup.json']);
   const state = JSON.parse(fs.readFileSync(path.join(data, 'setup.json')));
+  assert.equal(state.revision, 3);
   assert.equal(state.steps.check.status, 'done');
   assert.equal(state.steps.tools.status, 'waiting');
   const resumed = run('--resume');
   assert.equal(resumed.status, 3, resumed.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'setup.json'))).revision, 6);
 });
 
 test('a finished fixture exits 0 at the real CLI boundary without repeating actions', (t) => {
@@ -115,6 +117,7 @@ test('a finished fixture exits 0 at the real CLI boundary without repeating acti
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Setup is complete\. All steps passed/);
   const state = JSON.parse(fs.readFileSync(path.join(data, 'setup.json')));
+  assert.equal(state.revision, 11);
   assert.equal(Object.values(state.steps).filter((step) => step.status === 'done').length, 11);
   assert.equal(fs.existsSync(path.join(data, 'config.json')), false);
 });

@@ -61,17 +61,17 @@ If no question or pack exists, ask the Boss in Chat.
 
 Progress is in `setup.json` in the data directory.
 The file holds step names, states, the pacing choice, and your confirmations.
+It also holds an integer revision that increases by one at each save.
 It holds no secret.
 Setup refuses a progress, policy, or policy-log file that links outside the data folder.
 Its file readers and writers do not follow symbolic links.
 Setup assumes that the data directory is not replaced while it runs.
-Run one setup command for each data folder at a time.
-The command holds `setup.lock` while a terminal prompt is open.
-The lock records the process ID and its hostname marker.
-The command releases the lock when it exits normally.
-A second run exits 1 with `Setup is already running for this data folder.`
-Run it again after the first command ends.
-After a crash, setup removes a lock only when its process has ended or its marker has changed.
+Setup does not lock the data directory.
+If two runs use the same progress file, setup refuses a run at the first save that conflicts.
+Before each save, setup reads the revision again.
+If another run changed it, setup writes nothing and exits 1 with `Another setup run changed the progress. Run setup --resume.`
+A missing or corrupt progress file has revision 0.
+After a crash, resume setup to continue the saved progress.
 Each run checks the computer again.
 `--resume` continues the saved progress.
 A plain rerun also continues it.

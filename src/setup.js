@@ -5,7 +5,6 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { resolveAlias } from './config.js';
 import { assertSetupFiles, readDataFile, writeDataFile } from './data-file-safety.js';
-import { SETUP_LOCKED_MESSAGE, takeSetupLock } from './setup-lock.js';
 import { runDoctor } from './doctor.js';
 import { SETUP_ACTIONS, createSetupExecutor, hasSetupProject, readSetupPacing, runSetupAction } from './setup-actions.js';
 
@@ -20,6 +19,7 @@ export const SETUP_STEPS = Object.freeze([
 export const SETUP_USAGE = 'Usage: setup [--resume] [--dry-run] [--pacing paced|unpaced]';
 const STATES = new Set(['pending', 'done', 'waiting', 'failed']);
 const DOCTOR_STEPS = new Set(['check', 'tools', 'signin', 'settings', 'service', 'pacing', 'dashboard']);
+const SETUP_CONFLICT_MESSAGE = 'Another setup run changed the progress. Run setup --resume.';
 
 function parseArgs(args) {
   const seen = new Set();
@@ -39,13 +39,15 @@ function parseArgs(args) {
 export function readSetupState(dataDir) {
   let saved;
   try { saved = JSON.parse(readDataFile(path.join(dataDir, 'setup.json'), dataDir)); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw new Error('Cannot read setup progress. Check setup.json in the data folder.'); }
-  if (saved?.schema !== 'herdr-boss.setup/1' || !saved.steps || typeof saved.steps !== 'object') throw new Error('The setup progress is not valid. Check setup.json in the data folder.');
+  catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return null; throw new Error('Cannot read setup progress. Check setup.json in the data folder.'); }
+  if (saved?.schema !== 'herdr-boss.setup/1' || !saved.steps || typeof saved.steps !== 'object' || Array.isArray(saved.steps)) return null;
+  const revision = saved.revision === undefined ? 0 : saved.revision;
+  if (!Number.isSafeInteger(revision) || revision < 0) return null;
   // Copy only allowed values. Never carry an arbitrary field or command into a new write.
-  const state = { schema: saved.schema, steps: {} };
+  const state = { schema: saved.schema, revision, steps: {} };
   for (const { id, name } of SETUP_STEPS) {
     const status = saved.steps[id]?.status ?? 'pending';
-    if (!STATES.has(status)) throw new Error('The setup progress has an invalid step state.');
+    if (!STATES.has(status)) return null;
     state.steps[id] = { name, status };
   }
   if (['paced', 'unpaced'].includes(saved.pacing)) state.pacing = saved.pacing;
@@ -55,7 +57,12 @@ export function readSetupState(dataDir) {
 
 function writeState(dataDir, state) {
   assertSetupFiles(dataDir);
-  writeDataFile(path.join(dataDir, 'setup.json'), `${JSON.stringify(state, null, 2)}\n`, dataDir);
+  if ((readSetupState(dataDir)?.revision ?? 0) !== state.revision) return false;
+  const revision = state.revision + 1;
+  if (!Number.isSafeInteger(revision)) throw new Error('The setup progress revision cannot be increased.');
+  writeDataFile(path.join(dataDir, 'setup.json'), `${JSON.stringify({ ...state, revision }, null, 2)}\n`, dataDir);
+  state.revision = revision;
+  return true;
 }
 
 async function terminalAsk(question) {
@@ -91,19 +98,7 @@ export async function runSetup({ env = process.env, home = env.HOME || os.homedi
   dataDir = resolveAlias(dataDir);
   assertSetupFiles(dataDir);
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const release = takeSetupLock(dataDir);
-  if (!release) {
-    output(SETUP_LOCKED_MESSAGE);
-    return { exitCode: 1, steps, waitingStep: null };
-  }
-  try {
-    return await runLockedSetup({ home, env, dataDir, resume, pacing, runner, timeoutMs, ask, output, execute, steps });
-  } finally { release(); }
-}
-
-async function runLockedSetup({ home, env, dataDir, resume, pacing, runner, timeoutMs, ask, output, execute, steps }) {
-  assertSetupFiles(dataDir);
-  const state = readSetupState(dataDir) ?? { schema: 'herdr-boss.setup/1', steps: Object.fromEntries(steps.map(({ id, name }) => [id, { name, status: 'pending' }])) };
+  const state = readSetupState(dataDir) ?? { schema: 'herdr-boss.setup/1', revision: 0, steps: Object.fromEntries(steps.map(({ id, name }) => [id, { name, status: 'pending' }])) };
   const context = { home, env: { ...env, platform: os.platform() }, state, dataDir, pacing, ask, output, execute };
   output(resume ? 'Resume setup.' : 'Start setup. Saved progress continues.');
   for (const step of steps) {
@@ -132,7 +127,10 @@ async function runLockedSetup({ home, env, dataDir, resume, pacing, runner, time
     state.steps[step.id] = { name: step.name, status };
     // A prior done state is not evidence for a later step after a new failure.
     if (status !== 'done') for (const later of steps.slice(steps.indexOf(step) + 1)) state.steps[later.id].status = 'pending';
-    writeState(dataDir, state);
+    if (!writeState(dataDir, state)) {
+      output(SETUP_CONFLICT_MESSAGE);
+      return { exitCode: 1, steps, waitingStep: null };
+    }
     output(`${status}: ${step.name}.`);
     if (status !== 'done') {
       output(`${status === 'waiting' ? 'Waiting for you' : 'Setup refused or the action failed'}: ${step.name}. ${SETUP_ACTIONS[step.id]}`);

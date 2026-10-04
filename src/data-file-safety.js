@@ -37,5 +37,5 @@ export function writeDataFile(file, value, dir) {
 }
 
 export function assertSetupFiles(dir) {
-  for (const name of ['setup.json', 'policy.json', 'policy-changes.jsonl', 'policy-changes.jsonl.lock', 'setup.lock']) assertDataFile(path.join(dir, name), dir);
+  for (const name of ['setup.json', 'policy.json', 'policy-changes.jsonl', 'policy-changes.jsonl.lock']) assertDataFile(path.join(dir, name), dir);
 }
