@@ -25,7 +25,7 @@ Write an image as a relative path to a file under `docs/`, for example `![Overvi
 
 A `<picture>` block with a `prefers-color-scheme: dark` source shows the light image in the light theme and the dark image in the dark theme. HTML comments do not show. Other raw HTML shows as text.
 
-A Mermaid code block shows as its source in a closed fold.
+A Mermaid code block becomes a diagram. The dashboard loads the vendored Mermaid build `public/vendor/mermaid.min.js` when a page has a diagram, and draws each block in place of the source fold. The diagram follows the light and the dark theme. A diagram that is wider than the screen scrolls sideways in its own box. When the build or a diagram fails, the source fold stays and the page shows the line "The diagram could not be drawn.". The Markdown files do not change, so GitHub draws the same blocks. See `docs/adr/0026-vendored-mermaid.md`.
 
 ## The page list
 

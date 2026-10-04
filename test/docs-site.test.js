@@ -90,11 +90,11 @@ test('the front page is the README, a picture becomes a light and a dark image, 
   assert.match(site().page('glossary').body.html, /&lt;!-- keep --&gt;/);
 });
 
-test('a Mermaid block shows as source in a closed fold and other code stays as it is', () => {
+test('a Mermaid block becomes a diagram with a source fold and other code stays as it is', () => {
   const html = site().page('diagram').body.html;
-  assert.match(html, /<details class="docs-diagram"><summary>Diagram source \(Mermaid\)<\/summary><div class="md-code">[\s\S]*language-mermaid[\s\S]*a --&gt; b[\s\S]*<\/details>/);
+  assert.match(html, /<div class="docs-diagram" data-mermaid><div class="docs-diagram-view" data-mermaid-view hidden><\/div><p class="docs-diagram-error" data-mermaid-error hidden>The diagram could not be drawn\.<\/p><details class="docs-diagram-source" data-mermaid-source><summary>Diagram source \(Mermaid\)<\/summary><div class="md-code">[\s\S]*language-mermaid[\s\S]*a --&gt; b[\s\S]*<\/details><\/div>/);
   assert.equal(html.match(/<details/g).length, 1);
-  assert.match(html, /<\/details><div class="md-code">[\s\S]*language-js/);
+  assert.match(html, /<\/details><\/div><div class="md-code">[\s\S]*language-js/);
 });
 
 test('page help drops its title and starts at h3', () => {

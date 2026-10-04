@@ -27,3 +27,4 @@ Read the decision records for the design of Herdr Boss.
 - [ADR 0023: Agents may use the Windows host key through the host tool](0023-windows-host-access.md)
 - [ADR 0024: Codex in a container uses a custom seccomp profile and systempaths=unconfined](0024-codex-seccomp-and-systempaths.md)
 - [ADR 0025: The Docs section renders Markdown at request time with a small module](0025-docs-section-from-markdown.md)
+- [ADR 0026: The dashboard vendors Mermaid to draw the Docs diagrams](0026-vendored-mermaid.md)

@@ -16,6 +16,10 @@ Edit the Markdown file that the line **Source** names. Do not edit a generated f
 
 A picture comes from `docs/images/`. Write its path in the Markdown, relative to the file. A picture from outside `docs/` does not show.
 
+## Diagrams
+
+A Mermaid code block becomes a diagram. The page loads the diagram library only when the page has a diagram. The diagram follows the light or the dark theme of the page. A diagram that is wider than the screen scrolls sideways in its own box. When a diagram does not draw, the page shows its source in a fold and the line **The diagram could not be drawn.**.
+
 ## Explainer
 
 The page **How the parts work together** is a walkthrough of the parts of Herdr Boss. Each step highlights some boxes of a diagram and gives a short text. Select **Back** or **Next**, or select a step number. After you select the explainer, the left and right arrow keys, **Home**, and **End** also change the step. The walkthrough does not animate when your system asks for reduced motion.

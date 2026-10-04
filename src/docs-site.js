@@ -78,9 +78,10 @@ function prepare(source) {
     }));
 }
 
-// The dashboard has no diagram library. A Mermaid block shows as its source, in a fold that starts closed.
+// A Mermaid block becomes a diagram. The client script draws it and hides the source fold.
+// Without the script, or when drawing fails, the fold with the source stays visible.
 const MERMAID = /<div class="md-code">(?:(?!<\/div>)[\s\S])*?<code class="language-mermaid">[\s\S]*?<\/code><\/pre><\/div>/g;
-const foldDiagrams = (html) => html.replace(MERMAID, (block) => `<details class="docs-diagram"><summary>Diagram source (Mermaid)</summary>${block}</details>`);
+const foldDiagrams = (html) => html.replace(MERMAID, (block) => `<div class="docs-diagram" data-mermaid><div class="docs-diagram-view" data-mermaid-view hidden></div><p class="docs-diagram-error" data-mermaid-error hidden>The diagram could not be drawn.</p><details class="docs-diagram-source" data-mermaid-source><summary>Diagram source (Mermaid)</summary>${block}</details></div>`);
 
 function plainTitle(text) {
   return text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_~]/g, '').trim();

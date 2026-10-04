@@ -33,7 +33,7 @@ Settings text has its own single source already. `public/setting-help.js` builds
 ## Consequences
 
 - A change to a help file changes the Help panel and the Docs section at once.
-- A Mermaid diagram shows as its source in a closed fold. The dashboard has no diagram library.
+- A Mermaid diagram shows as its source in a closed fold when the diagram does not draw. [ADR 0026](0026-vendored-mermaid.md) adds a vendored Mermaid build that draws it.
 - Raw HTML in a Markdown file shows as text, except comments, which the service removes, and a `<picture>` block with a dark source. A `<picture>` block becomes a light and a dark image, and the style sheet shows the one that matches the theme.
 - The dashboard reads a page again at most every 30 seconds. A reload shows a change at once.
 - The scan of the file list is synchronous. It runs at most once in 2 seconds and reads only file metadata, so a request waits at most for that scan.
