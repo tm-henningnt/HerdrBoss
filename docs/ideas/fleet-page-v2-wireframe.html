@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fleet page v2 wireframe</title>
+<style>
+/* Invented neutral sample data only. No real factory, host, path, or credential.
+   This is a static wireframe: the dashboard links and the Copy actions are placeholders. */
+:root {
+  --bg:#f4f2ee; --panel:#fff; --panel-2:#f8f6f2; --line:#e3dfd7; --text:#1d1b18; --muted:#6f6a61; --faint:#a19b90;
+  --accent:#d0621f; --ok:#2f8a4c; --warn:#b7791f; --crit:#c2362b; --info:#3a6ea5;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace; --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121110; --panel:#1b1a18; --panel-2:#22201d; --line:#2e2b27; --text:#ece8e1; --muted:#a39d92; --faint:#6c665d;
+  --accent:#ef8a4a; --ok:#5cbf7a; --warn:#e0a84a; --crit:#ef6a5e; --info:#74a6dd; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#121110; --panel:#1b1a18; --panel-2:#22201d; --line:#2e2b27; --text:#ece8e1; --muted:#a39d92; --faint:#6c665d;
+  --accent:#ef8a4a; --ok:#5cbf7a; --warn:#e0a84a; --crit:#ef6a5e; --info:#74a6dd; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 20px 60px}
+body.phone .wrap{width:393px;max-width:100%;padding:14px 12px 40px}
+.wire-note{margin:0 0 14px;padding:8px 12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:12px}
+.controls{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin:0 0 14px;flex-wrap:wrap}
+.controls .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.controls .seg button{padding:8px 12px;color:var(--muted);min-height:40px}
+.controls .seg button[aria-pressed="true"]{background:var(--panel-2);color:var(--text);font-weight:600}
+body.phone .hide-on-phone{display:none}
+.page-head h1{margin:0;font-size:24px;letter-spacing:-.02em}
+.page-head p{margin:4px 0 0;color:var(--muted);font-size:13px}
+.page-head{display:flex;justify-content:space-between;gap:14px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+
+/* 1. Total line */
+.totals{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.total{flex:1 1 150px;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.total .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.total .v{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.total .s{display:block;color:var(--muted);font-size:12px}
+
+/* 2. Compact alert strip. Collapsed at every width; the label names the fix in words. */
+.alerts{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:10px;padding:2px 0;margin-bottom:12px}
+.alert{border-top:1px solid var(--line)}
+.alert:first-child{border-top:0}
+.alert-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:8px 14px;text-align:left}
+.alert-toggle .grow{flex:1 1 auto;min-width:0}
+.alert-toggle .tag{font-size:12px;color:var(--accent);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+.alert-label{font-weight:600}
+.sev{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.sev.error{background:var(--crit)} .sev.warning{background:var(--warn)} .sev.info{background:var(--info)}
+.alert-fix{display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:0 14px 12px 36px}
+.alert.open .alert-fix{display:flex}
+code.cmd{font-family:var(--mono);font-size:12px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;overflow-wrap:anywhere;white-space:pre-wrap}
+button.copy{min-height:44px;min-width:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px}
+
+/* 3. Compact factory comparison */
+.compare{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.cmp-row{display:grid;grid-template-columns:1.3fr .8fr .8fr .6fr .6fr 1fr .6fr .5fr 1.1fr;border-top:1px solid var(--line);align-items:center}
+.cmp-row:first-child{border-top:0}
+.cmp-row.head{background:var(--panel-2);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.cmp-cell{padding:9px 10px;min-width:0;overflow-wrap:anywhere}
+.cmp-k{display:none;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.cmp-name{font-weight:650}
+.cmp-sum{display:none}
+.state{font-weight:650;display:inline-flex;align-items:center;gap:6px}
+.state.healthy{color:var(--ok)} .state.degraded{color:var(--warn)} .state.offline{color:var(--crit)} .state.unknown{color:var(--muted)}
+.drift{color:var(--warn);font-weight:600}
+
+/* Factory card */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+.card-head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)}
+.card-head h2{margin:0;font-size:18px}
+.role{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.card-head .grow{flex:1 1 auto}
+.wait-owner{margin:0;padding:10px 16px;background:color-mix(in srgb,var(--warn) 12%,var(--panel));border-bottom:1px solid var(--line);font-size:13px;display:grid;gap:6px}
+.wait-owner b{color:var(--warn)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border-bottom:1px solid var(--line)}
+.fact{padding:10px 16px;border-right:1px solid var(--line);min-width:0}
+.fact .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.fact .v{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+
+/* Quota lanes. The expansion button is visible at every width. */
+.lanes{padding:8px 16px;border-bottom:1px solid var(--line)}
+.lanes h3{margin:6px 0;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+button.lane-more{display:inline-flex;align-items:center;min-height:44px;padding:0 12px;margin:4px 0;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);color:var(--text)}
+.lane{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:baseline;padding:7px 0;border-top:1px solid var(--line)}
+.lane:first-of-type{border-top:0}
+.lanes:not(.open) .lane.more{display:none}
+.lanes.open button.lane-more[aria-expanded="true"]{border-color:var(--accent);color:var(--accent)}
+.lane .who{overflow-wrap:anywhere}
+.bar{grid-column:1/-1;height:6px;border-radius:99px;background:var(--panel-2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok)}
+.bar i.warn{background:var(--warn)} .bar i.crit{background:var(--crit)}
+.pill{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--muted)}
+
+/* Projects */
+.projects{padding:0 16px 6px}
+.projects h3{margin:12px 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.proj{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:baseline;padding:10px 0;border-top:1px solid var(--line)}
+.proj:first-of-type{border-top:0}
+.proj .slug{font-weight:600;overflow-wrap:anywhere}
+.board{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+.board b{color:var(--text);font-variant-numeric:tabular-nums}
+.stale{color:var(--warn);font-size:12px;font-weight:600}
+
+/* Actions */
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel-2)}
+.actions button,.actions a,.actions .unavailable{min-height:44px;display:inline-flex;align-items:center;padding:0 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);text-decoration:none;font-size:13px}
+.actions .primary{border-color:var(--accent);color:var(--accent);font-weight:600}
+.actions .unavailable{color:var(--muted);border-style:dashed}
+.actions .note{flex:1 1 100%;color:var(--muted);font-size:12px}
+
+details.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-top:16px}
+details.panel>summary{padding:14px 16px;cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center}
+details.panel .body{padding:0 16px 16px;color:var(--muted)}
+
+/* Confirm sheet */
+dialog#confirm{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);max-width:460px;width:calc(100% - 32px);padding:0}
+dialog#confirm::backdrop{background:rgba(0,0,0,.45)}
+dialog#confirm .sheet{padding:18px;display:grid;gap:12px}
+dialog#confirm h2{margin:0;font-size:18px}
+dialog#confirm p{margin:0}
+.confirm-actions{display:flex;gap:8px;flex-wrap:wrap}
+.confirm-actions button{min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2)}
+.confirm-actions .go{border-color:var(--accent);color:var(--accent);font-weight:600}
+#confirm-status{color:var(--warn);min-height:1.4em}
+
+/* Phone layout. Same rules at 393 px and in the phone frame. */
+@media (max-width:760px){
+  .page-head{gap:6px}
+  .total{flex:1 1 46%}
+  .cmp-row{grid-template-columns:minmax(0,1fr) auto;gap:0;padding:8px 0}
+  .cmp-row.head{display:none}
+  .cmp-cell{padding:2px 12px}
+  .cmp-k{display:inline;margin-right:6px}
+  .cmp-cell.hide-phone{display:none}
+  .cmp-name{grid-column:1;grid-row:1}
+  .cmp-health{grid-column:2;grid-row:1;text-align:right}
+  .cmp-sum{display:block;grid-column:1/-1;grid-row:2;padding:2px 12px;color:var(--muted);font-size:12px}
+  .controls,.wire-note{display:none}
+  .fact{border-right:0;border-bottom:1px solid var(--line)}
+}
+body.phone .page-head{gap:6px}
+body.phone .total{flex:1 1 46%}
+body.phone .cmp-row{grid-template-columns:minmax(0,1fr) auto;gap:0;padding:8px 0}
+body.phone .cmp-row.head{display:none}
+body.phone .cmp-cell{padding:2px 12px}
+body.phone .cmp-k{display:inline;margin-right:6px}
+body.phone .cmp-cell.hide-phone{display:none}
+body.phone .cmp-name{grid-column:1;grid-row:1}
+body.phone .cmp-health{grid-column:2;grid-row:1;text-align:right}
+body.phone .cmp-sum{display:block;grid-column:1/-1;grid-row:2;padding:2px 12px;color:var(--muted);font-size:12px}
+body.phone .wire-note{display:none}
+body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="controls hide-on-phone" role="group" aria-label="Wireframe preview">
+    <div class="seg">
+      <button data-view="desktop" aria-pressed="true">Desktop</button>
+      <button data-view="phone" aria-pressed="false">Phone 393 px</button>
+    </div>
+    <div class="seg">
+      <button data-theme="auto" aria-pressed="true">Auto</button>
+      <button data-theme="light" aria-pressed="false">Light</button>
+      <button data-theme="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+  <p class="wire-note">Static wireframe. Sample data is invented. The dashboard links and the Copy actions are placeholders.</p>
+
+  <header class="page-head">
+    <div>
+      <h1>Fleet</h1>
+      <p>3 factories &middot; poll every 30 seconds &middot; head office: factory-zero, epoch 3</p>
+    </div>
+  </header>
+
+  <!-- 1. Fleet total line. Fresh values only, with coverage and as-of. -->
+  <section class="totals" aria-label="Fleet totals">
+    <div class="total"><span class="k">Workers</span><span class="v">5</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
+    <div class="total"><span class="k">Spend today</span><span class="v">$14.30</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 unknown</span></div>
+    <div class="total"><span class="k">Quota burn</span><span class="v">61%</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
+  </section>
+
+  <!-- 2. Compact alert strip. Collapsed at every width; the label names the fix in words. -->
+  <section class="alerts" aria-label="Alerts">
+    <div class="alert">
+      <button class="alert-toggle" type="button" aria-expanded="false">
+        <span class="sev error" aria-hidden="true"></span>
+        <span class="alert-label grow">win2 is not reachable &mdash; check the host</span>
+        <span class="tag">Fix</span>
+      </button>
+      <div class="alert-fix">
+        <code class="cmd">herdr-boss factory connect win2</code>
+        <button class="copy" type="button" data-copy="herdr-boss factory connect win2">Copy</button>
+      </div>
+    </div>
+    <div class="alert">
+      <button class="alert-toggle" type="button" aria-expanded="false">
+        <span class="sev warning" aria-hidden="true"></span>
+        <span class="alert-label grow">win1 kit drift &mdash; update the service</span>
+        <span class="tag">Fix</span>
+      </button>
+      <div class="alert-fix">
+        <code class="cmd">herdr-boss factory update win1 --tier service</code>
+        <button class="copy" type="button" data-copy="herdr-boss factory update win1 --tier service">Copy</button>
+      </div>
+    </div>
+    <div class="alert">
+      <button class="alert-toggle" type="button" aria-expanded="false">
+        <span class="sev error" aria-hidden="true"></span>
+        <span class="alert-label grow">win1 Claude login expired &mdash; sign in</span>
+        <span class="tag">Fix</span>
+      </button>
+      <div class="alert-fix">
+        <code class="cmd">herdr-boss factory login win1 claude</code>
+        <button class="copy" type="button" data-copy="herdr-boss factory login win1 claude">Copy</button>
+      </div>
+    </div>
+    <div class="alert">
+      <button class="alert-toggle" type="button" aria-expanded="false">
+        <span class="sev warning" aria-hidden="true"></span>
+        <span class="alert-label grow">factory-zero disk low &mdash; free disk space</span>
+        <span class="tag">Fix</span>
+      </button>
+      <div class="alert-fix">
+        <code class="cmd">Free disk space on this Mac. Check the data volume with df -h.</code>
+        <button class="copy" type="button" data-copy="Free disk space on this Mac. Check the data volume with df -h.">Copy</button>
+      </div>
+    </div>
+    <div class="alert">
+      <button class="alert-toggle" type="button" aria-expanded="false">
+        <span class="sev info" aria-hidden="true"></span>
+        <span class="alert-label grow">factory-zero clock offset -42 s &mdash; check the clock</span>
+        <span class="tag">Fix</span>
+      </button>
+      <div class="alert-fix">
+        <code class="cmd">Check Date and Time in System Settings on this Mac.</code>
+        <button class="copy" type="button" data-copy="Check Date and Time in System Settings on this Mac.">Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Compact factory comparison. Fresh values only; the sum line carries every key fact. -->
+  <section class="compare" aria-label="Factory comparison">
+    <div class="cmp-row head">
+      <span class="cmp-cell">Factory</span><span class="cmp-cell">Kind</span><span class="cmp-cell">Health</span><span class="cmp-cell">Last seen</span>
+      <span class="cmp-cell">Workers</span><span class="cmp-cell">Worst quota</span><span class="cmp-cell">Spend</span><span class="cmp-cell">Owner</span><span class="cmp-cell">Version / kit</span>
+    </div>
+    <div class="cmp-row">
+      <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>factory-zero</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>native</span>
+      <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>4 s</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>2 / 8</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>61% claude</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$6.10</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>2</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 2e0a5d394ccc</span>
+      <span class="cmp-sum">native &middot; 4 s &middot; 2/8 workers &middot; 61% claude &middot; $6.10 &middot; 2 owner &middot; 0.1.0 / 2e0a5d394ccc</span>
+    </div>
+    <div class="cmp-row">
+      <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>win1</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>container</span>
+      <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>12 s</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>3 / 8</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>61% claude</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$8.20</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>1</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span>
+      <span class="cmp-sum">container &middot; 12 s &middot; 3/8 workers &middot; 61% claude &middot; $8.20 &middot; 1 owner &middot; 0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span>
+    </div>
+    <div class="cmp-row">
+      <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>win2</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>container</span>
+      <span class="cmp-cell cmp-health"><span class="state offline"><span class="cmp-k">Health</span>&#9679; offline</span></span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>5 min</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>last good 1</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>last good 24%</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>unknown</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>last good 0</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>unknown</span>
+      <span class="cmp-sum">container &middot; 5 min &middot; last good 1/8 &middot; last good 24% codex &middot; spend unknown &middot; last good 0 owner &middot; version unknown</span>
+    </div>
+  </section>
+
+  <!-- Factory card: factory zero, native, head office -->
+  <article class="card" aria-label="factory-zero">
+    <div class="card-head">
+      <h2>factory-zero</h2>
+      <span class="role">Factory zero (native) &middot; Head office (epoch 3)</span>
+      <span class="grow"></span>
+      <span class="state healthy">&#9679; healthy</span>
+      <span class="muted small">last seen 4 s ago</span>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><span class="k">Load</span><span class="v">0.8 &middot; 8 cpus</span></div>
+      <div class="fact"><span class="k">Memory</span><span class="v">42% free</span></div>
+      <div class="fact"><span class="k">Disk</span><span class="v">12% free</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v mono">-42 s</span></div>
+      <div class="fact"><span class="k">Version / kit</span><span class="v mono">0.1.0 / 2e0a5d394ccc</span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v">running &middot; claude</span></div>
+      <div class="fact"><span class="k">Workers</span><span class="v">2 / 8</span></div>
+      <div class="fact"><span class="k">Logins</span><span class="v">claude ok &middot; codex ok</span></div>
+      <div class="fact"><span class="k">Spend today</span><span class="v">$6.10</span></div>
+      <div class="fact"><span class="k">Owner items</span><span class="v">2 &middot; from the Mailbox</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
+    </div>
+
+    <div class="lanes">
+      <h3>Quota</h3>
+      <button class="lane-more" type="button" aria-expanded="false">3 lanes &middot; worst 61%</button>
+      <div class="lane worst">
+        <span class="who">claude &middot; weekly <span class="muted small">shared &middot; a2b4&hellip;91c0</span></span>
+        <span class="mono">61% <span class="pill">ok</span></span>
+        <span class="bar"><i style="width:61%"></i></span>
+      </div>
+      <div class="lane more">
+        <span class="who">codex &middot; weekly <span class="muted small">shared &middot; 7e10&hellip;44ab</span></span>
+        <span class="mono">18% <span class="pill">ok</span></span>
+        <span class="bar"><i style="width:18%"></i></span>
+      </div>
+      <div class="lane more">
+        <span class="who">opencode &middot; weekly <span class="muted small">shared &middot; 0f3c&hellip;d812</span></span>
+        <span class="mono">9% <span class="pill">ok</span></span>
+        <span class="bar"><i style="width:9%"></i></span>
+      </div>
+    </div>
+
+    <div class="projects">
+      <h3>Projects</h3>
+      <div class="proj">
+        <span class="slug">sample-app <span class="pill">build</span></span>
+        <span class="mono small">doing</span>
+        <span class="board"><span>doing <b>1</b></span><span>review <b>0</b></span><span>blocked <b>0</b></span><span>done 7d <b>2</b></span></span>
+      </div>
+      <div class="proj">
+        <span class="slug">docs-site <span class="pill">release</span></span>
+        <span class="mono small">review</span>
+        <span class="board"><span>doing <b>0</b></span><span>review <b>1</b></span><span>blocked <b>0</b></span><span>done 7d <b>3</b></span></span>
+      </div>
+      <p class="small muted">2 Owner items &middot; 0 review packs waiting &middot; per-project counts are a gap (G7)</p>
+    </div>
+
+    <div class="actions">
+      <a href="#" aria-disabled="true">Open dashboard</a>
+      <span class="note">Update: run the release steps in AGENTS.md. Boss start: not available from this page for a native factory (G8).</span>
+    </div>
+  </article>
+
+  <!-- Factory card: win1, container -->
+  <article class="card" aria-label="win1">
+    <div class="card-head">
+      <h2>win1</h2>
+      <span class="role">Container factory</span>
+      <span class="grow"></span>
+      <span class="state healthy">&#9679; healthy</span>
+      <span class="muted small">last seen 12 s ago</span>
+    </div>
+    <p class="wait-owner"><span><b>Waiting for you:</b> login-claude. Run <code class="cmd">herdr-boss factory login win1 claude</code> at the Owner terminal.</span></p>
+
+    <div class="facts">
+      <div class="fact"><span class="k">Load</span><span class="v">0.3 &middot; 4 cpus</span></div>
+      <div class="fact"><span class="k">Memory</span><span class="v">61% free</span></div>
+      <div class="fact"><span class="k">Disk</span><span class="v">61% free</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v mono">+2 s</span></div>
+      <div class="fact"><span class="k">Version / kit</span><span class="v mono">0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v">running &middot; codex</span></div>
+      <div class="fact"><span class="k">Workers</span><span class="v">3 / 8</span></div>
+      <div class="fact"><span class="k">Logins</span><span class="v">claude expired &middot; codex ok</span></div>
+      <div class="fact"><span class="k">Spend today</span><span class="v">$8.20</span></div>
+      <div class="fact"><span class="k">Owner items</span><span class="v">1 &middot; from the Mailbox</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
+    </div>
+
+    <div class="lanes">
+      <h3>Quota</h3>
+      <button class="lane-more" type="button" aria-expanded="false">2 lanes &middot; worst 61%</button>
+      <div class="lane worst">
+        <span class="who">claude &middot; weekly <span class="muted small">shared &middot; a2b4&hellip;91c0</span></span>
+        <span class="mono">61% <span class="pill">ok</span></span>
+        <span class="bar"><i style="width:61%"></i></span>
+      </div>
+      <div class="lane more">
+        <span class="who">codex &middot; weekly <span class="muted small">shared &middot; 7e10&hellip;44ab</span></span>
+        <span class="mono">24% <span class="pill">ok</span></span>
+        <span class="bar"><i style="width:24%"></i></span>
+      </div>
+    </div>
+
+    <div class="projects">
+      <h3>Projects</h3>
+      <div class="proj">
+        <span class="slug">win1-lab <span class="pill">build</span> <span class="stale">status stale &middot; 3 h</span></span>
+        <span class="mono small">doing</span>
+        <span class="board"><span>doing <b>2</b></span><span>review <b>0</b></span><span>blocked <b>1</b></span><span>done 7d <b>4</b></span></span>
+      </div>
+      <p class="small muted">1 Owner item &middot; 1 review pack waiting &middot; per-project counts are a gap (G7)</p>
+    </div>
+
+    <div class="actions">
+      <button class="primary" type="button" data-action="update" data-name="win1" data-command="herdr-boss factory update win1 --tier service" data-effect="Restarts the service and fast-forwards the code.">Factory update</button>
+      <button type="button" data-action="boss" data-name="win1" data-command="herdr-boss factory boss start win1 --resume" data-effect="Starts the Boss pane in the factory.">Boss start</button>
+      <button type="button" data-copy="herdr-boss factory attach win1">Copy attach command</button>
+      <a href="#" aria-disabled="true">Open dashboard</a>
+    </div>
+  </article>
+
+  <!-- Factory card: win2, offline -->
+  <article class="card" aria-label="win2">
+    <div class="card-head">
+      <h2>win2</h2>
+      <span class="role">Container factory</span>
+      <span class="grow"></span>
+      <span class="state offline">&#9679; offline</span>
+      <span class="muted small">last seen 5 min ago &middot; last good data</span>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><span class="k">Load</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Memory</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Disk</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Version / kit</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Workers</span><span class="v muted">last good 1 / 8</span></div>
+      <div class="fact"><span class="k">Logins</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Spend today</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Owner items</span><span class="v muted">last good 0</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
+    </div>
+
+    <div class="lanes">
+      <h3>Quota &middot; last good data</h3>
+      <button class="lane-more" type="button" aria-expanded="false">1 lane &middot; worst 24%</button>
+      <div class="lane worst">
+        <span class="who">codex &middot; weekly <span class="muted small">shared &middot; 7e10&hellip;44ab</span></span>
+        <span class="mono">24% <span class="pill">last good</span></span>
+        <span class="bar"><i class="warn" style="width:24%"></i></span>
+      </div>
+    </div>
+
+    <div class="projects">
+      <h3>Projects &middot; last good data</h3>
+      <div class="proj">
+        <span class="slug">win2-lab <span class="pill">build</span></span>
+        <span class="mono small">doing</span>
+        <span class="board"><span>doing <b>1</b></span><span>review <b>1</b></span><span>blocked <b>0</b></span><span>done 7d <b>1</b></span></span>
+      </div>
+      <p class="small muted">last good 0 Owner items</p>
+    </div>
+
+    <div class="actions">
+      <button class="primary" type="button" data-action="update" data-name="win2" data-command="herdr-boss factory update win2 --tier service" data-effect="Restarts the service and fast-forwards the code.">Factory update</button>
+      <button type="button" data-action="boss" data-name="win2" data-command="herdr-boss factory boss start win2 --resume" data-effect="Starts the Boss pane in the factory.">Boss start</button>
+      <button type="button" data-copy="herdr-boss factory attach win2">Copy attach command</button>
+      <a href="#" aria-disabled="true">Open dashboard</a>
+    </div>
+  </article>
+
+  <details class="panel">
+    <summary>Fleet settings and factory shares</summary>
+    <div class="body">Name, dashboard base URL, polling, title sharing, account scopes, and the share sliders. These controls do not change in v2. They stay collapsed.</div>
+  </details>
+</div>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <div class="sheet">
+    <h2 id="confirm-title">Factory update</h2>
+    <p id="confirm-effect" class="muted">Restarts the service and fast-forwards the code.</p>
+    <p><code class="cmd" id="confirm-command">herdr-boss factory update win1 --tier service</code></p>
+    <p class="muted">Run this command in the Owner terminal on the host machine.</p>
+    <p id="confirm-status" role="status"></p>
+    <div class="confirm-actions">
+      <button class="go" id="confirm-copy" type="button">Confirm copy</button>
+      <button id="confirm-cancel" type="button">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+const html = document.documentElement, body = document.body;
+const pressed = (group, value) => document.querySelectorAll(`[data-${group}]`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset[group] === value)));
+document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => {
+  body.classList.toggle('phone', button.dataset.view === 'phone');
+  pressed('view', button.dataset.view);
+}));
+document.querySelectorAll('[data-theme]').forEach((button) => button.addEventListener('click', () => {
+  const value = button.dataset.theme;
+  if (value === 'auto') delete html.dataset.theme; else html.dataset.theme = value;
+  pressed('theme', value);
+}));
+// The alert strip is collapsed at every width. The label stays visible and Fix reveals the command.
+document.querySelectorAll('.alert-toggle').forEach((button) => button.addEventListener('click', () => {
+  const alert = button.closest('.alert');
+  const open = alert.classList.toggle('open');
+  button.setAttribute('aria-expanded', String(open));
+}));
+// The lane control is a 44 px button with aria-expanded, visible at every width.
+document.querySelectorAll('.lane-more').forEach((button) => button.addEventListener('click', () => {
+  const lanes = button.closest('.lanes');
+  const open = lanes.classList.toggle('open');
+  button.setAttribute('aria-expanded', String(open));
+}));
+// The confirm sheet. Confirm copy reports success only after a successful write.
+const dialog = document.getElementById('confirm');
+document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
+  document.getElementById('confirm-title').textContent = button.textContent.trim();
+  document.getElementById('confirm-effect').textContent = button.dataset.effect;
+  document.getElementById('confirm-command').textContent = button.dataset.command;
+  document.getElementById('confirm-status').textContent = '';
+  dialog.showModal();
+}));
+document.getElementById('confirm-cancel').addEventListener('click', () => dialog.close());
+document.getElementById('confirm-copy').addEventListener('click', async () => {
+  const command = document.getElementById('confirm-command');
+  const status = document.getElementById('confirm-status');
+  status.textContent = '';
+  try {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('no-clipboard');
+    await navigator.clipboard.writeText(command.textContent);
+    status.textContent = 'Copied.';
+    setTimeout(() => { status.textContent = ''; dialog.close(); }, 700);
+  } catch {
+    // Keep the sheet open and select the command, so the Owner can copy it by hand.
+    const range = document.createRange();
+    range.selectNodeContents(command);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    status.textContent = 'Copy failed. The command is selected. Copy it by hand.';
+  }
+});
+// A direct link to the confirm state, for review.
+if (location.hash === '#confirm' || new URLSearchParams(location.search).get('dialog') === 'confirm') dialog.showModal();
+</script>
+</body>
+</html>
