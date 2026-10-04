@@ -654,7 +654,40 @@ function activeUnavailableModel(unavailableModels, kind, model, now) {
     && Number.isSafeInteger(item.retryAt) && item.retryAt > now);
 }
 
-function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null, unavailableModels = {}, now = Date.now(), runningOpus = 0) {
+// Choose a model of a lane that is far below its pace when the harness can reach two or more lanes.
+// A lane below pace is one that the engine marked in lanes[<provider>].belowPace. A lane on hold or ahead of pace never wins.
+// The setting paceRouting turns the preference off. An explicit --kind or --model never reaches here.
+function paceRoute(kind, kitDefault, options, policy, config, resourcePolicy, lanes, unavailableModels, now) {
+  if (resourcePolicy?.paceRouting === false || !lanes) return null;
+  const projectPolicy = resourcePolicy?.projects?.[config.slug];
+  const excluded = new Set(projectPolicy?.excludedModels || []);
+  const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy)
+    && (config.allowedModels === null || config.allowedModels.includes(candidate))
+    && !excluded.has(candidate)
+    && !activeUnavailableModel(unavailableModels, kind, candidate, now)
+    && (!isOpus(candidate) || options.force);
+  const byLane = new Map();
+  for (const candidate of policy.allowedModels) {
+    if (!startable(candidate)) continue;
+    const lane = providerFor(kind, candidate, resourcePolicy) || 'unmetered';
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push(candidate);
+  }
+  // Two or more lanes must be able to serve the task, so the choice is a real routing choice.
+  if (byLane.size < 2) return null;
+  const below = [...byLane.keys()]
+    .filter((lane) => lane !== 'unmetered' && lanes[lane]?.belowPace)
+    .filter((lane) => !lanes[lane].paceHold && lanes[lane].planGuidance?.laneState !== 'hold')
+    .sort((a, b) => lanes[b].belowPace.roomPercent - lanes[a].belowPace.roomPercent || a.localeCompare(b));
+  const lane = below[0];
+  if (!lane) return null;
+  // The default lane already serves the task, so the default model stays.
+  if (lane === (providerFor(kind, kitDefault, resourcePolicy) || 'unmetered')) return null;
+  const { usedPercent, expectedPercent, tolerancePoints } = lanes[lane].belowPace;
+  return { model: byLane.get(lane)[0], route: { lane, usedPercent, expectedPercent, tolerancePoints } };
+}
+
+function validateSelection(kind, options, models, config, resourcePolicy = null, onOpusRefused = null, unavailableModels = {}, now = Date.now(), runningOpus = 0, lanes = {}) {
   const policy = models.kinds[kind];
   if (!policy) throw new Error(`Unknown agent kind: ${kind}. Choose one of ${Object.keys(models.kinds).join(', ')}.`);
   const startable = (candidate) => policy.allowedModels.includes(candidate) && modelEnabled(kind, candidate, resourcePolicy) &&
@@ -665,34 +698,43 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   let model = explicit;
   let modelSource = 'flag';
   let modelFallback;
+  let modelRoute;
   if (explicit == null) {
     // Without --model the kit default applies. The preferred model of the policy is a fallback for a default that cannot start.
     const kitDefault = normalizeModel(policy.defaultModel);
     if (!kitDefault) throw new Error(`${kind} has no default model in kit/models.json. Pass --model.`);
-    model = kitDefault;
-    modelSource = 'default';
-    const unavailable = activeUnavailableModel(unavailableModels, kind, kitDefault, now);
-    if (unavailable) {
-      const lane = providerFor(kind, kitDefault, resourcePolicy);
-      const defaultIndex = policy.allowedModels.indexOf(kitDefault);
-      const projectPolicy = resourcePolicy?.projects?.[config.slug];
-      const ordered = defaultIndex < 0 ? policy.allowedModels : [
-        ...policy.allowedModels.slice(defaultIndex + 1), ...policy.allowedModels.slice(0, defaultIndex),
-      ];
-      const candidate = ordered.find((item) => item !== kitDefault && startable(item)
-        && providerFor(kind, item, resourcePolicy) === lane
-        && !projectPolicy?.excludedKinds?.includes(kind) && !projectPolicy?.excludedModels?.includes(item)
-        && !activeUnavailableModel(unavailableModels, kind, item, now)
-        && (!isOpus(item) || options.force));
-      if (!candidate) throw new Error(`The default model ${kitDefault} of ${kind} is unavailable until ${retryText(unavailable)} and no available model in the same lane can start.`);
-      model = candidate;
-      modelSource = 'fallback';
-      modelFallback = { from: kitDefault, retryAt: unavailable.retryAt, reason: unavailable.reason || unavailable.label || 'provider cooldown' };
-    } else if (!startable(kitDefault)) {
-      const preferred = normalizeModel(resourcePolicy?.preferredModels?.[kind]);
-      if (!preferred || !startable(preferred)) throw new Error(`The default model ${kitDefault} of ${kind} cannot start and no preferred model can. Pass --model.`);
-      model = preferred;
-      modelSource = 'policy';
+    // A lane that is far below its pace wins before the kit default. The setting paceRouting turns it off.
+    const route = paceRoute(kind, kitDefault, options, policy, config, resourcePolicy, lanes, unavailableModels, now);
+    if (route) {
+      model = route.model;
+      modelSource = 'pace';
+      modelRoute = route.route;
+    } else {
+      model = kitDefault;
+      modelSource = 'default';
+      const unavailable = activeUnavailableModel(unavailableModels, kind, kitDefault, now);
+      if (unavailable) {
+        const lane = providerFor(kind, kitDefault, resourcePolicy);
+        const defaultIndex = policy.allowedModels.indexOf(kitDefault);
+        const projectPolicy = resourcePolicy?.projects?.[config.slug];
+        const ordered = defaultIndex < 0 ? policy.allowedModels : [
+          ...policy.allowedModels.slice(defaultIndex + 1), ...policy.allowedModels.slice(0, defaultIndex),
+        ];
+        const candidate = ordered.find((item) => item !== kitDefault && startable(item)
+          && providerFor(kind, item, resourcePolicy) === lane
+          && !projectPolicy?.excludedKinds?.includes(kind) && !projectPolicy?.excludedModels?.includes(item)
+          && !activeUnavailableModel(unavailableModels, kind, item, now)
+          && (!isOpus(item) || options.force));
+        if (!candidate) throw new Error(`The default model ${kitDefault} of ${kind} is unavailable until ${retryText(unavailable)} and no available model in the same lane can start.`);
+        model = candidate;
+        modelSource = 'fallback';
+        modelFallback = { from: kitDefault, retryAt: unavailable.retryAt, reason: unavailable.reason || unavailable.label || 'provider cooldown' };
+      } else if (!startable(kitDefault)) {
+        const preferred = normalizeModel(resourcePolicy?.preferredModels?.[kind]);
+        if (!preferred || !startable(preferred)) throw new Error(`The default model ${kitDefault} of ${kind} cannot start and no preferred model can. Pass --model.`);
+        model = preferred;
+        modelSource = 'policy';
+      }
     }
   }
   if (!policy.allowedModels.includes(model)) throw new Error(`Model ${model} is not allowed for ${kind}.`);
@@ -717,7 +759,7 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
   const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
   const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
-  return { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed };
+  return { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed };
 }
 
 function appendWorkerEvent(env, event, now) {
@@ -1004,6 +1046,7 @@ function renderStartPlan(plan) {
     `2. Read resource rules: ${plan.rulesFile}${plan.rulesStale ? ' (stale or missing; warn)' : ''}`,
     `3. Validate kind/model/effort: ${plan.kind} / ${plan.model} / ${plan.effort ?? '(none)'} (model source: ${plan.modelSource}${plan.effortSource ? `, effort source: ${plan.effortSource}` : ''}${plan.force ? ', --force: Opus approved by the Owner' : ''})`,
     ...(plan.modelFallback ? [`   Fallback: ${plan.modelFallback.from} unavailable until ${retryText(plan.modelFallback)} (${plan.modelFallback.reason})`] : []),
+    ...(plan.modelRoute ? [`   Routed to ${plan.modelRoute.lane}: ${plan.modelRoute.usedPercent}% used against ${plan.modelRoute.expectedPercent}% expected`] : []),
     `4. Create worktree: ${plan.noWorktree ? '(disabled; use current worktree)' : plan.worktree}`,
     ...(plan.noWorktree ? [] : [`   $ git worktree add -b ${displayArg(plan.branch)} ${displayArg(plan.worktree)} ${displayArg(plan.base)}`]),
     `   Append /.worker/ and /.orchestration/local/ to ${plan.excludeFile}`,
@@ -1287,7 +1330,8 @@ function startWorkerOnce(name, options, {
     : null;
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
-  const { model, modelSource, modelFallback, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0);
+  const { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0, rules.lanes);
+  if (modelRoute) output(`routed to ${modelRoute.lane}: ${modelRoute.usedPercent}% used against ${modelRoute.expectedPercent}% expected`);
   // A v2 OpenCode TUI rejects --model and --agent. Select the model and the worker agent in a project config file instead.
   const openCodeConfig = options.kind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
   const launchArgs = openCodeConfig ? [] : modelLaunchArgs;
@@ -1405,7 +1449,7 @@ function startWorkerOnce(name, options, {
   const agentArgs = [...envAgentArgs, ...browserArgs];
 
   const plan = {
-    name, kind: options.kind, model, modelSource, ...(modelFallback ? { modelFallback } : {}), effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
+    name, kind: options.kind, model, modelSource, ...(modelFallback ? { modelFallback } : {}), ...(modelRoute ? { modelRoute } : {}), effort, effortSource, force: opusForce, rulesFile: rulesPath, rulesStale: staleRules,
     noWorktree: !!options.noWorktree, readOnly: !!options.readOnly, allowedPaths, worktree, branch, base, template: config.briefTemplatePath,
     workspaceId, paneId, paneCommand, paneTab, launchArgs, agentArgs, recordFile, excludeFile,
     // A worker in the current worktree uses its existing dependencies, so setup runs only for a new worktree.
@@ -1641,6 +1685,7 @@ function startWorkerOnce(name, options, {
         model,
         modelSource,
         ...(modelFallback ? { modelFallback } : {}),
+        ...(modelRoute ? { modelRoute } : {}),
         ...(options.kind === 'opencode' ? { startAttempts: attempt } : {}),
         ...(opusForce ? { force: true } : {}),
         provider,
