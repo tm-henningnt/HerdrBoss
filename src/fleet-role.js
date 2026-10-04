@@ -180,9 +180,10 @@ export function createFleetRole({ dir, privateDir, settings, enableHeadOffice = 
     // Accept a role record from a registered factory.
     accept(body) {
       if (!body || validateFile(body, ROLE_SCHEMA_FILE).length || body.contractVersion !== '1.0.0') throw roleError('The role record is invalid.');
-      let registered = false;
-      try { registered = factoryRecords(registryFile).some((record) => record.factoryId === body.headOfficeFactoryId); } catch { /* An unreadable registry registers nobody. */ }
-      if (!registered && body.headOfficeFactoryId !== settings().factoryId) throw roleError('The head office holder is not a registered factory.', 409);
+      // A factory with a registry accepts only a registered holder. A factory with an empty registry is not a head office. It trusts the guide credential and the epoch rules.
+      let records;
+      try { records = factoryRecords(registryFile); } catch { throw roleError('The factory registry cannot be read.', 409); }
+      if (records.length && body.headOfficeFactoryId !== settings().factoryId && !records.some((record) => record.factoryId === body.headOfficeFactoryId)) throw roleError('The head office holder is not a registered factory.', 409);
       const current = view();
       const known = current.headOfficeFactoryId !== null;
       if (body.epoch - current.epoch > 1000) throw roleError('The role epoch is more than 1000 above the stored epoch.', 409);

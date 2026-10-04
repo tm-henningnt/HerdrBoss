@@ -192,6 +192,8 @@ WARNING: Keep head office polling off on a factory until `hub promote` makes it 
 
 WARNING: Run the move only when the Owner decides it. The planned move to the Windows factory waits for 7 clean days of that factory. Do not run the move before that. A command that fails with `Refused` changes nothing.
 
+A factory that has factories in its registry accepts a new head office holder only when the holder is in that registry. A factory with an empty registry is not a head office. It accepts the holder on the strength of the guide credential and the epoch rules. The limit of 1000 above the stored epoch applies in both cases.
+
 Before each move, check these items on the factory that takes the role:
 
 1. The registry lists every factory, and the former holder is in it. The registry has each host that the moved factories use. The move never copies a host record.

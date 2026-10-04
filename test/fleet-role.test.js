@@ -219,11 +219,17 @@ test('the handover sends a minimal projection and never a connection field', () 
   assert.throws(() => holder.api.handover(), (error) => error.status === 409);
 });
 
-test('accept refuses a holder that is not a registered factory', () => {
+test('accept takes a registered holder, refuses an unregistered holder when the registry has factories, and takes any valid holder when the registry is empty', () => {
   const { api, roleFile } = fixture({ headOffice: true });
   assert.throws(() => api.accept(role('factory-z', 5)), (error) => error.status === 409 && /registered/.test(error.message));
   assert.equal(fs.existsSync(roleFile), false);
-  assert.equal(api.accept(role('factory-b', 5)).changed, true, 'this factory is always a valid holder');
+  assert.equal(api.accept(role('factory-a', 5)).changed, true, 'a registered holder');
+  assert.equal(api.accept(role('factory-b', 6)).changed, true, 'this factory is always a valid holder');
+  assert.throws(() => api.accept(role('Bad Id', 7)), (error) => error.status === 400);
+  const empty = fixture({ registered: [], tokens: [] });
+  assert.equal(empty.api.accept(role('factory-z', 2)).changed, true);
+  assert.equal(readFleetFile(empty.roleFile).headOfficeFactoryId, 'factory-z');
+  assert.throws(() => empty.api.accept(role('factory-y', 2000)), (error) => error.status === 409, 'the jump limit stays');
 });
 
 test('a 409 answer is a hard error: another holder exists, the role goes back, the output does not say Not told', async () => {
