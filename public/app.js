@@ -1700,8 +1700,8 @@ function guidanceFold(s) {
 
 function quotaCard(q, s = state) {
   const name = PROVIDERS[q.provider] || q.provider;
-  // A missing usage reader is an unknown reading. Show the reason, never a probe failure.
-  if (!hasQuotaData(q) && q.unavailable) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">unknown</span></div><div class="muted">Usage limit unknown: ${esc(q.reason || q.error)}.</div></div>`;
+  // A missing usage reader is an unknown reading. Show the reason before the stale branch, never a probe failure.
+  if (q.unavailable) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">unknown</span></div><div class="muted">Usage limit unknown: ${esc(q.reason || q.error)}.</div></div>`;
   if (!hasQuotaData(q)) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
   const lane = state?.lanes?.[q.provider];
   const thresholds = quotaThresholds(s);

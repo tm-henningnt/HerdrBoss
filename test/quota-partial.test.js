@@ -49,7 +49,7 @@ test('a missing usage reader is an unknown reading with a reason, never a probe 
     assert.doesNotMatch(row.error, /failed|ENOENT/i);
   }
   const text = bulletin(quotas);
-  assert.match(text, /Usage limits are unknown for Codex, Claude, OpenCode Go: no usage reader in this factory\. Not a probe failure\./);
+  assert.match(text, /Usage limits are unknown for Codex \(no usage reader in this factory\), Claude \(no usage reader in this factory\), OpenCode Go \(no usage reader in this factory\)\. Not a probe failure\./);
   assert.doesNotMatch(text, /Quota data unavailable/);
   assert.doesNotMatch(text, /No quota or active machine restrictions/);
   const lane = laneStatus(quotas, structuredClone(POLICY_DEFAULTS), Date.parse('2026-09-28T01:00:00Z')).claude;
@@ -64,7 +64,35 @@ test('a missing harness login is an unknown reading with its reason', async () =
   assert.equal(claude.unavailable, true);
   assert.match(claude.reason, /no login for this harness in this factory/);
   const text = bulletin(quotas);
-  assert.match(text, /Usage limits are unknown for Claude: no login for this harness in this factory\./);
+  assert.match(text, /Usage limits are unknown for Claude \(no login for this harness in this factory\)\. Not a probe failure\./);
+});
+
+test('an unavailable reader after a good reading keeps the old windows as stale, never a failed probe', () => {
+  const good = [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 37, expectedPercent: 20, resetsAt: '2026-10-02T00:00:00.000Z', windowMinutes: 10080 }] }];
+  const readAt = Date.parse('2026-09-28T00:00:00.000Z');
+  const unavailable = [{ provider: 'claude', unavailable: true, reason: 'no usage reader in this factory', error: 'no usage reader in this factory' }];
+  const rows = keepStaleRows(unavailable, good, readAt, readAt + 60 * 60 * 1000);
+  const claude = rows[0];
+  assert.equal(claude.stale, true, 'the old windows stay, marked stale');
+  assert.equal(claude.unavailable, true, 'the row carries the unavailable marker');
+  assert.equal(claude.reason, 'no usage reader in this factory');
+  assert.equal(claude.windows[0].usedPercent, 37, 'the old reading stays as stale pacing data');
+  const lane = laneStatus(rows, structuredClone(POLICY_DEFAULTS), readAt + 60 * 60 * 1000).claude;
+  assert.notEqual(lane.state, 'unknown', 'the old windows still guide pacing');
+  assert.equal(lane.reading.usedPercent, 37);
+  assert.equal(lane.reading.ageMinutes, 60, 'the pacing data carries its age, never a fresh reading');
+  const text = bulletin(rows);
+  assert.match(text, /Usage limits are unknown for Claude \(no usage reader in this factory\)\. Not a probe failure\./);
+  assert.doesNotMatch(text, /the last probe failed/);
+  assert.doesNotMatch(text, /\(probe failed\)/);
+});
+
+test('quotaUnavailableReason returns null for a timeout, an exit code, and a missing row', () => {
+  const timeout = Object.assign(new Error('codexbar timed out after 60 s'), { killed: true, signal: 'SIGTERM' });
+  const exited = Object.assign(new Error('Command failed'), { code: 1, stderr: 'codexbar: no such option' });
+  assert.equal(quotaCollector.quotaUnavailableReason(timeout), null);
+  assert.equal(quotaCollector.quotaUnavailableReason(exited), null);
+  assert.equal(quotaCollector.quotaUnavailableReason('claude quota row is missing from the latest probe'), null);
 });
 
 const cfg = { quota: { warnPercent: 80 }, port: 4477, host: '127.0.0.1' };

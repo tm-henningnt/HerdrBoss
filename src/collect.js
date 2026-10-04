@@ -411,7 +411,9 @@ export function keepStaleRows(quotas, previous, previousAt, now = Date.now()) {
     const since = old.stale ? Date.parse(old.staleSince) : Date.parse(old.observedAt) || Date.parse(old.updatedAt) || previousAt;
     if (!Number.isFinite(since)) return q;
     const { stale, staleSince, error, ...data } = old;
-    return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error };
+    // An unavailable reader keeps its marker, so the row shows unknown and not a failed probe.
+    return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error,
+      ...(q.unavailable ? { unavailable: true, ...(q.reason ? { reason: q.reason } : {}) } : {}) };
   });
   for (const old of oldRows) {
     if (seen.has(old.provider)) continue;

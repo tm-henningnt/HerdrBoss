@@ -1526,7 +1526,7 @@ test('organization cards show an unavailable or stale quota bar, and the header 
   assert.match(app, /last reading \$\{reading\.usedPercent\}%/);
   assert.match(app, /\$\{readingAge\}\$\{reading\.stale \? ' · stale' : ''\}/);
   // A missing usage reader shows the reading as unknown with its reason, never as a probe failure.
-  assert.match(app, /!hasQuotaData\(q\) && q\.unavailable\) return `[\s\S]*?<span class="tag">unknown<\/span>[\s\S]*?Usage limit unknown: \$\{esc\(q\.reason \|\| q\.error\)\}/);
+  assert.match(app, /if \(q\.unavailable\) return `[\s\S]*?<span class="tag">unknown<\/span>[\s\S]*?Usage limit unknown: \$\{esc\(q\.reason \|\| q\.error\)\}/);
   assert.match(app, /if \(q\?\.unavailable\) return `\$\{PROVIDERS\[kind\]\} usage limit unknown · \$\{q\.reason \|\| q\.error\}`/);
   assert.match(app, /const unknown = lane\.state === 'unknown' && lane\.reason/);
   assert.match(app, /The Boss gets one warning when the Claude probe fails for over 60 minutes/);

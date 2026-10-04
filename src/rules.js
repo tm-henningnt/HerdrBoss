@@ -479,14 +479,14 @@ export function renderBulletin(snap, evaluation, cfg) {
   const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
   // Without quota data, pacing is blind. Say so, and never claim that no restriction applies.
   const quotaRows = snap.quotas || [];
-  const unknown = quotaRows.filter((q) => q.unavailable && !q.stale);
+  const unknown = quotaRows.filter((q) => q.unavailable);
   const failed = quotaRows.filter((q) => !hasQuotaData(q) && !q.unavailable).map((q) => providerName(q.provider));
-  const stale = quotaRows.filter((q) => q.error && q.stale);
+  const stale = quotaRows.filter((q) => q.error && q.stale && !q.unavailable);
   rules.unshift(...stale.map((q) => `Quota data for ${providerName(q.provider)} is from ${fmtTime(q.staleSince)}; the last probe failed.`));
   // A missing usage reader or login is an unknown reading, not a probe failure. A container factory has no CodexBar.
   if (unknown.length) {
-    const reason = unknown.find((q) => typeof q.reason === 'string' && q.reason)?.reason || 'the usage reader is not available';
-    rules.unshift(`Usage limits are unknown for ${unknown.map((q) => providerName(q.provider)).join(', ')}: ${reason}. Not a probe failure.`);
+    const entries = unknown.map((q) => `${providerName(q.provider)} (${typeof q.reason === 'string' && q.reason ? q.reason : 'the usage reader is not available'})`);
+    rules.unshift(`Usage limits are unknown for ${entries.join(', ')}. Not a probe failure.`);
   }
   if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
   else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
@@ -534,7 +534,11 @@ export function renderBulletin(snap, evaluation, cfg) {
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
     if (!hasQuotaData(q)) continue;
-    const provider = q.stale ? `${providerName(q.provider)} quota from ${fmtTime(q.staleSince)} (probe failed)` : providerName(q.provider);
+    const provider = q.stale
+      ? q.unavailable
+        ? `${providerName(q.provider)} quota from ${fmtTime(q.staleSince)} (unknown: ${typeof q.reason === 'string' && q.reason ? q.reason : 'the usage reader is not available'})`
+        : `${providerName(q.provider)} quota from ${fmtTime(q.staleSince)} (probe failed)`
+      : providerName(q.provider);
     for (const w of q.windows) {
       const reset = w.resetsAt && Date.parse(w.resetsAt) <= Date.parse(snap.updatedAt || Date.now());
       L.push(`| ${provider} | ${w.label} | ${reset ? 'reset, not yet measured' : `${w.usedPercent}%`} | ${reset ? '–' : `${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''}`} | ${fmtTime(w.resetsAt)} |`);
