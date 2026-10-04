@@ -34,6 +34,7 @@ import { readFleetFile } from './fleet-store.js';
 import { createFleetReadAccess, createFleetGuideAccess } from './fleet-access.js';
 import { createFleetGuidance } from './fleet-guidance.js';
 import { createFleetShares } from './fleet-shares.js';
+import { createFleetRole } from './fleet-role.js';
 import { createFleetSettings } from './fleet-settings.js';
 import { createProjectTransfer } from './project-transfer.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
@@ -56,9 +57,6 @@ const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs
 const defaultDocsSite = createDocsSite({ root: path.dirname(DOCS) });
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
 const execFileAsync = promisify(execFile);
-const FLEET_GUIDE_ROUTES = ['/api/fleet/guidance', '/api/fleet/transfer'];
-export const fleetGuideRouteAllowed = (method, pathname) => method === 'POST' && FLEET_GUIDE_ROUTES.includes(pathname);
-
 async function handoffCommand(args) {
   try {
     const { stdout } = await execFileAsync(process.execPath, [fileURLToPath(new URL('./cli.js', import.meta.url)), 'handoff', ...args], {
@@ -205,6 +203,8 @@ function validQueryTime(value) {
 const MACHINE_HOURS_CACHE_MS = 60000;
 
 const PREVIEW_DEFAULT_HOST = '127.0.0.1';
+// The guide credential permits only these routes. A peer factory uses them for guidance, the head office role, handover, and project transfer.
+const FLEET_GUIDE_ROUTES = ['POST /api/fleet/guidance', 'POST /api/fleet/role', 'GET /api/fleet/role', 'GET /api/fleet/handover', 'POST /api/fleet/transfer'];
 
 // A preview bind address is an IP address or a host name. An empty value is refused.
 export function assertPreviewHost(host) {
@@ -250,6 +250,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, config: cfg });
   const fleetShares = createFleetShares({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR,
     settings: fleetSettings.read, receiver: fleetGuidance, registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, now: fleet.now });
+  const fleetRole = createFleetRole({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, settings: fleetSettings.read,
+    registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, now: fleet.now });
   // The tool check runs beside the first tick. Its warnings are logged when they arrive.
   if (!readOnlyPreview) {
     checkMachineTools(machineTools).then((warnings) => {
@@ -292,8 +294,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       reviewPacks: (reviewStore.packHeads({ dir: DATA_DIR }).length ? reviewStore.listPacks({ dir: DATA_DIR }) : []).map((pack) => ({ id: `${pack.slug}-${pack.pack}`.slice(0, 64), waitingItems: pack.counts.open || 0 })) });
   };
   const fleetPoller = createFleetPoller({ dir: DATA_DIR, localSummary: localFleetSummary,
-    enabled: () => !readOnlyPreview && fleetSettings.read().headOffice,
-    onSummary: (record) => fleetShares.retry(record),
+    enabled: () => !readOnlyPreview && fleetSettings.read().headOffice && fleetRole.holds(),
+    onSummary: async (record) => { await fleetRole.retry(record); await fleetShares.retry(record); },
     credentials: () => readFleetFile(path.join(fleet.privateDir || PRIVATE_ACCESS_DIR, 'fleet-remotes.json'), {}), ...fleet });
   const fleetClock = fleet.now || Date.now;
   const FLEET_ROUTE_POLL_MS = 30000;
@@ -395,10 +397,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         return send(res, 403, { error: 'The fleetRead credential permits only GET summary and health.' });
       }
       const fleetGuide = fleetGuideAccess.check(req);
-      if (fleetGuide.present && (!fleetGuide.authorized || !fleetGuideRouteAllowed(req.method, p))) {
-        return send(res, 403, { error: 'The fleetGuide credential permits only POST guidance or transfer.' });
+      if (fleetGuide.present && (!fleetGuide.authorized || !FLEET_GUIDE_ROUTES.includes(`${req.method} ${p}`))) {
+        return send(res, 403, { error: 'The fleetGuide credential permits only guidance, role, handover, and transfer routes.' });
       }
-      if (fleetGuideRouteAllowed(req.method, p) && !fleetGuide.authorized) return send(res, 401, { error: 'A fleetGuide credential is required.' });
+      if (!fleetGuide.authorized && FLEET_GUIDE_ROUTES.includes(`${req.method} ${p}`)) return send(res, 401, { error: 'A fleetGuide credential is required.' });
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
@@ -482,6 +484,18 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         try { return send(res, 200, await fleetGuidance.accept(await jsonBody(req))); }
         catch (error) { return send(res, error.status || 400, { error: error.status ? error.message : 'The guidance could not be accepted.' }); }
       }
+      if (p === '/api/fleet/role' && req.method === 'GET') {
+        try { return send(res, 200, fleetRole.view()); }
+        catch { return send(res, 503, { error: 'The head office role cannot be read.' }); }
+      }
+      if (p === '/api/fleet/role' && req.method === 'POST') {
+        try { return send(res, 200, fleetRole.accept(await jsonBody(req))); }
+        catch (error) { return send(res, error.status || 400, { error: error.status ? error.message : 'The role record could not be accepted.' }); }
+      }
+      if (p === '/api/fleet/handover' && req.method === 'GET') {
+        try { return send(res, 200, fleetRole.handover()); }
+        catch (error) { return send(res, error.status || 503, { error: error.status ? error.message : 'The handover cannot be read.' }); }
+      }
       if (p === '/api/fleet/transfer' && req.method === 'POST') {
         const result = await projectTransfer.handle(await jsonBody(req));
         return send(res, result.status, result.body);
@@ -503,7 +517,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         // An empty view starts a poll at most once in 30 seconds.
         if (!fleetPoller.view().factories.length && (fleetClock() - lastRoutePoll >= FLEET_ROUTE_POLL_MS || lastRoutePoll === 0)) { lastRoutePoll = fleetClock(); await fleetPoller.poll(); }
         const view = fleetPoller.view();
-        return send(res, 200, { ...view, factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
+        let role = null;
+        try { role = fleetRole.view(); } catch { /* The page shows no role when the settings are invalid. */ }
+        return send(res, 200, { ...view, role, factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
       }
       if (p === '/api/health' && req.method === 'GET') {
         const body = await health(engine);

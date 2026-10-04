@@ -38,7 +38,7 @@ If a node shows no state, its agent is not running. Ask the Boss about it in the
 2. Read the six tiles at the top.
 3. Scroll down to the charts for the cost of each day.
 
-You should see **Claude spend a day**, **Quota against pace**, and four more tiles. A tile with a change compares the last 7 days with the 7 days before. The tile **Quota against pace** names the usage limit that is most ahead of its pace.
+You should see **Claude spend a day**, **Usage limit against pace**, and four more tiles. A tile with a change compares the last 7 days with the 7 days before. The tile **Usage limit against pace** names the usage limit that is most ahead of its pace.
 
 If a chart is empty, Herdr Boss has not collected enough data yet. Check again after a day of work.
 

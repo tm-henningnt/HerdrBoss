@@ -97,8 +97,8 @@ If `doctor` says that the command is not found, add `~/.local/bin` to your `PATH
 A *paced* *provider* spreads its use evenly over the *limit window*. Herdr Boss holds back new work when you are ahead of the pace. This protects the rest of the week.
 
 1. Open the dashboard Settings page. Step 8 shows how to open it.
-2. For each provider, choose **Manage pace** or **Ignore quota**.
-3. Choose **Manage pace** when you want to keep usage for the whole week. Choose **Ignore quota** when you want the agents to use all of it.
+2. For each provider, choose **Manage pace** or **Ignore usage limit**.
+3. Choose **Manage pace** when you want to keep usage for the whole week. Choose **Ignore usage limit** when you want the agents to use all of it.
 
 You should see your choice saved on the page.
 

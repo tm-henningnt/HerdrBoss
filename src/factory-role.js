@@ -9,6 +9,17 @@ export const FACTORY_SEED = '/opt/herdr-boss-seed';
 export const FACTORY_PROJECT_GROUP = `${FACTORY_HOME}/work`;
 export const FACTORY_GIT_IDENTITY = Object.freeze({ 'user.name': 'Herdr Factory', 'user.email': 'factory@localhost.invalid' });
 
+// Set the Git identity of the factory user once. An identity that exists stays as it is.
+export async function ensureFactoryGitIdentity(docker, name) {
+  for (const [key, value] of Object.entries(FACTORY_GIT_IDENTITY)) {
+    const prefix = ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', `hf-${name}`, 'git', 'config', '--global'];
+    const current = await docker.run([...prefix, '--get', key]);
+    if (current.code === 0 && current.stdout.trim()) continue;
+    const set = await docker.run([...prefix, key, value]);
+    if (set.code !== 0) throw new Error('The Git identity of the factory user could not be set. Check the factory configuration.');
+  }
+}
+
 export function isFactoryRole(env = process.env, exists = fs.existsSync) {
   return env.HOME === FACTORY_HOME && exists(FACTORY_SEED);
 }

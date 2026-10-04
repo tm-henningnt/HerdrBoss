@@ -17,7 +17,7 @@ import { recordProjectRepo } from '../src/harness.js';
 import { writeProject } from '../src/projects.js';
 import { readProjectTransferLock } from '../src/project-transfer-locks.js';
 import { createProjectTransfer, projectTransferCommand, projectTransferRoot } from '../src/project-transfer.js';
-import { fleetGuideRouteAllowed, serve } from '../src/server.js';
+import { serve } from '../src/server.js';
 import { FACTORY_PROJECT_GROUP } from '../src/factory-role.js';
 
 const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1' };
@@ -356,13 +356,6 @@ test('a second transfer for the same project is refused while the first is open'
   assert.equal(code, 1);
   assert.match(text, /open transfer|already in progress|transfer lock/i);
   assert.equal(readProjectTransferLock('alpha', { dataDir: f.sourceData }).side, 'source');
-});
-
-test('the transfer API is a POST-only fleetGuide route', () => {
-  assert.equal(fleetGuideRouteAllowed('POST', '/api/fleet/transfer'), true);
-  assert.equal(fleetGuideRouteAllowed('GET', '/api/fleet/transfer'), false);
-  assert.equal(fleetGuideRouteAllowed('POST', '/api/fleet/role'), false);
-  assert.equal(fleetGuideRouteAllowed('POST', '/api/workers/start'), false);
 });
 
 test('factory transfer projects use the factory work group', () => {

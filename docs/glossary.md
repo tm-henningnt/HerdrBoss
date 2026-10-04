@@ -33,7 +33,7 @@ For the language of factories, hosts, and head office, read [CONTEXT.md](CONTEXT
 - **Mailbox**: The dashboard page where agents leave messages for you. "Needs you" lists the items that wait for your answer.
 - **Chat**: The dashboard page where you talk with the Boss.
 - **review pack**: A set of items with evidence that you judge one by one.
-- **item**: One thing in a review pack that you accept, reject, or comment on.
+- **item**: One thing in a review pack that you accept, deny, or comment on.
 - **live check**: A link in a review pack that opens the real result, so that you can try it yourself.
 - **notice**: A short message that Herdr Boss sends to an agent or shows to you.
 

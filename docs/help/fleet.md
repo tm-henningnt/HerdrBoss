@@ -13,7 +13,7 @@ Run factory login NAME claude or factory login NAME codex in an Owner terminal. 
 
 At the head office, set one slider for each factory in an account scope. Use whole percentages from 0 to 100. The shares of one account must total at most 100. Select Save factory shares. The plan saves before delivery. A pending factory keeps its last accepted share. The next successful poll retries delivery.
 
-The factory share is a local pacing ceiling above the project allocation. Project shares stay in the local policy. At the ceiling, new workers for that account stop. Ignore quota mode and --force cannot bypass it. Each factory keeps its last accepted share when the head office is offline or the service restarts. Until the first guidance arrives, its profile ceiling is 100. Quota readings measure the shared account. They do not measure the use of one factory.
+The factory share is a local pacing ceiling above the project allocation. Project shares stay in the local policy. At the ceiling, new workers for that account stop. Ignore usage limit mode and --force cannot bypass it. Each factory keeps its last accepted share when the head office is offline or the service restarts. Until the first guidance arrives, its profile ceiling is 100. Quota readings measure the shared account. They do not measure the use of one factory.
 
 ## Nudge a factory Boss
 
@@ -23,6 +23,14 @@ The guidance credential can set shares and send nudges only. It cannot change po
 
 Send guidance credentials only over HTTPS. HTTP is permitted only for a loopback target. The sender refuses other HTTP targets before it sends the credential.
 
-The factory refuses an epoch more than 1000 above its highest stored guidance or role epoch. To recover from an incorrect epoch or holder, rotate the guide credential at the receiving factory. Rotation resets both stored epochs and holders. It clears the nudge IDs of the old term and keeps the last accepted shares. Import the new credential at the head office through private provisioning.
+The factory refuses an epoch more than 1000 above its highest stored guidance or role epoch. To recover from an incorrect epoch or holder, rotate the guide credential at the receiving factory. Rotation resets both stored epochs and holders, except on the factory that holds the head office role. It clears the nudge IDs of the old term and keeps the last accepted shares. Import the new credential at the head office through private provisioning.
 
 If a fleet share file is invalid, the pacing view shows the problem and the service logs one warning. The local policy still loads with factory shares unset. A metered worker start refuses a failed share check. Unmetered worker starts do not read factory shares. Repair the fleet files to clear the problem.
+
+## Head office role
+
+The Head office panel shows the factory that holds the head office role and the epoch of its term. Only the holder polls the other factories and sends factory shares and nudges. A factory that sees a higher epoch stops both.
+
+The panel also lists a factory that was never told of a move. Turn off head office polling on that factory. Keep head office polling off on every factory until it takes the role. A factory with polling on and no role record counts as the holder.
+
+Move the role on the factory that takes it. Run `herdr-boss hub promote` in an Owner terminal. The command refuses when a registered factory cannot be reached. Run it with `--force` to continue without that factory. The new holder gets the factory list and the factory shares from the former holder, or keeps its own copy. It never receives host addresses. A factory on an unknown host stays out of its registry. See the move runbook in the factory chapter of the user guide.

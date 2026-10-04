@@ -66,10 +66,10 @@ What you do:
 2. Sign in to the agent app in a terminal. Only you do this step.
 3. Run `herdr-boss harness check`. It lists each missing setting.
 4. Run `herdr-boss harness sync`. It adds the safe settings. For the Claude lines, follow [harness-setup.md](../harness-setup.md). Only you add them.
-5. Open Settings. Find **Harnesses**. Switch on **Available** for the agent app.
+5. Open Settings. Find **Agent apps**. Switch on **Available** for the agent app.
 6. Select **Apply policy**.
 
-What you should see: the agent app is on in **Harnesses**. The project lead can now start workers with it. A running worker keeps its agent app.
+What you should see: the agent app is on in **Agent apps**. The project lead can now start workers with it. A running worker keeps its agent app.
 
 If you do not see it: run `herdr-boss harness check` again. Read each missing entry in [harness-setup.md](../harness-setup.md). Codex cannot start a browser in its sandbox: give browser tasks to another agent app.
 

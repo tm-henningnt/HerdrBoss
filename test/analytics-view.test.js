@@ -266,7 +266,7 @@ test('Analytics quota reset form posts to the Owner-only announcement route', ()
 });
 
 test('the Codex quota plan chart and reset form appear in Analytics help and docs', () => {
-  assert.match(app, /Codex quota plan[\s\S]*Only the Owner can save an announcement/);
+  assert.match(app, /Codex usage limit plan[\s\S]*Only the Owner can save an announcement/);
   assert.match(guide, /\*\*Codex quota plan\*\*: the actual line uses quota history/);
   assert.match(guide, /Only the Owner can save an announcement/);
   assert.match(cli, /The Analytics page uses matching history/);
@@ -784,7 +784,7 @@ test('the Analytics help and the guide describe the memory chart, the classes, t
   assert.match(app, /<h3>Memory by class<\/h3>/);
   assert.match(app, /memory-samples\.jsonl/);
   assert.match(app, /every 5 minutes/);
-  assert.match(app, /<p>The page shows cost, quota use, model quality, denied work, machine use, lock waits, GitHub Actions minutes/);
+  assert.match(app, /<p>The page shows cost, usage limit use, model quality, denied work, machine use, lock waits, GitHub Actions minutes/);
   for (const cls of ['Claude', 'Codex', 'Browsers', 'MCP servers', 'Vitest']) assert.match(app, new RegExp(cls), cls);
   assert.match(guide, /## Memory by class/);
   assert.match(guide, /memory-samples\.jsonl/);

@@ -34,6 +34,11 @@ export function fleetMailbox(data) {
   }));
   return `<section class="fleet-mail"><h2>Fleet Mailbox</h2>${rows.length ? `<ul class="fleet-item-list">${rows.join('')}</ul>` : '<p class="muted">No Owner items in the available summaries.</p>'}</section>`;
 }
+function roleView(role, factories) {
+  if (!role?.headOfficeFactoryId) return '';
+  const holder = factories.find((factory) => factory.summary?.factoryId === role.headOfficeFactoryId)?.name || role.headOfficeFactoryId;
+  return `<section class="panel fleet-role"><h2>Head office</h2><p>Holder: <strong>${esc(holder)}</strong> · epoch ${esc(role.epoch)}</p><p class="muted">${role.holds ? 'This factory holds the head office role.' : 'Another factory holds the head office role. This factory does not poll the fleet and does not send guidance.'}</p>${role.neverTold?.length ? `<p role="alert">Never told of the move: ${esc(role.neverTold.join(', '))}. Turn off head office polling on each of these factories.</p>` : ''}</section>`;
+}
 export function fleetView(data, settings, message = '', shares) {
   if (!data) return '<header class="page-head"><h1>Fleet</h1></header><p role="status">Loading the fleet…</p>';
   const factories = data.factories || [];
@@ -52,6 +57,7 @@ export function fleetView(data, settings, message = '', shares) {
   });
   const spends = factories.flatMap((factory) => (factory.summary?.spend || []).map((row) => `<tr><th scope="row">${esc(factory.name)}</th><td>${esc(row.day)}</td><td>${esc(row.role)}</td><td>${esc(row.harness)}</td><td>${money(row.usd)}${factory.status === 'offline' ? ' · last good data' : ''}</td></tr>`));
   return `<header class="page-head"><h1>Fleet</h1><p class="muted">${factories.length} factories · poll every ${data.pollSeconds || 30} seconds</p><p><a href="/fleet/add-host">Add a host</a></p></header>${data.registryError ? `<p role="alert">Fleet data unavailable: ${esc(data.registryError)}. Check the fleet registry.</p>` : ''}
+    ${roleView(data.role, factories)}
     <section class="panel"><h2>Factories</h2>${table(['Factory', 'Health', 'Last seen', 'Projects', 'Worst quota', 'Spend today', 'Owner items', 'Version and kit'], rows, 'No factory summary is available.')}</section>
     <section class="panel"><h2>Shared account quota</h2>${table(['Account and lane', 'Use', 'Factories'], quotaRows(factories), 'No account is provisioned. Add an account digest and scope.')}<p class="muted">A shared account shows its highest reading. Repeated readings are not added.</p></section>
     ${settings && shares ? fleetSharesView(shares, settings) : ''}

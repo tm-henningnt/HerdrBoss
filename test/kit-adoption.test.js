@@ -210,7 +210,7 @@ test('the project page shows the published, disk, and current revision and the r
   assert.match(stale, /class="warnbox"/);
   assert.match(stale, /published a1a1a1a1a1a1, on disk d4d4d4d4d4d4, current d4d4d4d4d4d4/);
   assert.match(stale, /2 required changes behind\./);
-  assert.match(stale, /The disk copy is current\. The orchestrator must set .*kitRevision.* and publish\./);
+  assert.match(stale, /The disk copy is current\. The project lead must set .*kitRevision.* and publish\./);
   const behindDisk = kitLineFor({ ...base, kitRevision: 'a1a1a1a1a1a1', installedKitRevision: 'c3c3c3c3c3c3' }, changes);
   assert.match(behindDisk, /The disk copy is behind \(1 required change behind\)\./);
   const noDisk = kitLineFor({ ...base, kitRevision: 'c3c3c3c3c3c3' }, changes);

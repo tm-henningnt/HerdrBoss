@@ -583,7 +583,7 @@ test('fix round 5: backup and restore helpers explicitly run as root', async () 
 
 test('fix round 6: factory recovery help presents backup, restore, destroy and repair in separate short paragraphs', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const help = app.slice(app.indexOf('<h3>Factory hosts</h3>'), app.indexOf('<h3>Harness readiness</h3>'));
+  const help = app.slice(app.indexOf('<h3>Factory hosts</h3>'), app.indexOf('<h3>Agent app readiness</h3>'));
   const paragraphs = [...help.matchAll(/<p>(.*?)<\/p>/gs)].map((match) => match[1].replace(/<[^>]+>/g, ''));
   assert.ok(paragraphs.length >= 4);
   for (const paragraph of paragraphs) assert.ok(paragraph.trim().split(/\s+/).length <= 95, 'Keep each help paragraph short enough to scan.');

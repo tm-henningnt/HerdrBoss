@@ -285,7 +285,7 @@ function load(names, context = {}) {
 test('the stand-down card shows the text, both buttons, and the skipped reasons', () => {
   const { standDownCard } = load(['standDownCard']);
   const html = standDownCard({ standDown: { at: '2026-10-01T20:15:00.000Z', projects: { alpha: 'auto' } } }, { paused: ['alpha'], skipped: [{ slug: 'bravo', reason: 'worker running' }] });
-  assert.match(html, /Park the idle project orchestrators\. Goals stay set\. Running work continues\./);
+  assert.match(html, /Park the idle project leads\. Goals stay set\. Running work continues\./);
   assert.match(html, /data-stand-down="true"/);
   assert.match(html, /data-stand-down-undo="true"/);
   assert.match(html, /bravo: worker running/, 'the card shows each skipped project with its reason');
