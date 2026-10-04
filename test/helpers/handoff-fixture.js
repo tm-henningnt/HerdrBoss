@@ -67,7 +67,10 @@ if (args[0] === 'pane' && args[1] === 'read') {
     if (args.includes('recent') && process.env.TEST_RECENT_FAIL === '1') process.exit(1);
     if (args.includes('visible') && process.env.TEST_VISIBLE_FAIL === '1') process.exit(1);
     process.stdout.write(process.env.TEST_SOURCE_TEXT || '');
-  } else process.stdout.write(process.env.TEST_SHELL || '');
+  } else {
+    const started = Number(fs.readFileSync(process.env.TEST_AGENT_START_FILE, 'utf8') || 0) > 0;
+    process.stdout.write(started && process.env.TEST_SHELL_AFTER_START ? process.env.TEST_SHELL_AFTER_START : (process.env.TEST_SHELL || ''));
+  }
   process.exit(0);
 }
 console.log(JSON.stringify({ result }));

@@ -8,6 +8,7 @@ import { alertBossForOpus, deliverPrompt, isAgentPaneBusy, isOpus, normalizeMode
 import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor } from './control.js';
 import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
+import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './kit/opencode-cli.js';
 import { cleanGoal, goalDelivery, goalFromTranscript, goalOnScreen, goalPromptText } from './goal.js';
 import { EXIT_CODES as GOAL_EXIT_CODES, setGoal } from './goal-set.js';
 import { reownProjectLocks } from './kit/locks.js';
@@ -311,7 +312,9 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
 
 // A Codex tool shell can run under a shared app-server daemon with another environment, so a codex successor gets
 // the Herdr variables of its new pane as -c shell_environment_policy.set.* launch arguments. Other kinds get none.
-export function successorAgentArgs(item, launchArgs, env, { browserLookup, output = console.error } = {}) {
+export function successorAgentArgs(item, launchArgs, env, { browserLookup, output = console.error, tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags } = {}) {
+  // A v2 OpenCode TUI rejects --model and --agent. The model and the worker agent come from opencode.json instead.
+  if (item.toKind === 'opencode' && tuiSupportsModelFlags({ env }) === false) return [];
   if (item.toKind !== 'codex') return launchArgs;
   const envArgs = codexShellEnvArgs({
     HERDR_ENV: '1', HERDR_PANE_ID: item.newPane, HERDR_TAB_ID: item.newTab, HERDR_WORKSPACE_ID: item.workspace,
@@ -322,7 +325,37 @@ export function successorAgentArgs(item, launchArgs, env, { browserLookup, outpu
   return [...launchArgs, ...envArgs, ...browserArgs];
 }
 
-export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup } = {}) {
+// A v2 OpenCode TUI reads the model and the worker agent from a project config file. Write the file into the
+// successor working folder and keep it out of the Git index. The file holds no secret.
+function writeOpenCodeSuccessorConfig(item, { output = console.error } = {}) {
+  fs.writeFileSync(path.join(item.cwd, OPEN_CODE_CONFIG_NAME), openCodeConfigText(item.model), { mode: 0o600 });
+  try {
+    const relative = call('git', ['rev-parse', '--git-path', 'info/exclude'], item.cwd).trim();
+    const file = path.isAbsolute(relative) ? relative : path.resolve(item.cwd, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    const entry = `/${OPEN_CODE_CONFIG_NAME}`;
+    if (!current.split(/\r?\n/).includes(entry)) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}${entry}\n`, 'utf8');
+  } catch (error) {
+    output(`Warning: could not add ${OPEN_CODE_CONFIG_NAME} to the git exclude: ${String(error.message).slice(0, 200)}`);
+  }
+}
+
+// The pane shows a refused launch flag when the capability detection was wrong. Fail loudly and keep the record.
+function openCodeLaunchError(item) {
+  if (item.toKind !== 'opencode') return null;
+  let text;
+  try { text = herdr(['pane', 'read', item.newPane, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']).text; }
+  catch { return null; }
+  const flag = unsupportedOpenCodeFlag(text);
+  if (!flag) return null;
+  const error = new Error(`OpenCode refused the launch flag ${flag}: the pane shows "Unrecognized flag: ${flag} in command opencode". The installed OpenCode TUI does not accept this flag. Inspect pane ${item.newPane} with "herdr agent read ${item.newPane}", then retry handoff prepare.`);
+  error.code = 'opencode_unsupported_flag';
+  error.unsupportedFlag = flag;
+  return error;
+}
+
+export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup, output = console.error, tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags } = {}) {
   // Refuse a caller value that Codex cannot receive before any record or tab changes.
   if (toKind === 'codex') successorAgentArgs({ toKind }, [], env);
   const currentPanes = expireMissingSuccessors();
@@ -392,7 +425,10 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   }
 
   const { launchArgs } = handoffTarget(item.toKind, { model: item.model, effort: item.effort, force: item.force === true, command: 'prepare' }, loadPolicy(), loadModels());
-  const agentArgs = successorAgentArgs(item, launchArgs, env, { browserLookup });
+  const agentArgs = successorAgentArgs(item, launchArgs, env, { browserLookup, tuiSupportsModelFlags });
+  // The capability answer is cached for the process, so this check runs opencode --help at most once.
+  const openCodeConfig = item.toKind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
+  if (openCodeConfig) writeOpenCodeSuccessorConfig(item, { output });
   const args = migratedId && item.toKind === 'codex' ? ['resume', migratedId, ...agentArgs]
     : migratedId && item.toKind === 'claude' ? ['--resume', migratedId, ...agentArgs]
       : agentArgs;
@@ -426,6 +462,13 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
       item.status = 'needs-inspection'; item.promptError = retryError.message; save(records);
       throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${retryError.message}`);
     }
+  }
+  const flagError = openCodeLaunchError(item);
+  if (flagError) {
+    item.status = 'needs-inspection';
+    item.promptError = flagError.message;
+    save(records);
+    throw flagError;
   }
   item.status = 'prepared';
   delete item.promptError;
