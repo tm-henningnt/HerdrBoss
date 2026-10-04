@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { runDoctor } from '../src/doctor.js';
 import { SETUP_STEPS, readSetupState, runSetup, setupCommand } from '../src/setup.js';
@@ -265,6 +265,9 @@ test('F2 overlapping setup runs refuse the competitor without reading or replaci
   const first = runSetup({ ...f.options, runner: async ({ id }) => id === 'node' ? '' : f.values[id], ask: async () => { enter(); return consent; } });
   await entered;
   try {
+    const owner = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'setup.lock'), 'utf8'));
+    assert.equal(owner.pid, process.pid);
+    assert.equal(owner.startMarker, `${process.pid}@${os.hostname()}`);
     const before = fs.readFileSync(path.join(f.dataDir, 'setup.json'));
     const alias = path.join(f.home, 'data-alias');
     fs.symlinkSync(f.dataDir, alias);
@@ -277,6 +280,22 @@ test('F2 overlapping setup runs refuse the competitor without reading or replaci
   } finally { release('no'); await first; }
   assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
   assert.equal((await runSetup({ ...f.options, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+});
+
+test('F5 setup resumes after a lock owner exits without cleanup', async (t) => {
+  const f = fixture(t);
+  f.project();
+  const source = `import { takeSetupLock } from ${JSON.stringify(new URL('../src/setup-lock.js', import.meta.url).href)};
+    if (!takeSetupLock(${JSON.stringify(f.dataDir)})) throw new Error('Fixture could not acquire its lock');
+    process.exit(23);`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-'], {
+    input: source, encoding: 'utf8', env: { ...process.env, ...f.options.env },
+  });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 23, child.stderr);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), true);
+  assert.equal((await runSetup({ ...f.options, resume: true, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
   assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
 });
 

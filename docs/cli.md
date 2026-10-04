@@ -64,12 +64,14 @@ The file holds step names, states, the pacing choice, and your confirmations.
 It holds no secret.
 Setup refuses a progress, policy, or policy-log file that links outside the data folder.
 Its file readers and writers do not follow symbolic links.
+Setup assumes that the data directory is not replaced while it runs.
 Run one setup command for each data folder at a time.
 The command holds `setup.lock` while a terminal prompt is open.
-It releases the lock when it exits.
+The lock records the process ID and its hostname marker.
+The command releases the lock when it exits normally.
 A second run exits 1 with `Setup is already running for this data folder.`
 Run it again after the first command ends.
-If a crash leaves the lock file, remove it only after you verify that no setup command runs.
+After a crash, setup removes a lock only when its process has ended or its marker has changed.
 Each run checks the computer again.
 `--resume` continues the saved progress.
 A plain rerun also continues it.
