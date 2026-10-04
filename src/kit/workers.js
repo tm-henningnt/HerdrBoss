@@ -3,7 +3,7 @@ import { readFactoryShares, FACTORY_SHARE_ERROR } from '../fleet-pacing.js';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, gitLog, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, compareChangedPaths, gitLog, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
@@ -1927,7 +1927,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (backgroundShell) {
       throw new Error(`your own background shell (pid ${backgroundShell.pid}, command ${backgroundShell.command}) has its cwd in the worktree. Change directory or stop it.`);
     }
-    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`).join('; ')}. Stop them before collection.`);
+    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid})`).join('; ')}. Stop them before collection.`);
     if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
     if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
     const baseRef = run.baseCommit || run.base;
@@ -1944,7 +1944,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     }
     const allowedPaths = [...new Set([...(run.allowedPaths ?? []), ...extensionPaths, ...oneTimePaths])];
     const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
-    const changed = gitChangedPaths(run.worktree, baseRef).filter((item) => !ownFile(item));
+    const changed = gitWorkerChangedPaths(run.worktree, baseRef, run.base).filter((item) => !ownFile(item));
     const reportScope = compareChangedPaths(reported, allowedPaths);
     const actualScope = compareChangedPaths(changed, allowedPaths);
     const scopeErrors = [...new Set([...reportScope, ...actualScope])];

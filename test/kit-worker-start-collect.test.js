@@ -299,6 +299,35 @@ test('worker collect keeps changed paths stable after the base branch merges the
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
 });
 
+test('worker collect ignores paths that arrived only because the worker merged main', () => {
+  const f = setupFixture(null);
+  const run = startWorker('merged-main', { kind: 'codex', task: 'x', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  fs.mkdirSync(path.join(run.worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(run.worktree, 'src', 'change.js'), 'export const changed = true;\n');
+  git(run.worktree, 'add', 'src/change.js');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  // The base branch advances with a file outside the worker scope. The worker merges it, so the diff against the base commit lists it.
+  fs.mkdirSync(path.join(f.root, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'docs', 'main-only.md'), 'main only\n');
+  git(f.root, 'add', 'docs/main-only.md');
+  git(f.root, 'commit', '-m', 'main change');
+  git(run.worktree, 'merge', 'main', '-m', 'merge main');
+  const reportDir = path.join(run.worktree, '.worker');
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'Done.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: ['src/change.js'],
+    commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
+  }));
+  const summary = collectWorker('merged-main', { noRecord: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+  });
+  assert.deepEqual(summary.actualPaths, ['src/change.js']);
+  assert.deepEqual(summary.reportedPaths, ['src/change.js']);
+  assert.deepEqual(summary.outOfScope, []);
+});
+
 test('worker collect names every accepted evidence tier when evidence is empty', () => {
   const f = setupFixture(null);
   f.config.evidenceTiers = ['unit', 'local-browser', 'live-service', 'owner'];
@@ -540,6 +569,23 @@ test('worker collect names a separate background shell that keeps the worktree c
       { pid: 600, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
     ],
   }), new RegExp(`your own background shell \\(pid 600, command zsh\\) has its cwd in the worktree\\. Change directory or stop it\\.`));
+});
+
+test('worker collect names a leftover process by pid and command name only', (t) => {
+  const fixture = setupKitPathFixture('collect-leftover-name');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  assert.throws(() => collectWorker('collect-leftover-name', { noRecord: true }, {
+    config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 700, ppid: 42, command: 'node', cwd: fixture.run.worktree },
+    ],
+  }), (error) => {
+    assert.match(error.message, /still has processes in its worktree: node \(pid 700\)\. Stop them before collection\./);
+    assert.ok(!/ppid/.test(error.message), 'the refusal must not print the parent pid');
+    assert.ok(!/cwd/.test(error.message), 'the refusal must not print the working directory');
+    return true;
+  });
 });
 
 test('worker collect --record after merge and pane close writes one main-checkout ledger entry', (t) => {
