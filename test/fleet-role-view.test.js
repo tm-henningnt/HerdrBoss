@@ -15,5 +15,6 @@ test('the Fleet page shows the head office holder and the epoch', async () => {
   const own = fleetView({ factories, role: { factoryId: 'factory-zero', headOfficeFactoryId: 'factory-zero', epoch: 1, holds: true } });
   assert.match(own, /This factory/); assert.match(own, /epoch 1/);
   assert.match(fleetView({ factories, role: { factoryId: 'a', headOfficeFactoryId: '<b>x</b>', epoch: 2, holds: false } }), /&lt;b&gt;x/);
+  assert.match(fleetView({ factories, role: { factoryId: 'factory-zero', headOfficeFactoryId: 'factory-zero', epoch: 2, holds: true, neverTold: ['win2'] } }), /Never told of the move: win2/);
   assert.doesNotMatch(fleetView({ factories }), /epoch/);
 });

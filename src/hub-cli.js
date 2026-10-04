@@ -17,9 +17,11 @@ export async function hubCommand(args, { dir = DATA_DIR, privateDir = PRIVATE_AC
   const lines = [`This factory holds the head office role at epoch ${result.epoch}.`,
     `Told: ${result.told.length ? result.told.join(', ') : 'no factory'}.`];
   if (result.pending.length) lines.push(`Not told: ${result.pending.map((row) => `${row.name} (${row.error})`).join(', ')}. Each one learns of the change at the next successful poll.`);
-  lines.push({ received: 'Registry and factory shares: received from the former head office.',
-    'kept-own-copy': 'Registry and factory shares: the former head office gave none. This factory keeps its own copy.',
-    none: 'Registry and factory shares: no former head office is known. This factory keeps its own copy.' }[result.handover]);
+  const reasons = { unreachable: 'the former head office could not be reached', 'invalid-body': 'the former head office sent an invalid body', 'registry-rejected': 'the registry of the former head office conflicts with this registry' };
+  if (result.handover === 'received') lines.push('Registry and factory shares: received from the former head office.');
+  else if (result.handover === 'kept-own-copy') lines.push(`Registry and factory shares: not received because ${reasons[result.handoverReason] || `of the error ${result.handoverReason}`}. This factory keeps its own copy.`);
+  else lines.push('Registry and factory shares: no former head office is known. This factory keeps its own copy.');
+  if (result.missingHosts?.length) lines.push(`Not added to the registry: factories on hosts that this registry lacks (${result.missingHosts.join(', ')}). Add each host, then register those factories.`);
   stdout.write(`${lines.join('\n')}\n`);
   return 0;
 }

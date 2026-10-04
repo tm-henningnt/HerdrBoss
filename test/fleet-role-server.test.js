@@ -28,6 +28,9 @@ async function start(t, { holder = 'factory-a', headOffice = true } = {}) {
   for (const name of ['fleet-guidance.json', 'fleet-shares.json', 'head-office-role.json']) fs.rmSync(path.join(root, name), { force: true });
   writeFleetFile(path.join(root, 'factory-identity.json'), { factoryId: holder });
   writeFleetFile(path.join(root, 'fleet-accounts.json'), []);
+  const host = { hostId: 'example-host', runtime: 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: 'local' };
+  const registered = ['factory-a', 'factory-b', 'factory-c'].map((id) => ({ factoryId: id, name: id, hostId: 'example-host', kind: 'native', profile: 'personal', dashboardUrl: `https://${id}.example.invalid`, version: '0.1.0', kitRevision: 'abcdef012345' }));
+  writeFleetFile(path.join(root, 'role-registry.json'), { schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [host], factories: registered });
   writeFleetFile(path.join(root, 'fleet-settings.json'), { name: holder, dashboardUrl: 'http://localhost:4477', headOffice, shareItemTitles: true });
   const cfg = { ...loadConfig(), host: '127.0.0.1', port: 0, tickSeconds: 3600, allowedHosts: ['*.localhost'] };
   const engine = new EventEmitter();
@@ -36,7 +39,7 @@ async function start(t, { holder = 'factory-a', headOffice = true } = {}) {
   const privateDir = path.join(root, 'private-role');
   const app = serve(cfg, { liveDataDir: root, createEngine: () => engine,
     health: async () => ({ schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 0, herdrReachable: true, clockOffsetSeconds: null }),
-    fleet: { privateDir, now: clock, registryFile: path.join(root, 'empty-registry.json') } });
+    fleet: { privateDir, now: clock, registryFile: path.join(root, 'role-registry.json') } });
   t.after(async () => { await app.close(); });
   if (!app.server.listening) await once(app.server, 'listening');
   return { port: app.server.address().port, guide: createFleetGuideAccess({ privateDir, dir: root, now: clock }).rotate(), read: createFleetReadAccess({ privateDir, now: clock }).rotate() };
@@ -48,8 +51,10 @@ test('the role routes accept only the guide credential and move the role on a hi
   assert.equal((await request(port, '/api/fleet/role', { method: 'POST', token: read, body: role('factory-b', 2) })).status, 403);
   assert.equal((await request(port, '/api/fleet/handover', { token: read })).status, 403);
   assert.equal((await request(port, '/api/fleet/handover')).status, 401);
+  assert.equal((await request(port, '/api/fleet/role')).status, 401, 'Owner access cannot read the role route');
+  assert.equal((await request(port, '/api/fleet/role', { token: read })).status, 403);
   const before = await request(port, '/api/fleet/role', { token: guide });
-  assert.deepEqual(before.body, { factoryId: 'factory-a', headOfficeFactoryId: 'factory-a', epoch: 1, updatedAt: null, holds: true });
+  assert.deepEqual(before.body, { factoryId: 'factory-a', headOfficeFactoryId: 'factory-a', epoch: 1, updatedAt: null, holds: true, neverTold: [] });
   assert.equal((await request(port, '/api/fleet/handover', { token: guide })).status, 200);
   assert.equal((await request(port, '/api/fleet/role', { method: 'POST', token: guide, body: role('factory-b', 2) })).status, 200);
   assert.equal((await request(port, '/api/fleet/role', { method: 'POST', token: guide, body: role('factory-c', 2) })).status, 409);
@@ -65,6 +70,7 @@ test('the role routes accept only the guide credential and move the role on a hi
 test('the fleet view reports the role and the former holder stops polling', async (t) => {
   const { port, guide } = await start(t);
   assert.equal((await request(port, '/api/fleet')).body.role.holds, true);
+  assert.equal((await request(port, '/api/fleet/role', { method: 'POST', token: guide, body: role('factory-z', 2) })).status, 409, 'an unregistered holder is refused');
   await request(port, '/api/fleet/role', { method: 'POST', token: guide, body: role('factory-b', 2) });
   const view = (await request(port, '/api/fleet')).body;
   assert.equal(view.role.headOfficeFactoryId, 'factory-b'); assert.equal(view.role.holds, false);

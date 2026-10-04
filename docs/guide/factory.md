@@ -188,11 +188,13 @@ If you do not see it: the update checks again for new work and rolls back when a
 
 The head office is the factory that polls the other factories and sends factory shares and nudges. One factory holds the role at a time. The role has an epoch. Each move adds 1 to the epoch. The Fleet page shows the holder and the epoch.
 
+WARNING: Keep head office polling off on a factory until `hub promote` makes it the holder. A factory with polling on and no role record counts as the holder, and `hub promote` then changes nothing.
+
 WARNING: Run the move only when the Owner decides it. The planned move to the Windows factory waits for 7 clean days of that factory. Do not run the move before that. A command that fails with `Refused` changes nothing.
 
 Before each move, check these items on the factory that takes the role:
 
-1. The registry lists every factory, and the former holder is in it.
+1. The registry lists every factory, and the former holder is in it. The registry has each host that the moved factories use. The move never copies a host record.
 2. The factory has a guide credential for each other factory. Import each with `herdr-boss fleet guide-token set FACTORY --from-file FILE`.
 3. The factory has a read credential for each other factory.
 4. The account digests and scopes match the former holder. Use `herdr-boss fleet account --from-file FILE`.
@@ -204,9 +206,9 @@ Use this procedure when the former holder is running.
 1. Open the Fleet page. Read the holder and the epoch.
 2. Open an Owner terminal on the factory that takes the role.
 3. Run `herdr-boss hub promote`.
-4. If the command prints `Refused`, read the factory names and the reason codes. Make each factory reachable. Run the command again.
+4. If the command prints `Refused`, read the factory names and the reason codes. Make each factory reachable. Run the command again. If the message says that another head office holder exists, two factories promoted at the same time. Run the command again to take a higher epoch.
 5. Read the result. It shows the new epoch, the factories told, and the handover line.
-6. Check: the handover line says `received`. If it says that the factory keeps its own copy, compare the registry and the factory shares on the Fleet page.
+6. Check: the handover line says `received`. If it says that the factory keeps its own copy, read the reason. If a line lists host IDs that are not in the registry, add each host and register those factories. Then compare the factory list and the factory shares on the Fleet page.
 7. Open the Fleet page on the new holder. Check: the Head office panel names this factory and the new epoch.
 8. Open the Fleet page on the former holder. Check: the panel names the new holder and says that the former holder does not poll.
 
@@ -220,7 +222,7 @@ Use this procedure when the host of the head office fails.
 4. Run `herdr-boss hub promote --force`.
 5. Read the result. The failed factory is in the line `Not told`. The handover line says that this factory keeps its own copy.
 6. Check the registry and the factory shares on the Fleet page. Set the factory shares again if they are old.
-7. Repair the failed host. When its service starts, it still shows the old epoch. The new holder sends the record at the next successful poll. The old holder then stops polling and sending guidance.
+7. Repair the failed host. When its service starts, it still shows the old epoch. The new holder sends the record at the next successful poll. It stops after 20 attempts or 24 hours. The Fleet page then lists the factory as never told. The old holder stops polling and sending guidance when it gets the record.
 
 If the repaired factory still polls after the new holder polled it, open Fleet settings on the repaired factory and turn off head office polling.
 

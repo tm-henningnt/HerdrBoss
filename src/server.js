@@ -397,7 +397,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (fleetGuide.present && (!fleetGuide.authorized || !FLEET_GUIDE_ROUTES.includes(`${req.method} ${p}`))) {
         return send(res, 403, { error: 'The fleetGuide credential permits only guidance, role, and handover routes.' });
       }
-      if (!fleetGuide.authorized && ['POST /api/fleet/guidance', 'POST /api/fleet/role', 'GET /api/fleet/handover'].includes(`${req.method} ${p}`)) return send(res, 401, { error: 'A fleetGuide credential is required.' });
+      if (!fleetGuide.authorized && FLEET_GUIDE_ROUTES.includes(`${req.method} ${p}`)) return send(res, 401, { error: 'A fleetGuide credential is required.' });
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.

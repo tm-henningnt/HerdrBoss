@@ -37,7 +37,7 @@ export function fleetMailbox(data) {
 function roleView(role, factories) {
   if (!role?.headOfficeFactoryId) return '';
   const holder = factories.find((factory) => factory.summary?.factoryId === role.headOfficeFactoryId)?.name || role.headOfficeFactoryId;
-  return `<section class="panel fleet-role"><h2>Head office</h2><p>Holder: <strong>${esc(holder)}</strong> · epoch ${esc(role.epoch)}</p><p class="muted">${role.holds ? 'This factory holds the head office role.' : 'Another factory holds the head office role. This factory does not poll the fleet and does not send guidance.'}</p></section>`;
+  return `<section class="panel fleet-role"><h2>Head office</h2><p>Holder: <strong>${esc(holder)}</strong> · epoch ${esc(role.epoch)}</p><p class="muted">${role.holds ? 'This factory holds the head office role.' : 'Another factory holds the head office role. This factory does not poll the fleet and does not send guidance.'}</p>${role.neverTold?.length ? `<p role="alert">Never told of the move: ${esc(role.neverTold.join(', '))}. Turn off head office polling on each of these factories.</p>` : ''}</section>`;
 }
 export function fleetView(data, settings, message = '', shares) {
   if (!data) return '<header class="page-head"><h1>Fleet</h1></header><p role="status">Loading the fleet…</p>';
