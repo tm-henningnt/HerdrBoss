@@ -6,7 +6,7 @@
 <title>Fleet page v2 wireframe</title>
 <style>
 /* Invented neutral sample data only. No real factory, host, path, or credential.
-   This is a static wireframe: the dashboard links and Copy are placeholders. */
+   This is a static wireframe: the dashboard links and the Copy actions are placeholders. */
 :root {
   --bg:#f4f2ee; --panel:#fff; --panel-2:#f8f6f2; --line:#e3dfd7; --text:#1d1b18; --muted:#6f6a61; --faint:#a19b90;
   --accent:#d0621f; --ok:#2f8a4c; --warn:#b7791f; --crit:#c2362b; --info:#3a6ea5;
@@ -47,7 +47,7 @@ body.phone .hide-on-phone{display:none}
 .total .v{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
 .total .s{display:block;color:var(--muted);font-size:12px}
 
-/* 2. Compact alert strip */
+/* 2. Compact alert strip. Collapsed at every width; the label names the fix in words. */
 .alerts{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:10px;padding:2px 0;margin-bottom:12px}
 .alert{border-top:1px solid var(--line)}
 .alert:first-child{border-top:0}
@@ -57,7 +57,8 @@ body.phone .hide-on-phone{display:none}
 .alert-label{font-weight:600}
 .sev{display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto}
 .sev.error{background:var(--crit)} .sev.warning{background:var(--warn)} .sev.info{background:var(--info)}
-.alert-fix{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 14px 12px 36px}
+.alert-fix{display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:0 14px 12px 36px}
+.alert.open .alert-fix{display:flex}
 code.cmd{font-family:var(--mono);font-size:12px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;overflow-wrap:anywhere;white-space:pre-wrap}
 button.copy{min-height:44px;min-width:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px}
 
@@ -87,10 +88,10 @@ button.copy{min-height:44px;min-width:44px;padding:0 12px;border:1px solid var(-
 .fact .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
 .fact .v{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 
-/* Quota lanes */
+/* Quota lanes. The expansion button is visible at every width. */
 .lanes{padding:8px 16px;border-bottom:1px solid var(--line)}
 .lanes h3{margin:6px 0;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-button.lane-more{display:none;min-height:44px;padding:0 12px;margin:4px 0;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);color:var(--text)}
+button.lane-more{display:inline-flex;align-items:center;min-height:44px;padding:0 12px;margin:4px 0;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);color:var(--text)}
 .lane{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:baseline;padding:7px 0;border-top:1px solid var(--line)}
 .lane:first-of-type{border-top:0}
 .lanes:not(.open) .lane.more{display:none}
@@ -131,13 +132,12 @@ dialog#confirm p{margin:0}
 .confirm-actions{display:flex;gap:8px;flex-wrap:wrap}
 .confirm-actions button{min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2)}
 .confirm-actions .go{border-color:var(--accent);color:var(--accent);font-weight:600}
+#confirm-status{color:var(--warn);min-height:1.4em}
 
 /* Phone layout. Same rules at 393 px and in the phone frame. */
 @media (max-width:760px){
   .page-head{gap:6px}
   .total{flex:1 1 46%}
-  .alert-fix{display:none}
-  .alert.open .alert-fix{display:flex}
   .cmp-row{grid-template-columns:minmax(0,1fr) auto;gap:0;padding:8px 0}
   .cmp-row.head{display:none}
   .cmp-cell{padding:2px 12px}
@@ -147,13 +147,10 @@ dialog#confirm p{margin:0}
   .cmp-health{grid-column:2;grid-row:1;text-align:right}
   .cmp-sum{display:block;grid-column:1/-1;grid-row:2;padding:2px 12px;color:var(--muted);font-size:12px}
   .controls,.wire-note{display:none}
-  button.lane-more{display:inline-flex;align-items:center}
   .fact{border-right:0;border-bottom:1px solid var(--line)}
 }
 body.phone .page-head{gap:6px}
 body.phone .total{flex:1 1 46%}
-body.phone .alert-fix{display:none}
-body.phone .alert.open .alert-fix{display:flex}
 body.phone .cmp-row{grid-template-columns:minmax(0,1fr) auto;gap:0;padding:8px 0}
 body.phone .cmp-row.head{display:none}
 body.phone .cmp-cell{padding:2px 12px}
@@ -163,7 +160,6 @@ body.phone .cmp-name{grid-column:1;grid-row:1}
 body.phone .cmp-health{grid-column:2;grid-row:1;text-align:right}
 body.phone .cmp-sum{display:block;grid-column:1/-1;grid-row:2;padding:2px 12px;color:var(--muted);font-size:12px}
 body.phone .wire-note{display:none}
-body.phone button.lane-more{display:inline-flex;align-items:center}
 body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
 </style>
 </head>
@@ -189,19 +185,19 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     </div>
   </header>
 
-  <!-- 1. Fleet total line -->
+  <!-- 1. Fleet total line. Fresh values only, with coverage and as-of. -->
   <section class="totals" aria-label="Fleet totals">
-    <div class="total"><span class="k">Workers</span><span class="v">7</span><span class="s">includes win2 last good data</span></div>
-    <div class="total"><span class="k">Spend today</span><span class="v">$14.30</span><span class="s">by factory day &middot; 2 of 3 factories</span></div>
-    <div class="total"><span class="k">Quota burn</span><span class="v">61%</span><span class="s">claude &middot; weekly &middot; worst lane</span></div>
+    <div class="total"><span class="k">Workers</span><span class="v">5</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
+    <div class="total"><span class="k">Spend today</span><span class="v">$14.30</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 unknown</span></div>
+    <div class="total"><span class="k">Quota burn</span><span class="v">61%</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
   </section>
 
-  <!-- 2. Compact alert strip -->
+  <!-- 2. Compact alert strip. Collapsed at every width; the label names the fix in words. -->
   <section class="alerts" aria-label="Alerts">
     <div class="alert">
       <button class="alert-toggle" type="button" aria-expanded="false">
         <span class="sev error" aria-hidden="true"></span>
-        <span class="alert-label grow">win2 is not reachable</span>
+        <span class="alert-label grow">win2 is not reachable &mdash; check the host</span>
         <span class="tag">Fix</span>
       </button>
       <div class="alert-fix">
@@ -212,7 +208,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     <div class="alert">
       <button class="alert-toggle" type="button" aria-expanded="false">
         <span class="sev warning" aria-hidden="true"></span>
-        <span class="alert-label grow">win1 kit drift</span>
+        <span class="alert-label grow">win1 kit drift &mdash; update the service</span>
         <span class="tag">Fix</span>
       </button>
       <div class="alert-fix">
@@ -223,7 +219,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     <div class="alert">
       <button class="alert-toggle" type="button" aria-expanded="false">
         <span class="sev error" aria-hidden="true"></span>
-        <span class="alert-label grow">win1 Claude login expired</span>
+        <span class="alert-label grow">win1 Claude login expired &mdash; sign in</span>
         <span class="tag">Fix</span>
       </button>
       <div class="alert-fix">
@@ -234,36 +230,36 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     <div class="alert">
       <button class="alert-toggle" type="button" aria-expanded="false">
         <span class="sev warning" aria-hidden="true"></span>
-        <span class="alert-label grow">win1 disk low</span>
+        <span class="alert-label grow">factory-zero disk low &mdash; free disk space</span>
         <span class="tag">Fix</span>
       </button>
       <div class="alert-fix">
-        <code class="cmd">herdr-boss factory status win1</code>
-        <button class="copy" type="button" data-copy="herdr-boss factory status win1">Copy</button>
+        <code class="cmd">Free disk space on this Mac. Check the data volume with df -h.</code>
+        <button class="copy" type="button" data-copy="Free disk space on this Mac. Check the data volume with df -h.">Copy</button>
       </div>
     </div>
     <div class="alert">
       <button class="alert-toggle" type="button" aria-expanded="false">
         <span class="sev info" aria-hidden="true"></span>
-        <span class="alert-label grow">factory-zero clock offset &plusmn;6 s</span>
+        <span class="alert-label grow">factory-zero clock offset -42 s &mdash; check the clock</span>
         <span class="tag">Fix</span>
       </button>
       <div class="alert-fix">
-        <code class="cmd">Check the clock on this Mac</code>
-        <button class="copy" type="button" data-copy="Check the clock on this Mac">Copy</button>
+        <code class="cmd">Check Date and Time in System Settings on this Mac.</code>
+        <button class="copy" type="button" data-copy="Check Date and Time in System Settings on this Mac.">Copy</button>
       </div>
     </div>
   </section>
 
-  <!-- 3. Compact factory comparison -->
+  <!-- 3. Compact factory comparison. Fresh values only; the sum line carries every key fact. -->
   <section class="compare" aria-label="Factory comparison">
     <div class="cmp-row head">
-      <span class="cmp-cell">Factory</span><span class="cmp-cell">Role</span><span class="cmp-cell">Health</span><span class="cmp-cell">Last seen</span>
+      <span class="cmp-cell">Factory</span><span class="cmp-cell">Kind</span><span class="cmp-cell">Health</span><span class="cmp-cell">Last seen</span>
       <span class="cmp-cell">Workers</span><span class="cmp-cell">Worst quota</span><span class="cmp-cell">Spend</span><span class="cmp-cell">Owner</span><span class="cmp-cell">Version / kit</span>
     </div>
     <div class="cmp-row">
       <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>factory-zero</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Role</span>factory zero</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>native</span>
       <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>4 s</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>2 / 8</span>
@@ -271,11 +267,11 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$6.10</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>2</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 2e0a5d394ccc</span>
-      <span class="cmp-sum">2 / 8 workers &middot; 61% claude &middot; $6.10 &middot; 2 Owner items</span>
+      <span class="cmp-sum">native &middot; 4 s &middot; 2/8 workers &middot; 61% claude &middot; $6.10 &middot; 2 owner &middot; 0.1.0 / 2e0a5d394ccc</span>
     </div>
     <div class="cmp-row">
       <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>win1</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Role</span>container</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>container</span>
       <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>12 s</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>3 / 8</span>
@@ -283,19 +279,19 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$8.20</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>1</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span>
-      <span class="cmp-sum">3 / 8 workers &middot; 61% claude &middot; $8.20 &middot; 1 Owner item</span>
+      <span class="cmp-sum">container &middot; 12 s &middot; 3/8 workers &middot; 61% claude &middot; $8.20 &middot; 1 owner &middot; 0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span>
     </div>
     <div class="cmp-row">
       <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>win2</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Role</span>container</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Kind</span>container</span>
       <span class="cmp-cell cmp-health"><span class="state offline"><span class="cmp-k">Health</span>&#9679; offline</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>5 min</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>last good 1</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>last good 24%</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>last good $0.00</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>0</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>unknown</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>last good 0</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>unknown</span>
-      <span class="cmp-sum">last good 1 / 8 workers &middot; last good 24% codex</span>
+      <span class="cmp-sum">container &middot; 5 min &middot; last good 1/8 &middot; last good 24% codex &middot; spend unknown &middot; last good 0 owner &middot; version unknown</span>
     </div>
   </section>
 
@@ -308,18 +304,19 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="state healthy">&#9679; healthy</span>
       <span class="muted small">last seen 4 s ago</span>
     </div>
-    <p class="wait-owner"><span><b>Waiting for you:</b> login-claude. Sign in the Claude harness in a terminal on this Mac.</span></p>
 
     <div class="facts">
       <div class="fact"><span class="k">Load</span><span class="v">0.8 &middot; 8 cpus</span></div>
       <div class="fact"><span class="k">Memory</span><span class="v">42% free</span></div>
-      <div class="fact"><span class="k">Disk</span><span class="v">31% free</span></div>
+      <div class="fact"><span class="k">Disk</span><span class="v">12% free</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v mono">-42 s</span></div>
       <div class="fact"><span class="k">Version / kit</span><span class="v mono">0.1.0 / 2e0a5d394ccc</span></div>
-      <div class="fact"><span class="k">Boss pane</span><span class="v">running &middot; claude</span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v">running &middot; claude</span></div>
       <div class="fact"><span class="k">Workers</span><span class="v">2 / 8</span></div>
-      <div class="fact"><span class="k">Logins</span><span class="v">claude expired &middot; codex ok</span></div>
+      <div class="fact"><span class="k">Logins</span><span class="v">claude ok &middot; codex ok</span></div>
       <div class="fact"><span class="k">Spend today</span><span class="v">$6.10</span></div>
       <div class="fact"><span class="k">Owner items</span><span class="v">2 &middot; from the Mailbox</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
     </div>
 
     <div class="lanes">
@@ -372,17 +369,20 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="state healthy">&#9679; healthy</span>
       <span class="muted small">last seen 12 s ago</span>
     </div>
+    <p class="wait-owner"><span><b>Waiting for you:</b> login-claude. Run <code class="cmd">herdr-boss factory login win1 claude</code> at the Owner terminal.</span></p>
 
     <div class="facts">
       <div class="fact"><span class="k">Load</span><span class="v">0.3 &middot; 4 cpus</span></div>
       <div class="fact"><span class="k">Memory</span><span class="v">61% free</span></div>
-      <div class="fact"><span class="k">Disk</span><span class="v">12% free</span></div>
+      <div class="fact"><span class="k">Disk</span><span class="v">61% free</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v mono">+2 s</span></div>
       <div class="fact"><span class="k">Version / kit</span><span class="v mono">0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span></div>
-      <div class="fact"><span class="k">Boss pane</span><span class="v">running &middot; codex</span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v">running &middot; codex</span></div>
       <div class="fact"><span class="k">Workers</span><span class="v">3 / 8</span></div>
-      <div class="fact"><span class="k">Logins</span><span class="v">claude ok &middot; codex ok</span></div>
+      <div class="fact"><span class="k">Logins</span><span class="v">claude expired &middot; codex ok</span></div>
       <div class="fact"><span class="k">Spend today</span><span class="v">$8.20</span></div>
       <div class="fact"><span class="k">Owner items</span><span class="v">1 &middot; from the Mailbox</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
     </div>
 
     <div class="lanes">
@@ -432,12 +432,14 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <div class="fact"><span class="k">Load</span><span class="v muted">unknown</span></div>
       <div class="fact"><span class="k">Memory</span><span class="v muted">unknown</span></div>
       <div class="fact"><span class="k">Disk</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Clock</span><span class="v muted">unknown</span></div>
       <div class="fact"><span class="k">Version / kit</span><span class="v muted">unknown</span></div>
-      <div class="fact"><span class="k">Boss pane</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Boss (fact)</span><span class="v muted">unknown</span></div>
       <div class="fact"><span class="k">Workers</span><span class="v muted">last good 1 / 8</span></div>
       <div class="fact"><span class="k">Logins</span><span class="v muted">unknown</span></div>
-      <div class="fact"><span class="k">Spend today</span><span class="v muted">last good $0.00</span></div>
-      <div class="fact"><span class="k">Owner items</span><span class="v muted">0 &middot; last good</span></div>
+      <div class="fact"><span class="k">Spend today</span><span class="v muted">unknown</span></div>
+      <div class="fact"><span class="k">Owner items</span><span class="v muted">last good 0</span></div>
+      <div class="fact"><span class="k">Last backup</span><span class="v muted">unknown</span></div>
     </div>
 
     <div class="lanes">
@@ -457,7 +459,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
         <span class="mono small">doing</span>
         <span class="board"><span>doing <b>1</b></span><span>review <b>1</b></span><span>blocked <b>0</b></span><span>done 7d <b>1</b></span></span>
       </div>
-      <p class="small muted">0 Owner items</p>
+      <p class="small muted">last good 0 Owner items</p>
     </div>
 
     <div class="actions">
@@ -480,6 +482,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     <p id="confirm-effect" class="muted">Restarts the service and fast-forwards the code.</p>
     <p><code class="cmd" id="confirm-command">herdr-boss factory update win1 --tier service</code></p>
     <p class="muted">Run this command in the Owner terminal on the host machine.</p>
+    <p id="confirm-status" role="status"></p>
     <div class="confirm-actions">
       <button class="go" id="confirm-copy" type="button">Confirm copy</button>
       <button id="confirm-cancel" type="button">Cancel</button>
@@ -499,32 +502,46 @@ document.querySelectorAll('[data-theme]').forEach((button) => button.addEventLis
   if (value === 'auto') delete html.dataset.theme; else html.dataset.theme = value;
   pressed('theme', value);
 }));
-// The phone alert strip: the label stays visible and Fix reveals the command.
+// The alert strip is collapsed at every width. The label stays visible and Fix reveals the command.
 document.querySelectorAll('.alert-toggle').forEach((button) => button.addEventListener('click', () => {
   const alert = button.closest('.alert');
   const open = alert.classList.toggle('open');
   button.setAttribute('aria-expanded', String(open));
 }));
-// The phone lane control: a 44 px button with aria-expanded.
+// The lane control is a 44 px button with aria-expanded, visible at every width.
 document.querySelectorAll('.lane-more').forEach((button) => button.addEventListener('click', () => {
   const lanes = button.closest('.lanes');
   const open = lanes.classList.toggle('open');
   button.setAttribute('aria-expanded', String(open));
 }));
-// The confirm sheet. Confirm copy is a placeholder in this wireframe.
+// The confirm sheet. Confirm copy reports success only after a successful write.
 const dialog = document.getElementById('confirm');
 document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
   document.getElementById('confirm-title').textContent = button.textContent.trim();
   document.getElementById('confirm-effect').textContent = button.dataset.effect;
   document.getElementById('confirm-command').textContent = button.dataset.command;
+  document.getElementById('confirm-status').textContent = '';
   dialog.showModal();
 }));
 document.getElementById('confirm-cancel').addEventListener('click', () => dialog.close());
-document.getElementById('confirm-copy').addEventListener('click', () => {
-  const command = document.getElementById('confirm-command').textContent;
-  if (navigator.clipboard) navigator.clipboard.writeText(command).catch(() => {});
-  document.getElementById('confirm-copy').textContent = 'Copied';
-  setTimeout(() => { document.getElementById('confirm-copy').textContent = 'Confirm copy'; dialog.close(); }, 600);
+document.getElementById('confirm-copy').addEventListener('click', async () => {
+  const command = document.getElementById('confirm-command');
+  const status = document.getElementById('confirm-status');
+  status.textContent = '';
+  try {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('no-clipboard');
+    await navigator.clipboard.writeText(command.textContent);
+    status.textContent = 'Copied.';
+    setTimeout(() => { status.textContent = ''; dialog.close(); }, 700);
+  } catch {
+    // Keep the sheet open and select the command, so the Owner can copy it by hand.
+    const range = document.createRange();
+    range.selectNodeContents(command);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    status.textContent = 'Copy failed. The command is selected. Copy it by hand.';
+  }
 });
 // A direct link to the confirm state, for review.
 if (location.hash === '#confirm' || new URLSearchParams(location.search).get('dialog') === 'confirm') dialog.showModal();
