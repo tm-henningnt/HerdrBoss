@@ -87,6 +87,10 @@ A lease of a ports pool also ends in these cases:
 - The lease has a bound server process (`--pid` or `lease bind`), and that process is gone. Herdr Boss releases the lease within one tick. A process with a different start time than the bound one counts as gone, so a reused process ID does not keep a lease.
 - The port has no listener for `idleMinutes` (default 20). Herdr Boss probes `127.0.0.1` on the port with a connect timeout of 300 ms. A refused connection means no listener. The idle time starts at the first tick that finds no listener. A listener resets it. This rule covers an unbound lease that no server ever binds, and a bound server that lives but does not answer.
 
+A lease of a pool without an idle rule also ends when no process uses it for `workers.leaseGraceMinutes` (default 30). No process uses the lease when the lease has no bound process. Herdr Boss gives the lease back and sends the holder one notice. This rule stops an agent that takes a lease and never binds a process to it.
+
+`worker collect` and `worker park` give back every lease that names the worker, in every pool. This release includes a lease that the worker took after its start. The release keeps a lease of another worker and a lease of the project.
+
 A port with a listener and a living bound process is never reclaimed by the idle rule. The holder of an idle lease gets one notice: `Your lease of port N in pool serve-ports was reclaimed after 20 minutes without a listener. Start serve-live again to take a port.` A holder that takes a lease keeps it until its TTL only while its server answers on the port. `lease acquire` never gives out an item that a live holder has.
 
 Take a port before the server starts, start the server, then bind the lease to the server process with `lease bind POOL PORT --pid PID`. A caller that knows the PID at once uses `lease acquire POOL --pid PID`. See [Resource leases](../cli.md#resource-leases).

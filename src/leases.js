@@ -178,7 +178,7 @@ function idleReason(lease, pool, now) {
 
 // A lease of a ports pool also ends when its bound server process is gone, and when its port has had no listener for idleMinutes.
 // lease.idleSince records when the first tick saw no listener. A listener clears it.
-function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours = false }) {
+function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours = false, graceMinutes = 0 }) {
   if (pool?.check === 'cdp') {
     // A hung Chrome still has its process. Only a missing process counts, so a browser that does not respond keeps its lease.
     const present = typeof browserProcess === 'function' ? browserProcess(lease) : null;
@@ -220,15 +220,23 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidI
     if (listening === true) delete lease.idleSince;
     else if (listening === false) return idleReason(lease, pool, now);
   }
+  // A pool without an idle rule has no listener check. A lease of that pool that no process bound is unused
+  // after the grace time, so a lease that an agent took and never used goes back to the pool.
+  if (lease.pid == null && graceMinutes > 0 && !hasIdleRule(pool)) {
+    const since = Date.parse(lease.at);
+    if (Number.isFinite(since) && now - since >= graceMinutes * 60000) {
+      return { text: `no process used ${lease.item} for ${graceMinutes} minutes`, graceMinutes };
+    }
+  }
   return null;
 }
 
-function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pidInfo = processInfo, quietHours = false }) {
+function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pidInfo = processInfo, quietHours = false, graceMinutes = 0 }) {
   const reclaimed = [];
   const held = [];
   store.leases = store.leases.filter((lease) => {
     const pool = pools.find((candidate) => candidate.name === lease.pool);
-    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours });
+    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours, graceMinutes });
     if (reason?.held) {
       held.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, held: reason.held });
       return true;
@@ -236,6 +244,7 @@ function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pi
     if (!reason) return true;
     const entry = { pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason: typeof reason === 'string' ? reason : reason.text };
     if (reason.idleMinutes != null) entry.idleMinutes = reason.idleMinutes;
+    if (reason.graceMinutes != null) entry.graceMinutes = reason.graceMinutes;
     reclaimed.push(entry);
     return false;
   });
@@ -247,16 +256,19 @@ export function reclaimNoticeText(item) {
   if (item.idleMinutes != null) {
     return `Your lease of port ${item.item} in pool ${item.pool} was reclaimed after ${item.idleMinutes} minutes without a listener. Start serve-live again to take a port.`;
   }
+  if (item.graceMinutes != null) {
+    return `Your lease ${item.pool} ${item.item} was reclaimed after ${item.graceMinutes} minutes with no process. Take a new one with herdr-boss lease acquire ${item.pool} if you still need it.`;
+  }
   return `Your lease ${item.pool} ${item.item} was reclaimed: ${item.reason}. Stop using it, and take a new one with herdr-boss lease acquire ${item.pool}.`;
 }
 
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
 // `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS, graceMinutes = 0 } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [], held: [] };
   const at = timeValue(now);
   const quietHours = quietHoursActive(night ?? readNight({ dataDir, now: at }));
-  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo, quietHours }), waitMs);
+  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo, quietHours, graceMinutes }), waitMs);
   for (const item of reclaimed) log(item);
   for (const item of held) log(item);
   return { reclaimed, held };

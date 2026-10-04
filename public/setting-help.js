@@ -675,6 +675,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value sends the notice sooner.',
     apply: 'service',
   }),
+  S('service', 'workers.leaseGraceMinutes', 'Lease grace minutes', {
+    what: 'The time that a lease of a pool without an idle rule can stay with no bound process before the service reclaims it. A worker gives back its leases at collect and at park in any pool.',
+    default: '30', unit: 'Minutes', range: '1 to 1440',
+    raise: 'A higher value lets an unused lease stay longer.',
+    lower: 'A lower value gives an unused lease back sooner.',
+    apply: 'service',
+  }),
   S('service', 'browsers.reapOrphanDaemons', 'Stop orphan browser daemons', {
     what: 'Lets Herdr Boss stop an agent-browser daemon that has no parent, no children, and the minimum age. It never stops a browser that it did not start.',
     default: 'On', unit: 'Switch', range: 'On or off',

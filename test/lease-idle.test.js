@@ -378,3 +378,49 @@ test('acquire and release run no probe and no start-time lookup while they hold 
   assert.equal(readLeases(ctx.dataDir).leases.filter((item) => item.pid === 4242).length, 2);
   assert.ok(calls.every((value) => value === false));
 });
+
+// ----- global lease grace for a lease that no process uses -----
+
+// A pool without an idle rule: Herdr Boss cannot check a listener, so an unbound lease is the only signal that no process uses it.
+const ITEM_POOL = { name: 'licenses', items: ['alpha', 'beta', 'gamma'], env: 'HERDR_LICENSE', ttlMinutes: 240, check: null };
+const itemLease = (item, extra = {}) => ({ pool: 'licenses', item, project: 'worker-a-project', worker: 'worker-a', pane: 'ws:p2', at: new Date(NOW - MINUTE).toISOString(), expiresAt: new Date(NOW + 240 * MINUTE).toISOString(), borrowed: false, ...extra });
+
+function graceTick(ctx, now, { graceMinutes = 30, processes = {}, panes = new Set(['ws:p2']) } = {}) {
+  const events = [];
+  reclaimLeases({
+    pools: ctx.pools, dataDir: ctx.dataDir, now, panes, graceMinutes,
+    pidInfo: table(processes), log: (event) => events.push(event),
+  });
+  return events;
+}
+
+test('a lease that no process uses is released after the grace time and not before', () => {
+  const ctx = context(ITEM_POOL);
+  seed(ctx.dataDir, [itemLease('alpha', { at: new Date(NOW - 31 * MINUTE).toISOString() }), itemLease('beta', { at: new Date(NOW - 29 * MINUTE).toISOString() })]);
+  const events = graceTick(ctx, NOW);
+  assert.deepEqual(events.map((event) => [event.item, event.graceMinutes]), [['alpha', 30]]);
+  assert.match(events[0].reason, /no process used alpha for 30 minutes/);
+  assert.match(reclaimNoticeText(events[0]), /reclaimed after 30 minutes with no process/);
+  assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['beta']);
+});
+
+test('a live holder keeps its lease at the grace time, and a young unbound lease stays', () => {
+  const ctx = context(ITEM_POOL);
+  seed(ctx.dataDir, [
+    itemLease('alpha', { pid: 4242, pidStart: START_A, at: new Date(NOW - 90 * MINUTE).toISOString() }),
+    itemLease('beta', { at: new Date(NOW - 5 * MINUTE).toISOString() }),
+  ]);
+  const events = graceTick(ctx, NOW, { processes: { 4242: { alive: true, start: START_A } } });
+  assert.deepEqual(events, []);
+  assert.deepEqual(readLeases(ctx.dataDir).leases.map((item) => item.item), ['alpha', 'beta']);
+});
+
+test('a lease of a dead holder ends in the tick, also in a pool without an idle rule', () => {
+  const ctx = context(ITEM_POOL);
+  const runFile = path.join(ctx.dataDir, 'run.json');
+  fs.writeFileSync(runFile, JSON.stringify({ name: 'worker-a', finishedAt: new Date(NOW).toISOString() }));
+  seed(ctx.dataDir, [itemLease('alpha', { runFile }), itemLease('beta', { pane: 'ws:gone' })]);
+  const events = graceTick(ctx, NOW);
+  assert.deepEqual(events.map((event) => [event.item, event.reason]), [['alpha', 'worker worker-a finished'], ['beta', 'pane ws:gone is gone']]);
+  assert.deepEqual(readLeases(ctx.dataDir).leases, []);
+});
