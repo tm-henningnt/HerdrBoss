@@ -31,6 +31,13 @@
     "dashboardUrl": {
       "$ref": "common.v1.schema.json#/$defs/dashboardUrl"
     },
+    "kind": {
+      "enum": [
+        "native",
+        "container",
+        null
+      ]
+    },
     "health": {
       "type": "object",
       "properties": {
@@ -123,6 +130,27 @@
             "null"
           ],
           "minimum": 0
+        },
+        "diskFreePercent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "diskFreeMb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "utcOffsetMinutes": {
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
@@ -133,6 +161,139 @@
         "memoryTotalMb",
         "memoryFreePercent",
         "swapUsedMb"
+      ],
+      "additionalProperties": false
+    },
+    "workers": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "running",
+        "max"
+      ],
+      "additionalProperties": false
+    },
+    "harnesses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "$ref": "common.v1.schema.json#/$defs/harness"
+          },
+          "login": {
+            "enum": [
+              "ok",
+              "expired",
+              "unknown"
+            ]
+          },
+          "checkedAt": {
+            "oneOf": [
+              {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "login",
+          "checkedAt"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "boss": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "harness": {
+          "oneOf": [
+            {
+              "$ref": "common.v1.schema.json#/$defs/harness"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "running",
+        "harness"
+      ],
+      "additionalProperties": false
+    },
+    "pending": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "common.v1.schema.json#/$defs/slug"
+          },
+          "since": {
+            "oneOf": [
+              {
+                "$ref": "common.v1.schema.json#/$defs/timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "step",
+          "since"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "lastAt": {
+          "oneOf": [
+            {
+              "$ref": "common.v1.schema.json#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lastAt"
       ],
       "additionalProperties": false
     },
@@ -334,6 +495,9 @@
               "id": {
                 "$ref": "common.v1.schema.json#/$defs/slug"
               },
+              "projectSlug": {
+                "$ref": "common.v1.schema.json#/$defs/slug"
+              },
               "kind": {
                 "enum": [
                   "decide",
@@ -433,6 +597,9 @@
                       "approve",
                       "answer"
                     ]
+                  },
+                  "projectSlug": {
+                    "$ref": "common.v1.schema.json#/$defs/slug"
                   }
                 },
                 "required": [
@@ -486,6 +653,9 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 160
+                  },
+                  "projectSlug": {
+                    "$ref": "common.v1.schema.json#/$defs/slug"
                   }
                 },
                 "required": [

@@ -164,3 +164,114 @@ test('fleet summaries accept open harness identifiers and reject invalid identif
     assert.ok(validateFile(candidate, schemaFile).length > 0, `rejects ${JSON.stringify(harness)}`);
   }
 });
+
+const fleetSummarySchemaFile = `${schemaDir}/fleet-summary.v1.schema.json`;
+
+test('the fleet summary accepts the complete, minimal, and null add-only examples', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const complete = readJson(`${exampleDir}/fleet-summary.valid.complete.json`);
+  const minimal = readJson(`${exampleDir}/fleet-summary.valid.minimal.json`);
+  const nulls = readJson(`${exampleDir}/fleet-summary.valid.nulls.json`);
+  assert.deepEqual(validateFile(complete, fleetSummarySchemaFile), []);
+  assert.deepEqual(validateFile(minimal, fleetSummarySchemaFile), []);
+  assert.deepEqual(validateFile(nulls, fleetSummarySchemaFile), []);
+  // The complete example sets every new optional field.
+  assert.equal(complete.kind, 'native');
+  assert.deepEqual(complete.workers, { running: 5, max: 12 });
+  assert.equal(complete.harnesses[0].login, 'expired');
+  assert.deepEqual(complete.boss, { running: true, harness: 'claude' });
+  assert.equal(complete.pending[0].step, 'login-claude');
+  assert.equal(complete.backup.lastAt, '2026-10-02T06:00:00Z');
+  assert.equal(complete.machine.diskFreePercent, 34);
+  assert.equal(complete.machine.diskFreeMb, 51200);
+  assert.equal(complete.machine.utcOffsetMinutes, 120);
+  assert.equal(complete.ownerItems.rows[0].projectSlug, 'sample-project');
+  // The minimal example is an older summary without any new field.
+  for (const field of ['kind', 'workers', 'harnesses', 'boss', 'pending', 'backup']) {
+    assert.equal(minimal[field], undefined, `minimal omits ${field}`);
+  }
+  for (const field of ['diskFreePercent', 'diskFreeMb', 'utcOffsetMinutes']) {
+    assert.equal(minimal.machine[field], undefined, `minimal omits machine.${field}`);
+  }
+  // The null example keeps an unavailable reading as null, never as zero.
+  assert.equal(nulls.kind, null);
+  assert.deepEqual(nulls.workers, { running: null, max: null });
+  assert.equal(nulls.harnesses[0].checkedAt, null);
+  assert.deepEqual(nulls.boss, { running: null, harness: null });
+  assert.equal(nulls.backup.lastAt, null);
+  assert.equal(nulls.machine.diskFreePercent, null);
+  assert.equal(nulls.machine.diskFreeMb, null);
+  assert.equal(nulls.machine.utcOffsetMinutes, null);
+  // The title-sharing condition still holds when an Owner item also names a project.
+  const sharingOff = structuredClone(complete);
+  sharingOff.shareItemTitles = false;
+  assert.ok(validateFile(sharingOff, fleetSummarySchemaFile).length > 0, 'refuses a title when sharing is off');
+  const sharingOffNoTitles = structuredClone(complete);
+  sharingOffNoTitles.shareItemTitles = false;
+  sharingOffNoTitles.ownerItems.rows = sharingOffNoTitles.ownerItems.rows.map(({ title, ...row }) => row);
+  assert.deepEqual(validateFile(sharingOffNoTitles, fleetSummarySchemaFile), [], 'accepts a projectSlug without a title when sharing is off');
+});
+
+test('the fleet summary refuses an unknown field in each add-only object', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const complete = readJson(`${exampleDir}/fleet-summary.valid.complete.json`);
+  const targets = [
+    ['top level', body => { body.extra = 1; }],
+    ['workers', body => { body.workers.extra = 1; }],
+    ['harnesses', body => { body.harnesses[0].extra = 1; }],
+    ['boss', body => { body.boss.extra = 1; }],
+    ['pending', body => { body.pending[0].extra = 1; }],
+    ['backup', body => { body.backup.extra = 1; }],
+    ['machine', body => { body.machine.extra = 1; }],
+    ['ownerItems.rows', body => { body.ownerItems.rows[0].extra = 1; }],
+  ];
+  for (const [name, mutate] of targets) {
+    const body = structuredClone(complete);
+    mutate(body);
+    assert.ok(validateFile(body, fleetSummarySchemaFile).length > 0, `refuses an unknown ${name} field`);
+  }
+});
+
+test('the fleet summary refuses a wrong type for each add-only field', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const complete = readJson(`${exampleDir}/fleet-summary.valid.complete.json`);
+  const cases = [
+    ['kind', body => { body.kind = 'desktop'; }],
+    ['workers.running', body => { body.workers.running = 'five'; }],
+    ['workers.max', body => { body.workers.max = 1.5; }],
+    ['harnesses[].harness', body => { body.harnesses[0].harness = 'Claude'; }],
+    ['harnesses[].login', body => { body.harnesses[0].login = 'maybe'; }],
+    ['harnesses[].checkedAt', body => { body.harnesses[0].checkedAt = 'yesterday'; }],
+    ['boss.running', body => { body.boss.running = 'yes'; }],
+    ['boss.harness', body => { body.boss.harness = 7; }],
+    ['pending[].step', body => { body.pending[0].step = 'Login Claude'; }],
+    ['pending[].since', body => { body.pending[0].since = 123; }],
+    ['backup.lastAt', body => { body.backup.lastAt = 123; }],
+    ['machine.diskFreePercent', body => { body.machine.diskFreePercent = 140; }],
+    ['machine.diskFreePercent negative', body => { body.machine.diskFreePercent = -1; }],
+    ['machine.diskFreeMb', body => { body.machine.diskFreeMb = 'lots'; }],
+    ['machine.utcOffsetMinutes', body => { body.machine.utcOffsetMinutes = 'two hours'; }],
+    ['ownerItems.rows[].projectSlug', body => { body.ownerItems.rows[0].projectSlug = 'Sample Project'; }],
+  ];
+  for (const [field, mutate] of cases) {
+    const body = structuredClone(complete);
+    mutate(body);
+    assert.ok(validateFile(body, fleetSummarySchemaFile).length > 0, `refuses ${field}`);
+  }
+});
+
+test('an accepted newer 1.x fleet summary keeps working and drops an unsupported field', async () => {
+  const { acceptFleetSummary, assertFleetSummary } = await import('../../src/fleet-contract.js');
+  const source = readJson(`${exampleDir}/fleet-summary.valid.complete.json`);
+  const newer = structuredClone(source);
+  newer.contractVersion = '1.1.0';
+  newer.futureField = 'a later 1.x addition';
+  const accepted = acceptFleetSummary(newer, source.dashboardUrl);
+  assert.equal(accepted.drift, 'head office older');
+  assert.equal(accepted.summary.contractVersion, '1.1.0');
+  assert.equal(accepted.summary.futureField, undefined);
+  assert.deepEqual(accepted.summary.workers, { running: 5, max: 12 });
+  assert.equal(accepted.summary.kind, 'native');
+  // The strict producer allow-list still refuses the same unknown field.
+  assert.throws(() => assertFleetSummary(newer), /supported contract/);
+});

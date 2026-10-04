@@ -92,6 +92,29 @@ Do not treat a valid example as authorization.
 | `shareItemTitles`, `ownerItems` | Title sharing flag, counts, item IDs, kinds, and optional titles. |
 | `reviewPacks` | Waiting pack IDs and waiting item counts. |
 
+The optional 1.x additions are add-only.
+An older summary omits them and stays valid.
+An old reader selects only its supported fields.
+
+| Field | Meaning, unit, and allowed values |
+|---|---|
+| `kind` | The factory runtime kind. Allowed values are `native`, `container`, or `null` when unknown. |
+| `workers` | Worker counts. `running` and `max` are counts of at least 0, or `null` when unknown. |
+| `harnesses` | Login checks. Each entry has `harness`, `login`, and `checkedAt`. |
+| `harnesses[].login` | The login state. Allowed values are `ok`, `expired`, and `unknown`. |
+| `harnesses[].checkedAt` | The UTC time of the check, or `null` when unknown. |
+| `boss` | Boss availability as a fact. `running` is a boolean or `null`. `harness` is a harness name or `null`. |
+| `pending` | Factory-verified Owner waits. Each entry has `step` and `since`. |
+| `pending[].step` | The wait step as a slug, for example `login-claude`. |
+| `pending[].since` | The UTC time the step started, or `null` when unknown. |
+| `machine.diskFreePercent` | Free disk space as a percentage from 0 to 100, or `null`. |
+| `machine.diskFreeMb` | Free disk space in megabytes, a number of at least 0, or `null`. |
+| `machine.utcOffsetMinutes` | The local UTC offset of the factory in minutes, a signed number, or `null`. |
+| `backup.lastAt` | The UTC time of the last backup, or `null` when the head office does not know it. |
+| `ownerItems.rows[].projectSlug` | The project of an Owner item. Omit the field for a factory-level item. |
+
+A new field holds no path, token, account identity, message text, login output, or command output.
+
 **Add-only rules:** Add optional summary fields within the major version.
 Update the producer allow-list before publishing a new field.
 An old consumer uses the selection rule above.
@@ -119,9 +142,13 @@ The schema does not set a minimum byte size.
 
 **Example files:** `fleet-summary.valid.personal.json`,
 `fleet-summary.valid.titles-off.json`, `fleet-summary.valid.unknown-readings.json`,
-`fleet-summary.valid.transferred.json`,
+`fleet-summary.valid.transferred.json`, `fleet-summary.valid.complete.json`,
+`fleet-summary.valid.minimal.json`, `fleet-summary.valid.nulls.json`,
 `fleet-summary.invalid.title-with-sharing-off.json`, and
 `fleet-summary.invalid.message-text.json` in [examples/](examples/).
+The complete example sets every 1.x addition.
+The minimal example is an older summary without them.
+The null example uses an unavailable reading.
 
 ## Head office role record
 
