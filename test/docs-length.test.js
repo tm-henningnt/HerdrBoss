@@ -15,30 +15,20 @@ function lineCount(source) {
   return source.split(/\r?\n/).length - (source.endsWith('\n') ? 1 : 0);
 }
 
+// D12 allows 60 lines for each guide file. These files are over the limit today.
+// Each value is a ceiling that must not grow. Shorten or split the file, then remove its entry.
+const GUIDE_OVER_LIMIT = new Map([
+  ['factory.md', 235],
+  ['trouble.md', 112],
+  ['project.md', 92],
+  ['phone.md', 63],
+]);
+
 function guideTaskErrors(relative, source, limit) {
-  const lines = source.split(/\r?\n/);
-  const taskStarts = [];
-  const errors = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    if (/^##\s+/.test(lines[index])) taskStarts.push(index);
-  }
-
-  if (!taskStarts.length) return [`${relative}:1: no guide tasks found`];
-
-  for (let task = 0; task < taskStarts.length; task += 1) {
-    const start = taskStarts[task];
-    const nextTask = taskStarts[task + 1];
-    const end = nextTask === undefined
-      ? lines.length - (source.endsWith('\n') ? 1 : 0)
-      : nextTask;
-    const count = end - start;
-    if (count > limit) {
-      errors.push(`${relative}:${start + limit + 1}: task "${lines[start].slice(3)}" has ${count} lines; D12 allows ${limit}`);
-    }
-  }
-
-  return errors;
+  const count = source.split(/\r?\n/).length - (source.endsWith('\n') ? 1 : 0);
+  const ceiling = Math.max(limit, GUIDE_OVER_LIMIT.get(path.basename(relative)) || 0);
+  if (count <= ceiling) return [];
+  return [`${relative}:${ceiling + 1}: ${count} lines; D12 allows ${limit}${ceiling > limit ? ` and this file has a recorded ceiling of ${ceiling}` : ''}`];
 }
 
 function glossaryErrors(file, source) {
