@@ -231,6 +231,25 @@ export function gitChangedPaths(worktree, base) {
   return [...new Set([...committed, ...gitStatusPaths(worktree)])];
 }
 
+// True when the working tree of `item` has the same content as `ref`. A missing ref or a Git error counts as a difference, so the path stays visible.
+function pathMatchesRef(worktree, ref, item) {
+  try {
+    execFileSync('git', ['-C', worktree, 'diff', '--quiet', ref, '--', item], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+// The worker's own changes: the non-merge commits on the first-parent line, plus the working tree.
+// A worker that merges the base branch brings the base commits in as later parents, so the first-parent walk skips them.
+// A merge resolution is the worker's own change; keep it only when it differs from the base branch.
+export function gitWorkerChangedPaths(worktree, base, baseBranch = base) {
+  const ownCommitted = execFileSync('git', ['-C', worktree, 'log', '--no-merges', '--first-parent', '--no-renames', '--name-only', '-z', '--format=', `${base}..HEAD`], { encoding: 'utf8' })
+    .split('\0').filter(Boolean);
+  const own = new Set([...ownCommitted, ...gitStatusPaths(worktree)]);
+  const mergedIn = gitChangedPaths(worktree, base).filter((item) => !own.has(item) && !pathMatchesRef(worktree, baseBranch, item));
+  return [...new Set([...own, ...mergedIn])];
+}
+
 export function gitLog(worktree, base) {
   return execFileSync('git', ['-C', worktree, 'log', '--oneline', '--decorate', `${base}..HEAD`], { encoding: 'utf8' }).trim();
 }

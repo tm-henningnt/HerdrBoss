@@ -205,3 +205,7 @@ Summary: Add `worker collect --accept-scope FILE[,FILE] --reason TEXT`, which pa
 ## 5eff27364fa1
 Impact: useful
 Summary: List each project's accepted evidence tiers in worker briefs and collect refusals.
+
+## c1889c2b6d7c
+Impact: useful
+Summary: Keep kit-managed files and paths that arrived only from a merge of the base branch out of the worker collect scope check, and name a leftover process by PID and command name only.
