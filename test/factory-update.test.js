@@ -75,6 +75,7 @@ function updateFixture() {
   const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
   let remoteUrl = expectedOrigin, failFetch = false, failMerge = false;
   const dirty = new Set();
+  const git = {};
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
   const ok = (value = '') => ({ code: 0, stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
@@ -102,6 +103,11 @@ function updateFixture() {
     if (args[0] === 'exec' && args.includes('/command/s6-svc')) { serviceUp = args.includes('-u'); if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; } return ok(); }
     if (args[0] === 'exec' && args.includes('/command/s6-svstat')) return ok(serviceUp ? 'true' : 'false');
     if (args[0] === 'exec' && args.includes('git')) {
+      if (args.includes('config') && args.includes('--global')) {
+        const key = args.includes('--get') ? args.at(-1) : args.at(-2);
+        if (args.includes('--get')) return key in git ? ok(`${git[key]}\n`) : { code: 1, stdout: '', stderr: '' };
+        git[key] = args.at(-1); return ok();
+      }
       if (args.includes('rev-parse')) return ok(currentCommit);
       if (args.includes('remote') && args.includes('get-url')) return remoteUrl ? ok(`${remoteUrl}\n`) : { code: 2, stdout: '', stderr: 'error: No such remote' };
       if (args.includes('remote') && args.includes('add')) { remoteUrl = args.at(-1); return ok(); }
@@ -156,7 +162,7 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, dirty, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
@@ -303,6 +309,39 @@ test('service update still stops on a local change in another file and names the
     f.dirty.add('src/local-edit.js');
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge step.*src\/local-edit\.js/s);
     assert.equal(f.calls.some(({ args }) => args.includes('checkout') && args.includes('src/local-edit.js')), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update still stops on a local change in docs/orchestration/memory.md and names the file', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/orchestration/memory.md');
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge step.*docs\/orchestration\/memory\.md/s);
+    assert.equal(f.calls.some(({ args }) => args.includes('checkout')), false);
+  } finally { f.cleanup(); }
+});
+
+function gitIdentityCalls(f) {
+  return f.calls.map(({ args }) => args).filter((args) => args[0] === 'exec' && args.includes('config') && args.includes('--global'));
+}
+
+test('service update sets a missing Git identity for the factory user', async () => {
+  const f = updateFixture();
+  try {
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const writes = gitIdentityCalls(f).filter((args) => !args.includes('--get'));
+    assert.deepEqual(writes.map((args) => args.slice(-2)), [['user.name', 'Herdr Factory'], ['user.email', 'factory@localhost.invalid']]);
+    for (const args of writes) assert.deepEqual(args.slice(0, 5), ['exec', '--user', 'factory', '--env', 'HOME=/home/factory']);
+  } finally { f.cleanup(); }
+});
+
+test('service update keeps a Git identity that exists', async () => {
+  const f = updateFixture();
+  try {
+    f.git['user.name'] = 'Existing Name';
+    f.git['user.email'] = 'existing@example.invalid';
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.equal(gitIdentityCalls(f).some((args) => !args.includes('--get')), false);
   } finally { f.cleanup(); }
 });
 
@@ -467,7 +506,7 @@ test('image update distinguishes an unreadable schema from a schema increase', a
   } finally { f.cleanup(); }
 });
 
-function gitCalls(f) { return f.calls.filter(({ args }) => args[0] === 'exec' && args.includes('git')); }
+function gitCalls(f) { return f.calls.filter(({ args }) => args[0] === 'exec' && args.includes('git') && !args.includes('--global')); }
 
 test('service update runs every git call as the factory user with its home', async () => {
   const f = updateFixture();

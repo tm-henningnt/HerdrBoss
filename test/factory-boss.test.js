@@ -792,3 +792,14 @@ test('factory boss start keeps a Git identity that exists', async () => {
     assert.deepEqual(f.git, { 'user.name': 'Existing Name', 'user.email': 'factory@localhost.invalid' });
   } finally { f.cleanup(); }
 });
+
+test('factory boss prompt sends the Boss notes to ~/work/boss-notes and not to the repository', async () => {
+  const f = fixture({ projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    const call = f.dockerCalls.find(hasBossPromptScript);
+    const prompt = call.args.find((word) => word.startsWith('[herdr-boss] You are the Boss of this factory.'));
+    assert.match(prompt, /~\/work\/boss-notes\/memory\.md/);
+    assert.match(prompt, /not to docs\/orchestration\/memory\.md/);
+  } finally { f.cleanup(); }
+});

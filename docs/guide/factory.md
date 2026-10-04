@@ -177,8 +177,10 @@ What you do:
 
 1. Wait until no worker, suite, push, or handover is active in the factory.
 2. Run `herdr-boss factory update <name> --tier service --dry-run`.
-3. Run `herdr-boss factory update <name> --tier service`. This updates the code and restarts only the service.
+3. Run `herdr-boss factory update <name> --tier service`. This updates the code and restarts only the service. It also sets the Git identity of the factory user when none exists.
 4. For new tools, run `herdr-boss factory build <name>`. Then run `herdr-boss factory update <name> --tier image`.
+
+The factory Boss writes its notes to `~/work/boss-notes/memory.md`. The update ignores this file. A local change in a tracked file of the checkout stops the update and the error names the file.
 
 What you should see: the service answers within 30 seconds. An image update keeps the four volumes and prints the command to start the Boss again.
 
