@@ -1965,6 +1965,10 @@ The routes need the dashboard login and a same-origin request, as the project-ne
 | `artifactChecks` | `[]` | Generated artifact and source globs to check during worker collection. |
 | `checkAgents.exclude` | none | Orchestration file globs that `check agents` skips. |
 
+Each `artifactChecks` rule has `artifacts` and `sources` repository-relative POSIX globs. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
+
+`checkAgents` is an object with one key, `exclude`. `exclude` is a list of repository-relative POSIX globs, for example `{ "checkAgents": { "exclude": [".orchestration/tenant-*.md"] } }`. The globs have the same rules as `artifactChecks`.
+
 ### Evidence tiers
 
 Set `evidenceTiers` in `.herdr-boss.json` to choose which names reports and ledger entries accept. The worker brief and a collect refusal show the accepted names. This repository accepts these tiers:
@@ -1973,10 +1977,6 @@ Set `evidenceTiers` in `.herdr-boss.json` to choose which names reports and ledg
 - `local-browser`: Report a browser check of a build served on this machine.
 - `live-service`: Report a check of the running HerdrBoss service.
 - `owner`: Report acceptance from the Owner.
-
-Each `artifactChecks` rule has `artifacts` and `sources` repository-relative POSIX globs. `*` matches within one path segment. `**` matches zero or more path segments. Herdr Boss rejects absolute paths, parent traversal, backslashes, empty patterns, and malformed rules.
-
-`checkAgents` is an object with one key, `exclude`. `exclude` is a list of repository-relative POSIX globs, for example `{ "checkAgents": { "exclude": [".orchestration/tenant-*.md"] } }`. The globs have the same rules as `artifactChecks`.
 
 ## Read-only fleet
 
