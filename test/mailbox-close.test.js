@@ -83,6 +83,10 @@ test('the publish command closes an item for a removed task when another task re
   const dir = freshDir(t);
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-mbclose-cli-home-'));
   t.after(() => fs.rmSync(tempHome, { recursive: true, force: true }));
+  // Publish refreshes the kit files of the Git top level. Run in a temporary repository, never in this checkout.
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-mbclose-cli-repo-'));
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', projectRoot]);
   const now = Date.now();
   const a = item(dir, 'alpha', {}, now);
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
@@ -96,7 +100,7 @@ test('the publish command closes an item for a removed task when another task re
     tasks: [task('2', { status: 'doing', waitingOn: undefined, ask: undefined })],
   }));
   const output = execFileSync(process.execPath, [path.join(process.cwd(), 'src/cli.js'), 'publish', 'alpha', nextFile, '--force'], {
-    cwd: process.cwd(),
+    cwd: projectRoot,
     env: { ...process.env, HOME: tempHome, HERDR_BOSS_DIR: dir, HERDR_BOSS_PORT: '0' },
     encoding: 'utf8',
   });

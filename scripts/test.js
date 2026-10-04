@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { describeLiveChanges, liveDataDir, snapshotLiveFiles } from './live-data-guard.js';
+import { describeKitChanges, describeLiveChanges, KIT_FILES, liveDataDir, snapshotKitFiles, snapshotLiveFiles } from './live-data-guard.js';
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-test-'));
 const homeDir = path.join(tempDir, 'home');
@@ -17,6 +18,10 @@ const guardReport = path.join(tempDir, 'live-write-guard.jsonl');
 const guardModule = new URL('./live-write-guard.js', import.meta.url).href;
 const nodeOptions = [process.env.NODE_OPTIONS, `--import=${guardModule}`].filter(Boolean).join(' ');
 const before = snapshotLiveFiles(liveDir);
+// The tracked kit files of this checkout must stay as they are. The write guard refuses a write to them, and the
+// content hash after the run catches a write that bypasses the guard.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const kitBefore = snapshotKitFiles(repoRoot);
 
 const env = {
   ...process.env,
@@ -26,6 +31,7 @@ const env = {
   NODE_OPTIONS: nodeOptions,
   HERDR_BOSS_TEST_GUARD_DIR: liveDir,
   HERDR_BOSS_TEST_GUARD_REPORT: guardReport,
+  HERDR_BOSS_TEST_GUARD_FILES: KIT_FILES.map((name) => path.join(repoRoot, name)).join(path.delimiter),
 };
 const extraArgs = process.argv.slice(2);
 const separator = extraArgs.indexOf('--');
@@ -75,7 +81,13 @@ try {
   const changes = describeLiveChanges(before, snapshotLiveFiles(liveDir));
   if (changes.length) process.stderr.write(`Live data snapshot (the service writes these too): ${changes.join('; ')}\n`);
 
-  if (writes.length) {
+  const kitChanges = describeKitChanges(kitBefore, snapshotKitFiles(repoRoot));
+  if (kitChanges.length) {
+    process.stderr.write(`\nKit file guard: the run changed tracked kit file(s) in ${repoRoot}: ${kitChanges.join(', ')}\n`);
+    process.stderr.write('A test must install or update a kit in a temporary project root. Restore each file with git checkout -- <file>.\n');
+  }
+
+  if (writes.length || kitChanges.length) {
     process.exitCode = 1;
   } else if (spawnError) {
     process.stderr.write(`Cannot start the Node test runner: ${spawnError.message}\n`);

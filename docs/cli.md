@@ -1256,6 +1256,8 @@ Run `npm test` to run tests with a temporary `HOME`, `HERDR_BOSS_DIR`, and `HERD
 
 The test runner guards the live data directory. It loads `scripts/live-write-guard.js` into every test process. A write to `~/.herdr-boss`, or a launch of a Chrome or Chromium binary, makes that test fail and writes a line to the guard report. The runner prints the report and exits non-zero. The guard uses the real account home, so the temporary `HOME` of the test run cannot hide the live directory. An explicit `HERDR_BOSS_LIVE_DIR` names the guarded directory instead. A test must use a temporary `HERDR_BOSS_DIR` and a fake probe. The runner also records the size and the mtime of `events.jsonl` and `state.json` before and after the run. The live service writes those files on every tick, so the runner prints that change as evidence and does not fail on it.
 
+The runner also guards the tracked kit files of the repository: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. The guard refuses a write to them from a test process. The runner also compares the content hash of each file before and after the run. A changed file makes the run exit non-zero. A test that runs `publish`, `kit install`, or `kit update` must use a temporary Git repository as its working directory.
+
 Herdr Boss stores successful passes in `suite-passes.json` in its data directory. It keeps the last 200 passes. The file has mode `0600`. A pass key uses the Git common directory, the tested hash of the tree, the hash of each root lockfile, the exact command, and the Node version. The tested hash covers every file of `HEAD` except the files that match a glob of `suiteUntested`. A dirty tree cannot use or create a pass. A changed, staged, or untracked file that matches `suiteUntested` does not make the tree dirty. A changed file that no glob covers runs the suite again.
 
 `suiteUntested` is a list of repository-relative globs in `.herdr-boss.json`. It names the files that no test reads. The default is `.worker/**` and `.orchestration/**`. The value replaces the default. Only `*` and `**` are valid. Do not list a file that a test reads. A glob is invalid in these cases:
@@ -1734,7 +1736,7 @@ The `configure` wizard checks the container, volumes, Herdr server, and service.
 
 For Claude, the command sets `hasCompletedOnboarding` and each folder's `hasTrustDialogAccepted` in `~/.claude.json`. It adds the `dark` theme only when no theme is set. For Codex, it sets each folder's `trust_level` to `trusted` in `~/.codex/config.toml`. It also sets `notice.hide_full_access_warning` to `true`. The command merges these values into the existing files as the factory user. It keeps other keys and writes with mode `0600`. It does not read or change credential files. A state file that cannot be merged makes the command fail. Use TOML tables for the Codex project and notice settings; inline tables are not supported.
 
-Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. The command also sets the Git identity of the factory user: `user.name` is `Herdr Factory` and `user.email` is `factory@localhost.invalid`. It sets each value only when the value is missing. `factory login` sets the same values after it prepares the first-run state. The first commit of `project new` needs this identity. A live Boss without a startup dialog prints its state and exits 0. In that case the command sets no identity. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
+Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. The prompt tells the Boss to write its run notes to `~/work/boss-notes/memory.md` and not to `docs/orchestration/memory.md` in the repository. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. The command also sets the Git identity of the factory user: `user.name` is `Herdr Factory` and `user.email` is `factory@localhost.invalid`. It sets each value only when the value is missing. `factory login` sets the same values after it prepares the first-run state. The first commit of `project new` needs this identity. A live Boss without a startup dialog prints its state and exits 0. In that case the command sets no identity. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
 
 The command reads the Boss pane with `herdr pane read --source detection`. If that read fails, it reads the pane again without `--source`. If both reads fail, the command cannot check for a dialog. It then trusts the result of the prompt script: it fails only when the script reports no ready or unsent prompt.
 
@@ -1754,7 +1756,7 @@ Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker 
 
 Use the service tier to fast-forward the `code` volume. It restarts only the Herdr Boss service. Existing panes stay available.
 
-Before the merge, the service tier restores the generated kit files in the factory checkout: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. It then runs `herdr-boss kit install` in the checkout after the merge. A local change in any other tracked file stops the update at the git merge step. The error names the changed files.
+Before the merge, the service tier restores the generated kit files in the factory checkout: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. It then runs `herdr-boss kit install` in the checkout after the merge. A local change in any other tracked file stops the update at the git merge step. The error names the changed files. The update does not restore `docs/orchestration/memory.md`. The factory Boss keeps its notes in `~/work/boss-notes/memory.md`, outside the checkout. The service tier also sets the Git identity of the factory user when it is missing, with the same values as `factory boss start`. It keeps an identity that exists.
 
 Use the image tier to replace the labeled container on the same four volumes. Build the pinned image first with `herdr-boss factory build NAME`. The update backs up data, work, and home.
 
@@ -1765,7 +1767,7 @@ herdr-boss factory update NAME --tier service [--dry-run]
 herdr-boss factory update NAME --tier image [--dry-run] [--allow-boss-restart]
 ```
 
-The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, or `restart`.
+The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, `git identity`, or `restart`.
 
 An update is refused while a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. `--dry-run` checks the factory and prints the selected tier without changing Docker resources.
 
@@ -1976,7 +1978,7 @@ The `--from-file -` option reads JSON from standard input.
 - `herdr-boss fleet account --from-file FILE`: Read `harness`, `identity`, `hmacKey`, and `scope`. Use at least 32 bytes for `hmacKey`. Use the same identity spelling and HMAC key on factories that share an account. `scope` is a list of factory IDs. The command stores only the HMAC digest and scope. It does not store the identity or HMAC key.
 - `herdr-boss fleet read-token rotate --out-file FILE`: Create a read credential. Save it as a JSON string in a new file inside the private Herdr Boss configuration folder. The file has mode 0600. The command prints no credential. The previous credential stays valid for 10 minutes.
 - `herdr-boss fleet read-token set FACTORY --from-file FILE`: Import that JSON string into the head office's private credential store. `FACTORY` is the registered factory ID. Transfer the export file through a private provisioning channel. Delete the export file on the source factory after the transfer. When `FILE` is inside the private Herdr Boss configuration folder, the command deletes `FILE` after the import. The command never deletes a file outside that folder.
-- `herdr-boss fleet guide-token rotate --out-file FILE`: Create a separate guidance credential. Use a new file in the private configuration folder. The file has mode 0600. The previous credential stays valid for 10 minutes. Rotation resets the stored guidance epoch and head office holder. It clears the nudge IDs of the old term and keeps the last accepted shares. The command prints no credential.
+- `herdr-boss fleet guide-token rotate --out-file FILE`: Create a separate guidance credential. Use a new file in the private configuration folder. The file has mode 0600. The previous credential stays valid for 10 minutes. Rotation resets the stored guidance epoch and head office holder, except on the factory that holds the head office role. It clears the nudge IDs of the old term and keeps the last accepted shares. The command prints no credential.
 - `herdr-boss fleet guide-token set FACTORY --from-file FILE`: Import the guidance credential at the head office. Use the same private transfer procedure as for the read credential. The command removes an export file only when that file is in the private configuration folder.
 
 The read credential permits only `GET /api/fleet/summary` and `GET /api/health`.
@@ -2056,7 +2058,7 @@ The factory refuses an additional ID when it reaches this limit.
 A failed Boss delivery stays pending and retries when guidance arrives again.
 If the remote request fails, select **Send nudge** again with the same text.
 
-The guidance credential permits only `POST /api/fleet/guidance`.
+The guidance credential permits only `POST /api/fleet/guidance`, `POST /api/fleet/role`, `GET /api/fleet/role`, and `GET /api/fleet/handover`.
 It gets 403 for policy changes, worker start or stop, message reads, and every other route or method.
 The read credential gets 403 on the guidance route.
 A missing guidance credential gets 401.
@@ -2064,3 +2066,42 @@ An invalid guidance credential gets 403.
 Owner access cannot submit directly to the guidance route.
 Use the head office share and nudge routes instead.
 A read-only preview refuses all three write routes.
+
+### Head office role
+
+Each factory stores the head office factory ID and the epoch in one role record.
+The file is `head-office-role.json` in the Herdr Boss data folder.
+The file has mode 0600.
+A factory that has head office polling on and no role record holds the role at epoch 1.
+Keep head office polling off on a factory until it takes the role with `hub promote`.
+Such a factory answers `hub promote` with "already holds the role" and changes nothing.
+
+- `herdr-boss hub promote`: Take the head office role on this factory. The new epoch is the highest epoch that any registered factory reports, plus one. The command takes a lock first. A second promotion on the same factory stops with a message while the first runs. The command checks each registered factory. It refuses to start when a factory cannot be reached or has no guide credential, and it names that factory with a reason code. It refuses when a factory reports an epoch more than 1000 above the local epoch or above the median of the other reports. It refuses when the next epoch passes 9007199254740991. In each refusal it changes nothing.
+- The command then writes the role record, sends it to each factory with `POST /api/fleet/role`, and turns on head office polling on this factory. If a factory answers 409, another holder exists at that epoch. The command gives the role back, probes the factories again, prints what they report, and exits with code 1. Run the command again to take a higher epoch.
+- `herdr-boss hub promote --force`: Continue when a factory cannot be reached. The command lists that factory as not told. The service of the new holder sends the record to that factory after each successful poll. It stops after 20 attempts or 24 hours. The Fleet page then lists the factory as never told. Turn off head office polling on that factory.
+
+A factory that already holds the role prints that fact and changes nothing.
+The new holder needs the guide credential of each registered factory.
+Import each one with `herdr-boss fleet guide-token set FACTORY --from-file FILE` before the promotion.
+
+The registry and the factory shares move with the role.
+The new holder asks the former holder for them with `GET /api/fleet/handover`.
+The former holder sends only factory identities (ID, name, host ID, profile, dashboard URL, version, kit revision) and the factory share plan.
+It never sends a host address, a Docker context, a connection reference, a port, or a container name.
+The new holder adds each factory that its own registry lacks as a `native` record on a host that its own registry has.
+A factory on a host that the new holder lacks stays out, and the command lists the host IDs.
+The new holder keeps its own record when both registries have the same ID.
+It writes the factory shares first, the registry second, and the role record last.
+If the former holder cannot be reached, sends an invalid body, or sends a registry that conflicts with the own registry, the new holder keeps its own copy.
+The result line gives the reason.
+
+- `GET /api/fleet/role`: Read the holder, the epoch, the time of the record, whether this factory holds the role, and the factories that were never told. Only the `fleetGuide` credential is accepted. Owner access and the read credential get 401 and 403.
+- `POST /api/fleet/role`: Accept a role record with the `fleetGuide` credential. Use the head office role contract 1.0.0: `schema`, `contractVersion`, `headOfficeFactoryId`, `epoch`, and `updatedAt`. The holder must be a registered factory or this factory when the registry has factories. A factory with an empty registry accepts any valid holder ID. The factory accepts a higher epoch and an exact repeat. It refuses an unregistered holder (with a non-empty registry), a lower epoch, another holder at the same epoch, and an epoch more than 1000 above the stored epoch, with 409. It refuses an invalid body with 400. A missing credential gets 401.
+- `GET /api/fleet/handover`: Return the factory identities and the factory shares with the `fleetGuide` credential. Only the holder answers. Another factory gets 409.
+
+A factory that sees a higher epoch stops polling the fleet and refuses to send guidance.
+Newer head office guidance also updates the role record.
+Rotation of the guide credential keeps the role record and the stored epoch on the factory that holds the role.
+On another factory, rotation deletes the role record and resets the stored epoch and holder.
+`GET /api/fleet` returns the same data as `role`.
+The file `head-office-handover.json` lists the factories that are not yet told. It has mode 0600.

@@ -4,7 +4,7 @@ import { maskLine } from './factory-host.js';
 import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
-import { FACTORY_GIT_IDENTITY } from './factory-role.js';
+import { ensureFactoryGitIdentity } from './factory-role.js';
 import { verifyHarnessLogin } from './factory-wizard.js';
 import { waitForAgentReady } from './kit/workers.js';
 
@@ -25,7 +25,7 @@ export const BOSS_START_CALL_PLAN = Object.freeze([
   'ready-prompt-check',
 ]);
 
-const BOSS_PROMPT = '[herdr-boss] You are the Boss of this factory. Read AGENTS.md, PRODUCT.md, docs/user-guide.md, docs/orchestration/memory.md, and docs/orchestration/herdr-boss.md in this factory. Follow the kit rules. Start project orchestrators with `herdr-boss project new` from this factory. Keep projects, messages, and handover state in this factory. Report missing files and blocked work to the Owner.';
+const BOSS_PROMPT = '[herdr-boss] You are the Boss of this factory. Read AGENTS.md, PRODUCT.md, docs/user-guide.md, docs/orchestration/memory.md, and docs/orchestration/herdr-boss.md in this factory. Follow the kit rules. Start project orchestrators with `herdr-boss project new` from this factory. Keep projects, messages, and handover state in this factory. Write your run notes to ~/work/boss-notes/memory.md and not to docs/orchestration/memory.md in the repository. Report missing files and blocked work to the Owner.';
 const BOSS_RESUME_PROBE_SCRIPT = String.raw`
 import { createHerdrRunner, readAgentText } from '/home/factory/herdr-boss/src/kit/workers.js';
 import { inspectBossPromptText } from '/home/factory/herdr-boss/src/factory-boss.js';
@@ -320,17 +320,6 @@ async function prepareFactoryHarness(docker, name, harness, roots) {
   const result = await docker.run(['exec', '--user', 'factory', '--env', 'HOME=/home/factory',
     `hf-${name}`, 'node', '--input-type=module', '-e', script, harness, JSON.stringify(roots)]);
   if (result.code !== 0) throw new Error('The harness first-run state could not be prepared. Check the factory configuration.');
-}
-
-// Set the Git identity of the factory user once. An identity that exists stays as it is.
-async function ensureFactoryGitIdentity(docker, name) {
-  for (const [key, value] of Object.entries(FACTORY_GIT_IDENTITY)) {
-    const prefix = ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', `hf-${name}`, 'git', 'config', '--global'];
-    const current = await docker.run([...prefix, '--get', key]);
-    if (current.code === 0 && current.stdout.trim()) continue;
-    const set = await docker.run([...prefix, key, value]);
-    if (set.code !== 0) throw new Error('The Git identity of the factory user could not be set. Check the factory configuration.');
-  }
 }
 
 async function installFactoryKits(docker, name, roots) {

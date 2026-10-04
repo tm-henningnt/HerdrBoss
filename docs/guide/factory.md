@@ -177,9 +177,60 @@ What you do:
 
 1. Wait until no worker, suite, push, or handover is active in the factory.
 2. Run `herdr-boss factory update <name> --tier service --dry-run`.
-3. Run `herdr-boss factory update <name> --tier service`. This updates the code and restarts only the service.
+3. Run `herdr-boss factory update <name> --tier service`. This updates the code and restarts only the service. It also sets the Git identity of the factory user when none exists.
 4. For new tools, run `herdr-boss factory build <name>`. Then run `herdr-boss factory update <name> --tier image`.
+
+The factory Boss writes its notes to `~/work/boss-notes/memory.md`. The update ignores this file. A local change in a tracked file of the checkout stops the update and the error names the file.
 
 What you should see: the service answers within 30 seconds. An image update keeps the four volumes and prints the command to start the Boss again.
 
 If you do not see it: the update checks again for new work and rolls back when a check fails. Run `factory configure <name> --resume`, then retry. If the tool asks for `--accept-data-loss`, read the error first. This option can discard data written after the backup.
+
+## Move the head office
+
+The head office is the factory that polls the other factories and sends factory shares and nudges. One factory holds the role at a time. The role has an epoch. Each move adds 1 to the epoch. The Fleet page shows the holder and the epoch.
+
+WARNING: Keep head office polling off on a factory until `hub promote` makes it the holder. A factory with polling on and no role record counts as the holder, and `hub promote` then changes nothing.
+
+WARNING: Run the move only when the Owner decides it. The planned move to the Windows factory waits for 7 clean days of that factory. Do not run the move before that. A command that fails with `Refused` changes nothing.
+
+A factory that has factories in its registry accepts a new head office holder only when the holder is in that registry. A factory with an empty registry is not a head office. It accepts the holder on the strength of the guide credential and the epoch rules. The limit of 1000 above the stored epoch applies in both cases.
+
+Before each move, check these items on the factory that takes the role:
+
+1. The registry lists every factory, and the former holder is in it. The registry has each host that the moved factories use. The move never copies a host record.
+2. The factory has a guide credential for each other factory. Import each with `herdr-boss fleet guide-token set FACTORY --from-file FILE`.
+3. The factory has a read credential for each other factory.
+4. The account digests and scopes match the former holder. Use `herdr-boss fleet account --from-file FILE`.
+
+### Planned move
+
+Use this procedure when the former holder is running.
+
+1. Open the Fleet page. Read the holder and the epoch.
+2. Open an Owner terminal on the factory that takes the role.
+3. Run `herdr-boss hub promote`.
+4. If the command prints `Refused`, read the factory names and the reason codes. Make each factory reachable. Run the command again. If the message says that another head office holder exists, two factories promoted at the same time. Run the command again to take a higher epoch.
+5. Read the result. It shows the new epoch, the factories told, and the handover line.
+6. Check: the handover line says `received`. If it says that the factory keeps its own copy, read the reason. If a line lists host IDs that are not in the registry, add each host and register those factories. Then compare the factory list and the factory shares on the Fleet page.
+7. Open the Fleet page on the new holder. Check: the Head office panel names this factory and the new epoch.
+8. Open the Fleet page on the former holder. Check: the panel names the new holder and says that the former holder does not poll.
+
+### Move after a host failure
+
+Use this procedure when the host of the head office fails.
+
+1. Choose a factory that is always on. The Mac sleeps, so do not choose the Mac as a standby.
+2. Open an Owner terminal on that factory.
+3. Run `herdr-boss hub promote`. The command refuses because the failed factory cannot be reached.
+4. Run `herdr-boss hub promote --force`.
+5. Read the result. The failed factory is in the line `Not told`. The handover line says that this factory keeps its own copy.
+6. Check the registry and the factory shares on the Fleet page. Set the factory shares again if they are old.
+7. Repair the failed host. When its service starts, it still shows the old epoch. The new holder sends the record at the next successful poll. It stops after 20 attempts or 24 hours. The Fleet page then lists the factory as never told. The old holder stops polling and sending guidance when it gets the record.
+
+If the repaired factory still polls after the new holder polled it, open Fleet settings on the repaired factory and turn off head office polling.
+
+What you should see: the Fleet page works on the new holder while the former host is off.
+
+If you do not see it: read the reason code for each factory. `no-credential` means that the guide credential is missing. `auth` means that the credential is old. `unreachable` and `timeout` mean a network or host problem.
+

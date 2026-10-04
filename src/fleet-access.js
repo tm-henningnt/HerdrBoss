@@ -6,13 +6,21 @@ import { readFleetFile, writeFleetFile } from './fleet-store.js';
 
 export const FLEET_READ_TOKEN = /^hf_read_[a-f0-9]{64}$/;
 export const FLEET_GUIDE_TOKEN = /^hf_guide_[a-f0-9]{64}$/;
+// A factory holds the role when the role record names it, or when it polls as head office and has no record.
+function holdsRole(dir) {
+  const factoryId = readFleetFile(path.join(dir, 'factory-identity.json'), {}).factoryId;
+  const role = readFleetFile(path.join(dir, 'head-office-role.json'), null);
+  if (role) return !!factoryId && role.headOfficeFactoryId === factoryId;
+  return readFleetFile(path.join(dir, 'fleet-settings.json'), {}).headOffice === true;
+}
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 function createFleetAccess({ privateDir, dir = DATA_DIR, now = () => Date.now() }, kind, pattern) {
   const file = path.join(privateDir, `fleet-${kind}.json`);
   const read = () => readFleetFile(file, {});
   return {
     rotate() {
-      if (kind === 'guide') {
+      // The holder of the head office role keeps its term. Only another factory resets the stored epoch and holder.
+      if (kind === 'guide' && !holdsRole(dir)) {
         const guidanceFile = path.join(dir, 'fleet-guidance.json');
         const guidance = readFleetFile(guidanceFile, null);
         if (guidance) writeFleetFile(guidanceFile, { senderEpoch: 0, headOfficeFactoryId: null, shares: guidance.shares, nudges: [] });

@@ -7,6 +7,7 @@ import { defaultFactoryImage, FACTORY_LABEL, managedFactory, transportFor, inspe
 import { assertName, factoryFile, readPrivate, writePrivate, updateFleet, VOLUMES } from './factory-store.js';
 import { restoreBackupInPlace } from './factory-recovery.js';
 import { KIT_MANAGED_PATHS } from './kit/workers.js';
+import { ensureFactoryGitIdentity } from './factory-role.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const OWNER_NAME = /^(?=.{1,31}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/;
@@ -489,6 +490,7 @@ async function updateService(name, factory, docker, owner, flags, initial) {
     const localChanges = await runStep('git status', '', () => restoreGeneratedKitFiles(docker, name));
     await runStep('git merge', localChanges.length ? `Local changes in: ${localChanges.join(', ')}.` : '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
     await runStep('kit install', '', () => dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', '--workdir', '/home/factory/herdr-boss', `hf-${name}`, 'herdr-boss', 'kit', 'install']));
+    await runStep('git identity', '', () => ensureFactoryGitIdentity(docker, name));
     await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']));
     const health = await waitForCleanTick(docker, name, initial, factory.io.updateTimeoutMs ?? 30_000);
     updateRecord(name, factory, health);

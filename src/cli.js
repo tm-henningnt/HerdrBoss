@@ -132,6 +132,7 @@ const USAGE = `herdr-boss <command>
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   project paths [--json]  Print the registered paths of other projects.
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
+  hub promote [--force]                   Take the head office role with the next epoch and tell every factory. See docs/cli.md.
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
   factory configure NAME [--resume] [--step STEP]  Check the container, volumes, Herdr server, and service. Exit 3 waits for Owner logins.
   factory login NAME claude|codex  Sign in to one harness at the Owner terminal, then check its login.
@@ -512,6 +513,12 @@ async function main() {
   if (cmd === 'fleet') {
     const { fleetCommand } = await import('./fleet-cli.js');
     const code = await fleetCommand(args);
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'hub') {
+    const { hubCommand } = await import('./hub-cli.js');
+    const code = await hubCommand(args);
     if (code) process.exitCode = code;
     return;
   }
