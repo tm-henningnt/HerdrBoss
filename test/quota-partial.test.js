@@ -143,26 +143,59 @@ test('a timed-out quota command kills its process group', { timeout: 10000 }, as
 
 test('a timed-out quota command settles when a detached grandchild holds its pipes', { timeout: 15000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'herdr-quota-held-pipes-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const parentPidFile = path.join(dir, 'parent.pid');
   const grandchildPidFile = path.join(dir, 'grandchild.pid');
+  // The fixture holds its pipes with a heartbeat. A heartbeat alone never ends, so both fixture children also set a
+  // deadline. Every fixture child then leaves the run at the latest at that deadline, also when the test file dies
+  // before its cleanup runs. The deadline must stay above the timeout of the probe plus the kill settle time.
+  const fixtureHoldMs = 15000;
+  const grandchildSource = `setTimeout(() => process.exit(0), ${fixtureHoldMs}); setInterval(() => {}, 1000)`;
   const fixture = `
     const fs = require('node:fs');
     const { spawn } = require('node:child_process');
-    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildSource)}], {
       detached: true, stdio: ['ignore', 'inherit', 'inherit'],
     });
     fs.writeFileSync(process.argv[1], String(process.pid));
     fs.writeFileSync(process.argv[2], String(grandchild.pid));
+    setTimeout(() => process.exit(0), ${fixtureHoldMs});
     setInterval(() => {}, 1000);
   `;
   let settled = false;
   let failure = null;
   const command = quotaCollector.runQuotaCommand(process.execPath, ['-e', fixture, parentPidFile, grandchildPidFile], { timeout: 3000 })
     .then(() => { settled = true; }, (error) => { failure = error; settled = true; });
-  let parentPid = null;
-  let grandchildPid = null;
-  const stop = (pid) => { if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch {} } };
+  // The pid files hold the pids of both fixture children. The cleanup reads the files instead of variables, so it
+  // also kills the children of a failed or aborted run. The cleanup and the folder removal share one hook, because a
+  // separate removal hook runs first and takes the pid files away.
+  const readPid = (file) => {
+    try {
+      const pid = Number(fs.readFileSync(file, 'utf8'));
+      return Number.isInteger(pid) && pid > 0 ? pid : null;
+    } catch { return null; }
+  };
+  const stop = (pid) => {
+    if (!pid) return;
+    try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  };
+  const gone = async (pid, maxMs) => {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return true; }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+  };
+  t.after(async () => {
+    const parent = readPid(parentPidFile);
+    const grandchild = readPid(grandchildPidFile);
+    stop(grandchild);
+    stop(parent);
+    if (grandchild) {
+      assert.equal(await gone(grandchild, 5000), true, 'the detached grandchild must not outlive the test');
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   const waitFor = async (condition, maxMs) => {
     const deadline = Date.now() + maxMs;
     while (Date.now() < deadline) {
@@ -172,22 +205,17 @@ test('a timed-out quota command settles when a detached grandchild holds its pip
     return false;
   };
 
-  try {
-    assert.equal(await waitFor(() => fs.existsSync(parentPidFile) && fs.existsSync(grandchildPidFile), 5000), true, 'the fixture must start');
-    parentPid = Number(fs.readFileSync(parentPidFile, 'utf8'));
-    grandchildPid = Number(fs.readFileSync(grandchildPidFile, 'utf8'));
-    const parentExited = await waitFor(() => {
-      try { process.kill(parentPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
-    }, 7000);
-    assert.equal(parentExited, true, 'the timed-out parent must exit');
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(settled, true, 'the quota promise must settle when its parent exits, even while a grandchild holds stdio');
-    assert.match(failure?.message || '', /timed out/);
-  } finally {
-    stop(grandchildPid);
-    stop(parentPid);
-    await command;
-  }
+  assert.equal(await waitFor(() => fs.existsSync(parentPidFile) && fs.existsSync(grandchildPidFile), 5000), true, 'the fixture must start');
+  const parentPid = readPid(parentPidFile);
+  assert.ok(parentPid, 'the fixture must write its own pid');
+  const parentExited = await waitFor(() => {
+    try { process.kill(parentPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+  }, 7000);
+  assert.equal(parentExited, true, 'the timed-out parent must exit');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, true, 'the quota promise must settle when its parent exits, even while a grandchild holds stdio');
+  assert.match(failure?.message || '', /timed out/);
+  await command;
 });
 
 test('a stale lane shows the last used value and age, then extrapolates expected use only', () => {
