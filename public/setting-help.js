@@ -676,7 +676,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('service', 'workers.leaseGraceMinutes', 'Lease grace minutes', {
-    what: 'The time that a lease of a pool without an idle rule can stay with no bound process before the service reclaims it. A worker gives back its leases at collect and at park in any pool.',
+    what: 'The time that a lease of a pool with an idle rule can have no bound process and no listener. The service reclaims the lease after this time, also when the idle time of the pool is longer. A lease of a pool without an idle rule is not reclaimed by this time. A worker gives back its leases at collect and at park in any pool.',
     default: '30', unit: 'Minutes', range: '1 to 1440',
     raise: 'A higher value lets an unused lease stay longer.',
     lower: 'A lower value gives an unused lease back sooner.',

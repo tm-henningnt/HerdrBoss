@@ -218,14 +218,18 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidI
   if (lease.pid == null && hasIdleRule(pool) && typeof probeTcp === 'function') {
     const listening = probeTcp(lease.item, lease.pool);
     if (listening === true) delete lease.idleSince;
-    else if (listening === false) return idleReason(lease, pool, now);
+    else if (listening === false) {
+      const idle = idleReason(lease, pool, now);
+      if (idle) return idle;
+    }
   }
-  // A pool without an idle rule has no listener check. A lease of that pool that no process bound is unused
-  // after the grace time, so a lease that an agent took and never used goes back to the pool.
-  if (lease.pid == null && graceMinutes > 0 && !hasIdleRule(pool)) {
-    const since = Date.parse(lease.at);
-    if (Number.isFinite(since) && now - since >= graceMinutes * 60000) {
-      return { text: `no process used ${lease.item} for ${graceMinutes} minutes`, graceMinutes };
+  // The grace time bounds the idle rule: a lease of a pool with an idle rule that has no bound process
+  // and no listener goes back after graceMinutes, also when the idle time of the pool is longer.
+  // A pool without an idle rule and a missing pool never apply this rule, so a live worker pane,
+  // a project lease, and a lease of an unknown pool keep the lease.
+  if (lease.pid == null && graceMinutes > 0 && hasIdleRule(pool) && lease.idleSince) {
+    if (now - Date.parse(lease.idleSince) >= graceMinutes * 60000) {
+      return { text: `no listener on port ${lease.item} for ${graceMinutes} minutes`, idleMinutes: graceMinutes };
     }
   }
   return null;
@@ -244,7 +248,6 @@ function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pi
     if (!reason) return true;
     const entry = { pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, reason: typeof reason === 'string' ? reason : reason.text };
     if (reason.idleMinutes != null) entry.idleMinutes = reason.idleMinutes;
-    if (reason.graceMinutes != null) entry.graceMinutes = reason.graceMinutes;
     reclaimed.push(entry);
     return false;
   });
@@ -255,9 +258,6 @@ function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pi
 export function reclaimNoticeText(item) {
   if (item.idleMinutes != null) {
     return `Your lease of port ${item.item} in pool ${item.pool} was reclaimed after ${item.idleMinutes} minutes without a listener. Start serve-live again to take a port.`;
-  }
-  if (item.graceMinutes != null) {
-    return `Your lease ${item.pool} ${item.item} was reclaimed after ${item.graceMinutes} minutes with no process. Take a new one with herdr-boss lease acquire ${item.pool} if you still need it.`;
   }
   return `Your lease ${item.pool} ${item.item} was reclaimed: ${item.reason}. Stop using it, and take a new one with herdr-boss lease acquire ${item.pool}.`;
 }
