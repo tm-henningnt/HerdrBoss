@@ -16,17 +16,17 @@ export const APPLY = {
 // The order of a group is the order on the page. `advanced` groups sit in the collapsed Advanced section.
 export const SETTING_GROUPS = [
   {
-    id: 'harnesses', title: 'Harnesses', advanced: false,
-    controls: 'Which agent kinds and models workers may use, the preferred model of each kind, and which provider quota each model counts against.',
-    affects: 'Workers and quotas. Worker start and handover choose only from the models that you leave on.',
+    id: 'harnesses', title: 'Agent apps', advanced: false,
+    controls: 'Which agent kinds and models workers may use, the preferred model of each kind, and which provider usage limit each model counts against.',
+    affects: 'Workers and usage limits. Worker start and handover choose only from the models that you leave on.',
     safe: 'Safe to change at any time. A running worker keeps its model. A model that you switch off is not chosen again.',
     restart: 'No restart. Select Apply policy.',
   },
   {
-    id: 'quotas', title: 'Provider quotas', advanced: false,
-    controls: 'How Herdr Boss paces each provider quota, the goal for each quota window, and the warning and critical levels.',
-    affects: 'Quotas and notices. Pacing changes which lanes say Use now and when a worker start is refused. The levels change when a quota notice is sent.',
-    safe: 'Safe to change. A goal below 100% makes Herdr Boss save quota. Keep the warning level below the critical level.',
+    id: 'quotas', title: 'Provider usage limits', advanced: false,
+    controls: 'How Herdr Boss paces each provider usage limit, the goal for each usage limit window, and the warning and critical levels.',
+    affects: 'Usage limits and notices. Pacing changes which lanes say Use now and when a worker start is refused. The levels change when a usage limit notice is sent.',
+    safe: 'Safe to change. A goal below 100% makes Herdr Boss save usage limit. Keep the warning level below the critical level.',
     restart: 'No restart. Goals and modes need Apply policy. The two levels need Save.',
   },
   {
@@ -59,8 +59,8 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'capacity', title: 'Capacity and handover', advanced: false,
-    controls: 'The number of working agents, idle sharing, the orchestrator reserve, and automatic handover of an orchestrator to a successor. These controls are on the Allocation page.',
-    affects: 'Workers, quotas, and handover. The maximum working agents is a hard cap for worker start. Handover moves an orchestrator to a fresh successor before a quota or context limit.',
+    controls: 'The number of working agents, idle sharing, the project lead reserve, and automatic handover of a project lead to a successor. These controls are on the Allocation page.',
+    affects: 'Workers, usage limits, and handover. The maximum working agents is a hard cap for worker start. Handover moves a project lead to a fresh successor before a usage limit or context limit.',
     safe: 'Change the maximum working agents with care: a high value adds load. Leave automatic handover off until you have read the handover guide.',
     restart: 'No restart. Select Apply policy.',
   },
@@ -93,11 +93,11 @@ export const SETTING_GROUPS = [
     restart: 'The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.',
   },
   {
-    id: 'quota-plan', title: 'Quota plan', advanced: true,
+    id: 'quota-plan', title: 'Usage limit plan', advanced: true,
     controls: 'The Codex reset credit plan, Owner prompts, expiry notices, and usage curve.',
-    affects: 'Quota plan guidance, Mailbox items, and expiry notices. It does not change worker starts or apply a credit.',
+    affects: 'Usage limit plan guidance, Mailbox items, and expiry notices. It does not change worker starts or apply a credit.',
     safe: 'Safe to change. Herdr Boss shows estimates and never applies a reset credit.',
-    restart: 'No restart. Select Save in Quota plan settings.',
+    restart: 'No restart. Select Save in Usage limit plan settings.',
   },
   {
     id: 'analytics', title: 'Analytics', advanced: true,
@@ -107,10 +107,10 @@ export const SETTING_GROUPS = [
     restart: 'No restart. Select Save in the group.',
   },
   {
-    id: 'readiness', title: 'Harness readiness', advanced: true,
-    controls: 'A read-only table that shows if each harness entry that orchestration needs is present.',
+    id: 'readiness', title: 'Agent app readiness', advanced: true,
+    controls: 'A read-only table that shows if each agent app entry that orchestration needs is present.',
     affects: 'Nothing. The table only reports.',
-    safe: 'Nothing to change. Run herdr-boss harness sync to see what to fix.',
+    safe: 'Nothing to change. Run herdr-boss agent app sync to see what to fix.',
     restart: 'No restart.',
   },
 ];
@@ -120,35 +120,35 @@ const S = (group, id, label, fields) => [id, { group, label, ...fields }];
 export const SETTING_HELP = Object.fromEntries([
   // Harnesses
   S('harnesses', 'harness.available', 'Available', {
-    what: 'Lets workers use this harness. Clear it to stop all workers from using the harness.',
-    default: 'On for every harness', unit: 'Switch', range: 'On or off',
-    raise: 'Turning it on lets worker start and handover pick the harness.',
-    lower: 'Turning it off stops new workers on this harness. A running worker keeps working.',
+    what: 'Lets workers use this agent app. Clear it to stop all workers from using the agent app.',
+    default: 'On for every agent app', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets worker start and handover pick the agent app.',
+    lower: 'Turning it off stops new workers on this agent app. A running worker keeps working.',
     apply: 'policy',
   }),
   S('harnesses', 'harness.preferredModel', 'Preferred model', {
     what: 'The model that worker start and handover use when no model is given.',
-    default: 'The harness default', unit: 'Model name', range: 'Any model that the harness allows',
+    default: 'The agent app default', unit: 'Model name', range: 'Any model that the agent app allows',
     raise: 'Not applicable. Choose another model to change the choice.',
-    lower: 'An empty choice uses the harness default.',
+    lower: 'An empty choice uses the agent app default.',
     apply: 'policy',
   }),
   S('harnesses', 'harness.model', 'Model box', {
-    what: 'Lets this harness use the model. Clear the box to stop the harness from using the model.',
+    what: 'Lets this agent app use the model. Clear the box to stop the agent app from using the model.',
     default: 'On for a catalog model', unit: 'Switch', range: 'On or off',
-    raise: 'Turning it on lets workers use the model in this harness.',
-    lower: 'Turning it off stops new workers on this model in this harness. Other harnesses keep their own box.',
+    raise: 'Turning it on lets workers use the model in this agent app.',
+    lower: 'Turning it off stops new workers on this model in this agent app. Other agent apps keep their own box.',
     apply: 'policy',
   }),
   S('harnesses', 'harness.provider', 'Provider', {
-    what: 'The provider quota that this model counts against.',
-    default: 'The route of the catalog, or Unmetered', unit: 'Provider name', range: 'The providers that the harness supports, or Unmetered',
-    raise: 'Not applicable. Choose a provider to count the model against its quota.',
-    lower: 'Unmetered means no quota applies. Pacing and quota warnings ignore the model.',
+    what: 'The provider usage limit that this model counts against.',
+    default: 'The route of the catalog, or Unmetered', unit: 'Provider name', range: 'The providers that the agent app supports, or Unmetered',
+    raise: 'Not applicable. Choose a provider to count the model against its usage limit.',
+    lower: 'Unmetered means no usage limit applies. Pacing and usage limit warnings ignore the model.',
     apply: 'policy',
   }),
   S('harnesses', 'harness.addModel', 'Add model', {
-    what: 'Adds a local model string to this harness. The string is stored in the local policy, not in kit/models.json.',
+    what: 'Adds a local model string to this agent app. The string is stored in the local policy, not in kit/models.json.',
     default: 'No local models', unit: 'Model string', range: 'Up to 128 characters: letters, digits, dot, underscore, slash, and hyphen',
     raise: 'Not applicable.',
     lower: 'Select Remove to delete a local model.',
@@ -156,57 +156,57 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   // Provider quotas
-  S('quotas', 'quota.mode', 'Quota mode', {
-    what: 'Sets if Herdr Boss paces a provider. Manage pace uses the quota to decide when to run work. Ignore quota stops pacing and pace warnings for worker dispatch.',
-    default: 'Manage pace', unit: 'Choice', range: 'Manage pace or Ignore quota',
+  S('quotas', 'quota.mode', 'Usage limit mode', {
+    what: 'Sets if Herdr Boss paces a provider. Manage pace uses the usage limit to decide when to run work. Ignore usage limit stops pacing and pace warnings for worker dispatch.',
+    default: 'Manage pace', unit: 'Choice', range: 'Manage pace or Ignore usage limit',
     raise: 'Not applicable.',
-    lower: 'Ignore quota lets workers start at any pace. Handover risk and automatic handover still use live quota data. A window at 100% still exhausts the provider.',
+    lower: 'Ignore usage limit lets workers start at any pace. Handover risk and automatic handover still use live usage limit data. A window at 100% still exhausts the provider.',
     apply: 'policy',
   }),
   S('quotas', 'quota.goalPercent', 'Pacing goal and goal end', {
-    what: 'The most percent of a quota window that Herdr Boss plans to use by the end of the goal. The goal end is at the reset, at a local date and time, or a whole number of hours before each reset.',
+    what: 'The most percent of a usage limit window that Herdr Boss plans to use by the end of the goal. The goal end is at the reset, at a local date and time, or a whole number of hours before each reset.',
     default: 'Blank, which means 100%', unit: 'Percent of the window', range: '0 to 100. A goal end must be after now, after the window start, and not after the reset',
-    raise: 'A higher goal lets workers use more of the window. A later end gives the goal more time to use quota.',
-    lower: 'A lower goal saves quota. The lanes say Use now less often. An earlier end forces the use of quota sooner.',
+    raise: 'A higher goal lets workers use more of the window. A later end gives the goal more time to use usage limit.',
+    lower: 'A lower goal saves usage limit. The lanes say Use now less often. An earlier end forces the use of usage limit sooner.',
     apply: 'policy',
   }),
   S('quotas', 'paceTolerancePoints', 'Pace tolerance points', {
-    what: 'The number of percentage points that the use of a quota window may be above its expected use before the lane is ahead of pace. A lane inside the tolerance is on pace.',
+    what: 'The most percentage points that the use may be above the expected use of a usage limit window. Above this, the lane is ahead of pace. A lane inside the tolerance is on pace.',
     default: '5', unit: 'Percentage points', range: '0 to 50',
     raise: 'A lane stays on pace with a larger lead. Workers start more often.',
     lower: 'A lane is ahead of pace sooner. A value of 0 uses no tolerance.',
     apply: 'policy',
   }),
   S('quotas', 'paceMinUsePercent', 'Minimum use for ahead of pace', {
-    what: 'The used percent of a quota window below which the lane is never ahead of pace, also when the use is above the expected use.',
+    what: 'The lane is never ahead of pace below this used percent of a usage limit window. This holds also when the use is above the expected use.',
     default: '30', unit: 'Percent used', range: '0 to 100',
     raise: 'A lane stays on pace to a higher use. A fresh window does not block workers.',
     lower: 'A lane can be ahead of pace at a lower use. A value of 0 uses no minimum.',
     apply: 'policy',
   }),
   S('quotas', 'quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', {
-    what: 'The number of Claude quota probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once.',
+    what: 'The number of Claude usage limit probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once.',
     default: '2', unit: 'Timeouts', range: '1 to 10',
     raise: 'A higher value keeps the normal probe interval for more timeouts.',
     lower: 'A lower value starts the back-off sooner.',
     apply: 'policy',
   }),
   S('quotas', 'quotaProbe.backoffMinutes', 'Claude back-off minutes', {
-    what: 'The time between Claude quota probes after the timeouts in a row reach the limit. Codex and OpenCode Go keep the normal interval. The last good Claude reading stays on screen with its age.',
+    what: 'The time between Claude usage limit probes after the timeouts in a row reach the limit. Codex and OpenCode Go keep the normal interval. The last good Claude reading stays on screen with its age.',
     default: '20', unit: 'Minutes', range: '1 to 1440',
     raise: 'A higher value probes Claude less often during a failure.',
     lower: 'A lower value probes Claude more often during a failure and adds load.',
     apply: 'policy',
   }),
-  S('quotas', 'quota.warnPercent', 'Quota warning level', {
-    what: 'The used percent of a quota window at which the quota shows a warning.',
+  S('quotas', 'quota.warnPercent', 'Usage limit warning level', {
+    what: 'The used percent of a usage limit window at which the usage limit shows a warning.',
     default: '90', unit: 'Percent used', range: '50 to 99, below the critical level',
     raise: 'A higher value gives the warning later.',
     lower: 'A lower value gives the warning earlier.',
     apply: 'service',
   }),
-  S('quotas', 'quota.criticalPercent', 'Quota critical level', {
-    what: 'The used percent of a quota window at which the quota shows a critical alert.',
+  S('quotas', 'quota.criticalPercent', 'Usage limit critical level', {
+    what: 'The used percent of a usage limit window at which the usage limit shows a critical alert.',
     default: '98', unit: 'Percent used', range: '51 to 100, above the warning level',
     raise: 'A higher value gives the critical alert later.',
     lower: 'A lower value gives the critical alert earlier. Keep it above the warning level.',
@@ -320,7 +320,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('machine', 'machine.kitDigestMinutes', 'Kit digest interval minutes', {
-    what: 'The least time between two kit digests to one orchestrator pane. A digest lists the required kit changes that the pane has not received. Herdr Boss sends no digest while the pane works. It sends the digest when the pane is idle or done.',
+    what: 'The least time between two kit digests to one project lead pane. A digest lists the required kit changes that the pane has not received. Herdr Boss sends no digest while the pane works. It sends the digest when the pane is idle or done.',
     default: '120 (2 hours)', unit: 'Minutes', range: '10 to 1440',
     raise: 'A higher value sends fewer kit digests. Each digest lists more changes.',
     lower: 'A lower value sends kit digests sooner. Each digest lists fewer changes.',
@@ -424,7 +424,7 @@ export const SETTING_HELP = Object.fromEntries([
     what: 'When a routine runs during a watch: every N minutes, or at a set time before the end of the watch.',
     default: 'Every 60 minutes for a new routine', unit: 'Minutes, or a time of day', range: '1 to 1440 minutes, or a time such as 01:00',
     raise: 'More minutes between runs send fewer prompts.',
-    lower: 'Fewer minutes between runs send more prompts and use more quota.',
+    lower: 'Fewer minutes between runs send more prompts and use more usage limit.',
     apply: 'now',
   }),
   S('watch', 'watch.routine.prompt', 'Routine prompt', {
@@ -437,7 +437,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('watch', 'watch.maxWorkers', 'Watch worker cap', {
     what: 'The most workers that run at the same time while a watch runs. A blank value uses the day value.',
     default: 'Blank (the day value)', unit: 'Workers', range: '1 to 40, or blank',
-    raise: 'A higher cap runs more workers overnight and uses more quota and CPU.',
+    raise: 'A higher cap runs more workers overnight and uses more usage limit and CPU.',
     lower: 'A lower cap runs fewer workers overnight.',
     apply: 'service',
   }),
@@ -445,7 +445,7 @@ export const SETTING_HELP = Object.fromEntries([
     what: 'The most workers per lane while a watch runs. The lanes are Unmetered, Codex, Claude, and OpenCode Go. A blank lane uses the day value.',
     default: 'All lanes blank', unit: 'Workers', range: '1 to 40 for each lane, or blank',
     raise: 'A higher cap lets that lane run more workers.',
-    lower: 'A lower cap protects the quota of that lane.',
+    lower: 'A lower cap protects the usage limit of that lane.',
     apply: 'service',
   }),
   S('watch', 'watch.quietHours', 'Quiet hours default', {
@@ -460,7 +460,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('capacity', 'maxWorkers', 'Maximum working agents', {
     what: 'The most agents that work at the same time. The worker command enforces it for all projects together.',
     default: '8', unit: 'Agents', range: '1 to 64',
-    raise: 'A higher value runs more work at once and adds CPU and quota use.',
+    raise: 'A higher value runs more work at once and adds CPU and usage limit use.',
     lower: 'A lower value queues new workers until a slot is free.',
     apply: 'policy',
   }),
@@ -478,36 +478,36 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A project lends its share sooner.',
     apply: 'policy',
   }),
-  S('capacity', 'reservePercent', 'Orchestrator reserve', {
-    what: 'The percent of a provider quota that is kept for orchestrators. Workers cannot use it.',
-    default: '15', unit: 'Percent of the quota', range: '0 to 80',
-    raise: 'A higher reserve keeps orchestrators running longer when quota is short. Workers get less.',
-    lower: 'A lower reserve gives workers more quota. An orchestrator can run out first.',
+  S('capacity', 'reservePercent', 'Project lead reserve', {
+    what: 'The percent of a provider usage limit that is kept for project leads. Workers cannot use it.',
+    default: '15', unit: 'Percent of the usage limit', range: '0 to 80',
+    raise: 'A higher reserve keeps project leads running longer when usage limit is short. Workers get less.',
+    lower: 'A lower reserve gives workers more usage limit. A project lead can run out first.',
     apply: 'policy',
   }),
   S('capacity', 'handoffLeadMinutes', 'Handover lead minutes', {
-    what: 'A quota window is at risk when it will run out within this many minutes. Herdr Boss then recommends a handover.',
+    what: 'A usage limit window is at risk when it will run out within this many minutes. Herdr Boss then recommends a handover.',
     default: '180', unit: 'Minutes', range: '0 to 10080',
     raise: 'A higher value recommends a handover earlier.',
     lower: 'A lower value recommends a handover later.',
     apply: 'policy',
   }),
   S('capacity', 'autoHandover', 'Automatic handover', {
-    what: 'Lets Herdr Boss prepare and activate a successor orchestrator without the Owner. It never runs for the Boss. It never runs for a project that no longer works or that is paused or stood down. It never runs for a successor model that is weaker than the source. After activation, Herdr Boss closes the old pane when the successor has answered and the old pane is idle.',
+    what: 'Lets Herdr Boss prepare and activate a successor project lead without the Owner. It never runs for the Boss. It never runs for a project that no longer works or that is paused or stood down. It never runs for a successor model that is weaker than the source. After activation, Herdr Boss closes the old pane when the successor has answered and the old pane is idle.',
     default: 'Off', unit: 'Switch', range: 'On or off',
-    raise: 'Turning it on moves an orchestrator to a successor at the reserve limit or the context limit.',
+    raise: 'Turning it on moves a project lead to a successor at the reserve limit or the context limit.',
     lower: 'Turning it off means only the Owner starts a handover.',
     apply: 'policy',
   }),
-  S('capacity', 'autoHandoverPercent', 'Activate at quota used %', {
-    what: 'The quota level at which the prepared successor takes control. Boss prepares the successor at the reserve limit. The source stays in control until the successor reports ready and the quota reaches this level.',
-    default: '98', unit: 'Percent of the quota', range: '90 to 100',
+  S('capacity', 'autoHandoverPercent', 'Activate at usage limit used %', {
+    what: 'The usage limit level at which the prepared successor takes control. Boss prepares the successor at the reserve limit. The source stays in control until the successor reports ready and the usage limit reaches this level.',
+    default: '98', unit: 'Percent of the usage limit', range: '90 to 100',
     raise: 'A higher value keeps the source in control for longer.',
     lower: 'A lower value hands over sooner.',
     apply: 'policy',
   }),
   S('capacity', 'autoHandoverContextTokens', 'Hand over at context tokens', {
-    what: 'The context size above which a Claude orchestrator gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the orchestrator pane is not working. It reads the context size only for Claude. It compares a token count with this value, not a percent of the model window. A pane that it sees for the first time waits for its next boundary.',
+    what: 'The context size above which a Claude project lead gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the project lead pane is not working. It reads the context size only for Claude. It compares a token count with this value, not a percent of the model window. A pane that it sees for the first time waits for its next boundary.',
     default: '300000', unit: 'Tokens', range: '50000 to 2000000',
     raise: 'A higher value keeps a long context for longer.',
     lower: 'A lower value hands over sooner and keeps the context short.',
@@ -530,20 +530,20 @@ export const SETTING_HELP = Object.fromEntries([
   S('capacity', 'opus.maxConcurrent', 'Running Opus workers at most', {
     what: 'The most Opus workers that can run at the same time when Opus starts without `--force`. A start at the limit is refused and names this setting. `--force` skips the limit.',
     default: '2', unit: 'Workers', range: '1 to 8',
-    raise: 'A higher value allows more Opus workers at the same time and uses the Opus quota faster.',
+    raise: 'A higher value allows more Opus workers at the same time and uses the Opus usage limit faster.',
     lower: 'A lower value refuses an Opus start sooner. Running Opus workers continue.',
     apply: 'policy',
   }),
-  S('capacity', 'defaultOrchestratorGoal', 'Default orchestrator goal', {
-    what: 'The goal text for a new orchestrator that has no goal. A handover copies the goal of the old orchestrator to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the orchestrator waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
+  S('capacity', 'defaultOrchestratorGoal', 'Default project lead goal', {
+    what: 'The goal text for a new project lead that has no goal. A handover copies the goal of the old project lead to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the project lead waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
     default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',
     raise: 'A longer text gives more direction and uses more context.',
-    lower: 'An empty text gives a new orchestrator no default goal.',
+    lower: 'An empty text gives a new project lead no default goal.',
     apply: 'policy',
   }),
 
-  S('capacity', 'succession.ladder', 'Orchestrator succession', {
-    what: 'The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable quotas, and global or project exclusions.',
+  S('capacity', 'succession.ladder', 'Project lead succession', {
+    what: 'The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable usage limits, and global or project exclusions.',
     default: 'The list in policy.json', unit: 'List of choices', range: 'Up to 20 choices',
     raise: 'A longer list gives automatic handover more successors to try.',
     lower: 'A shorter list can leave no successor. A choice outside the list is never selected automatically.',
@@ -638,7 +638,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('service', 'worktreeRoot', 'Worktree root', {
     what: 'The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place.',
     default: '~/Projects/.herdr-wt', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',
-    raise: 'Set another folder for new worker worktrees. Run herdr-boss harness sync to check harness access.',
+    raise: 'Set another folder for new worker worktrees. Run herdr-boss agent app sync to check agent app access.',
     lower: 'The value does not move or delete existing worktrees.', apply: 'service',
   }),
   S('service', 'projectRoot', 'Project root', {
@@ -669,7 +669,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('service', 'workers.uncollectedNoticeMinutes', 'Uncollected worker notice minutes', {
-    what: 'The time that a worker can stay done without collection before the service tells its project orchestrator.',
+    what: 'The time that a worker can stay done without collection before the service tells its project lead.',
     default: '30', unit: 'Minutes', range: '1 to 1440',
     raise: 'A higher value sends the notice later.',
     lower: 'A lower value sends the notice sooner.',
@@ -725,19 +725,19 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
 
-  S('service', 'quotaSeconds', 'Quota seconds', {
-    what: 'The time between two reads of the provider quotas.',
+  S('service', 'quotaSeconds', 'Usage limit seconds', {
+    what: 'The time between two reads of the provider usage limits.',
     default: '300', unit: 'Seconds', range: 'A whole number of 30 to 3600',
-    raise: 'A higher value reads quotas less often.',
-    lower: 'A lower value reads quotas more often and calls the providers more.',
+    raise: 'A higher value reads usage limits less often.',
+    lower: 'A lower value reads usage limits more often and calls the providers more.',
     apply: 'service',
   }),
 
   S('service', 'push', 'Push prompts', {
-    what: 'Lets the service send prompts to orchestrator panes. Notices to the Owner are always sent. The environment variable HERDR_BOSS_PUSH=0 overrides the saved value. Restart the service after a change.',
+    what: 'Lets the service send prompts to project lead panes. Notices to the Owner are always sent. The environment variable HERDR_BOSS_PUSH=0 overrides the saved value. Restart the service after a change.',
     default: 'On', unit: 'Switch', range: 'On or off',
-    raise: 'Turning it on lets the service prompt the orchestrators.',
-    lower: 'Turning it off stops all prompts to orchestrator panes.',
+    raise: 'Turning it on lets the service prompt the project leads.',
+    lower: 'Turning it off stops all prompts to project lead panes.',
     apply: 'saved-restart',
   }),
 
@@ -752,17 +752,17 @@ export const SETTING_HELP = Object.fromEntries([
 
 
   S('service', 'providerKinds', 'Provider kinds', {
-    what: 'Maps each quota provider to the agent kinds that use it.',
+    what: 'Maps each usage limit provider to the agent kinds that use it.',
     default: 'claude to claude, codex to codex, opencodego to opencode and pi', unit: 'Object of lists', range: 'Kind names that exist',
     raise: 'Not applicable.',
-    lower: 'A wrong map counts a kind against the wrong quota.',
+    lower: 'A wrong map counts a kind against the wrong usage limit.',
     apply: 'restart',
   }),
-  S('service', 'orchestratorLabel', 'Orchestrator label', {
-    what: 'The pane label that marks the orchestrator of a project.',
+  S('service', 'orchestratorLabel', 'Project lead label', {
+    what: 'The pane label that marks the project lead of a project.',
     default: 'orch', unit: 'Text', range: 'One pane label',
     raise: 'Not applicable.',
-    lower: 'A wrong label makes Herdr Boss miss the orchestrator panes.',
+    lower: 'A wrong label makes Herdr Boss miss the project lead panes.',
     apply: 'restart',
   }),
   S('service', 'port', 'Port', {
@@ -812,12 +812,12 @@ export const SETTING_HELP = Object.fromEntries([
   S('quota-plan', 'quotaPlan.applyThreshold', 'Credit apply threshold', {
     what: 'The used percent at which the plan may schedule a reset credit and ask the Owner to apply it.',
     default: '95', unit: 'Percent used', range: '50 to 100',
-    raise: 'A higher threshold saves more quota before the planned reset.',
+    raise: 'A higher threshold saves more usage limit before the planned reset.',
     lower: 'A lower threshold schedules the reset sooner.',
     apply: 'service',
   }),
   S('quota-plan', 'quotaPlan.margin', 'Reserve margin', {
-    what: 'The percent points that the plan keeps below full quota use.',
+    what: 'The percent points that the plan keeps below full usage limit use.',
     default: '0', unit: 'Percentage points', range: '0 to 50',
     raise: 'A higher margin lowers the effective credit apply threshold.',
     lower: 'A lower margin permits a higher apply threshold.',
@@ -826,7 +826,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('quota-plan', 'quotaPlan.horizon', 'Planning horizon', {
     what: 'The time at which the plan stops. Use the last credit expiry or enter an ISO time.',
     default: 'last-expiry', unit: 'End time', range: 'last-expiry or an ISO time',
-    raise: 'A later time includes more planned quota use.',
+    raise: 'A later time includes more planned usage limit use.',
     lower: 'An earlier time limits the plan to a shorter period.',
     apply: 'service',
   }),
@@ -862,7 +862,7 @@ export const SETTING_HELP = Object.fromEntries([
 
   // Harness readiness
   S('readiness', 'harness.readiness', 'Readiness table', {
-    what: 'Shows for each harness entry if it is ok, missing, or bad. The table shows no path and no value.',
+    what: 'Shows for each agent app entry if it is ok, missing, or bad. The table shows no path and no value.',
     default: 'Not applicable', unit: 'Table', range: 'Read-only',
     raise: 'Not applicable.', lower: 'Not applicable.',
     apply: 'now',

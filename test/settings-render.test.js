@@ -97,7 +97,7 @@ test('Quota plan settings render editable values with decimal steps and save as 
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
   const html = app.settingsView(fixture());
-  assert.match(html, /<span>Quota plan<\/span>/);
+  assert.match(html, /<span>Usage limit plan<\/span>/);
   assert.match(html, /min="0\.1" max="10" step="0\.1" value="1"[^>]*data-service-setting="quotaPlan\.burstPace"[^>]*data-service-group="Quota plan"/);
   assert.match(html, /type="text"[^>]*value="last-expiry" placeholder="last-expiry or an ISO time"[^>]*data-service-setting="quotaPlan\.horizon"[^>]*data-service-group="Quota plan"/);
   assert.match(html, /data-save-service-settings="Quota plan"/);

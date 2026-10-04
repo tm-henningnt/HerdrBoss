@@ -1505,7 +1505,7 @@ test('quota colors use configured thresholds and Settings shows their values', (
   assert.match(app, /quota\.usedPercent >= quota\.criticalPercent[^\n]+quota\.usedPercent >= quota\.warnPercent/);
   assert.doesNotMatch(app, /Quota warning at \$\{esc\(warnPercent\)\}/, 'the two levels show as rows of the Service settings table, not as an inline line');
   const settingsHelp = /settings: \['Settings', `([\s\S]*?)`\],\s+agents:/.exec(app)?.[1] || '';
-  assert.match(settingsHelp, /quota colors use the warning and critical values from <code>config\.json<\/code>/i);
+  assert.match(settingsHelp, /usage limit colors use the warning and critical values from <code>config\.json<\/code>/i);
   assert.match(app, /data-service-setting=/);
   assert.match(app, /data-save-service-settings=/);
   assert.match(SETTING_GROUPS.find((group) => group.id === 'service').safe, /A row without an input is read-only\. Change it in config\.json\./);
@@ -1518,9 +1518,9 @@ test('organization cards show an unavailable or stale quota bar, and the header 
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // A Claude or Codex card without quota data shows a muted empty bar with a label.
   assert.match(app, /function orgQuotaMeter\(s, kind\)/);
-  assert.match(app, /aria-label="\$\{esc\(`\$\{PROVIDERS\[agent\]\} quota unavailable`\)\}"/);
-  assert.match(app, /class="org-quota-note" aria-hidden="true">quota unavailable</);
-  assert.match(app, /quota from \$\{clock\(quota\.staleSince\)\}, the last probe failed/);
+  assert.match(app, /aria-label="\$\{esc\(`\$\{PROVIDERS\[agent\]\} usage limit unavailable`\)\}"/);
+  assert.match(app, /class="org-quota-note" aria-hidden="true">usage limit unavailable</);
+  assert.match(app, /usage limit from \${clock\(quota\.staleSince\)\}, the last probe failed/);
   assert.match(app, /last reading \$\{reading\.usedPercent\}%/);
   assert.match(app, /\$\{readingAge\}\$\{reading\.stale \? ' · stale' : ''\}/);
   assert.match(app, /The Boss gets one warning when the Claude probe fails for over 60 minutes/);
@@ -1847,8 +1847,8 @@ test('Analytics and Mailbox show the scan and store limits from the state', () =
 
 test('Analytics shows the top ten denial counts by harness, model, and cause', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /Counts by harness and model/);
-  assert.match(app, /<th>Harness<\/th><th>Model<\/th><th>Cause<\/th><th>Count<\/th>/);
+  assert.match(app, /Counts by agent app and model/);
+  assert.match(app, /<th>Agent app<\/th><th>Model<\/th><th>Cause<\/th><th>Count<\/th>/);
   assert.match(app, /modelRows\.slice\(0, 10\)/);
   assert.match(app, /data-label="Count" class="mono"/);
   assert.match(app, /modelMoreCount\.toLocaleString\(\)} more/);
@@ -2062,13 +2062,13 @@ test('Settings shows a read-only harness readiness table with the fixed sync lin
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const guide = readUserGuide();
-  assert.match(app, /<h2>Harness readiness\$\{helpButton\('harness\.readiness'\)\}<\/h2>/);
+  assert.match(app, /<h2>Agent app readiness\$\{helpButton\('harness\.readiness'\)\}<\/h2>/);
   assert.match(app, /s\?\.harness\?\.findings/);
   assert.doesNotMatch(app, /Run herdr-boss harness sync to see the changes to make\./, 'the readiness group text in the schema holds the sync hint');
   assert.match(app, /<th scope="col">Status<\/th><th scope="col">Area<\/th><th scope="col">Item<\/th>/);
   assert.match(css, /\.harness-readiness-panel\b/);
   assert.match(css, /\.harness-readiness-bad\b/);
-  assert.match(app, /<h3>Harness readiness<\/h3>/);
+  assert.match(app, /<h3>Agent app readiness<\/h3>/);
   assert.match(guide, /Harness readiness/);
   assert.match(guide, /Run `herdr-boss harness sync` to see the changes to make/);
 });
