@@ -1,6 +1,7 @@
 // Shared helpers for the test-runner live-data guard. The guard keeps tests away from the real service data
 // directory. It reads that directory only, and it never changes it. The real account home decides the path, so the
 // temporary HOME of a test run cannot hide the live directory.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,4 +71,25 @@ export function describeLiveChanges(before, after) {
     else if (a.size !== b.size || a.mtimeMs !== b.mtimeMs) changes.push(`${name}: size ${a.size} -> ${b.size}`);
   }
   return changes;
+}
+
+// Tracked files that the kit installer writes into a project checkout. A test must never change them in this repository.
+export const KIT_FILES = ['docs/orchestration/herdr-boss.md', 'AGENTS.md', '.claude/settings.json'];
+
+// Record the content hash of each kit file under `root`. A missing file has the hash null.
+export function snapshotKitFiles(root) {
+  const snapshot = {};
+  for (const name of KIT_FILES) {
+    try {
+      snapshot[name] = createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex');
+    } catch {
+      snapshot[name] = null;
+    }
+  }
+  return snapshot;
+}
+
+// Name each kit file whose content differs between two snapshots. An empty array means no change.
+export function describeKitChanges(before, after) {
+  return KIT_FILES.filter((name) => (before?.[name] ?? null) !== (after?.[name] ?? null));
 }

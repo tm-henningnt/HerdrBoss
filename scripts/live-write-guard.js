@@ -14,6 +14,8 @@ const nodePath = require('node:path');
 
 const liveDir = process.env.HERDR_BOSS_TEST_GUARD_DIR;
 const reportFile = process.env.HERDR_BOSS_TEST_GUARD_REPORT;
+// Tracked kit files of the repository checkout. The runner names them, delimited by the path delimiter.
+const protectedFiles = (process.env.HERDR_BOSS_TEST_GUARD_FILES ?? '').split(nodePath.delimiter).filter(Boolean);
 
 if (liveDir && reportFile) {
   // Resolve the deepest existing ancestor, so a path whose final part does not exist still compares by its real path.
@@ -39,6 +41,8 @@ if (liveDir && reportFile) {
     const relative = nodePath.relative(live, candidate);
     return relative === '' || (!relative.startsWith('..') && !nodePath.isAbsolute(relative));
   };
+  const protectedReal = new Set(protectedFiles.map(realPath));
+  const isGuarded = (target) => isInsideLiveDir(target) || (protectedReal.size > 0 && protectedReal.has(realPath(target)));
 
   const appendRaw = fs.appendFileSync.bind(fs);
   const patched = new Set();
@@ -46,7 +50,7 @@ if (liveDir && reportFile) {
   const report = (kind, target) => {
     const line = JSON.stringify({ kind, target: String(target), pid: process.pid });
     try { appendRaw(reportFile, `${line}\n`); } catch { /* The report is best effort. */ }
-    const error = new Error(`Refusing to ${kind} the live data directory from a test: ${target}. Use a temporary HERDR_BOSS_DIR and a fake probe.`);
+    const error = new Error(`Refusing to ${kind} the live data directory or a tracked kit file from a test: ${target}. Use a temporary HERDR_BOSS_DIR, a temporary project root, and a fake probe.`);
     error.code = 'HERDR_LIVE_DATA_WRITE';
     throw error;
   };
@@ -71,7 +75,7 @@ if (liveDir && reportFile) {
     patched.add(key);
     object[name] = function (...args) {
       const target = asPath(args[targetIndex]);
-      if (target && isInsideLiveDir(target) && (flagIndex === null || writeFlags(args[flagIndex]))) report(kind, target);
+      if (target && isGuarded(target) && (flagIndex === null || writeFlags(args[flagIndex]))) report(kind, target);
       return original.apply(this, args);
     };
   };

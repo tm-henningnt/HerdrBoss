@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { describeLiveChanges, isInsideLiveDir, liveDataDir, snapshotLiveFiles } from '../scripts/live-data-guard.js';
+import { describeKitChanges, describeLiveChanges, isInsideLiveDir, liveDataDir, snapshotKitFiles, snapshotLiveFiles } from '../scripts/live-data-guard.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GUARD = path.join(here, '..', 'scripts', 'live-write-guard.js');
@@ -157,4 +157,52 @@ test('the preload keeps promisified execFile and exec resolving stdout and stder
   const result = spawnSync(process.execPath, ['--import', GUARD, script], { encoding: 'utf8', env });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()), ['one', 'two']);
+});
+
+test('the preload refuses a write to a protected kit file and allows a write to a copy elsewhere', (t) => {
+  const live = tempDir(t, 'kit-guard-live');
+  const root = tempDir(t, 'kit-guard-root');
+  const kitFile = path.join(root, 'kit-file.md');
+  const otherFile = path.join(root, 'other.md');
+  fs.writeFileSync(kitFile, 'committed\n');
+  const script = path.join(root, 'attempts.mjs');
+  fs.writeFileSync(script, `
+import fs from 'node:fs';
+const results = [];
+const attempt = (name, fn) => { try { fn(); results.push([name, 'allowed']); } catch (error) { results.push([name, error.code ?? 'error']); } };
+attempt('write-kit-file', () => fs.writeFileSync(process.env.GUARD_KIT, 'changed\\n'));
+attempt('rename-onto-kit-file', () => { fs.writeFileSync(process.env.GUARD_OTHER, 'x'); fs.renameSync(process.env.GUARD_OTHER, process.env.GUARD_KIT); });
+attempt('write-other-file', () => fs.writeFileSync(process.env.GUARD_OTHER, 'x'));
+attempt('read-kit-file', () => fs.readFileSync(process.env.GUARD_KIT, 'utf8'));
+console.log(JSON.stringify(results));
+`);
+  const env = {
+    ...process.env,
+    GUARD_KIT: kitFile,
+    GUARD_OTHER: otherFile,
+    HERDR_BOSS_TEST_GUARD_DIR: live,
+    HERDR_BOSS_TEST_GUARD_REPORT: path.join(root, 'report.jsonl'),
+    HERDR_BOSS_TEST_GUARD_FILES: kitFile,
+  };
+  delete env.NODE_OPTIONS;
+  const result = spawnSync(process.execPath, ['--import', GUARD, script], { encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    ['write-kit-file', 'HERDR_LIVE_DATA_WRITE'],
+    ['rename-onto-kit-file', 'HERDR_LIVE_DATA_WRITE'],
+    ['write-other-file', 'allowed'],
+    ['read-kit-file', 'allowed'],
+  ]);
+  assert.equal(fs.readFileSync(kitFile, 'utf8'), 'committed\n');
+});
+
+test('a kit file snapshot names each kit file whose content changed', (t) => {
+  const root = tempDir(t, 'kit-guard-snapshot');
+  fs.mkdirSync(path.join(root, 'docs', 'orchestration'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'orchestration', 'herdr-boss.md'), 'v=one\n');
+  const before = snapshotKitFiles(root);
+  assert.deepEqual(describeKitChanges(before, snapshotKitFiles(root)), []);
+  fs.writeFileSync(path.join(root, 'docs', 'orchestration', 'herdr-boss.md'), 'v=two\n');
+  fs.writeFileSync(path.join(root, 'AGENTS.md'), 'stub\n');
+  assert.deepEqual(describeKitChanges(before, snapshotKitFiles(root)), ['docs/orchestration/herdr-boss.md', 'AGENTS.md']);
 });
