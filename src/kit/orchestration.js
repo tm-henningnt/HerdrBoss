@@ -63,10 +63,24 @@ function scopeExtensions(value, errors) {
 
 function tiers(value, errors, allowedTiers) {
   const list = Array.isArray(value) ? value : [value];
-  if (!list.length) errors.push('evidenceTier must not be empty.');
+  let needsAllowedTiers = false;
+  if (!list.length) {
+    errors.push('evidenceTier must not be empty.');
+    needsAllowedTiers = true;
+  }
   list.forEach((tier, index) => {
-    if (!allowedTiers.includes(tier)) errors.push(`evidenceTier[${index}] is unknown: ${String(tier)}. Allowed tiers: ${allowedTiers.join(', ') || '(none)'}. Set the project's tiers in evidenceTiers in .herdr-boss.json at the repository root.`);
+    if (!allowedTiers.includes(tier)) {
+      errors.push(`evidenceTier[${index}] is unknown: ${String(tier)}.`);
+      needsAllowedTiers = true;
+    }
   });
+  if (needsAllowedTiers) {
+    const accepted = allowedTiers.length
+      ? `Accepted evidence tiers:\n${allowedTiers.map((tier) => `- The ${JSON.stringify(tier)} tier is accepted.`).join('\n')}`
+      : 'No evidence tiers are configured.';
+    errors.push(accepted);
+    errors.push("Set the project's tiers in evidenceTiers in .herdr-boss.json at the repository root.");
+  }
 }
 
 // A worker can write the issue as a numeric string ("204" or "#204"). Turn it into the number and return a

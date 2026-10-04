@@ -200,6 +200,10 @@ Write the human report to `{{reportPath}}`.
 
 Write the machine report to `{{reportJsonPath}}`.
 
+## Evidence tiers
+
+Use one or more of these project tiers in `evidenceTier`: {{evidenceTiers}}.
+
 Include these fields in the JSON report:
 
 ```json
@@ -240,7 +244,7 @@ Write `issue` as a JSON number, for example `204`, not as a string (`"204"` or `
 }
 ```
 
-Replace `<tier>` with one or more of the evidence tiers of this project: {{evidenceTiers}}. The report validator rejects every other tier.
+Replace `<tier>` with one or more of the accepted project tiers. The report validator rejects every other tier.
 
 Fill `usage` only with values measured by the worker's harness. Leave unknown values as `null`.
 

@@ -164,10 +164,12 @@ test('project setup must be a non-empty command', () => {
   assert.throws(() => loadProjectConfig({ cwd: root }), /setup must be null or a non-empty shell command/);
 });
 
-test('an unknown evidence tier names the allowed tiers and the project setting', async () => {
+test('an unknown evidence tier names the accepted tiers and the project setting', async () => {
   const { validateWorkerReport } = await import('../src/kit/orchestration.js');
   const errors = validateWorkerReport({ evidenceTier: ['owner-proxy'] }, { evidenceTiers: ['local', 'owner'] });
-  assert.ok(errors.some((error) => /evidenceTier\[0\] is unknown: owner-proxy\. Allowed tiers: local, owner\. Set the project's tiers in evidenceTiers in \.herdr-boss\.json/.test(error)));
+  assert.ok(errors.some((error) => error === 'evidenceTier[0] is unknown: owner-proxy.'));
+  assert.ok(errors.some((error) => error === 'Accepted evidence tiers:\n- The "local" tier is accepted.\n- The "owner" tier is accepted.'));
+  assert.ok(errors.some((error) => error === "Set the project's tiers in evidenceTiers in .herdr-boss.json at the repository root."));
 });
 
 test('worker collect --record names every missing flag at once with a hint from the report', async () => {
@@ -179,8 +181,10 @@ test('worker collect --record names every missing flag at once with a hint from 
   assert.deepEqual(recordFlagErrors({ record: true, outcome: 'done', gatePassed: true }), []);
 });
 
-test('the rendered brief lists the project evidence tiers', () => {
-  assert.equal(renderBrief('Tiers: {{evidenceTiers}}', { evidenceTiers: 'local, hosted-ui, owner' }), 'Tiers: local, hosted-ui, owner');
+test('the rendered worker brief has a section with the project evidence tiers', () => {
+  const template = fs.readFileSync(new URL('../kit/templates/worker-brief.md', import.meta.url), 'utf8');
+  const brief = renderBrief(template, { evidenceTiers: 'unit, local-browser, live-service, owner' });
+  assert.match(brief, /## Evidence tiers\n\nUse one or more of these project tiers in `evidenceTier`: unit, local-browser, live-service, owner\./);
 });
 
 test('worker brief shows the effective screenshot budget and project precedence', () => {

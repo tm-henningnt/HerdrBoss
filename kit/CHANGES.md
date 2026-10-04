@@ -201,3 +201,7 @@ Summary: Replace "There is no load threshold" with the lock lane guard rule: a q
 ## fa883d81b25f
 Impact: useful
 Summary: Add `worker collect --accept-scope FILE[,FILE] --reason TEXT`, which passes only the listed files outside the allowed scope and records the files and the reason as a Scope exception.
+
+## 5eff27364fa1
+Impact: useful
+Summary: List each project's accepted evidence tiers in worker briefs and collect refusals.

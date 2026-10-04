@@ -299,6 +299,24 @@ test('worker collect keeps changed paths stable after the base branch merges the
   assert.deepEqual(afterMerge.actualPaths, beforeMerge.actualPaths);
 });
 
+test('worker collect names every accepted evidence tier when evidence is empty', () => {
+  const f = setupFixture(null);
+  f.config.evidenceTiers = ['unit', 'local-browser', 'live-service', 'owner'];
+  const run = startWorker('collect-empty-evidence', {
+    kind: 'codex', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true,
+  }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  const reportDir = path.join(run.worktree, run.workerDir);
+  fs.writeFileSync(path.join(reportDir, 'report.md'), 'No evidence was reported.\n');
+  fs.writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify({
+    issue: null, branch: run.branch, worktree: run.worktree, changedPaths: [],
+    commands: ['focused check'], evidenceTier: [], unverified: [], stoppedEarly: false,
+  }));
+
+  assert.throws(() => collectWorker('collect-empty-evidence', { noRecord: true }, {
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [],
+  }), /Invalid worker report:\n- evidenceTier must not be empty\.\n- Accepted evidence tiers:\n- The "unit" tier is accepted\.\n- The "local-browser" tier is accepted\.\n- The "live-service" tier is accepted\.\n- The "owner" tier is accepted\./);
+});
+
 // The kit rewrites its own files in a worker worktree. The collect scope check must ignore them.
 const KIT_FIXTURE_FILES = ['docs/orchestration/herdr-boss.md', 'docs/orchestration/memory.md', 'AGENTS.md', '.claude/settings.json'];
 
