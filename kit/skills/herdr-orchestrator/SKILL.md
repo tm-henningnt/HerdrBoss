@@ -150,7 +150,7 @@ Read each file in the skill folder when its step comes:
 herdr-boss worker start <name> --kind <kind> --task-file <file> --task-id <id> [--allow <path> | --read-only]
 ```
 
-Use `--read-only` for a task that changes no repository file.
+Use `--read-only` for a task that changes no repository file. A read-only worker must not run `git stash`, `git reset`, or `git checkout` of any path or branch. It uses `git show`, `git diff`, and `git log` only.
 
 Always give `--task-id` with the published task id.
 

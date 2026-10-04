@@ -10,6 +10,10 @@ Read this file before you dispatch a reviewer or a review subagent.
 
 - Put this rule in a review task brief: run any command that reads Herdr Boss data with a temporary `HOME` and `HERDR_BOSS_DIR` (`mktemp -d`). Do not import modules of `src/` that open the live data directory.
 
+## Read-only worktree
+
+- Put this rule in a review task brief: do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only. A reviewer must not change the worktree that it reviews.
+
 ## Docs check
 
 - Put this rule in a review task brief: check that a change of behavior comes with a change of the docs and the page help in the same branch.

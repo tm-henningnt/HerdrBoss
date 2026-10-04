@@ -209,3 +209,11 @@ Summary: List each project's accepted evidence tiers in worker briefs and collec
 ## c1889c2b6d7c
 Impact: useful
 Summary: Keep kit-managed files and paths that arrived only from a merge of the base branch out of the worker collect scope check, and name a leftover process by PID and command name only.
+
+## caac14d2ce06
+Impact: useful
+Summary: Ban `git stash`, `git reset`, and `git checkout` of any path or branch in read-only worker briefs and review task rules; read-only workers use `git show`, `git diff`, and `git log` only.
+
+## 7ba8dfb66645
+Impact: useful
+Summary: Read-only worker briefs ban `git stash`, `git reset`, and `git checkout`. The worker collect scope check skips kit-managed files and merge-from-base paths and names a leftover process by PID and command name only. The OpenCode TUI starts with a project config instead of flags that the v2 TUI rejects.

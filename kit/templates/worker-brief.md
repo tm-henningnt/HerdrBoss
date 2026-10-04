@@ -56,6 +56,8 @@ Edit only these paths:
 
 Preserve all work outside these paths.
 
+{{readOnlySection}}
+
 Do not choose another task or change product direction.
 
 Do not edit issues, project instructions, roadmaps, or architecture decisions unless the allowed paths name them.

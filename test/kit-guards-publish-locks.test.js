@@ -187,6 +187,19 @@ test('the rendered worker brief has a section with the project evidence tiers', 
   assert.match(brief, /## Evidence tiers\n\nUse one or more of these project tiers in `evidenceTier`: unit, local-browser, live-service, owner\./);
 });
 
+test('a read-only brief bans git stash, reset, and checkout; a normal brief omits the ban', () => {
+  const f = setupFixture(null);
+  f.config.briefTemplatePath = path.resolve('kit/templates/worker-brief.md');
+  const options = { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} };
+  const readOnlyRun = startWorker('reviewer', { kind: 'codex', task: 'review the change', readOnly: true }, options);
+  const readOnlyBrief = fs.readFileSync(path.join(readOnlyRun.worktree, '.worker', 'brief.md'), 'utf8');
+  assert.match(readOnlyBrief, /Do not run `git stash`, `git reset`, or `git checkout` of any path or branch\./);
+  assert.match(readOnlyBrief, /Use `git show`, `git diff`, and `git log` only\./);
+  const normalRun = startWorker('author', { kind: 'codex', task: 'write the change', allow: ['src/'] }, options);
+  const normalBrief = fs.readFileSync(path.join(normalRun.worktree, '.worker', 'brief.md'), 'utf8');
+  assert.doesNotMatch(normalBrief, /git stash/);
+});
+
 test('worker brief shows the effective screenshot budget and project precedence', () => {
   const f = setupFixture(null);
   const template = path.join(f.root, 'brief-template.md');
