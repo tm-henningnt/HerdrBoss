@@ -13,7 +13,7 @@ Run factory login NAME claude or factory login NAME codex in an Owner terminal. 
 
 At the head office, set one slider for each factory in an account scope. Use whole percentages from 0 to 100. The shares of one account must total at most 100. Select Save factory shares. The plan saves before delivery. A pending factory keeps its last accepted share. The next successful poll retries delivery.
 
-The factory share is a local pacing ceiling above the project allocation. Project shares stay in the local policy. At the ceiling, new workers for that account stop. Ignore quota mode and --force cannot bypass it. Each factory keeps its last accepted share when the head office is offline or the service restarts. Until the first guidance arrives, its profile ceiling is 100. Quota readings measure the shared account. They do not measure the use of one factory.
+The factory share is a local pacing ceiling above the project allocation. Project shares stay in the local policy. At the ceiling, new workers for that account stop. Ignore usage limit mode and --force cannot bypass it. Each factory keeps its last accepted share when the head office is offline or the service restarts. Until the first guidance arrives, its profile ceiling is 100. Quota readings measure the shared account. They do not measure the use of one factory.
 
 ## Nudge a factory Boss
 

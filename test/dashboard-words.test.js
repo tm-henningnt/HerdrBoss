@@ -23,8 +23,11 @@ function retiredWordsIn(file) {
   for (const { line, text } of literalSegments(source)) {
     const plain = readableText(text);
     // A literal without a space or a capital is a key, a class name, or a route.
-    if (KEYS.has(plain.trim())) continue;
-    if (!/\s/.test(plain.trim()) && !/^[A-Z]/.test(plain.trim())) continue;
+    if (KEYS.has(text)) continue;
+    // A plain lowercase word without markup is a key, a class name, or a route. The same word between tags is visible text.
+    if (!/[<>]/.test(text) && !/\s/.test(plain.trim()) && !/^[A-Z]/.test(plain.trim())) continue;
+    const doubled = plain.match(/\b([a-z]+) \1\b/i);
+    if (doubled) found.push(`${file}:${line} doubled word "${doubled[0]}": ${plain.trim().slice(0, 80)}`);
     for (const [pattern, word] of RETIRED) {
       const match = plain.match(pattern);
       if (match) found.push(`${file}:${line} "${match[0]}" should be "${word}": ${plain.trim().slice(0, 80)}`);
@@ -38,6 +41,11 @@ for (const file of FILES) {
     assert.deepEqual(retiredWordsIn(file), []);
   });
 }
+
+test('the scanner reads a data-label value as visible text', () => {
+  assert.match(readableText('<td data-label="Harness" class="harness-cell">x</td>'), /Harness/);
+  assert.doesNotMatch(readableText('<td class="harness-cell">x</td>'), /harness/);
+});
 
 test('the scanner reads literals and skips code spans, tags, and code', () => {
   const source = "const a = 'The orchestrator works';\nconst b = `Run <code>quota</code> and `${x}` the harness`;\nconst c = '<div class=\"quota-row\">ok</div>';\nconst d = /quota/.test(y); // orchestrator\nconst e = 'Use `harness` here';";

@@ -12,7 +12,7 @@ You should see each provider with a state: **Use now**, **on pace**, or **hold**
 ## Pace a provider
 
 1. Open **Settings**. Find **Provider quotas**.
-2. Choose **Manage pace** to pace a provider. Choose **Ignore quota** to let the agents use all of it.
+2. Choose **Manage pace** to pace a provider. Choose **Ignore usage limit** to let the agents use all of it.
 3. Select **Apply policy** when the bar shows unsaved changes.
 
 You should see your choice saved. A live window at 100% still stops the provider until its reset. If the choice does not stay, you use the read-only preview.

@@ -91,15 +91,20 @@ export function literalSegments(source) {
 }
 
 // The words that the user reads: no HTML tags, no `<code>` elements, no Markdown code spans.
-// An attribute value stays when the user reads it: title, aria-label, placeholder, and alt.
-const READ_ATTRIBUTES = new Set(['title', 'aria-label', 'placeholder', 'alt']);
+// An attribute value stays when the user reads it: title, aria-label, placeholder, alt, and data-label.
+const READ_ATTRIBUTES = new Set(['title', 'aria-label', 'placeholder', 'alt', 'data-label']);
 
 export function readableText(text) {
-  return text
+  const attributes = [];
+  const stripped = text
     .replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, ' ')
     .replace(/`[^`]*`/g, ' ')
     // an attribute, also when a `${}` hole cuts the tag into several segments
-    .replace(/([\w:-]+)=(?:"([^"]*)"?|'([^']*)'?)/g, (all, name, a, b) => (READ_ATTRIBUTES.has(name) ? ` ${a ?? b} ` : ' '))
+    .replace(/([\w:-]+)=(?:"([^"]*)"?|'([^']*)'?)/g, (all, name, a, b) => {
+      if (READ_ATTRIBUTES.has(name)) attributes.push(a ?? b);
+      return ' ';
+    })
     .replace(/<[^>]*>?/g, ' ')
     .replace(/^[^<]*?>/, ' ');
+  return [stripped, ...attributes].join(' ');
 }
