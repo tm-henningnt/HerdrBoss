@@ -51,9 +51,9 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
-test('quota plan settings share the Quota plan help group and documented defaults', () => {
+test('quota plan settings share the Usage limit plan help group and documented defaults', () => {
   const group = SETTING_GROUPS.find((item) => item.id === 'quota-plan');
-  assert.equal(group?.title, 'Quota plan');
+  assert.equal(group?.title, 'Usage limit plan');
   assert.match(group?.affects || '', /Mailbox items.*expiry notices/);
   assert.match(SETTING_HELP['quotaPlan.applyThreshold']?.what || '', /ask the Owner/);
   for (const [setting, value, range] of [
@@ -69,7 +69,7 @@ test('quota plan settings share the Quota plan help group and documented default
     assert.equal(SETTING_HELP[setting]?.default, value);
     assert.equal(SETTING_HELP[setting]?.range, range);
   }
-  assert.match(app, /<h3>Quota plan<\/h3><p>Set the Codex burst pace/);
+  assert.match(app, /<h3>Usage limit plan<\/h3><p>Set the Codex burst pace/);
   const help = app.slice(app.indexOf('const HELP ='));
   assert.match(help, /Mailbox approval item when a credit is due or expires within 48 hours/);
   assert.match(help, /warning in the 24 hours before an available credit expires/);
@@ -215,7 +215,7 @@ test('no two rows of a section carry the same explanation as row buttons', () =>
 
 test('the repeated per-harness, per-provider, and per-routine settings have one button on the header', () => {
   const settings = app.slice(app.indexOf('function settingsView('));
-  assert.match(settings, /<h3>Quota mode\$\{helpButton\('quota\.mode'\)\}<\/h3>/);
+  assert.match(settings, /<h3>Usage limit mode\$\{helpButton\('quota\.mode'\)\}<\/h3>/);
   assert.match(settings, /Pacing goals\$\{helpButton\('quota\.goalPercent'\)\}<\/h3>/);
   for (const id of ['harness.available', 'harness.preferredModel', 'harness.model', 'harness.provider', 'harness.addModel']) assert.match(settings, new RegExp(`class="help-legend"[^\\n]*helpButton\\('${id.replace('.', '\\.')}'\\)`), `${id} is in the Harnesses legend`);
   for (const id of ['watch.routine.title', 'watch.routine.model', 'watch.routine.schedule', 'watch.routine.prompt']) assert.match(app, new RegExp(`class="help-legend"[^\\n]*helpButton\\('${id.replace(/\./g, '\\.')}'\\)`), `${id} is in the routines legend`);
