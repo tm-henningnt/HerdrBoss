@@ -364,6 +364,8 @@ Policy settings take precedence over legacy `config.json` values. The old `machi
 
 Clear the **Available** box of a harness to disable that harness for every project. Choose a preferred model for a harness. Worker start and handoff use it when you omit an explicit model. An empty choice uses the harness default.
 
+Choose **Route to a below-pace lane** to let `worker start` prefer a model of a lane that is far below its pace. It does this only when the kind can reach two or more lanes and you give no model. The command prints the reason. It records `modelSource: "pace"` and `modelRoute`. A lane that is ahead of pace or on hold is never chosen.
+
 Each model row has a box and a provider route. Clear the box to disable the model in that harness for every project. A model can be in more than one harness. Each harness keeps its own box and its own route for the model, so a change in one harness does not change another harness.
 
 An active provider cooldown marks a model unavailable and shows its retry time in Settings and `herdr-boss models`. `herdr-boss lanes` shows the model and its lane. A worker pane that reports `Free usage exceeded` puts that model on cooldown for 60 minutes, or until a later retry time that the provider reports. An overload such as `503 service_overloaded` puts that model on a fixed 30-minute cooldown. Other models in the lane stay available. When you omit `--model`, `worker start` chooses the next available model in the same lane. The run record stores `modelSource: "fallback"` and `modelFallback` with the unavailable model, retry time, and reason. An explicit `--model` does not fall back.

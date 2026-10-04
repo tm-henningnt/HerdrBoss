@@ -184,6 +184,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lane can be ahead of pace at a lower use. A value of 0 uses no minimum.',
     apply: 'policy',
   }),
+  S('quotas', 'paceRouting', 'Route to a below-pace lane', {
+    what: 'Chooses a model of a lane that is far below its pace when you give no model. A lane is far below its pace when every live window is more than the tolerance below its expected use. The choice keeps the agent app and never overrides --kind or --model.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on uses the usage limit of a lane that is behind its pace.',
+    lower: 'Turning it off keeps the default model of the agent app.',
+    apply: 'policy',
+  }),
   S('quotas', 'quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', {
     what: 'The number of Claude usage limit probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once. A missing usage reader or login is an unknown reading and does not count as a timeout.',
     default: '2', unit: 'Timeouts', range: '1 to 10',

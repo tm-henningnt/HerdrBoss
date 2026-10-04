@@ -22,6 +22,8 @@ export const POLICY_DEFAULTS = {
   // A lane is ahead of pace only when its use is more than paceTolerancePoints above the expected use and at least paceMinUsePercent.
   paceTolerancePoints: 5,
   paceMinUsePercent: 30,
+  // Prefer a model of a lane that is far below its pace when no model is given. It never overrides --kind or --model.
+  paceRouting: true,
   handoffLeadMinutes: 180,
   autoHandover: false,
   autoHandoverPercent: 98,
@@ -184,6 +186,7 @@ export function validatePolicy(value, models) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['policy must be an object.'];
   if (!Number.isInteger(value.maxWorkers) || value.maxWorkers < 1 || value.maxWorkers > 64) errors.push('maxWorkers must be an integer from 1 to 64.');
   if (typeof value.borrowIdle !== 'boolean') errors.push('borrowIdle must be boolean.');
+  if (typeof value.paceRouting !== 'boolean') errors.push('paceRouting must be boolean.');
   if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
   if (!isObject(value.goals)) errors.push('goals must be an object.');
   else if (typeof value.goals.autoCommand !== 'boolean') errors.push('goals.autoCommand must be boolean.');
@@ -761,16 +764,20 @@ export function laneStatus(quotas, policy, now = Date.now(), { todayUse = {}, re
     const longPressure = pressured.filter(isLongQuotaWindow).sort(byPressure)[0] || null;
     const w = risk || pressure;
     if (!w) {
-      const room = liveWindows.map((window) => {
+      const rooms = liveWindows.map((window) => {
         const expected = adjustedExpectedPercent(policy, q.provider, window, now);
-        return expected == null ? null : expected - window.usedPercent;
-      }).filter(Number.isFinite);
+        return expected == null ? null : { window, expected, room: expected - window.usedPercent };
+      }).filter(Boolean);
+      const room = rooms.map((entry) => entry.room);
+      const tightestRoom = room.length ? Math.min(...room) : null;
       // A window above its expected use but inside the tolerance is on pace. The lanes line shows it.
-      const tolerated = liveWindows.map((window) => ({ window, expected: adjustedExpectedPercent(policy, q.provider, window, now) }))
-        .filter(({ window, expected }) => expected != null && window.usedPercent > expected)
-        .sort((a, b) => (b.window.usedPercent - b.expected) - (a.window.usedPercent - a.expected))[0];
-      lanes[q.provider] = { state: 'open', roomPercent: room.length ? Math.max(0, Math.min(...room)) : null, resetWindows, goals };
+      const tolerated = rooms.filter((entry) => entry.room < 0).sort((a, b) => a.room - b.room)[0];
+      lanes[q.provider] = { state: 'open', roomPercent: tightestRoom == null ? null : Math.max(0, tightestRoom), resetWindows, goals };
       if (tolerated) lanes[q.provider].onPace = { window: tolerated.window.label, usedPercent: tolerated.window.usedPercent, expectedPercent: tolerated.expected, tolerancePoints: paceTolerancePoints(policy) };
+      // Every live window below its expected use by more than the tolerance: the lane is far below its pace.
+      const below = tightestRoom != null && tightestRoom > paceTolerancePoints(policy)
+        ? rooms.slice().sort((a, b) => b.room - a.room)[0] : null;
+      if (below) lanes[q.provider].belowPace = { window: below.window.label, usedPercent: below.window.usedPercent, expectedPercent: below.expected, roomPercent: below.room, tolerancePoints: paceTolerancePoints(policy) };
       continue;
     }
     const expectedPercent = adjustedExpectedPercent(policy, q.provider, w, now);
