@@ -110,7 +110,7 @@ try {
     'worktreeRoot', 'projectRoot',
     'machine.memFreeWarnPercent',
     'quota.warnPercent', 'quota.criticalPercent',
-    'quotaPlan.burstPace', 'quotaPlan.applyThreshold', 'quotaPlan.margin', 'quotaPlan.horizon', 'quotaPlan.tolerance', 'quotaPlan.slowFactor', 'quotaPlan.planMode',
+    'quotaPlan.burstPace', 'quotaPlan.applyThreshold', 'quotaPlan.margin', 'quotaPlan.horizon', 'quotaPlan.tolerance', 'quotaPlan.holdMargin', 'quotaPlan.slowFactor', 'quotaPlan.planMode',
     'staleStatusMinutes',
     'workers.staleIdleMinutes',
     'workers.paneCloseDelayMinutes',
@@ -121,7 +121,7 @@ try {
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
-    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
+    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
     'config', 'config', 'default', 'default', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
     'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',

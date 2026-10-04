@@ -131,6 +131,60 @@ test('paced mode holds when ahead by more than the tolerance and spends when beh
   assert.equal(guidance.deviationText, 'on plan');
 });
 
+test('the saved plan state holds until the lead leaves the tolerance band', (t) => {
+  const { dir, service } = setup(t);
+  writeHistory(dir, [[0, 20]]);
+  service.replan({ provider: 'codex', quotas: quotas(20), now: T });
+  writeHistory(dir, [[0, 20], [5, 37.5], [10, 55]]);
+  const now = T + 10 * HOUR;
+  const planned = service.replan({ provider: 'codex', quotas: quotas(55), now }).plannedUsageNow;
+  const stateAt = (difference) => service.replan({ provider: 'codex', quotas: quotas(planned + difference), now }).guidance.state;
+  assert.equal(stateAt(-7), 'spend', 'start the sequence outside the hold');
+  assert.equal(stateAt(5.0), 'normal');
+  assert.equal(stateAt(5.2), 'normal', '5.0 then 5.2 does not flip the state');
+  assert.equal(stateAt(4.9), 'normal');
+  assert.equal(stateAt(6.1), 'hold', '6.1 enters the hold');
+  assert.equal(stateAt(4.1), 'hold', 'the hold stays inside the band');
+  assert.equal(stateAt(3.9), 'normal', '3.9 leaves the hold');
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'quota-plan.json'), 'utf8'));
+  assert.equal(saved.current.guidance.state, 'normal');
+});
+
+test('a skipped tick stores a state change from the moving curve', (t) => {
+  const { dir, service } = setup(t);
+  writeHistory(dir, [[0, 20]]);
+  service.replan({ provider: 'codex', quotas: quotas(20), now: T });
+  writeHistory(dir, [[0, 20], [5, 37.5], [10, 55]]);
+  const now1 = T + 10 * HOUR;
+  const planned = service.replan({ provider: 'codex', quotas: quotas(55), now: now1 }).plannedUsageNow;
+  const used = planned + 6.1;
+  assert.equal(service.replan({ provider: 'codex', quotas: quotas(used), now: now1 }).guidance.state, 'hold');
+  const plansBefore = service.read().plans.length;
+  // The same reading at a later now gives the same input digest. The plan is skipped.
+  const second = service.replan({ provider: 'codex', quotas: quotas(used), now: now1 + 3 * HOUR });
+  assert.equal(service.read().plans.length, plansBefore, 'the unchanged reading skips the plan');
+  assert.equal(second.guidance.state, 'normal', 'the moving curve leaves the hold');
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'quota-plan.json'), 'utf8'));
+  assert.equal(saved.current.guidance.state, 'normal', 'the skipped tick stored the state');
+});
+
+test('the Codex lane keeps the hold from the saved state and the hold margin', () => {
+  const plan = (state, used, planned) => ({
+    historyAvailable: true, usedPercent: used, plannedUsageNow: planned, guidance: { state }, credits: [{ id: 'a' }], plan: { credits: [] },
+  });
+  assert.equal(codexPlanGuidance(plan('normal', 55.2, 50), 5, 'paced', 1).laneState, 'on pace', 'a small lead does not enter the hold');
+  assert.equal(codexPlanGuidance(plan('normal', 56.1, 50), 5, 'paced', 1).laneState, 'hold', 'a lead past the margin enters the hold');
+  assert.equal(codexPlanGuidance(plan('hold', 54.1, 50), 5, 'paced', 1).laneState, 'hold', 'a saved hold stays inside the band');
+  assert.equal(codexPlanGuidance(plan('hold', 53.9, 50), 5, 'paced', 1).laneState, 'on pace', 'a saved hold leaves below the band');
+});
+
+test('quotaPlan.holdMargin is a settable number with a bounded range', () => {
+  assert.deepEqual(validateServiceSettings({ 'quotaPlan.holdMargin': 1 }), { 'quotaPlan.holdMargin': 1 });
+  assert.deepEqual(validateServiceSettings({ 'quotaPlan.holdMargin': 0.5 }), { 'quotaPlan.holdMargin': 0.5 });
+  assert.throws(() => validateServiceSettings({ 'quotaPlan.holdMargin': -0.1 }), /0 to 50/);
+  assert.throws(() => validateServiceSettings({ 'quotaPlan.holdMargin': 50.1 }), /0 to 50/);
+});
+
 test('the Owner case: 27 percent used, 3.5 points per hour burn, 1 planned', () => {
   const guidance = codexPlanGuidance({
     historyAvailable: true, usedPercent: 38, plannedUsageNow: 30, guidance: { state: 'hold' }, credits: [{ id: 'a' }], plan: { credits: [] },

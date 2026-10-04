@@ -62,6 +62,7 @@ test('quota plan settings share the Usage limit plan help group and documented d
     ['quotaPlan.margin', '0', '0 to 50'],
     ['quotaPlan.horizon', 'last-expiry', 'last-expiry or an ISO time'],
     ['quotaPlan.tolerance', '5', '0 to 50'],
+    ['quotaPlan.holdMargin', '1', '0 to 50'],
     ['quotaPlan.slowFactor', '0.5', '0.1 to 1'],
     ['quotaPlan.planMode', 'paced', 'paced or burst'],
   ]) {

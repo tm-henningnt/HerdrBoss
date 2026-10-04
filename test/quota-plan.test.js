@@ -48,6 +48,20 @@ test('curve guidance compares below, on, and above with a five-point tolerance',
   assert.equal(usageGuidance(plan, at(40), 44, 2).state, 'hold');
 });
 
+test('guidance enters the hold at the tolerance plus the margin and leaves below the tolerance minus the margin', () => {
+  const plan = planQuota(exactInput({ burstPace: 1 }));
+  // The curve reads 41 points at hour 40. Add the difference to that value.
+  const stateAt = (difference, previous) => usageGuidance(plan, at(40), 41 + difference, 5, { margin: 1, previous }).state;
+  assert.equal(stateAt(5.0, null), 'normal', 'the old tolerance edge no longer enters the hold');
+  assert.equal(stateAt(5.2, 'normal'), 'normal', '5.0 then 5.2 does not flip the state');
+  assert.equal(stateAt(4.9, 'normal'), 'normal');
+  assert.equal(stateAt(6.1, 'normal'), 'hold', '6.1 enters the hold');
+  assert.equal(stateAt(4.1, 'hold'), 'hold', 'the hold stays inside the band');
+  assert.equal(stateAt(3.9, 'hold'), 'normal', '3.9 leaves the hold');
+  assert.equal(stateAt(-5.0, 'normal'), 'normal', 'the spend boundary stays at minus the tolerance');
+  assert.equal(stateAt(-5.1, 'normal'), 'spend');
+});
+
 test('burst table gives totals by the last expiry and earlier credits at faster paces', () => {
   const rows = burstTable(exactInput({ horizon: at(500) }));
   assert.deepEqual(rows.map((row) => row.burstPace), [0.8, 1, 1.2, 1.5, 2]);

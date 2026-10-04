@@ -10,7 +10,7 @@ const DAY = 24 * HOUR;
 const HISTORY_DAYS = 14;
 const PLAN_HISTORY_LIMIT = 50;
 const EVENT_HISTORY_LIMIT = 250;
-const DEFAULT_SETTINGS = Object.freeze({ burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5, planMode: 'paced' });
+const DEFAULT_SETTINGS = Object.freeze({ burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, holdMargin: 1, slowFactor: 0.5, planMode: 'paced' });
 
 function time(value, label = 'time') {
   const result = typeof value === 'number' ? value : Date.parse(value);
@@ -226,7 +226,7 @@ function validSettings(settings) {
   const result = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   const ranged = [
     ['burstPace', 0.1, 10], ['applyThreshold', 50, 100], ['margin', 0, 50],
-    ['tolerance', 0, 50], ['slowFactor', 0.1, 1],
+    ['tolerance', 0, 50], ['holdMargin', 0, 50], ['slowFactor', 0.1, 1],
   ];
   for (const [key, min, max] of ranged) {
     if (typeof result[key] !== 'number' || !Number.isFinite(result[key]) || result[key] < min || result[key] > max) {
@@ -291,7 +291,7 @@ function buildInput({ provider, quotas, now, settings, state, burstPace, horizon
     credits: input.credits, historicalP90, burstPace: input.burstPace, slowBurnRate: input.slowBurnRate,
     applyThreshold: input.applyThreshold, margin: input.margin, horizon: input.horizon ?? 'last-expiry',
     announcedResets: input.announcedResets, whatIf: input.whatIf ?? null,
-    usedCredits: state.usedCredits, settings: { tolerance: settings.tolerance }, anchor,
+    usedCredits: state.usedCredits, settings: { tolerance: settings.tolerance, holdMargin: settings.holdMargin }, anchor,
   };
   const inputsDigest = createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
   return { input, inputsDigest, historicalP90, historyAvailable: readings.length > 0, availableCredits, row, window, currentTime, anchor, readings };
@@ -310,12 +310,12 @@ function addPlan(state, view) {
 const curveSource = (view) => (view.anchorCurve?.length ? { curve: view.anchorCurve } : view.plan);
 
 // Read the planned curve at the anchor, the guidance, and the projection at the recent real burn.
-function standing(view, { now, tolerance, applyThreshold, readings }) {
+function standing(view, { now, tolerance, holdMargin, previous = null, applyThreshold, readings }) {
   const source = curveSource(view);
   const burn = recentBurn(readings, { now });
   return {
     plannedUsageNow: plannedUsageAt(source, now),
-    guidance: { ...usageGuidance(source, now, view.usedPercent, tolerance), difference: view.usedPercent - plannedUsageAt(source, now) },
+    guidance: { ...usageGuidance(source, now, view.usedPercent, tolerance, { margin: holdMargin, previous }), difference: view.usedPercent - plannedUsageAt(source, now) },
     projection: projectedReach(burn, applyThreshold, view.resetsAt),
   };
 }
@@ -323,8 +323,10 @@ function standing(view, { now, tolerance, applyThreshold, readings }) {
 function calculate(options, built = buildInput(options)) {
   const existing = options.state.current;
   const settings = options.settings;
+  // The saved guidance state is the memory of the hysteresis. A reading change keeps it.
+  const previous = existing?.guidance?.state ?? null;
   if (existing?.inputsDigest === built.inputsDigest && !options.force && typeof existing.historyAvailable === 'boolean' && existing.anchorCurve) {
-    return { ...existing, now: new Date(built.currentTime).toISOString(), ...standing(existing, { now: built.currentTime, tolerance: settings.tolerance, applyThreshold: settings.applyThreshold, readings: built.readings }),
+    return { ...existing, now: new Date(built.currentTime).toISOString(), ...standing(existing, { now: built.currentTime, tolerance: settings.tolerance, holdMargin: settings.holdMargin, previous, applyThreshold: settings.applyThreshold, readings: built.readings }),
       planMode: settings.planMode, skipped: true };
   }
   const plan = planQuota(built.input);
@@ -355,7 +357,7 @@ function calculate(options, built = buildInput(options)) {
     observedResets: options.state.observedResets.filter((item) => item.provider === options.provider),
     usedCredits: options.state.usedCredits.filter((item) => item.provider === options.provider),
   };
-  return { ...view, ...standing(view, { now: built.currentTime, tolerance: settings.tolerance, applyThreshold: settings.applyThreshold, readings: built.readings }) };
+  return { ...view, ...standing(view, { now: built.currentTime, tolerance: settings.tolerance, holdMargin: settings.holdMargin, previous, applyThreshold: settings.applyThreshold, readings: built.readings }) };
 }
 
 function observeReset(state, { provider, row, window, currentTime, dataDir }) {
@@ -416,9 +418,11 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
     const built = buildInput(calculationOptions);
     const view = calculate(calculationOptions, built);
     if (save) state.anchor = built.anchor;
+    // A skipped tick keeps the plan, but the curve moves with time. Store a state change from the moving curve.
+    const guidanceChanged = (view.guidance?.state ?? null) !== (state.current?.guidance?.state ?? null);
     if (!view.skipped) addPlan(state, view);
-    else if (changedByObservation) state.current = { ...view, skipped: undefined };
-    if (save && (!view.skipped || changedByObservation || nextState)) writeState(file, state);
+    else if (changedByObservation || guidanceChanged) state.current = { ...view, skipped: undefined };
+    if (save && (!view.skipped || changedByObservation || guidanceChanged || nextState)) writeState(file, state);
     if (save) postDueCreditPrompts(messageStore, provider, built, view, currentTime);
     const summary = { ...view };
     delete summary.skipped;
@@ -455,7 +459,7 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
         now: iso(currentTime),
         history,
         planMode: normalizedSettings.planMode,
-        ...standing(current, { now: currentTime, tolerance: normalizedSettings.tolerance, applyThreshold: normalizedSettings.applyThreshold, readings: history }),
+        ...standing(current, { now: currentTime, tolerance: normalizedSettings.tolerance, holdMargin: normalizedSettings.holdMargin, previous: current.guidance?.state ?? null, applyThreshold: normalizedSettings.applyThreshold, readings: history }),
       };
     },
     expiryNotices({ now = clock() } = {}) {

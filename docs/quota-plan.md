@@ -218,11 +218,14 @@ It uses the first value before the curve starts.
 It uses the final value after the horizon.
 Do not use that final value as a forecast beyond the horizon.
 
-Call `usageGuidance(plan, time, usedPercent, tolerance)` for a comparison.
+Call `usageGuidance(plan, time, usedPercent, tolerance, options)` for a comparison.
 The default tolerance is 5 points.
+The options hold a `margin` and the `previous` state.
 Usage more than the tolerance below the curve gives `spend`.
 Usage within the tolerance gives `normal`.
-Usage more than the tolerance above the curve gives `hold`.
+Usage more than the tolerance plus the margin above the curve gives `hold`.
+A saved `hold` stays until the lead falls below the tolerance minus the margin.
+Set the margin from the `quotaPlan.holdMargin` setting.
 The threshold edges count as `normal`.
 This result is guidance only.
 
@@ -269,7 +272,8 @@ Call `planDeviationText(difference)` for `ahead of plan by N points`, `behind pl
 Fleet guidance uses the anchored comparison for Codex when quota history or a reset credit is available.
 The setting `quotaPlan.planMode` selects `paced` or `burst`.
 The default is `paced`.
-In `paced` mode the Codex lane says `hold` above the curve by more than the tolerance.
+In `paced` mode the Codex lane says `hold` above the curve by more than the tolerance plus the hold margin.
+A saved `hold` stays until the lead falls below the tolerance minus the hold margin.
 It says `on pace` above the curve by up to the tolerance.
 It says `Use now` at or below the curve.
 In `burst` mode the curve is advice only and the lane says `Use now`.
@@ -329,7 +333,7 @@ Each plan record has its time, input digest, and planned credit times.
 The service writes the file through a temporary file and rename.
 A quota tick with the same input digest skips a plan write.
 
-The `quotaPlan` settings control burst pace, application threshold, margin, horizon, guidance tolerance, slow scenario pace, and plan mode.
+The `quotaPlan` settings control burst pace, application threshold, margin, horizon, guidance tolerance, hold margin, slow scenario pace, and plan mode.
 The service supports Codex only.
 The calculation core can support other providers when a later service connects them.
 

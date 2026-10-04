@@ -919,13 +919,16 @@ function creditLabel(index) {
 }
 
 // The plan changes Codex guidance only. Keep laneStatus and worker admission rules unchanged.
-export function codexPlanGuidance(plan, tolerance = 5, planMode = 'paced') {
+export function codexPlanGuidance(plan, tolerance = 5, planMode = 'paced', holdMargin = 0) {
   if (!plan || (!plan.historyAvailable && !(plan.historicalP90 > 0) && !plan.credits?.length)
     || !Number.isFinite(plan.usedPercent) || !Number.isFinite(plan.plannedUsageNow)) return null;
   const difference = plan.usedPercent - plan.plannedUsageNow;
   const mode = planMode === 'burst' ? 'burst' : 'paced';
-  // A burst plan is advice only: the lane stays Use now. A paced plan holds when the use is ahead of the curve by more than the tolerance. Use at or below the curve is Use now.
-  const laneState = mode === 'burst' ? 'Use now' : difference > tolerance ? 'hold' : difference > 0 ? 'on pace' : 'Use now';
+  // A burst plan is advice only: the lane stays Use now. A paced plan holds when the use is ahead of the curve by more than the tolerance. The hold has hysteresis: the saved guidance state keeps it until the lead falls below the tolerance minus the margin. Use at or below the curve is Use now.
+  const enter = tolerance + holdMargin;
+  const leave = Math.max(0, tolerance - holdMargin);
+  const savedHold = plan.guidance?.state === 'hold';
+  const laneState = mode === 'burst' ? 'Use now' : difference > enter || (savedHold && difference >= leave) ? 'hold' : difference > 0 ? 'on pace' : 'Use now';
   const scheduledIndex = (plan.plan?.credits || []).findIndex((credit) => credit.applyAt);
   const scheduledCredit = scheduledIndex >= 0 ? plan.plan.credits[scheduledIndex] : null;
   return {
