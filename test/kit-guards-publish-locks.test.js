@@ -200,6 +200,17 @@ test('a read-only brief bans git stash, reset, and checkout; a normal brief omit
   assert.doesNotMatch(normalBrief, /git stash/);
 });
 
+test('the rendered worker brief carries the no-load-generator rule', () => {
+  const f = setupFixture(null);
+  f.config.briefTemplatePath = path.resolve('kit/templates/worker-brief.md');
+  const result = startWorker('loadguard', { kind: 'codex', task: 'run the changed tests', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  const brief = fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8');
+  assert.match(brief, /Do not start a load generator, a stress test, a benchmark loop, or a parallel test run beyond the test thread flag\./);
+  assert.match(brief, /Run only the changed test files\./);
+});
+
 test('worker brief shows the effective screenshot budget and project precedence', () => {
   const f = setupFixture(null);
   const template = path.join(f.root, 'brief-template.md');

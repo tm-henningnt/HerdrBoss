@@ -48,7 +48,7 @@ const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
-  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule',
+  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule', 'loadRule',
 ]);
 const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
 const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
@@ -276,7 +276,7 @@ export function renderBrief(template, slots) {
   for (const name of names) if (!BRIEF_SLOTS.has(name)) throw new Error(`Unknown brief template slot: {{${name}}}.`);
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, name) => {
     const value = slots[name];
-    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule'].includes(name) && (value === undefined || value === null || value === '')) return '';
+    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule', 'loadRule'].includes(name) && (value === undefined || value === null || value === '')) return '';
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
@@ -702,12 +702,12 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
     const opus = resourcePolicy?.opus;
     if (opus?.allowWithoutForce !== true) {
       onOpusRefused?.(model);
-      throw new Error(`${model} needs the Owner's approval. Ask the Owner, then start with --force. The Owner can allow Opus starts without --force with the setting opus.allowWithoutForce.`);
+      throw new Error(`${model} needs the Owner's approval. Ask the Owner to turn on the setting opus.allowWithoutForce.`);
     }
     const limit = Number.isInteger(opus.maxConcurrent) ? opus.maxConcurrent : 2;
     if ((runningOpus ?? 0) >= limit) {
       onOpusRefused?.(model);
-      throw new Error(`${model} is at the limit of ${limit} running Opus workers (setting opus.maxConcurrent). Wait for an Opus worker to finish, or start with --force.`);
+      throw new Error(`${model} is at the limit of ${limit} running Opus workers (setting opus.maxConcurrent). Wait for an Opus worker to finish, or raise the setting opus.maxConcurrent.`);
     }
     opusAllowed = true;
   }
@@ -755,7 +755,7 @@ function recordOpusRefusal(name, model, options, config, env, now) {
   const taskId = taskIdForEvent(options);
   appendWorkerEvent(env, {
     type: 'worker-opus-refused',
-    text: `Opus worker start refused for ${name}; --force was not set.`,
+    text: `Opus worker start refused for ${name}; see the settings opus.allowWithoutForce and opus.maxConcurrent.`,
     worker: name,
     model,
     taskId,
@@ -1487,6 +1487,7 @@ function startWorkerOnce(name, options, {
     readOnlySection: options.readOnly
       ? '## Read-only review\n\nThis task is read-only. Do not change a repository file. Do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only.'
       : '',
+    loadRule: 'Do not start a load generator, a stress test, a benchmark loop, or a parallel test run beyond the test thread flag. Run only the changed test files.',
   };
   const missingBriefDetails = [];
   if (!/{{\s*imageBudget\s*}}/.test(template)) {

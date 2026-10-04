@@ -221,3 +221,7 @@ Summary: Read-only worker briefs ban `git stash`, `git reset`, and `git checkout
 ## 260531d896e4
 Impact: useful
 Summary: Add `worker stop-own NAME --pid PID` for a Codex worker to stop its own process without a raw signal, and `worker commit NAME -m MESSAGE` for the orchestrator to commit a Codex worker change that stays in the working tree; `worker commit` refuses a secret-bearing path and every path under `.worker/` or `.orchestration/`, and it strips control characters from the message and limits it to 2000 characters; the Codex worker brief carries both rules, and `worker collect` accepts an uncommitted Codex worker.
+
+## 32b5295c1ca9
+Impact: useful
+Summary: The kit update line for a useful-only change is optional to act on now and waits for the next task boundary; a required change keeps the direct line. The Opus refusal names the setting that controls it and drops `--force`. The worker brief forbids a load generator, a stress test, a benchmark loop, and a parallel test run beyond the test thread flag.
