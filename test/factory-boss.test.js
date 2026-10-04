@@ -261,6 +261,21 @@ test('factory boss start prepares an existing Claude home without losing other k
   } finally { f.cleanup(); }
 });
 
+test('factory boss start trusts the factory work folder for a fresh Claude home', async () => {
+  const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    const state = JSON.parse(fs.readFileSync(path.join(f.root, '.claude.json'), 'utf8'));
+    for (const folder of ['/home/factory/herdr-boss', '/home/factory/work', '/home/factory/work/alpha']) {
+      assert.equal(state.projects[folder]?.hasTrustDialogAccepted, true, `the folder ${folder} is trusted`);
+    }
+    // The work folder is trusted, but it is not a project: it gets no kit files.
+    const kitChecks = f.dockerCalls.filter(({ args }) => args.includes('check') && args.includes('agents'));
+    const kitWorkdirs = kitChecks.map(({ args }) => args[args.indexOf('--workdir') + 1]);
+    assert.equal(kitWorkdirs.includes('/home/factory/work'), false);
+  } finally { f.cleanup(); }
+});
+
 test('factory login prepares fresh Codex trust and first-run notice state without touching auth', async () => {
   const f = fixture({ executeHarnessState: true, projectPaths: [{ path: '/home/factory/work/alpha' }] });
   try {

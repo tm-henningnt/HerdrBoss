@@ -4,13 +4,13 @@ import { maskLine } from './factory-host.js';
 import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
-import { ensureFactoryGitIdentity } from './factory-role.js';
+import { ensureFactoryGitIdentity, FACTORY_PROJECT_GROUP } from './factory-role.js';
 import { verifyHarnessLogin } from './factory-wizard.js';
 import { waitForAgentReady } from './kit/workers.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const BOSS_ROOT = '/home/factory/herdr-boss';
-const WORK_ROOT = '/home/factory/work';
+const WORK_ROOT = FACTORY_PROJECT_GROUP;
 const DATA_ROOT = '/home/factory/.herdr-boss';
 const LOGIN_TIMEOUT_MS = 30 * 60_000;
 const BOSS_PROMPT_MARKER = 'You are the Boss of this factory.';
@@ -315,6 +315,10 @@ async function readFactoryRoots(docker, name) {
   return roots;
 }
 
+// The Boss and its projects live in the factory checkout and under the work volume root.
+// The work root is a trusted folder too, but it is not a project, so it gets no kit files.
+function trustRoots(roots) { return [...new Set([...roots, WORK_ROOT])]; }
+
 async function prepareFactoryHarness(docker, name, harness, roots) {
   const script = `import { prepareHarnessHome } from '${BOSS_ROOT}/src/factory-harness-state.js';\nprepareHarnessHome(process.argv[1], JSON.parse(process.argv[2]));`;
   const result = await docker.run(['exec', '--user', 'factory', '--env', 'HOME=/home/factory',
@@ -451,7 +455,7 @@ export async function factoryLoginCommand(args, io) {
     const verified = await verifyHarnessLogin(docker, name, harness);
     const ok = result.code === 0 && verified;
     if (ok) {
-      await prepareFactoryHarness(docker, name, harness, await readFactoryRoots(docker, name));
+      await prepareFactoryHarness(docker, name, harness, trustRoots(await readFactoryRoots(docker, name)));
       await ensureFactoryGitIdentity(docker, name);
     }
     io.stdout.write(`${ok ? 'ok' : 'failed'}\n`);
@@ -499,7 +503,7 @@ export async function factoryBossStart(args, io) {
     return 3;
   }
   const roots = await readFactoryRoots(docker, name);
-  await prepareFactoryHarness(docker, name, harness, roots);
+  await prepareFactoryHarness(docker, name, harness, trustRoots(roots));
   await ensureFactoryGitIdentity(docker, name);
   await installFactoryKits(docker, name, roots);
   const bossPane = await ensureBossPane(docker, name, existing);
