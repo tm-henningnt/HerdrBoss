@@ -1,20 +1,16 @@
 // The Docs diagrams. The Docs page imports this module only when it shows at least one Mermaid block.
 // The module loads the vendored Mermaid build with a script element, draws each block, and keeps the
 // source fold when the library or a diagram fails. It uses no CDN and no other network call.
+import { showFallback } from './docs-fallback.js';
+
 export const VENDOR_URL = '/vendor/mermaid.min.js';
-export const ERROR_TEXT = 'The diagram could not be drawn.';
 
 let vendorPromise = null;
 let counter = 0;
 let themeBound = false;
 
-// The Mermaid theme for the current dashboard theme. A forced theme wins over the system setting.
-export function diagramTheme(doc) {
-  const forced = doc?.documentElement?.dataset?.theme;
-  if (forced === 'dark') return 'dark';
-  if (forced === 'light') return 'default';
-  return doc?.defaultView?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
-}
+// A test resets the cached load between cases.
+export function resetMermaidLoader() { vendorPromise = null; }
 
 // The colors of the dashboard, so the diagram matches the page.
 export function themeVariables(doc) {
@@ -43,21 +39,12 @@ export function loadMermaid(doc = globalThis.document, url = VENDOR_URL) {
     const script = doc.createElement('script');
     script.src = url;
     script.async = true;
-    script.addEventListener('load', () => (globalThis.mermaid ? resolve(globalThis.mermaid) : reject(new Error(ERROR_TEXT))));
-    script.addEventListener('error', () => reject(new Error(ERROR_TEXT)));
+    script.addEventListener('load', () => (globalThis.mermaid ? resolve(globalThis.mermaid) : reject(new Error('The diagram library did not load.'))));
+    script.addEventListener('error', () => reject(new Error('The diagram library did not load.')));
     (doc.head || doc.body).appendChild(script);
   });
   vendorPromise.catch(() => { vendorPromise = null; });
   return vendorPromise;
-}
-
-function showFallback(block) {
-  const view = block.querySelector('[data-mermaid-view]');
-  const error = block.querySelector('[data-mermaid-error]');
-  const fold = block.querySelector('[data-mermaid-source]');
-  if (view) { view.hidden = true; view.textContent = ''; }
-  if (error) { error.textContent = ERROR_TEXT; error.hidden = false; }
-  if (fold) fold.hidden = false;
 }
 
 async function drawBlock(block, mermaid, doc) {

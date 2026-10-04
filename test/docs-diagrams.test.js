@@ -1,10 +1,11 @@
-// The Docs diagrams. The tests cover the lazy load and the fallback without a browser.
+// The Docs diagrams. The tests cover the lazy load, the shared fallback, and the draw without a browser.
 // The browser check in the task covers the drawn diagram, the theme, and the phone width.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountDiagrams, loadMermaid, diagramTheme, themeVariables, VENDOR_URL, ERROR_TEXT } from '../public/docs-diagrams.js';
+import { mountDiagrams, loadMermaid, resetMermaidLoader, themeVariables, VENDOR_URL } from '../public/docs-diagrams.js';
+import { ERROR_TEXT, showFallback, showImportFallback } from '../public/docs-fallback.js';
 
-// A block with the elements that the module reads.
+// A block with the elements that the modules read.
 function block(source = 'flowchart TD\n a --> b') {
   const view = { hidden: true, textContent: '', innerHTML: '' };
   const error = { hidden: true, textContent: '' };
@@ -21,6 +22,11 @@ function block(source = 'flowchart TD\n a --> b') {
 }
 
 const renderer = { initialize() {}, render: async () => ({ svg: '<svg></svg>' }) };
+
+test.afterEach(() => {
+  resetMermaidLoader();
+  delete globalThis.mermaid;
+});
 
 test('a page without a diagram never loads Mermaid', async () => {
   let loads = 0;
@@ -44,7 +50,6 @@ test('loadMermaid adds one script element with the vendor URL', async () => {
   globalThis.mermaid = renderer;
   created[0].fire('load');
   assert.equal(await promise, renderer);
-  delete globalThis.mermaid;
 });
 
 test('a page with a diagram loads Mermaid and draws the block', async () => {
@@ -56,6 +61,18 @@ test('a page with a diagram loads Mermaid and draws the block', async () => {
   assert.equal(one.view.hidden, false);
   assert.equal(one.fold.hidden, true);
   assert.equal(one.error.hidden, true);
+});
+
+test('two distinct blocks load Mermaid once and draw both', async () => {
+  const first = block();
+  const second = block('flowchart LR\n x --> y');
+  let loads = 0;
+  await mountDiagrams([first, second], { load: () => { loads += 1; return Promise.resolve(renderer); } });
+  assert.equal(loads, 1);
+  assert.equal(first.view.innerHTML, '<svg></svg>');
+  assert.equal(second.view.innerHTML, '<svg></svg>');
+  assert.equal(first.fold.hidden, true);
+  assert.equal(second.fold.hidden, true);
 });
 
 test('a mounted block is not drawn a second time', async () => {
@@ -86,12 +103,24 @@ test('a failed drawing keeps the source fold and shows the error line', async ()
   assert.equal(one.view.hidden, true);
 });
 
-test('the diagram theme follows a forced theme before the system setting', () => {
-  const view = (matches) => ({ matchMedia: () => ({ matches }) });
-  assert.equal(diagramTheme({ documentElement: { dataset: { theme: 'dark' } }, defaultView: view(false) }), 'dark');
-  assert.equal(diagramTheme({ documentElement: { dataset: { theme: 'light' } }, defaultView: view(true) }), 'default');
-  assert.equal(diagramTheme({ documentElement: { dataset: {} }, defaultView: view(true) }), 'dark');
-  assert.equal(diagramTheme({ documentElement: { dataset: {} }, defaultView: view(false) }), 'default');
+test('a failed module import shows the error line next to the source fold', () => {
+  const one = block();
+  showImportFallback([one]);
+  assert.equal(one.error.hidden, false);
+  assert.equal(one.error.textContent, ERROR_TEXT);
+  assert.equal(one.fold.hidden, false);
+  assert.equal(one.view.hidden, true);
+  assert.equal(one.dataset.mermaidDrawn, '1');
+});
+
+test('the fallback hides a drawn view and shows the error line', () => {
+  const one = block();
+  one.view.hidden = false;
+  one.view.innerHTML = '<svg></svg>';
+  showFallback(one);
+  assert.equal(one.view.hidden, true);
+  assert.equal(one.view.textContent, '');
+  assert.equal(one.error.hidden, false);
 });
 
 test('the theme variables read the dashboard colors and fall back without a document', () => {

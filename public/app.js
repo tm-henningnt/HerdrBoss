@@ -5,6 +5,7 @@ import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardCo
 import { patchHtml } from './keyed.js';
 import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
 import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
+import { showImportFallback } from './docs-fallback.js';
 import { installTableHints } from './table-hint.js';
 import { orchestratorFocus, workerListHtml } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
@@ -220,7 +221,7 @@ function docsAfterRender() {
   }
   const diagrams = document.querySelectorAll('[data-mermaid]:not([data-mermaid-drawn])');
   if (!diagrams.length) return;
-  import('/docs-diagrams.js').then((mod) => mod.mountDiagrams(diagrams), () => { for (const block of diagrams) block.dataset.mermaidDrawn = '1'; });
+  import('/docs-diagrams.js').then((mod) => mod.mountDiagrams(diagrams), () => showImportFallback(diagrams));
 }
 // The Add a host page keeps its own DOM. The render gives it one empty element, so a refresh of the state never replaces it.
 // The module loads when the page shows. A render that replaces the element mounts it again.
