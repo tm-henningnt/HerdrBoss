@@ -1926,6 +1926,9 @@ export function stopOwnWorker(name, { pid = null } = {}, {
   const callerPids = new Set(callerProcessTree(processes, callerPid, callerPpid).map((item) => Number(item.pid)));
   if (callerPids.has(target)) throw new Error(`worker stop-own refuses pid ${target}: it is the caller or one of its parents.`);
   const shellPid = Number(run.shellPid);
+  if (Number.isSafeInteger(shellPid) && shellPid > 1 && target === shellPid) {
+    throw new Error(`worker stop-own refuses pid ${target}: it is the worker pane shell.`);
+  }
   const inShellTree = (() => {
     let current = targetProcess;
     const seen = new Set();
@@ -1947,12 +1950,38 @@ export function stopOwnWorker(name, { pid = null } = {}, {
   return { pid: target, command };
 }
 
+// A path that worker commit never stages, even inside the allowed scope. It names the reason, or null.
+export function commitDeniedReason(relative) {
+  const item = String(relative).replaceAll('\\', '/');
+  if (item === '.worker' || item.startsWith('.worker/')) return 'under .worker/';
+  if (item === '.orchestration' || item.startsWith('.orchestration/')) return 'under .orchestration/';
+  const name = item.split('/').pop() ?? '';
+  if (name === '.env' || name.startsWith('.env.')) return 'a dotenv file';
+  if (name.endsWith('.pem') || name.endsWith('.key')) return 'a key file';
+  if (name.startsWith('id_rsa')) return 'a private key';
+  if (/token|secret/i.test(name)) return 'a token or secret file';
+  if (name.startsWith('credentials')) return 'a credentials file';
+  if (name === 'opencode.json') return 'an OpenCode config file';
+  return null;
+}
+
+// Keep the line breaks and tabs of a commit message, strip every other control character, and limit
+// the message to 2000 characters.
+export function cleanCommitMessage(message) {
+  return String(message ?? '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 2000)
+    .trimEnd();
+}
+
 // Commit the scoped change of one worker on its own branch. The orchestrator runs this from its own
 // pane, because a Codex worker cannot write the shared Git metadata of a worktree. The command stages
-// the changed paths inside the worker scope and refuses every path outside it.
+// the changed paths inside the worker scope and refuses every path outside it, every secret-bearing
+// path, and the worker bookkeeping paths.
 export function commitWorker(name, { message = null } = {}, { config, output = console.log } = {}) {
   const { run } = readRun(config, name);
-  const text = String(message ?? '').trim();
+  const text = cleanCommitMessage(message);
   if (!text) throw new Error('worker commit needs -m MESSAGE.');
   const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
   if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
@@ -1961,7 +1990,10 @@ export function commitWorker(name, { message = null } = {}, { config, output = c
   const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/') || KIT_MANAGED_PATHS.includes(String(item));
   const extensionPaths = (Array.isArray(run.scopeExtensions) ? run.scopeExtensions : []).flatMap((extension) => Array.isArray(extension?.paths) ? extension.paths : []);
   const allowedPaths = [...new Set([...(run.allowedPaths ?? []), ...extensionPaths])];
-  const changed = gitWorkerChangedPaths(run.worktree, baseRef, run.base).filter((item) => !ownFile(item));
+  const changedAll = gitWorkerChangedPaths(run.worktree, baseRef, run.base);
+  const denied = changedAll.filter((item) => commitDeniedReason(item));
+  if (denied.length) throw new Error(`Worker ${name} changed a path that worker commit refuses to stage: ${denied.join(', ')}.`);
+  const changed = changedAll.filter((item) => !ownFile(item));
   const outOfScope = compareChangedPaths(changed, allowedPaths);
   if (outOfScope.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${outOfScope.join(', ')}.`);
   if (!changed.length) {

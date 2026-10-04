@@ -71,6 +71,22 @@ test('worker stop-own refuses the caller and its parents', (t) => {
   assert.deepEqual(killed, []);
 });
 
+test('worker stop-own refuses the worker pane shell pid', (t) => {
+  const f = setupFixture(null);
+  const run = startKind(f, 'stop-shell');
+  cleanup(t, f, run);
+  const killed = [];
+  const processes = [
+    { pid: 10, ppid: 1, command: 'zsh', cwd: run.worktree },
+    { pid: 900, ppid: 1, command: 'node', cwd: run.worktree },
+  ];
+  assert.throws(() => stopOwnWorker('stop-shell', { pid: 10 }, {
+    config: f.config, output: () => {}, listProcesses: () => processes,
+    kill: (pid, signal) => killed.push([pid, signal]), callerPid: 900, callerPpid: 1,
+  }), /worker pane shell/);
+  assert.deepEqual(killed, [], 'the worker pane shell is never signalled');
+});
+
 test('worker stop-own stops an own child and prints only the pid and command', (t) => {
   const f = setupFixture(null);
   const run = startKind(f, 'stop-child');
@@ -153,6 +169,32 @@ test('worker commit stages the worker change and commits on the worker branch', 
   assert.equal(git(run.worktree, 'branch', '--show-current').trim(), run.branch);
   assert.equal(git(run.worktree, 'status', '--porcelain', '--untracked-files=all').trim(), '');
   assert.ok(output.some((line) => /Committed .* on commit-ok/.test(line)));
+});
+
+test('worker commit refuses to stage a denied path and names it', (t) => {
+  const f = setupFixture(null);
+  const run = startKind(f, 'commit-deny');
+  cleanup(t, f, run);
+  const denied = ['src/.env', 'src/.env.local', 'src/key.pem', 'src/key.key', 'src/id_rsa', 'src/api-token.json', 'src/secret.txt', 'src/credentials.json', 'src/opencode.json', '.orchestration/runs/x.json'];
+  for (const relative of denied) writeChange(run, relative);
+  const before = git(run.worktree, 'rev-parse', 'HEAD');
+  assert.throws(() => commitWorker('commit-deny', { message: 'change' }, { config: f.config, output: () => {} }), (error) => {
+    return /refuses to stage/.test(error.message) && denied.every((relative) => error.message.includes(relative));
+  });
+  assert.equal(git(run.worktree, 'rev-parse', 'HEAD'), before, 'a denied commit changes no history');
+  assert.equal(git(run.worktree, 'status', '--porcelain', '--untracked-files=all').split('\n').filter(Boolean).length, denied.length);
+});
+
+test('worker commit strips control characters and limits the message to 2000 characters', (t) => {
+  const f = setupFixture(null);
+  const run = startKind(f, 'commit-clean');
+  cleanup(t, f, run);
+  writeChange(run, 'src/change.js');
+  commitWorker('commit-clean', { message: 'Codex\u0007 worker change' }, { config: f.config, output: () => {} });
+  assert.equal(git(run.worktree, 'log', '-1', '--pretty=%B').trim(), 'Codex worker change');
+  writeChange(run, 'src/change2.js');
+  commitWorker('commit-clean', { message: 'x'.repeat(2500) }, { config: f.config, output: () => {} });
+  assert.equal(git(run.worktree, 'log', '-1', '--pretty=%B').trim().length, 2000);
 });
 
 test('worker commit needs a message', (t) => {
