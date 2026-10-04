@@ -262,6 +262,7 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
 herdr-boss project check <slug> [--fix STEP [--start]]
+herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
 herdr-boss project paths [--json]
 ```
 
@@ -353,6 +354,22 @@ The `ci` item is present only when the project has workflow files. A project wit
 | 4 | `project check` found a missing item. |
 
 Run `project new` in a plain terminal, in the pane labeled `boss`, or in a pane labeled `orch`. A worker pane is refused before any step runs. The pane check is the check of `herdr-boss say`.
+
+### Project transfer
+
+```
+herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
+```
+
+Use `plan` to check the target factory, the kit revision, and the GitHub remote. The plan changes nothing. The remote must be reachable.
+
+Use `start` to freeze a project for transfer. It lists a dirty tree, unpushed commits, an unpushed branch, or a running worker and stops when it finds one. It refuses while the source project lead is working or waiting for input. When the checks pass, Herdr Boss locks the project on both factories. It closes an idle project lead on the source, clones the repository on the target, installs the kit, creates the project record, and starts a fresh project lead. The new lead reads `docs/orchestration/memory.md`. The command posts a decision to the source Mailbox and exits with code 3.
+
+After you answer the Mailbox item, run `switch`. It waits with code 3 until it finds a clear answer. `Accept the switch` marks the source project as transferred and unlocks both factories. `Deny the switch` removes the target project and restarts the source project lead.
+
+Use `cancel` before the switch to remove the target project and clone, close the Mailbox decision, unlock both factories, and restart the source project lead. Cancel is refused after the switch.
+
+Herdr Boss transfers the repository through GitHub. It does not copy secrets, login state, Mailbox items, review packs, or message text. Both factories write an audit record. The transfer API accepts only `POST /api/fleet/transfer` with the fleet guide credential.
 
 ### Module
 

@@ -35,6 +35,7 @@ import { createFleetReadAccess, createFleetGuideAccess } from './fleet-access.js
 import { createFleetGuidance } from './fleet-guidance.js';
 import { createFleetShares } from './fleet-shares.js';
 import { createFleetSettings } from './fleet-settings.js';
+import { createProjectTransfer } from './project-transfer.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
@@ -55,6 +56,8 @@ const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs
 const defaultDocsSite = createDocsSite({ root: path.dirname(DOCS) });
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
 const execFileAsync = promisify(execFile);
+const FLEET_GUIDE_ROUTES = ['/api/fleet/guidance', '/api/fleet/transfer'];
+export const fleetGuideRouteAllowed = (method, pathname) => method === 'POST' && FLEET_GUIDE_ROUTES.includes(pathname);
 
 async function handoffCommand(args) {
   try {
@@ -242,6 +245,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (!boss || typeof engine.promptService !== 'function') throw new Error('boss-unavailable');
       await engine.promptService(boss.id, text, { herdr, messages: [{ text, kind: 'nudge' }] });
     } });
+  const projectTransfer = createProjectTransfer({ role: 'target', dataDir: DATA_DIR,
+    privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, settings: fleetSettings.read,
+    registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, config: cfg });
   const fleetShares = createFleetShares({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR,
     settings: fleetSettings.read, receiver: fleetGuidance, registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, now: fleet.now });
   // The tool check runs beside the first tick. Its warnings are logged when they arrive.
@@ -389,10 +395,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         return send(res, 403, { error: 'The fleetRead credential permits only GET summary and health.' });
       }
       const fleetGuide = fleetGuideAccess.check(req);
-      if (fleetGuide.present && (!fleetGuide.authorized || req.method !== 'POST' || p !== '/api/fleet/guidance')) {
-        return send(res, 403, { error: 'The fleetGuide credential permits only POST guidance.' });
+      if (fleetGuide.present && (!fleetGuide.authorized || !fleetGuideRouteAllowed(req.method, p))) {
+        return send(res, 403, { error: 'The fleetGuide credential permits only POST guidance or transfer.' });
       }
-      if (p === '/api/fleet/guidance' && !fleetGuide.authorized) return send(res, 401, { error: 'A fleetGuide credential is required.' });
+      if (fleetGuideRouteAllowed(req.method, p) && !fleetGuide.authorized) return send(res, 401, { error: 'A fleetGuide credential is required.' });
       // The raw route runs before allowedRequest(): a request from the opaque origin of the frame is cross-site and has no cookie.
       // The route checks the host list and the token itself.
       // It tests the path as sent: the URL parser would fold a `..` part away and hide it from the route.
@@ -475,6 +481,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (p === '/api/fleet/guidance' && req.method === 'POST') {
         try { return send(res, 200, await fleetGuidance.accept(await jsonBody(req))); }
         catch (error) { return send(res, error.status || 400, { error: error.status ? error.message : 'The guidance could not be accepted.' }); }
+      }
+      if (p === '/api/fleet/transfer' && req.method === 'POST') {
+        const result = await projectTransfer.handle(await jsonBody(req));
+        return send(res, result.status, result.body);
       }
       if (p === '/api/fleet/shares' && req.method === 'GET') {
         try { return send(res, 200, fleetShares.view()); }

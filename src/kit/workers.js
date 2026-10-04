@@ -22,6 +22,7 @@ import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from
 import { activeLaunchRecords, detectLaunchBlock, isPaneStartupBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
+import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1256,6 +1257,7 @@ function startWorkerOnce(name, options, {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
   const caller = verifyCallerPane(env, herdr, options.orch);
+  if (config?.slug) assertProjectTransferAllowsWorker(config.slug, { dataDir: env.HERDR_BOSS_DIR || DATA_DIR });
   const herdrCommands = workerBriefHerdrCommands(env);
   const modelConfig = models ?? JSON.parse(fs.readFileSync(new URL('../../kit/models.json', import.meta.url), 'utf8'));
   const rulesPath = rulesFile ?? path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');

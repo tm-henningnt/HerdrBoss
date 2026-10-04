@@ -491,6 +491,12 @@ async function main() {
         : projects.map(({ slug, path: projectPath }) => `${slug}=${projectPath}`).join(' '));
       return;
     }
+    if (args[0] === 'transfer') {
+      const { projectTransferCommand } = await import('./project-transfer.js');
+      const code = await projectTransferCommand(args.slice(1), { env: process.env, dataDir: DATA_DIR });
+      if (code) process.exitCode = code;
+      return;
+    }
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });

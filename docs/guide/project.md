@@ -72,3 +72,21 @@ What you do:
 What you should see: the agent app is on in **Harnesses**. The project lead can now start workers with it. A running worker keeps its agent app.
 
 If you do not see it: run `herdr-boss harness check` again. Read each missing entry in [harness-setup.md](../harness-setup.md). Codex cannot start a browser in its sandbox: give browser tasks to another agent app.
+
+## Transfer a project to another factory
+
+Transfer one project to another factory through its GitHub repository. Both factories must use the same kit revision.
+
+What you do:
+
+1. Check the transfer plan: `herdr-boss project transfer plan <slug> --to <factory>`.
+2. Start the transfer: `herdr-boss project transfer start <slug> --to <factory>`.
+3. If the command lists a dirty tree, unpushed commits, an unpushed branch, or a running worker, resolve each item and run `start` again. The source project lead must be idle. Let it finish if it is working or waiting for input.
+4. Open the Mailbox on the source factory. Accept or deny the switch.
+5. Run `herdr-boss project transfer switch <slug> --to <factory>` to apply your answer.
+
+What you should see: the target factory clones the project, installs the kit, and starts a fresh project lead. The lead reads `docs/orchestration/memory.md`. After you accept, the source marks the project as transferred and both factories remove the transfer lock.
+
+To stop before the switch, run `herdr-boss project transfer cancel <slug> --to <factory>`. This removes the target project and clone. It closes the Mailbox decision, unlocks both factories, and restarts the source project lead. You cannot cancel after the switch.
+
+Herdr Boss transfers the repository through GitHub. Secrets, logins, Mailbox items, review packs, and message text stay at the source. Transfer does not copy them.
