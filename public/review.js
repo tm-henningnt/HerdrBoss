@@ -242,6 +242,15 @@ export function summaryHeaderHtml(pack, esc) {
   return `<div class="review-summary-row" role="group" aria-label="Pack summary">${cells.join('')}</div>`;
 }
 
+// The judge-pass note of a pack: the text of the independent judge pass that ran, or a plain note when it is missing.
+// The publish command stores the text on the manifest of the version.
+export function judgePassNoteHtml(pack, esc) {
+  const pass = pack.manifest?.judgePass;
+  return pass
+    ? `<small class="review-judge-note">Judge pass: ${esc(pass)}</small>`
+    : '<small class="review-judge-note review-judge-none">no judge pass</small>';
+}
+
 // ---------- Section list ----------
 
 function itemRowHtml(pack, item, ui, esc) {
@@ -561,7 +570,7 @@ export function packPageHtml(pack, ui, h) {
   }
 
   const tag = pack.manifest?.session ? `<p class="review-head-session">Session ${esc(pack.manifest.session)}${pack.manifest.round ? ` · round ${esc(pack.manifest.round)}` : ''}</p>` : '';
-  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${tag}${summaryHeaderHtml(pack, esc)}${progressBarHtml(counts, { esc, legend: true })}</div>`;
+  const head = `<div class="review-head"><p class="review-head-line"><span><b class="num">${answeredOf(counts)}</b> of ${esc(plural(counts.items, 'item'))} answered · <b class="num">${viewed}</b> viewed</span>${open ? '' : doneChip(pack, esc)}</p>${tag}${summaryHeaderHtml(pack, esc)}${judgePassNoteHtml(pack, esc)}${progressBarHtml(counts, { esc, legend: true })}</div>`;
   const side = ui.sidebar || {};
   const viewport = side.viewport || 1280;
   const collapsed = side.collapsed === true;

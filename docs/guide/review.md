@@ -8,7 +8,7 @@ A *review pack* is a set of *items* with evidence. A project lead or a planning 
 2. Find the pack in the folder **Open**.
 3. Select the pack.
 
-You should see the sections of the pack. Each row shows a type icon, a title, and a state. A bar at the top shows how many items are accepted, denied, or still open. The label `N of M items answered` shows your progress.
+You should see the sections of the pack. Each row shows a type icon, a title, and a state. A bar at the top shows how many items are accepted, denied, or still open. The label `N of M items answered` shows your progress. A small note under the summary shows the judge pass that ran on the pack, or `no judge pass`.
 
 If the list is empty, no pack waits. Ask the project lead in the *Chat* if you expect one.
 

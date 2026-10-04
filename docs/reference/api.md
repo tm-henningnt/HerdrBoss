@@ -34,6 +34,8 @@ Set `verifiedBy` to `agent-verified` when an agent ran the interaction check, or
 
 A pack can set `designPass` to an object with a non-empty reviewer name of up to 200 characters, a result (`passed`, `issues`, or `not-run`), and an optional note of up to 2000 characters. `review check` warns when the design pass is missing or has result `not-run`.
 
+A pack can carry `judgePass`, one line of 1 to 200 characters that names the independent judge pass that ran on the pack, for example the model and the date. The `review publish` command sets it from `--judge-pass TEXT` and stores it on the manifest of the version. The pack page shows the text, or `no judge pass` when the field is absent.
+
 The pack response includes a server-computed `summary` object. It has `total`, `agentVerified`, `needsYou`, `unmarked`, and `designPass`. The first four fields are counts. `designPass` is the result string, or `not-run` when no design pass is set. Each returned item also includes its `description`, `steps`, `expected`, `link`, `verifiedBy`, and `evidence` fields when set.
 
 ### Access

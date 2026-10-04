@@ -15,11 +15,12 @@ import { PLANNER_LABEL, activeSessionForPane, setRound } from './planner-session
 export const EXIT = Object.freeze({ ok: 0, refused: 1, invalid: 2, missing: 3 });
 
 const NOTE_MAX = 1000;
+const JUDGE_MAX = 200;
 const STATES = ['open', 'done', 'all'];
 
 const USAGE = {
   check: 'Usage: review check FOLDER',
-  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run] [--carry-open]',
+  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--judge-pass TEXT] [--round N] [--dry-run] [--carry-open]',
   import: 'Usage: review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]',
   result: 'Usage: review result [SLUG] PACK [--version N] [--format json|md]. PACK can also be SLUG/PACK. --json means --format json.',
   delete: 'Usage: review delete [SLUG] PACK. PACK can also be SLUG/PACK.',
@@ -256,7 +257,7 @@ function previousSubmittedPack(slug, session, dir, excludePack) {
 }
 
 // Validate, then publish or dry-run one pack folder. `imported` allows the page item type.
-function publishFolder({ slug, folder, caller, note, dryRun, imported = false, round: wantedRound, carryOpen = false }, ctx) {
+function publishFolder({ slug, folder, caller, note, judgePass, warnJudgePass = false, dryRun, imported = false, round: wantedRound, carryOpen = false }, ctx) {
   const { out, err, dir, now, deps } = ctx;
   const validation = validatePack(folder, { allowPage: imported });
   printWarnings(validation, ctx);
@@ -266,6 +267,9 @@ function publishFolder({ slug, folder, caller, note, dryRun, imported = false, r
     return EXIT.invalid;
   }
   const { manifest, totals } = validation;
+  // The judge pass is publish metadata, not folder content. It rides on the stored manifest of this version.
+  if (judgePass !== undefined) manifest.judgePass = judgePass;
+  if (warnJudgePass && judgePass === undefined) out(`Warning: The pack has no judge pass. Pass --judge-pass TEXT with the model and the date of the independent judge pass that ran.`);
   let carried = { count: 0, fileSources: {}, answers: {} };
   let previous = null;
   if (carryOpen) {
@@ -353,17 +357,24 @@ function checkCommand(args, ctx) {
 }
 
 function publishCommand(args, ctx) {
-  const { flags, positional } = parse(args, { values: ['--note', '--round'], switches: ['--dry-run', '--carry-open'] }, USAGE.publish);
+  const { flags, positional } = parse(args, { values: ['--note', '--judge-pass', '--round'], switches: ['--dry-run', '--carry-open'] }, USAGE.publish);
   if (positional.length !== 2) throw new ReviewCliError(USAGE.publish);
   const slug = checkSlug(positional[0], USAGE.publish);
   const caller = verifyReviewCaller('review publish', slug, ctx, { planner: true });
+  let judgePass;
+  if (flags['--judge-pass'] !== undefined) {
+    judgePass = flags['--judge-pass'];
+    if (typeof judgePass !== 'string' || !judgePass.trim() || judgePass.length > JUDGE_MAX || /[\r\n]/.test(judgePass)) throw new ReviewCliError(`The judge pass must be one line of 1 to ${JUDGE_MAX} characters. ${USAGE.publish}`);
+    refuseSecret(judgePass, 'judge pass');
+    judgePass = judgePass.trim();
+  }
   let round;
   if (flags['--round'] !== undefined) {
     if (!/^[1-9]\d{0,3}$/.test(flags['--round'])) throw new ReviewCliError(`The round must be a whole number from 1 to 9999. ${USAGE.publish}`);
     if (!caller.planner) throw new ReviewCliError('--round is only for a pane with a planner session.');
     round = Number(flags['--round']);
   }
-  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], dryRun: !!flags['--dry-run'], round, carryOpen: !!flags['--carry-open'] }, ctx);
+  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], judgePass, warnJudgePass: true, dryRun: !!flags['--dry-run'], round, carryOpen: !!flags['--carry-open'] }, ctx);
 }
 
 function reopenCommand(args, ctx) {

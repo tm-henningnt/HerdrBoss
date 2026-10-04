@@ -63,6 +63,20 @@ test('the summary header escapes the reviewer name and the note', () => {
   assert.match(html, /&lt;img/);
 });
 
+test('the pack page shows the judge pass text or the no-judge-pass note', () => {
+  const pass = 'claude-opus-5-5, 2026-10-04';
+  const withPass = page(pack({ manifest: { designPass: { reviewer: 'R', result: 'passed' }, judgePass: pass, sections: [] } }));
+  assert.match(withPass, /class="review-judge-note"/);
+  assert.match(withPass, /claude-opus-5-5, 2026-10-04/);
+  assert.doesNotMatch(withPass, /no judge pass/);
+  const without = page(pack({ manifest: { designPass: { reviewer: 'R', result: 'passed' }, sections: [] } }));
+  assert.match(without, /review-judge-none/);
+  assert.match(without, /no judge pass/);
+  const escaped = page(pack({ manifest: { designPass: { reviewer: 'R', result: 'passed' }, judgePass: EVIL, sections: [] } }));
+  assert.doesNotMatch(escaped, /<img/);
+  assert.match(escaped, /&lt;img/);
+});
+
 test('a badge has an icon, a word, and an accessible name, and an unmarked item has a neutral badge', () => {
   const agent = verifiedBadgeHtml({ verifiedBy: 'agent-verified' }, esc);
   assert.match(agent, /review-badge-agent/);
@@ -223,7 +237,7 @@ test('the page wires the filter, the evidence viewer, and the hidden-item skip',
 
 test('the Reviews help and the user guide describe the header, the badges, the evidence, and the filter', () => {
   assert.match(app, /Needs you<\/b> filter/);
-  for (const text of ['summary header', 'agent-verified', 'needs-you', 'Needs you', 'design pass']) assert.ok(guide.includes(text), text);
+  for (const text of ['summary header', 'agent-verified', 'needs-you', 'Needs you', 'design pass', 'judge pass']) assert.ok(guide.includes(text), text);
 });
 
 test('RV3b fix 1: the phone rules outrank the base rules by selector', () => {
