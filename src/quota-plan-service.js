@@ -418,9 +418,11 @@ export function createQuotaPlanService({ dataDir = DATA_DIR, settings = DEFAULT_
     const built = buildInput(calculationOptions);
     const view = calculate(calculationOptions, built);
     if (save) state.anchor = built.anchor;
+    // A skipped tick keeps the plan, but the curve moves with time. Store a state change from the moving curve.
+    const guidanceChanged = (view.guidance?.state ?? null) !== (state.current?.guidance?.state ?? null);
     if (!view.skipped) addPlan(state, view);
-    else if (changedByObservation) state.current = { ...view, skipped: undefined };
-    if (save && (!view.skipped || changedByObservation || nextState)) writeState(file, state);
+    else if (changedByObservation || guidanceChanged) state.current = { ...view, skipped: undefined };
+    if (save && (!view.skipped || changedByObservation || guidanceChanged || nextState)) writeState(file, state);
     if (save) postDueCreditPrompts(messageStore, provider, built, view, currentTime);
     const summary = { ...view };
     delete summary.skipped;

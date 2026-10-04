@@ -150,6 +150,24 @@ test('the saved plan state holds until the lead leaves the tolerance band', (t) 
   assert.equal(saved.current.guidance.state, 'normal');
 });
 
+test('a skipped tick stores a state change from the moving curve', (t) => {
+  const { dir, service } = setup(t);
+  writeHistory(dir, [[0, 20]]);
+  service.replan({ provider: 'codex', quotas: quotas(20), now: T });
+  writeHistory(dir, [[0, 20], [5, 37.5], [10, 55]]);
+  const now1 = T + 10 * HOUR;
+  const planned = service.replan({ provider: 'codex', quotas: quotas(55), now: now1 }).plannedUsageNow;
+  const used = planned + 6.1;
+  assert.equal(service.replan({ provider: 'codex', quotas: quotas(used), now: now1 }).guidance.state, 'hold');
+  const plansBefore = service.read().plans.length;
+  // The same reading at a later now gives the same input digest. The plan is skipped.
+  const second = service.replan({ provider: 'codex', quotas: quotas(used), now: now1 + 3 * HOUR });
+  assert.equal(service.read().plans.length, plansBefore, 'the unchanged reading skips the plan');
+  assert.equal(second.guidance.state, 'normal', 'the moving curve leaves the hold');
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'quota-plan.json'), 'utf8'));
+  assert.equal(saved.current.guidance.state, 'normal', 'the skipped tick stored the state');
+});
+
 test('the Codex lane keeps the hold from the saved state and the hold margin', () => {
   const plan = (state, used, planned) => ({
     historyAvailable: true, usedPercent: used, plannedUsageNow: planned, guidance: { state }, credits: [{ id: 'a' }], plan: { credits: [] },

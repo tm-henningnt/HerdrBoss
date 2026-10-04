@@ -425,10 +425,10 @@ export function usageGuidance(plan, at, usedPercent, tolerance = 5, { margin = 0
   const difference = usedPercent - plannedPercent;
   const enter = tolerance + margin;
   const leave = Math.max(0, tolerance - margin);
-  // A saved hold stays until the lead falls below the leave value. A lead below the spend boundary is a spend.
+  // A saved hold stays until the lead falls below the leave value. The spend boundary stays at minus the tolerance.
   const state = difference > enter ? 'hold'
     : previous === 'hold' && difference >= leave ? 'hold'
-      : difference < -enter ? 'spend' : 'normal';
+      : difference < -tolerance ? 'spend' : 'normal';
   return { plannedPercent, difference, state };
 }
 

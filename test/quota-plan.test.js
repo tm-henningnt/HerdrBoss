@@ -58,6 +58,8 @@ test('guidance enters the hold at the tolerance plus the margin and leaves below
   assert.equal(stateAt(6.1, 'normal'), 'hold', '6.1 enters the hold');
   assert.equal(stateAt(4.1, 'hold'), 'hold', 'the hold stays inside the band');
   assert.equal(stateAt(3.9, 'hold'), 'normal', '3.9 leaves the hold');
+  assert.equal(stateAt(-5.0, 'normal'), 'normal', 'the spend boundary stays at minus the tolerance');
+  assert.equal(stateAt(-5.1, 'normal'), 'spend');
 });
 
 test('burst table gives totals by the last expiry and earlier credits at faster paces', () => {
