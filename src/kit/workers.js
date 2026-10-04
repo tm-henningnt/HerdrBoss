@@ -47,7 +47,7 @@ const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
-  'kindHeaderNote', 'kindWaitNote', 'portInstruction',
+  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection',
 ]);
 const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
 const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
@@ -275,7 +275,7 @@ export function renderBrief(template, slots) {
   for (const name of names) if (!BRIEF_SLOTS.has(name)) throw new Error(`Unknown brief template slot: {{${name}}}.`);
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, name) => {
     const value = slots[name];
-    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction'].includes(name) && (value === undefined || value === null || value === '')) return '';
+    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection'].includes(name) && (value === undefined || value === null || value === '')) return '';
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
@@ -1485,6 +1485,9 @@ function startWorkerOnce(name, options, {
     threadLimit: config.testThreadsFlag
       ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
       : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
+    readOnlySection: options.readOnly
+      ? '## Read-only review\n\nThis task is read-only. Do not change a repository file. Do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only.'
+      : '',
   };
   const missingBriefDetails = [];
   if (!/{{\s*imageBudget\s*}}/.test(template)) {

@@ -205,3 +205,7 @@ Summary: Add `worker collect --accept-scope FILE[,FILE] --reason TEXT`, which pa
 ## 5eff27364fa1
 Impact: useful
 Summary: List each project's accepted evidence tiers in worker briefs and collect refusals.
+
+## caac14d2ce06
+Impact: useful
+Summary: Ban `git stash`, `git reset`, and `git checkout` of any path or branch in read-only worker briefs and review task rules; read-only workers use `git show`, `git diff`, and `git log` only.
