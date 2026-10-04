@@ -140,7 +140,7 @@ const DEFAULTS = {
   // Minimum seconds before the same alert is pushed again.
   alertCooldownSeconds: 6 * 3600,
   quota: { warnPercent: 90, criticalPercent: 98 },
-  quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, slowFactor: 0.5, planMode: 'paced' },
+  quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, holdMargin: 1, slowFactor: 0.5, planMode: 'paced' },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
   // Optional legacy shared browsers. Only alert about explicitly configured entries.
   sharedBrowsers: [],
@@ -183,6 +183,7 @@ const SERVICE_SETTINGS = [
   ['Quota plan', 'quotaPlan.margin'],
   ['Quota plan', 'quotaPlan.horizon'],
   ['Quota plan', 'quotaPlan.tolerance'],
+  ['Quota plan', 'quotaPlan.holdMargin'],
   ['Quota plan', 'quotaPlan.slowFactor'],
   ['Quota plan', 'quotaPlan.planMode'],
   ['Status', 'staleStatusMinutes'],
@@ -437,6 +438,7 @@ const SERVICE_SETTING_DECIMALS = new Map([
   ['quotaPlan.burstPace', [0.1, 10]],
   ['quotaPlan.margin', [0, 50]],
   ['quotaPlan.tolerance', [0, 50]],
+  ['quotaPlan.holdMargin', [0, 50]],
   ['quotaPlan.slowFactor', [0.1, 1]],
 ]);
 const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode']);

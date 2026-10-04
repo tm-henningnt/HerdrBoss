@@ -837,6 +837,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower tolerance makes the lane say hold after a smaller gap.',
     apply: 'service',
   }),
+  S('quota-plan', 'quotaPlan.holdMargin', 'Hold margin', {
+    what: 'The points that the hold state adds to the plan guidance tolerance, and subtracts from it to leave the hold.',
+    default: '1', unit: 'Percentage points', range: '0 to 50',
+    raise: 'A higher margin makes the hold enter later and leave later.',
+    lower: 'A lower margin makes the hold follow the tolerance more closely.',
+    apply: 'service',
+  }),
   S('quota-plan', 'quotaPlan.planMode', 'Plan mode', {
     what: 'How the planned curve guides the Codex lane. Paced holds the lane when use is ahead of the curve by more than the tolerance. Burst gives the curve as advice only and keeps the lane at Use now.',
     default: 'paced', unit: 'Mode', range: 'paced or burst',

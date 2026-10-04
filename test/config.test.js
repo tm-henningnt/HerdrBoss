@@ -89,6 +89,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     'quotaPlan.margin': 0,
     'quotaPlan.horizon': 'last-expiry',
     'quotaPlan.tolerance': 5,
+    'quotaPlan.holdMargin': 1,
     'quotaPlan.slowFactor': 0.5,
     'quotaPlan.planMode': 'paced',
   };
@@ -102,6 +103,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     ['quotaPlan.applyThreshold', 50], ['quotaPlan.applyThreshold', 100],
     ['quotaPlan.margin', 0], ['quotaPlan.margin', 50],
     ['quotaPlan.tolerance', 0], ['quotaPlan.tolerance', 50],
+    ['quotaPlan.holdMargin', 0], ['quotaPlan.holdMargin', 50],
     ['quotaPlan.slowFactor', 0.1], ['quotaPlan.slowFactor', 1],
     ['quotaPlan.horizon', 'last-expiry'], ['quotaPlan.horizon', '2032-04-01T00:00:00.000Z'],
     ['quotaPlan.planMode', 'paced'], ['quotaPlan.planMode', 'burst'],
@@ -111,6 +113,7 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
     ['quotaPlan.applyThreshold', 49], ['quotaPlan.applyThreshold', 100.1],
     ['quotaPlan.margin', -0.1], ['quotaPlan.margin', 50.1],
     ['quotaPlan.tolerance', -0.1], ['quotaPlan.tolerance', 50.1],
+    ['quotaPlan.holdMargin', -0.1], ['quotaPlan.holdMargin', 50.1],
     ['quotaPlan.slowFactor', 0.09], ['quotaPlan.slowFactor', 1.01],
     ['quotaPlan.horizon', 'tomorrow'], ['quotaPlan.horizon', '2032-04-01'], ['quotaPlan.planMode', 'fast'],
   ]) assertRejectedSetting(t, key, value);

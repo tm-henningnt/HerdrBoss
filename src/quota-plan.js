@@ -415,12 +415,21 @@ export function plannedUsageAt(plan, at) {
 }
 
 // The plan gives guidance only. It cannot refuse a worker start.
-export function usageGuidance(plan, at, usedPercent, tolerance = 5) {
+// The hold state has hysteresis. It enters at the tolerance plus the margin and leaves below the tolerance minus the margin.
+// The caller passes the last state in `previous`. Read the `quotaPlan.holdMargin` setting for the margin.
+export function usageGuidance(plan, at, usedPercent, tolerance = 5, { margin = 0, previous = null } = {}) {
   number(usedPercent, 'usedPercent', 0, 100);
   number(tolerance, 'tolerance', 0, 100);
+  number(margin, 'margin', 0, 100);
   const plannedPercent = plannedUsageAt(plan, at);
   const difference = usedPercent - plannedPercent;
-  return { plannedPercent, difference, state: difference > tolerance ? 'hold' : difference < -tolerance ? 'spend' : 'normal' };
+  const enter = tolerance + margin;
+  const leave = Math.max(0, tolerance - margin);
+  // A saved hold stays until the lead falls below the leave value. A lead below the spend boundary is a spend.
+  const state = difference > enter ? 'hold'
+    : previous === 'hold' && difference >= leave ? 'hold'
+      : difference < -enter ? 'spend' : 'normal';
+  return { plannedPercent, difference, state };
 }
 
 // Compare burst settings through the last available credit expiry.
