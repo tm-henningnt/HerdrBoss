@@ -164,6 +164,8 @@ Do not run the full suite or the project's verify script unless this brief names
 
 Limit the test runner to two worker threads. Other projects use the same machine. {{threadLimit}}
 
+{{loadRule}}
+
 Record each command and its exact result.
 
 If a gate is unavailable, report the reason and leave it unverified.

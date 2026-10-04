@@ -55,7 +55,13 @@ test('kitBehindLine counts required and useful changes since the installed revis
   const line = kitBehindLine(gitRepo(t, { kit: '111111111111' }), { changesFile: file, current: '555555555555' });
   assert.equal(line, 'Kit update: this project kit is behind by 1 required and 2 useful change(s). Run herdr-boss kit update.');
   const usefulOnly = kitBehindLine(gitRepo(t, { kit: '333333333333' }), { changesFile: file, current: '555555555555' });
-  assert.equal(usefulOnly, 'Kit update: this project kit is behind by 1 useful change(s). Run herdr-boss kit update.');
+  assert.equal(usefulOnly, 'Kit update: this project kit is behind by 1 useful change(s). The update is optional to act on now. Run herdr-boss kit update at the next task boundary.');
+  // A required change keeps the direct wording. A useful-only change is optional and waits for a task boundary.
+  assert.doesNotMatch(line, /optional/);
+  assert.match(line, /\. Run herdr-boss kit update\.$/);
+  assert.match(usefulOnly, /optional to act on now/);
+  assert.match(usefulOnly, /at the next task boundary/);
+  assert.match(usefulOnly, /herdr-boss kit update/);
 });
 
 test('worker start prints the kit line when the project kit is behind', (t) => {

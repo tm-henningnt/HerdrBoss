@@ -170,7 +170,8 @@ export function installedKitRevision(root) {
 }
 
 // One line that says the project kit is behind for a required or useful change, or null. A project
-// with no installed kit, a current kit, or only changes with impact none gives null.
+// with no installed kit, a current kit, or only changes with impact none gives null. A required change
+// gives the direct line. A useful-only change gives an optional line that waits for a task boundary.
 export function kitBehindLine(root, { changesFile = CHANGES_FILE, current = kitRevision() } = {}) {
   const installed = installedKitRevision(root);
   if (!installed || installed === current) return null;
@@ -179,7 +180,10 @@ export function kitBehindLine(root, { changesFile = CHANGES_FILE, current = kitR
   const useful = changes.filter((change) => change.impact === 'useful').length;
   if (!required && !useful) return null;
   const parts = [required && `${required} required`, useful && `${useful} useful`].filter(Boolean).join(' and ');
-  return `Kit update: this project kit is behind by ${parts} change(s). Run herdr-boss kit update.`;
+  const lead = `Kit update: this project kit is behind by ${parts} change(s).`;
+  // A required change needs action. A useful-only change is optional and waits for a task boundary.
+  if (required) return `${lead} Run herdr-boss kit update.`;
+  return `${lead} The update is optional to act on now. Run herdr-boss kit update at the next task boundary.`;
 }
 
 // The number of required changes after a kit revision, up to the current revision. The result is
