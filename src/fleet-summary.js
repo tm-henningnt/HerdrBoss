@@ -20,12 +20,15 @@ const isoTime = (value) => {
 };
 const harnessState = (value) => value === 'logged-in' ? 'ok' : ['expired', 'none'].includes(value) ? 'expired' : 'unknown';
 function pendingLogins(logins, mailbox, name) {
-  return logins.filter((row) => ['claude', 'codex'].includes(row.harness) && row.login !== 'ok').map((row) => {
+  return logins.filter((row) => ['claude', 'codex'].includes(row.harness) && row.login !== 'ok').flatMap((row) => {
     const prefix = `The ${row.harness} login is not ready. Run \`herdr-boss factory login ${name} ${row.harness}\` at an Owner terminal`;
     const matches = mailbox.filter((item) => item?.from === 'boss' && item?.to === 'owner' && item?.thread === 'boss'
       && item?.kind === 'reply' && item?.action === 'answer' && typeof item?.text === 'string' && item.text.startsWith(prefix));
-    const since = matches.map((item) => isoTime(item.at)).filter(Boolean).sort()[0] ?? null;
-    return { step: `login-${row.harness}`, since };
+    const open = matches.filter((item) => !item.closedAt && item.closedBy !== 'boss');
+    if (row.login === 'unknown' && open.length === 0) return [];
+    const current = open.length ? open : matches;
+    const since = current.map((item) => isoTime(item.at)).filter(Boolean).sort()[0] ?? null;
+    return [{ step: `login-${row.harness}`, since }];
   });
 }
 

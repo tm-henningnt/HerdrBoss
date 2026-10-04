@@ -78,6 +78,13 @@ Do not treat a valid example as authorization.
 **Sources:** Tickets [16](../tickets/factories/16-fleet-summary.md) and
 [17](../tickets/factories/17-head-office-fleet-page.md).
 
+**Producer notes:** The login check uses the harness verifier and recorded login-state file metadata.
+Pending login waits come from current matching Mailbox items.
+Disk readings come from the machine snapshot.
+The clock offset comes from the latest machine sample.
+The summary uses the supplied factory kind.
+The head office supplies the registered kind for a remote factory.
+
 | Field | Content |
 |---|---|
 | `factoryId`, `name` | Stable factory identity and display name. |

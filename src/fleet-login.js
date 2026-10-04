@@ -5,8 +5,8 @@ import { execFile } from 'node:child_process';
 import { harnessLoginVerifierArgs } from './factory-wizard.js';
 
 const LOGIN_STATE_FILES = Object.freeze({
-  claude: '.claude.json',
-  codex: '.codex/config.toml',
+  claude: '.claude/.credentials.json',
+  codex: '.codex/auth.json',
 });
 const LOGIN_CHECKS = Object.freeze(['claude', 'codex']);
 const LOGIN_TIMEOUT_MS = 10000;
@@ -27,6 +27,11 @@ export function loginStateFileStatus(home, harness) {
   if (!inside || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
     return { status: 'unknown', reason: 'login state path is outside HOME' };
   }
+  let homeStat;
+  try { homeStat = fs.lstatSync(root); }
+  catch { return { status: 'unknown', reason: 'HOME path cannot be checked' }; }
+  if (homeStat.isSymbolicLink()) return { status: 'unknown', reason: 'HOME path contains a symlink' };
+  if (!homeStat.isDirectory()) return { status: 'unknown', reason: 'HOME path is not a directory' };
   let current = root;
   const parts = inside.split(path.sep);
   for (let index = 0; index < parts.length; index += 1) {
@@ -56,9 +61,15 @@ export async function readFleetLogins({ home = process.env.HOME || os.homedir(),
   const rows = [];
   for (const harness of LOGIN_CHECKS) {
     const at = checkedAt(now);
+    const state = loginStateFileStatus(home, harness);
+    if (state.status === 'unknown') {
+      rows.push({ harness, login: 'unknown', checkedAt: at, reason: state.reason });
+      continue;
+    }
     let passed = false;
     try {
-      const result = await run(harness, harnessLoginVerifierArgs(harness), {
+      const [command, ...args] = harnessLoginVerifierArgs(harness);
+      const result = await run(command, args, {
         env: { ...process.env, HOME: home }, timeout: LOGIN_TIMEOUT_MS,
       });
       passed = result?.code === 0;
@@ -67,7 +78,6 @@ export async function readFleetLogins({ home = process.env.HOME || os.homedir(),
       rows.push({ harness, login: 'logged-in', checkedAt: at });
       continue;
     }
-    const state = loginStateFileStatus(home, harness);
     if (state.status === 'present') rows.push({ harness, login: 'expired', checkedAt: at });
     else if (state.status === 'missing') rows.push({ harness, login: 'none', checkedAt: at });
     else rows.push({ harness, login: 'unknown', checkedAt: at, reason: state.reason });

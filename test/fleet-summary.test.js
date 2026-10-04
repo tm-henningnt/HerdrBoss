@@ -172,9 +172,22 @@ test('the fleet summary emits sourced optional fields and keeps unknown readings
     logins: [{ harness: 'codex', login: 'none', checkedAt: '2026-10-02T09:59:31Z' }] });
   assert.deepEqual(withoutWaitMail.pending, [{ step: 'login-codex', since: null }]);
 
+  const activeLoginWait = { ...mailbox.find((item) => item.id === 'login-wait') };
+  delete activeLoginWait.closedAt;
   const unknownWithWait = buildFleetSummary({ settings, state: {}, health, now,
-    logins: [{ harness: 'claude', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [mailbox.find((item) => item.id === 'login-wait')] });
+    logins: [{ harness: 'claude', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [activeLoginWait] });
   assert.deepEqual(unknownWithWait.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
+
+  const unknownWithoutWait = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'codex', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }] });
+  assert.deepEqual(unknownWithoutWait.pending, []);
+
+  const repeatedExpiry = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [
+      { ...mailbox.find((item) => item.id === 'login-wait'), at: '2026-09-28T09:00:00Z' },
+      { ...activeLoginWait, id: 'login-wait-current', at: '2026-10-02T09:58:00Z' },
+    ] });
+  assert.deepEqual(repeatedExpiry.pending, [{ step: 'login-claude', since: '2026-10-02T09:58:00Z' }]);
 
   const lowDisk = buildFleetSummary({ settings, state: { machine: { diskFreePercent: 4 } }, health, now });
   assert.ok(lowDisk.alerts.some((alert) => alert.code === 'machine-disk' && alert.severity === 'error'));
