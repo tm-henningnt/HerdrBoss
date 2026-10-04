@@ -1859,7 +1859,7 @@ export class Engine extends EventEmitter {
     for (const provider of QUOTA_PROVIDERS) {
       if (skipped.includes(provider)) continue;
       const row = result.quotas.find((quota) => quota.provider === provider);
-      if (row && !row.error) this.quotaTimeoutIndexes[provider] = 0;
+      if (row && (!row.error || row.unavailable)) this.quotaTimeoutIndexes[provider] = 0;
       else this.quotaTimeoutIndexes[provider] = Math.min((this.quotaTimeoutIndexes[provider] || 0) + 1, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS[provider].length - 1);
     }
     const claude = result.quotas.find((quota) => quota.provider === 'claude');
@@ -1869,7 +1869,8 @@ export class Engine extends EventEmitter {
       const policy = result.probePolicy || POLICY_DEFAULTS.quotaProbe;
       this.claudeProbe.nextAt = this.claudeProbe.timeouts >= policy.backoffAfterTimeouts ? result.at + policy.backoffMinutes * 60000 : 0;
     }
-    if (claude && !claude.error) delete this.memory.claudeQuotaProbeFailure;
+    // A missing reader or login is unknown, not a failure: it never starts the Claude failure warning.
+    if (claude && (!claude.error || claude.unavailable)) delete this.memory.claudeQuotaProbeFailure;
     else this.memory.claudeQuotaProbeFailure ||= { startedAt: new Date(result.at).toISOString() };
     recordQuotaSnapshot(this.quotas, new Date(result.at).toISOString());
     try {

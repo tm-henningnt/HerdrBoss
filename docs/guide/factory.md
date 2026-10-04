@@ -120,6 +120,8 @@ What you do:
 
 What you should see: each login prints `ok`. The Boss starts in a pane labeled `boss`. The command never starts a second Boss. Both commands first prepare the first-run state of the agent app in the factory, so no setup dialog waits for a key. If a dialog still shows, the error names the dialog and the pane.
 
+The container has no CodexBar, because CodexBar does not exist on Linux. The usage limit of each agent app therefore shows as unknown, with the reason `no usage reader in this factory`. Herdr Boss does not treat this as a failure. It sends no Boss warning, and it backs off no provider.
+
 The factory Boss starts projects with `herdr-boss project new <slug>`. In a factory, the command needs no `--group` or `--path`. It creates the project in `/home/factory/work`. It marks the folder as trusted for the agent app, so the orchestrator starts without a trust dialog. The command also sets the Git identity `Herdr Factory <factory@localhost.invalid>` for the factory user. It keeps an identity that already exists.
 
 If you do not see it: the command exits with code 3 and adds one Mailbox item when a login is missing. Sign in, then run `factory boss start <name> --resume`.

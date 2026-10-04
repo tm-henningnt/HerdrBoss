@@ -107,6 +107,6 @@ What you do:
 2. Run `herdr-boss doctor`. Read the line for CodexBar. It is optional.
 3. Work without the reading, or use the agent app limits that the app itself shows.
 
-What you should see: the usage limit shows as unknown. Everything else works.
+What you should see: the usage limit shows as unknown, with the reason `no usage reader in this factory`. Herdr Boss does not treat this as a failure. It sends no Boss warning and takes no back-off. Everything else works.
 
 If it does not work: the Linux usage reader is open work. [linux-usage-reader.md](../ideas/linux-usage-reader.md) lists the options.

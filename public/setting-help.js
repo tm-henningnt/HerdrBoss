@@ -185,7 +185,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('quotas', 'quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', {
-    what: 'The number of Claude usage limit probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once.',
+    what: 'The number of Claude usage limit probe timeouts in a row after which Herdr Boss probes Claude at the back-off interval. A good reading resets the count. A timed-out probe is not retried at once. A missing usage reader or login is an unknown reading and does not count as a timeout.',
     default: '2', unit: 'Timeouts', range: '1 to 10',
     raise: 'A higher value keeps the normal probe interval for more timeouts.',
     lower: 'A lower value starts the back-off sooner.',

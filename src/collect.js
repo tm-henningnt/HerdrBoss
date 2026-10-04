@@ -230,6 +230,17 @@ export function codexbarError(err, timeoutMs = DEFAULT_QUOTA_TIMEOUT_MS, provide
   return `${name} failed: ${err?.message || err}`;
 }
 
+// A missing usage reader or login makes the reading unknown. The probe did not fail, so this never warns the Boss,
+// backs off the provider, or counts as failed quota data. A container factory has no CodexBar on Linux.
+const MISSING_READER = /\bENOENT\b|command not found|not found on this machine/i;
+const MISSING_LOGIN = /not logged in|not authenticated|no (?:credentials|login)\b|login (?:required|expired|is missing)|sign in\b/i;
+export function quotaUnavailableReason(value) {
+  const text = String(value?.message || value || '');
+  if (MISSING_READER.test(text)) return 'no usage reader in this factory';
+  if (MISSING_LOGIN.test(text)) return 'no login for this harness in this factory';
+  return null;
+}
+
 function partialRows(err) {
   if (err?.killed || err?.signal || !Number.isInteger(err?.code)) return null;
   try {
@@ -306,19 +317,26 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
     const finishedAt = Number(now());
     const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
     const killedPidState = ['exited', 'alive', 'unknown'].includes(failure?.killedPidState) ? failure.killedPidState : null;
+    const rowErrorText = row?.error ? (typeof row.error === 'string' ? row.error : row.error.message || '') : '';
+    const unavailable = failure ? quotaUnavailableReason(failure) : quotaUnavailableReason(rowErrorText);
     writeQuotaProbeHistory({
       at: new Date(finishedAt).toISOString(), provider,
-      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome: quotaProbeOutcome(row, failure),
+      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome: unavailable ? 'unavailable' : quotaProbeOutcome(row, failure),
       endedStep: quotaProbeEndedStep(row, failure),
       killedPid, killedPidState,
       killSignal: ['SIGTERM', 'SIGKILL'].includes(failure?.signal) ? failure.signal : null,
     }, historyFile);
     if (failure) {
-      result.push({ provider, error: codexbarError(failure, timeoutMs, provider) });
+      result.push(unavailable
+        ? { provider, unavailable: true, reason: unavailable, error: unavailable }
+        : { provider, error: codexbarError(failure, timeoutMs, provider) });
       continue;
     }
     if (row.error) {
-      result.push({ provider, error: typeof row.error === 'string' ? row.error : row.error.message || `${provider} quota probe failed` });
+      const text = rowErrorText || `${provider} quota probe failed`;
+      result.push(unavailable
+        ? { provider, unavailable: true, reason: unavailable, error: unavailable }
+        : { provider, error: text });
       continue;
     }
     const r = row;
@@ -393,7 +411,9 @@ export function keepStaleRows(quotas, previous, previousAt, now = Date.now()) {
     const since = old.stale ? Date.parse(old.staleSince) : Date.parse(old.observedAt) || Date.parse(old.updatedAt) || previousAt;
     if (!Number.isFinite(since)) return q;
     const { stale, staleSince, error, ...data } = old;
-    return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error };
+    // An unavailable reader keeps its marker, so the row shows unknown and not a failed probe.
+    return { ...data, stale: true, staleSince: new Date(since).toISOString(), error: q.error,
+      ...(q.unavailable ? { unavailable: true, ...(q.reason ? { reason: q.reason } : {}) } : {}) };
   });
   for (const old of oldRows) {
     if (seen.has(old.provider)) continue;
