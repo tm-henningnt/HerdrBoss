@@ -1,4 +1,5 @@
 // Turns a snapshot into alerts and bulletin advice. Pure functions, no side effects.
+import { createHash } from 'node:crypto';
 import { dashboardUrl } from './config.js';
 import { aheadOfQuotaPace, formatPacingGoalEnd, goalSummary, hasQuotaData, machineLimits, pacingGoal, pacingGoalEnd, POLICY_DEFAULTS, claudePaceHoldText, planPercent, quotaPlanLaneText, unmeteredClosedParts, unmeteredSummary, useNowLanes } from './control.js';
 import { projectionText } from './quota-plan.js';
@@ -11,6 +12,9 @@ import { mismatchText, NO_WORKER_MINUTES, projectStatusFreshness, taskMismatches
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const STALE_STATUS_NOTICE_AFTER_MINUTES = NO_WORKER_MINUTES;
 export const STALE_STATUS_NOTICE_INTERVAL_MINUTES = 60;
+// The published text fields that must change at each publish. See staleTextStatuses().
+export const STALE_TEXT_FIELDS = ['phase', 'summary'];
+export const STALE_TEXT_DEFAULT_MINUTES = 360;
 const MINUTE_MS = 60000;
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
 
@@ -182,6 +186,64 @@ function staleStatusAlerts(snap, now) {
   return alerts;
 }
 
+const textHash = (text) => createHash('sha1').update(text).digest('hex');
+
+// The published text fields that stayed the same. A field whose text is older than staleTextMinutes is
+// stale text. prior holds the previous result: { slug: { field: { hash, since } } }. A field whose text
+// changes starts a new period at the change time. A republish with the same text keeps the same period.
+// A paused project is skipped. The state is kept in the notice memory of the data directory.
+export function staleTextStatuses(snap, cfg, now = Date.now(), prior = {}) {
+  const state = {};
+  for (const project of snap.projects || []) {
+    if (!project?.slug) continue;
+    const control = snap.control?.projects?.[project.slug];
+    if (project.status === 'paused' || (control?.effectiveMode ?? control?.mode) === 'paused') continue;
+    const before = prior?.[project.slug] || {};
+    const fields = {};
+    for (const field of STALE_TEXT_FIELDS) {
+      const text = typeof project[field] === 'string' ? project[field].trim() : '';
+      if (!text) continue;
+      const hash = textHash(text);
+      const earlier = before[field];
+      const same = earlier?.hash === hash && Number.isFinite(earlier.since);
+      fields[field] = { hash, since: same ? earlier.since : now };
+    }
+    if (Object.keys(fields).length) state[project.slug] = fields;
+  }
+  return state;
+}
+
+// One notice for each stale period of the published text. Fields whose text changed at the same time
+// share one notice. The key holds the field names and the period start, so the deliver gate sends one
+// notice for one period. The notice names only the fields whose text did not change.
+export function staleTextAlerts(snap, cfg, now = Date.now(), state = {}) {
+  const limitMs = (Number.isFinite(cfg?.staleTextMinutes) ? cfg.staleTextMinutes : STALE_TEXT_DEFAULT_MINUTES) * MINUTE_MS;
+  const alerts = [];
+  for (const project of snap.projects || []) {
+    const fields = state[project.slug];
+    if (!fields) continue;
+    const groups = new Map();
+    for (const field of STALE_TEXT_FIELDS) {
+      const entry = fields[field];
+      if (!entry || now - entry.since < limitMs) continue;
+      if (!groups.has(entry.since)) groups.set(entry.since, []);
+      groups.get(entry.since).push(field);
+    }
+    const control = snap.control?.projects?.[project.slug];
+    const workspace = control?.workspace || project.workspace || null;
+    for (const [since, names] of groups) {
+      const label = names.map((field) => `\`${field}\``).join(' and ');
+      alerts.push({
+        key: `status:text:${project.slug}:${names.join('+')}:${since}`,
+        severity: 'info', once: true, scope: workspace,
+        title: `${project.slug} published text is stale`,
+        text: `The published ${label} text did not change for ${fmtDuration(Math.floor((now - since) / 1000))}. Rewrite it at the next publish: herdr-boss publish ${project.slug} <file>.`,
+      });
+    }
+  }
+  return alerts;
+}
+
 // alert: { key, severity: info|warn|critical, scope: 'all' | <workspace id> | 'user', title, text }
 // One step of the swap warning. It needs 3 samples in a row at or above the warn percent, each with at least
 // swapMinUsedGB in use. A raised warning clears when swap is 5 points below the warn percent, or below the GB floor.
@@ -207,6 +269,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null, 
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
   alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy));
   alerts.push(...staleStatusAlerts(snap, now));
+  alerts.push(...staleTextAlerts(snap, cfg, now, snap.staleText || {}));
 
   const orphanedPairs = new Set();
   const workspaceLabels = new Map((snap.herdr?.workspaces || []).map((workspace) => [workspace.id, workspace.label]));

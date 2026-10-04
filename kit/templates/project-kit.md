@@ -52,6 +52,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
 - Publish project status through Herdr Boss. Do not build a separate project dashboard.
 - Publish the status with `herdr-boss publish <slug> <file> --sync` at each task boundary. The option sets each card state from git, workers and issues before it installs the status, and prints how many cards changed.
+- Rewrite `phase` and `summary` at each publish. Remove an Owner wait from them when no Mailbox item is open. A wait is real only for a task with `waitingOn: owner` or `mailboxId` that is not done, or an open Mailbox item for the project.
+- Herdr Boss sends one stale text notice when `phase` or `summary` keeps the same text for `staleTextMinutes` (default 360 minutes).
 - Set `waitingOn: owner` only for the escalation categories.
 - Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.
 - Use `blockedBy` for waits on other tasks.

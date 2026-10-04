@@ -112,6 +112,7 @@ try {
     'quota.warnPercent', 'quota.criticalPercent',
     'quotaPlan.burstPace', 'quotaPlan.applyThreshold', 'quotaPlan.margin', 'quotaPlan.horizon', 'quotaPlan.tolerance', 'quotaPlan.holdMargin', 'quotaPlan.slowFactor', 'quotaPlan.planMode',
     'staleStatusMinutes',
+    'staleTextMinutes',
     'workers.staleIdleMinutes',
     'workers.paneCloseDelayMinutes',
     'workers.uncollectedNoticeMinutes',
@@ -123,7 +124,7 @@ try {
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
-    'config', 'config', 'default', 'default', 'default', 'config', 'config', 'default',
+    'config', 'default', 'config', 'default', 'default', 'default', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
     'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',
   ]);

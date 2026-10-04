@@ -1,7 +1,7 @@
 import { fleetView, fleetMailbox, fleetSettingsFromForm, fleetSharesFromForm } from './fleet.js';
 import { HOST_GUIDE_PATH } from './host-guide-view.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
-import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText } from './board.js';
+import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText, waitsForOwner } from './board.js';
 import { patchHtml } from './keyed.js';
 import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
 import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
@@ -1233,6 +1233,7 @@ function settingsView(s) {
     'quotaPlan.holdMargin': [0, 50],
     'quotaPlan.slowFactor': [0.1, 1],
     staleStatusMinutes: [5, 1440],
+    staleTextMinutes: [5, 10080],
     'workers.staleIdleMinutes': [5, 1440],
     'workers.paneCloseDelayMinutes': [0, 60],
     'workers.uncollectedNoticeMinutes': [1, 1440],
@@ -1888,7 +1889,7 @@ function projectSelector(s, selected) {
     const mode = l?.effectiveMode === 'paused' ? 'Paused' : l?.idle ? 'Idle' : l ? 'Active' : 'Published';
     const name = p?.project || l?.label || slug;
     const color = allocationColor(s, slug);
-    const decisions = (p?.tasks || []).filter((t) => !isDone(t) && t.waitingOn === 'owner').length;
+    const decisions = (p?.tasks || []).filter(waitsForOwner).length;
     return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''} ${color ? `has-allocation ${allocationActivity(l)}` : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''} ${color ? `style="--allocation-color:${color}"` : ''}>
       <div class="proj-head"><b>${esc(name)}</b><span class="tag">${esc(mode)}</span></div>
       <div class="project-selector-meta"><span>${esc(p?.status || p?.phase || 'No status published')}</span><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
@@ -1958,7 +1959,7 @@ function fleetBlock(s) {
 
 // The total of open Owner waits across projects, with a link to each project group.
 function decisionSummary(s) {
-  const rows = (s.projects || []).map((p) => ({ slug: p.slug, label: p.project || p.slug, count: (p.tasks || []).filter((t) => !isDone(t) && t.waitingOn === 'owner').length })).filter((r) => r.count > 0);
+  const rows = (s.projects || []).map((p) => ({ slug: p.slug, label: p.project || p.slug, count: (p.tasks || []).filter(waitsForOwner).length })).filter((r) => r.count > 0);
   if (!rows.length) return '';
   const total = rows.reduce((n, r) => n + r.count, 0);
   return `<div class="panel decisions-summary"><strong>Needs your decision <span class="num">${total}</span></strong><span>${rows.map((r) => `<a href="/projects/${esc(r.slug)}#decisions">${esc(r.label)} ${r.count}</a>`).join(' · ')}</span></div>`;
@@ -5866,7 +5867,7 @@ function waitText(t, m) {
 
 // Open work that waits on an Owner decision. Each entry links to its Mailbox conversation.
 function decisionsBlock(p, m, slug) {
-  const items = m.tasks.filter((t) => !isDone(t) && t.waitingOn === 'owner');
+  const items = m.tasks.filter(waitsForOwner);
   if (!items.length) return '';
   const body = `<div class="decision-list">${items.map((t) => {
     const mail = t.mailboxId
@@ -6323,7 +6324,7 @@ function projectNowModel(p, { workspace, panes = [], ready = [], since = {}, now
     return { id: x.id, name: x.name || x.agent, kind: x.agent, status: x.status || 'unknown', title: x.title || '', task: (x.name && open.find((t) => workerName(t) === x.name)) || null, seconds: start ? Math.round((now - start) / 1000) : null };
   });
   return {
-    decisions: open.filter((t) => t.waitingOn === 'owner'),
+    decisions: open.filter(waitsForOwner),
     orch: orch ? { pane: orch.id, kind: orch.agent, status: orch.status || 'unknown' } : null,
     workers,
     review: open.filter((t) => state(t) === 'review'),
@@ -6476,14 +6477,14 @@ const HELP = {
     <p><b>Current Owner goal</b> shows the durable direction set by the Owner. Keep it in every status publication until the Owner changes or clears it.</p>
     <p>The bar above the cards shows the applied share and the effective slots of each project, in card order. Its colors match the top edge of each card. An idle project is faded. A paused project is faded and striped.</p>
     <h3>Progress and frontier</h3><p><b>Current frontier</b> is open work with no open blocker. <b>Next</b> waits only on the current frontier. The project lead can set both itself.</p>
-    <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the project lead set <code>mailboxId</code>. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
+    <h3>Needs your decision</h3><p>Open work that waits on you. Each item shows its ID, title, and ask, and links to its Mailbox conversation when the project lead set <code>mailboxId</code>. A task with <code>mailboxId</code> and a task with <code>waitingOn: owner</code> both count. The phase and summary text never counts. A task that waits on other tasks shows <b>waiting on #ID</b>. A task that waits on the Boss or an external party names it and shows the ask.</p>
     <h3>Board</h3><p>The board has up to six columns in the order of the flow. <b>Blocked</b> holds a task that waits on another task, the Owner, the Boss, or an external item. <b>Ready</b> holds a task whose dependencies are all done. <b>Doing</b> holds a task with a live worker. <b>Stuck</b> holds a Doing task with no live worker and no commit for 3 hours. The column shows only while a task is stuck. The card shows the reason and the time of the last activity. <b>Review</b> holds a task whose worker finished or was collected and whose branch is not merged. The card source says <b>finished, not collected</b> when the worker wrote its report and no collect is recorded. A task whose branch is merged shows in Done with the source <b>merged</b>. <b>Done</b> shows the last 10 done tasks. Select <b>Show all N done</b> to see the rest.</p>
     <p>Each card shows the task ID, the title, what the task waits on, and its worker. A Doing card shows the worker, the model, the elapsed time, and the source, for example <b>live from worker NAME</b>. The state comes from the worker records, so it does not wait for a publish. Ready sorts by priority: the critical path first, then the group order, then the published order. A Blocked card always shows a reason. When the status names no blocker, the card says so. The <b>Board</b> page shows the tasks of all projects, and its card links open this page with the task selected.</p>
     <p><b>Unplanned work</b> cards in Doing show live workers that have no task in the published status. A <b>No worker</b> badge marks a Doing task with no live worker for 30 minutes.</p>
     <p>The service computes the state of each card from facts: a commit on the base branch that names the task ID, then the worker records, then the issue tracker. The API fields are <code>computedState</code>, <code>publishedState</code>, and <code>source</code>. A card diverges when its computed state differs from its published state. <code>boardDiverged</code> counts the diverged cards of the project. A Doing card with no live worker and no commit for 3 hours is stuck. <code>stuck</code> holds the reason and the age. The service never writes the status file.</p>
     <p>Each card with a fact shows an <b>auto</b> badge and the fact: the short commit ID, the worker name, or the issue number. A card that diverges shows <b>published: doing, computed: done, merged abc1234 3 hours ago</b>. A line above the board counts the cards that differ from git and names their IDs. The board counts and columns use the computed state. When a project has a divergence for more than 30 minutes, Herdr Boss sends the project lead one line in the info digest, at most once in each 2-hour interval, and none while a worker runs and the project lead had no turn since the last line. After 3 hours, it sends the Boss one notice. Run <code>herdr-boss publish SLUG FILE --sync</code> to set the card states from the facts before the publish.</p>
     <p>A <b>stale</b> mark with its reason shows when the published status does not match the workers or is too old. The project lead clears it with a new publish.</p>
-    <h3>Live status</h3><p><b>status published N min ago</b> shows the age of the project status. It is amber when the server gives <code>statusStale.level</code> the value <code>warn</code>. The phase and summary lines show the age of their data. The sync line compares working agents with Doing cards. It is amber when <code>sync.inSync</code> is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.</p>
+    <h3>Live status</h3><p><b>status published N min ago</b> shows the age of the project status. It is amber when the server gives <code>statusStale.level</code> the value <code>warn</code>. The phase and summary lines show the age of their data. When one of them keeps the same text for <b>Stale text minutes</b>, the project lead gets one stale text notice that names the unchanged fields. The sync line compares working agents with Doing cards. It is amber when <code>sync.inSync</code> is false. The page refreshes from live state events. It keeps the scroll position, focus, and open Board column.</p>
     <h3>Select a task</h3><p>Select a card title to select the task. The card gets a ring, and the graph shows the task and its dependency chain; the other tasks fade. Select a graph box to select its task and go to its card. On a Blocked card, select a blocker ID to go to that task. Select the selected task again to clear the selection. A refresh keeps the selection and the scroll position.</p>
     <h3>Dependencies</h3><p>The graph uses the same states and colors as the board. Each box names its state. Columns show the order. An arrow runs from a blocker to the work that waits on it. A task without links sits in the first column, after the linked tasks. <b>Open work only</b> shows the open tasks and the done tasks that block them directly. Clear it to show all tasks.</p>
     <p>The orange line is the critical path: the longest chain of open tasks to the next milestone. The next milestone is the first group with open work. Its boxes say <b>path</b>, and its cards say <b>critical path</b>.</p>

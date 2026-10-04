@@ -214,6 +214,28 @@ test('fleetFilter filters by project, by who the task waits on or who works on i
   assert.deepEqual(fleetWho(items), { kinds: ['claude', 'codex'], models: ['model-a', 'model-b'] });
 });
 
+test('the board counts a task that waits for the Owner from a Mailbox link or waitingOn, never from the published text', async () => {
+  const { fleetItems, fleetFilter, waitsForOwner } = await import('../public/board.js');
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const projects = [
+    { slug: 'north', project: 'North', phase: 'Waiting for the Owner', summary: 'Waiting for the Owner.', tasks: [
+      { id: 'N1', title: 'Linked wait', status: 'blocked', mailboxId: 'm1' },
+      { id: 'N2', title: 'Named wait', status: 'blocked', waitingOn: 'owner', ask: 'Which one?' },
+      { id: 'N3', title: 'Done wait', status: 'done', state: 'done', waitingOn: 'owner', ask: 'Old', updated: new Date(now - 60000).toISOString() },
+      { id: 'N4', title: 'Plain work', status: 'todo' },
+    ] },
+  ];
+  const items = fleetItems(projects, { now });
+  const ids = (list) => list.map((i) => i.task.id).sort();
+  assert.deepEqual(ids(fleetFilter(items, { who: 'owner' })), ['N1', 'N2'], 'a Mailbox link or waitingOn owner counts; a done task does not');
+  assert.equal(waitsForOwner({ status: 'todo', mailboxId: 'm1' }), true);
+  assert.equal(waitsForOwner({ status: 'todo', waitingOn: 'owner' }), true);
+  assert.equal(waitsForOwner({ status: 'done', mailboxId: 'm1' }), false);
+  assert.equal(waitsForOwner({ status: 'done', waitingOn: 'owner' }), false);
+  assert.equal(waitsForOwner({ status: 'todo' }), false);
+  assert.equal(waitsForOwner({ status: 'todo', mailboxId: '   ' }), false);
+});
+
 test('a blockedBy that is not an array, and a title that is not a string, break no board function', async () => {
   const { graphDepths, fleetItems, fleetFilter, blockerIds } = await import('../public/board.js');
   const tasks = [

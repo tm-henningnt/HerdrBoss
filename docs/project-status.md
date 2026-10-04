@@ -50,10 +50,10 @@ Only `project` is required. Omit the fields that you do not use.
 |---|---|---|
 | `project` | string | The display name. Required. |
 | `workspace` | string | The Herdr workspace ID or label. The project page then shows the live agents of that workspace. |
-| `summary` | string | One sentence. |
+| `summary` | string | One sentence. Rewrite it at each publish. Remove an Owner wait from it when no Mailbox item is open. |
 | `goal` | string | Optional durable Owner direction. Use a non-empty string of at most 1000 characters. Each status publication must keep the current value until the Owner changes or clears it. Omit the field to clear it. The next H26 handover slice will include this value in the successor record and startup prompt. |
 | `status` | string | Free text, for example `on-track`, `at-risk`, `blocked`, `done`. |
-| `phase` | string | The current phase. When `phases` contains this value, the page shows a phase bar. |
+| `phase` | string | The current phase. Rewrite it at each publish. Remove an Owner wait from it when no Mailbox item is open. When `phases` contains this value, the page shows a phase bar. |
 | `phases` | string[] | All phases in order. |
 | `tasks[].id` | string | A short ID, for example an issue number. |
 | `tasks[].title` | string | Required for each task. |
@@ -117,6 +117,12 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 The project data holds `doneCount`. The server does not compute a progress total. The client adds `doneCount` to the number of done tasks and to the number of all tasks.
 
 Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as external: the graph notes it on the task and does not draw it. Links in `links[]`, `tasks[].url`, and `groups[].refs[].url` must start with `http://` or `https://`.
+
+## The published text
+
+The published `phase` and `summary` are free text for the Owner. Rewrite them at every publish, so they describe the current work. Remove an Owner wait from them as soon as the wait ends. A wait is real only when a task has `waitingOn: owner` or a `mailboxId` and is not done, or when an open Mailbox item exists for the project. Herdr Boss never reads the words of `phase` or `summary` as an Owner wait.
+
+Herdr Boss keeps the hash and the first time of the `phase` text and of the `summary` text for each project in its notice memory. When one text keeps the same value for `staleTextMinutes` (default 360 minutes), it sends one notice to the project lead of that project. The notice names the unchanged fields. The project lead changes the text at its next publish. A field that changes starts a new period.
 
 Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`. Clear `waitingOn` and `ask`, or finish the task, when the Owner has answered in any place. Then publish the status. Removing the task does not close the item. The publish closes the Mailbox item of `mailboxId` with the note `resolved by the project`. Only a publish for the same project closes its items.
 

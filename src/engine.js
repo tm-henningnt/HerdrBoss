@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS } from './collect.js';
-import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses } from './rules.js';
+import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
@@ -1299,6 +1299,9 @@ export class Engine extends EventEmitter {
       snap.projects = applyTaskState(snap.projects, snap.taskWorkers, {
         stale: snap.staleStatus, gitCounts: this.readGitCounts(now), boardFacts: this.readBoardFacts(now), herdr: snap.herdr, control: snap.control, now,
       });
+      // Stale published text: a phase or summary that stays the same across publishes. The state lives with the other notice memory.
+      snap.staleText = staleTextStatuses(snap, this.cfg, now, this.memory.staleText);
+      this.memory.staleText = snap.staleText;
       this.memory.lastOrchestrators ||= {};
       for (const p of Object.values(control.projects)) if (p.orch?.kind) this.memory.lastOrchestrators[p.workspace] = { pane: p.orch.pane, kind: p.orch.kind, project: p.slug };
       for (const pane of herdr?.panes || []) if (pane.label === 'boss' && pane.agent) this.memory.lastOrchestrators[pane.workspace] = { pane: pane.id, kind: pane.agent, project: 'Boss', label: 'Boss', boss: true };

@@ -654,6 +654,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value gives the stale notice sooner.',
     apply: 'service',
   }),
+  S('service', 'staleTextMinutes', 'Stale text minutes', {
+    what: 'The time that a published phase or summary can keep the same text before the project lead gets a stale text notice. The project lead must rewrite the text at each publish.',
+    default: '360', unit: 'Minutes', range: '5 to 10080',
+    raise: 'A higher value sends the stale text notice later.',
+    lower: 'A lower value sends the stale text notice sooner.',
+    apply: 'service',
+  }),
   S('service', 'workers.staleIdleMinutes', 'Stale idle worker minutes', {
     what: 'The idle time after which Herdr Boss reports a worker as stale. The wait command uses it as its stall time.',
     default: '120', unit: 'Minutes', range: '5 to 1440',

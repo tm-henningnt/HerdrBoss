@@ -225,3 +225,7 @@ Summary: Add `worker stop-own NAME --pid PID` for a Codex worker to stop its own
 ## 32b5295c1ca9
 Impact: useful
 Summary: The kit update line for a useful-only change is optional to act on now and waits for the next task boundary; a required change keeps the direct line. The Opus refusal names the setting that controls it and drops `--force`. The worker brief forbids a load generator, a stress test, a benchmark loop, and a parallel test run beyond the test thread flag.
+
+## e90c411a41ac
+Impact: useful
+Summary: Add the status review step: rewrite the published phase and summary at each publish and remove an Owner wait when no Mailbox item is open; Herdr Boss sends one stale text notice when a field keeps the same text for staleTextMinutes (default 360).

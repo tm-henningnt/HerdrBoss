@@ -20,6 +20,18 @@ Read this file when you record a worker run, check the ledger, or decide which e
 - Check ledger records with `herdr-boss ledger check`. Add `--runs` to find run records with no ledger entry; run it before a handover and before you publish status.
 - Treat the ledger as operational telemetry, not acceptance evidence.
 
+## Status review
+
+Do this review before each `herdr-boss publish`:
+
+- Read the current `phase` and `summary` in the status file.
+- Rewrite both fields for the current work. Do not keep the previous text when the work moved on.
+- Name an Owner wait only when it is real: a task with `waitingOn: owner` or `mailboxId` that is not done, or an open Mailbox item for the project.
+- Remove an Owner wait from `phase` and `summary` when no Mailbox item is open.
+- Check that each open Owner wait has a Mailbox item, and set `mailboxId` to its id.
+
+Herdr Boss keeps the hash and the first time of the `phase` text and of the `summary` text for each project. When a text keeps the same value for `staleTextMinutes` (default 360 minutes), Herdr Boss sends you one stale text notice that names the fields that did not change. Rewrite those fields at the next publish. A field that changes starts a new period.
+
 ## Evidence tiers
 
 - Use the evidence tiers configured by the project. Set them in `evidenceTiers` in `.herdr-boss.json`; the kit rejects every other tier.
