@@ -33,6 +33,8 @@ Each section is a fold with its title, its state chip, and its count of answered
 
 The summary header is one compact row at the top of a pack page. It shows the item total, the agent-verified count, and the needs-you count. It shows the unmarked count only when that count is above 0. It also shows the design pass result (`passed`, `issues`, or `not-run`) with the reviewer name and the note. The row wraps on a phone. A pack without `verifiedBy` marks and without a design pass shows no row.
 
+Under the summary row, a small note shows the judge pass that ran on the pack. It shows the text of the `judgePass` field of the manifest, or `no judge pass` when the pack has none.
+
 Each item row and each item view shows a badge. The badge has an icon and a word: `agent-verified`, `needs-you`, or `unmarked`. The column of the sections shows the icon only when it is narrower than 340 px. The word stays as the accessible name and the tooltip.
 
 An agent-verified item that lists evidence shows the evidence images under the heading **Agent evidence**. A grid opens an image in the same zoom stage as an image item. The item view also shows the two-line description, the numbered steps, the expected result, and the link to the app. The link opens in a new tab.

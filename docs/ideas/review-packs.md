@@ -133,6 +133,8 @@ A pack may have `session` and `round`. `session` is a planner session ID, a slug
 
 A pack may have `designPass: { reviewer, result, note }`. The reviewer is non-empty and has at most 200 characters. The result is `passed`, `issues`, or `not-run`. The optional note has at most 2000 characters. The reviewer runs the pass before the pack ships and reports the result.
 
+A pack may have `judgePass`: one line of at most 200 characters that names the independent judge pass that ran, for example the model and the date. `herdr-boss review publish --judge-pass TEXT` stores it on the manifest of the version. The viewer shows the text under the summary row, or `no judge pass` when the field is absent. A missing judge pass prints one warning and does not block the publish.
+
 ### Questions
 
 `ask` lists the questions of the item. The default is `["accept", "deny", "note"]`.

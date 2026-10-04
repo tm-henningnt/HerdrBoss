@@ -312,6 +312,32 @@ test('publish refuses the sixth open pack and names the limit', (t) => {
   assert.equal(reviewRecords(data).length, 5);
 });
 
+test('review publish warns once without a judge pass and stores the flag when given', (t) => {
+  const { cli, data } = fixture(t);
+  const warnings = (text) => text.split('\n').filter((line) => line.startsWith('Warning:') && /judge pass/i.test(line));
+  const missing = cli('review', 'publish', 'shop', packFolder());
+  assert.equal(missing.status, 0, output(missing));
+  assert.equal(warnings(missing.stdout).length, 1);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).manifest.judgePass, undefined);
+
+  const pass = 'claude-opus-5-5, 2026-10-04';
+  const result = cli('review', 'publish', 'shop', packFolder({ tag: 1 }), '--judge-pass', pass);
+  assert.equal(result.status, 0, output(result));
+  assert.equal(warnings(result.stdout).length, 0);
+  const pack = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  assert.equal(pack.version, 2);
+  assert.equal(pack.manifest.judgePass, pass);
+});
+
+test('review publish refuses a judge pass that looks like a secret and stores nothing', (t) => {
+  const { cli, data } = fixture(t);
+  const secret = 'ghp_abcdefghijklmnop1234567890';
+  const result = cli('review', 'publish', 'shop', packFolder(), '--judge-pass', secret);
+  assert.equal(result.status, 1, output(result));
+  assert.ok(!output(result).includes(secret));
+  assert.ok(noStore(data), 'a refused judge pass publishes nothing');
+});
+
 test('publish --dry-run validates and prints the plan and writes nothing', (t) => {
   const { cli, data } = fixture(t);
   const result = cli('review', 'publish', 'shop', packFolder(), '--dry-run');
