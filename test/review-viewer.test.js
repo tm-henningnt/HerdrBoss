@@ -3,6 +3,9 @@
 // have no DOM use, so the tests import them directly.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
 
 const viewer = await import('../public/review-viewer.js');
 const zoom = await import('../public/review-zoom.js');
@@ -199,6 +202,32 @@ test('an image pair has a toggle with the manifest labels, a split slider, and p
   assert.match(split, /class="rv-canvas rv-split"/);
   assert.match(split, /type="range"[^>]*data-rv-split[^>]*value="30"/);
   assert.match(split, /aria-label="Split between Light and Dark"/);
+});
+
+// The before and after rule: the a image is the before image and sits at the left of the split line;
+// the b image is the after image and sits at the right. The browser check in the RV2 report confirms the pixels.
+test('the toggle shows the pressed side, and the slider keeps a on the left of the split line and b on the right', () => {
+  const spec = {
+    id: 'pay', title: 'Pay button', type: 'image-pair', variant: 'before-after',
+    a: { src: 'before.png', label: 'Before' }, b: { src: 'after.png', label: 'After' }, ask: ['accept'],
+  };
+  const pack = packWith(spec);
+  const before = render(pack, { pair: 'a' });
+  assert.match(before, /class="rv-canvas rv-show-a"/, 'the a side shows the a image');
+  assert.match(before, /data-rv-pair="a" aria-pressed="true">Before</);
+  const after = render(pack, { pair: 'b' });
+  assert.match(after, /class="rv-canvas rv-show-b"/, 'the b side shows the b image');
+  assert.match(css, /\.rv-show-a \.rv-img-b, \.rv-show-b \.rv-img-a \{ visibility: hidden; \}/, 'the CSS hides the image of the other side');
+
+  const split = render(pack, { pairMode: 'split', split: 40 });
+  // The a image comes first and the b image second, so b paints on top. The CSS clips b from its left edge:
+  // b fills the split to the right edge, and a stays visible on the left of the line.
+  const aAt = split.indexOf('data-src="a"');
+  const bAt = split.indexOf('data-src="b"');
+  assert.ok(aAt >= 0 && bAt > aAt, 'the a image precedes the b image in the split canvas');
+  assert.match(split, /rv-split-legend"><span>Before<\/span><span>After<\/span>/, 'the before label sits at the left of the range and the after label at the right');
+  assert.match(css, /\.rv-split \.rv-img-b \{ clip-path: inset\(0 0 0 var\(--rv-split, 50%\)\); \}/, 'the CSS clips the b image from the left, so a shows at the left of the split line');
+  assert.match(css, /\.rv-split-line \{[^}]*left: var\(--rv-split, 50%\)/, 'the split line and the clip use the same position');
 });
 
 test('a gallery shows a grid of buttons, and an open image has the same stage with next and previous', () => {

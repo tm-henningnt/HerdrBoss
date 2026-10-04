@@ -103,7 +103,7 @@ Each item has `id`, `title`, `type`, and `ask`. It can have `body`: Markdown tex
 | Type | Fields | Viewer |
 |---|---|---|
 | `image` | `src`, `alt` | One image with pinch zoom and pins. |
-| `image-pair` | `variant` (`theme`, `before-after`, or `compare`), `a` and `b` with `src` and `label` | A segmented toggle between A and B. On a wide screen, a side-by-side view and a slider view. |
+| `image-pair` | `variant` (`theme`, `before-after`, or `compare`), `a` and `b` with `src` and `label` | A segmented toggle between A and B. The `a` image is the before image, and the `b` image is the after image. The slider shows `a` at the left of the split line and `b` at the right. On a wide screen, a side-by-side view and a slider view. |
 | `gallery` | `images`: 2 to 60 entries with `src`, `alt`, and `caption` | A strip of thumbnails. A tap opens one image in the zoom viewer. |
 | `video` | `src` (MP4 or WebM), `poster` | The native `<video>` player with controls. No autoplay. |
 | `markdown` | `text` or `body` | Safe Markdown with `renderMarkdown()`. Notes attach to a text range. |
@@ -269,7 +269,7 @@ The top bar has Back, the pack title, and a menu with **Live links**, **Shortcut
 The item fills the screen. The top bar holds Back, `7 / 31`, the section name, and the **Viewed** check box. The evidence takes the space between the top bar and the answer bar.
 
 - **Images.** Pinch to zoom from 1× to 8×. Double tap zooms to 2× at the tap point, and again to fit. Pan inside the zoomed image. A first-time hint "Pinch to zoom · double tap for 2×" shows under the image for 3 seconds. On the desktop, the wheel with Ctrl zooms, and `z` toggles fit and 100 %.
-- **Pairs.** A segmented toggle `Light | Dark` (or the two labels of the item) sits at the top of the image. The zoom and the pan stay the same on a toggle, so the Owner compares one spot. `t` toggles on the desktop. The desktop also has **Side by side** and **Slider**.
+- **Pairs.** A segmented toggle `Light | Dark` (or the two labels of the item) sits at the top of the image. The `a` image is the before image and stays at the left of the split line; the `b` image is the after image and stays at the right. The zoom and the pan stay the same on a toggle, so the Owner compares one spot. `t` toggles on the desktop. The desktop also has **Side by side** and **Slider**.
 - **Swipe.** A horizontal swipe on an image at 1× moves to the next or the previous item. At a zoom above 1×, the swipe pans. A swipe down at 1× goes back to the section list.
 - **Pins.** Tap **Note**, then tap the image. A numbered pin appears, and the note field opens with the pin number.
 - **Answer bar.** A slim bar at the bottom above the safe area: **Deny**, **Note**, **Live**, and **Accept**, only for the questions in `ask`. Choice and rating controls show in the bar in place of Accept and Deny. After Accept or Deny, the viewer moves to the next open item after 400 ms, and an Undo snackbar shows for 5 seconds.
