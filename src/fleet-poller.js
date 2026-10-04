@@ -16,7 +16,7 @@ export function factoryRecords(file) {
   if (body.schema !== 1 || body.contractVersion !== '1.0.0' || validate(body.factories, registrySchema.properties.factories, { schemaFile }).length) throw new Error('registry-invalid');
   if (new Set(body.factories.map((row) => row.name)).size !== body.factories.length) throw new Error('registry-invalid');
   // The poller needs no host connection record. Never read registry.json.
-  return body.factories.map(({ factoryId, name, dashboardUrl, version, kitRevision }) => ({ factoryId, name, version, kitRevision, dashboardUrl: new URL(dashboardUrl).origin }));
+  return body.factories.map(({ factoryId, name, kind, dashboardUrl, version, kitRevision }) => ({ factoryId, name, kind, version, kitRevision, dashboardUrl: new URL(dashboardUrl).origin }));
 }
 const pollError = (code) => Object.assign(new Error(code), { code });
 export function fleetPollError(error) {

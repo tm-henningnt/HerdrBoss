@@ -16,7 +16,7 @@ import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
-import { summarizeHours, clampSummaryDays } from './machine-samples.js';
+import { summarizeHours, clampSummaryDays, latestMachineSample } from './machine-samples.js';
 import { analyticsSummary } from './analytics.js';
 import { buildWatchRecord, clearNight, readNight, readStandDown, writeNight, writeStandDown } from './night.js';
 import { effectiveRoutines, rememberChoice, resetRoutine, saveRoutine } from './watch-routines.js';
@@ -38,6 +38,7 @@ import { createFleetRole } from './fleet-role.js';
 import { createFleetSettings } from './fleet-settings.js';
 import { createProjectTransfer } from './project-transfer.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
+import { readFleetLogins } from './fleet-login.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
@@ -290,7 +291,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     const healthBody = await health(engine);
     if (healthBody.error) throw new Error('Factory health is unavailable.');
     return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody,
-      ownerItems: mailboxView(readMessages()).needsYou, spend: fleetSpend(spendSummary({ days: 7 })),
+      ownerItems: readMessages(), logins: await readFleetLogins(), machineSample: latestMachineSample(), spend: fleetSpend(spendSummary({ days: 7 })),
       reviewPacks: (reviewStore.packHeads({ dir: DATA_DIR }).length ? reviewStore.listPacks({ dir: DATA_DIR }) : []).map((pack) => ({ id: `${pack.slug}-${pack.pack}`.slice(0, 64), waitingItems: pack.counts.open || 0 })) });
   };
   const fleetPoller = createFleetPoller({ dir: DATA_DIR, localSummary: localFleetSummary,

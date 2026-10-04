@@ -29,6 +29,30 @@ test('a guidance retry failure cannot turn a successful read-only summary poll i
   assert.equal(row.summary.factoryId, 'factory-b');
 });
 
+test('the poller carries registry kind and preserves optional fields from a newer 1.x summary', async (t) => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'newer-summary-registry.json');
+  registry(registryFile, [{ ...factory('factory-b', 'https://example.invalid'), kind: 'container', containerName: 'hf-factory-b',
+    hostname: 'factory-b.example.invalid', ports: { dashboard: 4477, ssh: 22 }, image: { builtAt: '2026-10-01T00:00:00Z', pinsHash: 'a'.repeat(64) } }]);
+  const newer = { ...fixture, factoryId: 'factory-b', name: 'factory-b', dashboardUrl: 'https://example.invalid', contractVersion: '1.2.0',
+    kind: 'container', workers: { running: 2, max: 8 }, harnesses: [{ harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:30Z' }],
+    boss: { running: true, harness: 'claude' }, pending: [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }], backup: { lastAt: null },
+    machine: { ...fixture.machine, diskFreePercent: 34, diskFreeMb: 51200, utcOffsetMinutes: 120 } };
+  const poller = createFleetPoller({ dir: path.join(root, 'newer-summary-cache'), registryFile,
+    localSummary: async () => ({ ...fixture, name: 'factory-zero', factoryId: 'factory-zero' }),
+    credentials: () => ({ 'factory-b': 'hf_read_' + 'b'.repeat(64) }), now: () => Date.parse(fixture.generatedAt),
+    fetchImpl: async () => new Response(JSON.stringify(newer), { headers: { 'content-type': 'application/json' } }) });
+  t.after(() => poller.stop());
+  await poller.poll();
+  const row = poller.view().factories.find((item) => item.remote);
+  assert.ok(row, JSON.stringify(poller.view()));
+  assert.equal(row.kind, 'container');
+  assert.equal(row.summary.contractVersion, '1.2.0');
+  assert.deepEqual(row.summary.workers, { running: 2, max: 8 });
+  assert.deepEqual(row.summary.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
+  assert.equal(row.summary.machine.utcOffsetMinutes, 120);
+});
+
 test('the poller classifies private failures and retains the last successful sighting across an outage', async (t) => {
   const { createFleetPoller } = await import('../src/fleet-poller.js');
   const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'failure-codes.json');

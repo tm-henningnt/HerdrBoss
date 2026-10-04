@@ -40,7 +40,8 @@ test('the real fleet summary route emits the closed contract without private sta
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.deepEqual(validateFile(result.body, schemaFile), []);
   assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE MESSAGE|invented-secret|private\/fixture|token|messages|path/);
-  assert.deepEqual(result.body.machine, { load1: 1, load5: 2, load15: 3, cpus: 4, memoryTotalMb: 8192, memoryFreePercent: 55, swapUsedMb: 3 });
+  assert.deepEqual(result.body.machine, { load1: 1, load5: 2, load15: 3, cpus: 4, memoryTotalMb: 8192, memoryFreePercent: 55,
+    swapUsedMb: 3, diskFreePercent: null, diskFreeMb: null, utcOffsetMinutes: null });
   const again = await request(port, '/api/fleet/summary');
   assert.equal(again.body.factoryId, result.body.factoryId);
 });
@@ -98,11 +99,98 @@ test('title sharing and account scopes change through the dashboard API', async 
 test('the producer allow-list rejects an extra key at every object level', async () => {
   const { assertFleetSummary } = await import('../src/fleet-contract.js');
   const fixture = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/fleet-summary.valid.personal.json', import.meta.url)));
-  for (const target of [[], ['health'], ['machine'], ['projects', 0], ['projects', 0, 'board'], ['quotas', 0], ['spend', 0], ['alerts', 0], ['ownerItems'], ['ownerItems', 'rows', 0], ['reviewPacks', 0]]) {
+  for (const target of [[], ['health'], ['machine'], ['workers'], ['harnesses', 0], ['boss'], ['pending', 0], ['backup'], ['projects', 0], ['projects', 0, 'board'], ['quotas', 0], ['spend', 0], ['alerts', 0], ['ownerItems'], ['ownerItems', 'rows', 0], ['reviewPacks', 0]]) {
     const body = structuredClone(fixture);
+    body.workers = { running: null, max: null };
+    body.harnesses = [{ harness: 'claude', login: 'unknown', checkedAt: null }];
+    body.boss = { running: null, harness: null };
+    body.pending = [{ step: 'login-claude', since: null }];
+    body.backup = { lastAt: null };
     target.reduce((row, key) => row[key], body).messageText = 'PRIVATE MESSAGE';
     assert.throws(() => assertFleetSummary(body), /supported contract/);
   }
+});
+
+test('the fleet summary emits sourced optional fields and keeps unknown readings null', async () => {
+  const { buildFleetSummary } = await import('../src/fleet-summary.js');
+  const settings = { factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'http://localhost:4477', shareItemTitles: true, accounts: [] };
+  const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1,
+    herdrReachable: true, clockOffsetSeconds: -42 };
+  const now = Date.parse('2026-10-02T10:00:00Z');
+  const mailbox = [
+    { id: 'owner-decision', from: 'boss', to: 'owner', thread: 'sample-project', kind: 'reply', action: 'decide', at: '2026-10-02T09:50:00Z', text: 'Choose the sample colour' },
+    { id: 'factory-question', from: 'boss', to: 'owner', thread: 'boss', kind: 'reply', action: 'answer', at: '2026-10-02T09:45:00Z', text: 'Choose the factory setting' },
+    { id: 'login-wait', from: 'boss', to: 'owner', thread: 'boss', kind: 'reply', action: 'answer', at: '2026-10-02T09:00:00Z', closedAt: '2026-10-02T09:30:00Z',
+      text: 'The claude login is not ready. Run `herdr-boss factory login factory-zero claude` at an Owner terminal, then run `herdr-boss factory boss start factory-zero --resume`.' },
+    { id: 'codex-wait', from: 'boss', to: 'owner', thread: 'boss', kind: 'reply', action: 'answer', at: '2026-10-02T09:10:00Z', closedAt: '2026-10-02T09:31:00Z',
+      text: 'The codex login is not ready. Run `herdr-boss factory login factory-zero codex` at an Owner terminal, then run `herdr-boss factory boss start factory-zero --resume`.' },
+    { id: 'closed-item', from: 'boss', to: 'owner', thread: 'sample-project', kind: 'report', action: 'decide', closedAt: '2026-10-02T09:55:00Z', at: '2026-10-02T08:00:00Z' },
+    { id: 'info-item', from: 'boss', to: 'owner', thread: 'boss', kind: 'reply', action: 'read', at: '2026-10-02T09:30:00Z' },
+    { id: 'review-pack', from: 'boss', to: 'owner', thread: 'sample-project', kind: 'review', action: 'approve', at: '2026-10-02T09:40:00Z' },
+  ];
+  const state = { control: { runningWorkers: 5, maxWorkers: 12 },
+    machine: { diskFreePercent: 34, diskFreeBytes: 51200 * 2 ** 20 },
+    herdr: { panes: [{ label: 'boss', agent: 'claude' }] },
+    projects: [{ slug: 'sample-project', tasks: [] }], quotas: [] };
+  const summary = buildFleetSummary({ settings, state, health, now, kind: 'container', machineSample: { utcOffsetMinutes: 120 },
+    logins: [{ harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:30Z' }, { harness: 'codex', login: 'logged-in', checkedAt: '2026-10-02T09:59:31Z' }],
+    ownerItems: mailbox });
+  assert.deepEqual(summary.workers, { running: 5, max: 12 });
+  assert.equal(summary.machine.diskFreePercent, 34);
+  assert.equal(summary.machine.diskFreeMb, 51200);
+  assert.equal(summary.machine.utcOffsetMinutes, 120);
+  assert.equal(summary.health.clockOffsetSeconds, -42);
+  assert.equal(summary.kind, 'container');
+  assert.deepEqual(summary.harnesses, [
+    { harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:30Z' },
+    { harness: 'codex', login: 'ok', checkedAt: '2026-10-02T09:59:31Z' },
+  ]);
+  assert.deepEqual(summary.boss, { running: true, harness: 'claude' });
+  assert.deepEqual(summary.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
+  assert.deepEqual(summary.backup, { lastAt: null });
+  assert.ok(summary.alerts.some((alert) => alert.code === 'login-expired' && alert.severity === 'warning'));
+  assert.equal(summary.ownerItems.total, 2);
+  assert.equal(summary.ownerItems.needsOwner, 2);
+  assert.equal(summary.ownerItems.rows.find((row) => row.id === 'owner-decision').projectSlug, 'sample-project');
+  assert.equal(summary.ownerItems.rows.find((row) => row.id === 'factory-question').projectSlug, undefined);
+  assert.equal(summary.ownerItems.rows.some((row) => row.id === 'review-pack' || row.id === 'closed-item' || row.id === 'info-item'), false);
+  assert.deepEqual(validateFile(summary, schemaFile), []);
+
+  const unknown = buildFleetSummary({ settings, state: {}, health: { ...health, clockOffsetSeconds: null }, now });
+  assert.deepEqual(unknown.workers, { running: null, max: null });
+  assert.equal(unknown.machine.diskFreePercent, null);
+  assert.equal(unknown.machine.diskFreeMb, null);
+  assert.equal(unknown.machine.utcOffsetMinutes, null);
+  assert.equal(unknown.health.clockOffsetSeconds, null);
+  assert.equal(unknown.kind, null);
+  assert.deepEqual(unknown.boss, { running: null, harness: null });
+  assert.deepEqual(unknown.pending, []);
+  assert.deepEqual(unknown.backup, { lastAt: null });
+  assert.deepEqual(validateFile(unknown, schemaFile), []);
+
+  const withoutWaitMail = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'codex', login: 'none', checkedAt: '2026-10-02T09:59:31Z' }] });
+  assert.deepEqual(withoutWaitMail.pending, [{ step: 'login-codex', since: null }]);
+
+  const unknownWithWait = buildFleetSummary({ settings, state: {}, health, now,
+    logins: [{ harness: 'claude', login: 'unknown', checkedAt: '2026-10-02T09:59:31Z' }], ownerItems: [mailbox.find((item) => item.id === 'login-wait')] });
+  assert.deepEqual(unknownWithWait.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
+
+  const lowDisk = buildFleetSummary({ settings, state: { machine: { diskFreePercent: 4 } }, health, now });
+  assert.ok(lowDisk.alerts.some((alert) => alert.code === 'machine-disk' && alert.severity === 'error'));
+});
+
+test('machine readings expose current disk data and derive the calendar offset from an existing sample', async (t) => {
+  const { appendMachineSample, fleetMachineReadings, latestMachineSample, sampleLine } = await import('../src/machine-samples.js');
+  const now = Date.parse('2026-10-02T10:00:00Z');
+  const dataDir = fs.mkdtempSync(path.join(root, 'fleet-machine-sample-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  appendMachineSample(sampleLine({ machine: {}, now }), { dataDir });
+  const sample = latestMachineSample({ dataDir });
+  assert.deepEqual(fleetMachineReadings({ diskFreePercent: 34, diskFreeBytes: 51200 * 2 ** 20 }, sample), {
+    diskFreePercent: 34, diskFreeMb: 51200, utcOffsetMinutes: -new Date(now).getTimezoneOffset(),
+  });
+  assert.deepEqual(fleetMachineReadings({}, null), { diskFreePercent: null, diskFreeMb: null, utcOffsetMinutes: null });
 });
 
 test('the Fleet API includes factory zero and the summary link without exposing credentials', async (t) => {
@@ -136,7 +224,7 @@ test('published project fields and public alert codes reach the summary without 
   assert.equal(result.body.projects[0].phase, 'build');
   assert.equal(result.body.projects[0].status, 'doing');
   assert.ok(result.body.projects[0].statusAgeSeconds >= 120);
-  assert.deepEqual(result.body.alerts, [{ code: 'machine-pressure', severity: 'error' }]);
+  assert.deepEqual(result.body.alerts, [{ code: 'machine-pressure', severity: 'error' }, { code: 'login-expired', severity: 'warning' }]);
   assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE alert|private\/fixture|invented-secret/);
 });
 
@@ -148,7 +236,7 @@ test('rows that the contract refuses are dropped and the summary still builds', 
   const body = buildFleetSummary({ settings, health, now: Date.parse('2026-10-03T03:00:00Z'),
     state: { kit: { current: 'abcdef012345' }, machine: {}, quotas: [], alerts: [{ key: 'x', severity: 'info', projectSlug: '2fa-app' }],
       projects: [...slugs.map((slug) => ({ slug, tasks: [] })), { slug: 'phase-app', phase: '2 build', tasks: [] }, { slug: 'age-app', statusAgeSeconds: 1.5, tasks: [] }] },
-    ownerItems: slugs.map((id) => ({ id, action: 'decide' })),
+    ownerItems: slugs.map((id) => ({ id, from: 'boss', to: 'owner', thread: id, kind: 'reply', action: 'decide' })),
     reviewPacks: [...slugs, `${'a'.repeat(63)}-`].map((id) => ({ id, waitingItems: 1 })) });
   assert.deepEqual(validateFile(body, schemaFile), []);
   assert.deepEqual(body.projects.map((project) => project.slug), ['good-app', 'phase-app', 'age-app']);

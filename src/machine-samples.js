@@ -73,6 +73,25 @@ const swapPercent = (line) => {
   return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
 };
 
+// Read only the latest existing sample. The local calendar offset comes from its timestamp.
+export function latestMachineSample(options = {}) {
+  const line = readMachineSamples(options).at(-1);
+  if (!line) return null;
+  const at = Date.parse(line.at);
+  return { ...line, utcOffsetMinutes: Number.isFinite(at) ? -new Date(at).getTimezoneOffset() : null };
+}
+
+// Select the disk readings from the current machine snapshot and the calendar offset from its sample.
+export function fleetMachineReadings(machine = {}, sample = null) {
+  const percent = finite(machine.diskFreePercent);
+  const bytes = finite(machine.diskFreeBytes);
+  return {
+    diskFreePercent: percent !== null && percent >= 0 && percent <= 100 ? percent : null,
+    diskFreeMb: bytes !== null && bytes >= 0 ? bytes / 2 ** 20 : null,
+    utcOffsetMinutes: finite(sample?.utcOffsetMinutes),
+  };
+}
+
 // Overload: swap above 90 percent with at least 1 GB in use, or a 5-minute load above 3 times the cores.
 export function isOverloadSample(line) {
   const pct = swapPercent(line);
