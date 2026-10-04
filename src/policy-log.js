@@ -5,6 +5,7 @@
 // When the lock is not free within the wait, the append goes without the lock and skips the trim. A line can be lost then: the log is for diagnosis, not for audit.
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
 
 export const POLICY_CHANGES_FILE = 'policy-changes.jsonl';
 export const MAX_LINES = 500;
@@ -61,15 +62,13 @@ export function diffPolicy(before, after) {
 
 // Keep the last MAX_LINES lines and at most MAX_BYTES. The newest line always stays.
 function trim(file) {
-  const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  const lines = readDataFile(file, path.dirname(file)).split('\n').filter(Boolean);
   const size = () => lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
   if (lines.length <= MAX_LINES && size() <= MAX_BYTES) return;
   lines.splice(0, Math.max(0, lines.length - MAX_LINES));
   let bytes = size();
   while (lines.length > 1 && bytes > MAX_BYTES) bytes -= Buffer.byteLength(lines.shift()) + 1;
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${lines.join('\n')}\n`, { flag: 'w', mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeDataFile(file, `${lines.join('\n')}\n`, path.dirname(file));
 }
 
 // Take the lock file. Return the release function, or null when the lock is not free within the wait.
@@ -86,21 +85,28 @@ function takeLock(lock) {
   }
 }
 
-// Append one line with a single write call. A failure never fails the policy write. No changes means no line.
-export function appendPolicyChange(dir, { at = new Date().toISOString(), caller, changes }) {
+// Append one line with a single write call. Strict setup callers refuse a log failure.
+// Other callers keep the diagnostic log best effort. No changes means no line.
+export function appendPolicyChange(dir, { at = new Date().toISOString(), caller, changes, strict = false }) {
   if (!Array.isArray(changes) || !changes.length) return false;
   const file = path.join(dir, POLICY_CHANGES_FILE);
   try {
+    assertDataFile(file, dir);
+    assertDataFile(`${file}.lock`, dir);
     const cut = changes.map((c) => ({ ...c, key: String(c.key).slice(0, MAX_KEY) }));
     const line = `${JSON.stringify({ at, caller: callerKind(caller), changes: cut })}\n`;
     const release = takeLock(`${file}.lock`);
     try {
-      const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT, 0o600);
-      try { fs.writeSync(fd, line); fs.fchmodSync(fd, 0o600); } finally { fs.closeSync(fd); }
+      const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1) throw new Error('The policy log must be a regular file with no links.');
+        fs.writeSync(fd, line); fs.fchmodSync(fd, 0o600);
+      } finally { fs.closeSync(fd); }
       if (release) trim(file);
     } finally { release?.(); }
     return true;
-  } catch { return false; }
+  } catch (error) { if (strict) throw error; return false; }
 }
 
 function parseChange(value) {

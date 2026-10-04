@@ -6,6 +6,7 @@ import { loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
 import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
+import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
@@ -109,7 +110,7 @@ const warnedFactoryShares = new Set();
 // and ignoredRoutes makes providerFor treat it as unmetered for that harness. Each conflict warns once per process.
 export function loadPolicy({ file = FILE, models = null, warn = (text) => console.warn(text) } = {}) {
   let saved = {};
-  try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  try { saved = JSON.parse(readDataFile(file, path.dirname(file))); }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
   const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...stored } = saved;
   const savedMachine = isObject(stored.machine) ? stored.machine : {};
@@ -318,16 +319,19 @@ export function validatePolicy(value, models) {
 
 // The one function that writes policy.json. It appends one line to policy-changes.jsonl for a write that changes a value.
 // caller is a label (page, cli, project-new, unknown). A missing or other marker logs as unknown.
-export function writePolicy(value, { caller = 'unknown', dir = null, file = null } = {}) {
+export function writePolicy(value, { caller = 'unknown', dir = null, file = null, strictLog = false } = {}) {
   const target = file || path.join(dir || DATA_DIR, 'policy.json');
   const logDir = dir || path.dirname(target);
+  assertDataFile(target, logDir);
+  assertDataFile(path.join(logDir, 'policy-changes.jsonl'), logDir);
+  assertDataFile(path.join(logDir, 'policy-changes.jsonl.lock'), logDir);
   const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...stored } = value;
   let before = {};
-  try { before = JSON.parse(fs.readFileSync(target, 'utf8')); } catch {}
-  const tmp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(stored, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  fs.renameSync(tmp, target);
-  appendPolicyChange(logDir, { caller: callerKind(caller), changes: diffPolicy(before, stored) });
+  let text;
+  try { text = readDataFile(target, logDir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { before = JSON.parse(text); } catch {}
+  writeDataFile(target, `${JSON.stringify(stored, null, 2)}\n`, logDir);
+  appendPolicyChange(logDir, { caller: callerKind(caller), changes: diffPolicy(before, stored), strict: strictLog });
 }
 
 // The share guard of a policy write from the page or the CLI. Compare the project shares of the new policy with the saved one.
@@ -467,7 +471,7 @@ export function prunePolicy(value, models) {
 }
 
 // Pass a notes array to receive a note for each automatic prune of stale model references.
-export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null, caller = 'unknown', dryRun = false } = {}) {
+export function savePolicy(value, models, { file = FILE, quotas = null, now = Date.now(), notes = null, caller = 'unknown', dryRun = false, strictLog = false } = {}) {
   // ignoredRoutes is derived at load time, so a draft that carries it back does not store it.
   const { ignoredRoutes: _derived, factoryShares: _shares, factoryShareError: _shareError, ...draft } = value || {};
   const { policy: stored, note } = prunePolicy(draft, models);
@@ -497,7 +501,7 @@ export function savePolicy(value, models, { file = FILE, quotas = null, now = Da
     goal.end.resetAt = new Date(window.resetsAt).toISOString();
   }
   if (dryRun) return [];
-  writePolicy(merged, { file, caller });
+  writePolicy(merged, { file, caller, strictLog });
   if (note && notes) notes.push(note);
   return [];
 }

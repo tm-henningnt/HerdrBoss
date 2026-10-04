@@ -188,6 +188,46 @@ test('a write that changes nothing appends no line', (t) => {
   assert.equal(logLines(dir).length, 1, 'the same policy adds no line');
 });
 
+test('F1 policy load and write refuse escaping links before changing any file', (t) => {
+  const dir = tmp(t);
+  const outside = tmp(t);
+  const sentinel = path.join(outside, 'sentinel');
+  fs.writeFileSync(sentinel, '{}\n', { mode: 0o644 });
+  assert.throws(() => writePolicy(policyWith(FIVE), { file: sentinel, dir }), /outside its data folder/);
+  const policy = path.join(dir, 'policy.json');
+  fs.symlinkSync(sentinel, policy);
+  assert.throws(() => loadPolicy({ file: policy }), /outside its data folder/);
+  assert.throws(() => writePolicy(policyWith(FIVE), { dir }), /outside its data folder/);
+  fs.unlinkSync(policy);
+  fs.symlinkSync(sentinel, logFile(dir));
+  assert.throws(() => savePolicy(policyWith(FIVE), models, { file: policy, strictLog: true }), /outside its data folder/);
+  assert.equal(fs.existsSync(policy), false, 'refuse the log before writing the policy');
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), '{}\n');
+  assert.equal(fs.statSync(sentinel).mode & 0o777, 0o644);
+});
+
+test('F1 the append writer does not follow a link planted immediately before open', (t) => {
+  const dir = tmp(t);
+  const outside = tmp(t);
+  const sentinel = path.join(outside, 'sentinel');
+  fs.writeFileSync(sentinel, 'fixture sentinel\n', { mode: 0o644 });
+  const file = logFile(dir);
+  const original = fs.openSync;
+  let flagsAtOpen;
+  t.mock.method(fs, 'openSync', (target, flags, ...args) => {
+    if (target === file) {
+      flagsAtOpen = flags;
+      fs.symlinkSync(sentinel, file);
+    }
+    return original(target, flags, ...args);
+  });
+  assert.throws(() => log.appendPolicyChange(dir, { caller: 'cli', changes: [{ key: 'maxWorkers', old: 8, new: 9 }], strict: true }));
+  assert.equal(flagsAtOpen & fs.constants.O_NOFOLLOW, fs.constants.O_NOFOLLOW);
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'fixture sentinel\n');
+  assert.equal(fs.statSync(sentinel).mode & 0o777, 0o644);
+  assert.equal(fs.existsSync(`${file}.lock`), false);
+});
+
 test('writePolicy logs arrays as changed, cuts long strings, and masks secret keys', (t) => {
   const dir = tmp(t);
   const file = path.join(dir, 'policy.json');

@@ -114,6 +114,7 @@ const USAGE = `herdr-boss <command>
                               The preview binds 127.0.0.1 unless --host names another address.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
   doctor [--json] [--factory-host]  Check onboarding items. Exit 4 when an item needs a fix.
+  setup [--resume] [--dry-run] [--pacing paced|unpaced]  Run the first-hour setup. Exit 3 when it waits for you.
   publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.
   install               Install and start the launchd agent.
@@ -462,10 +463,10 @@ async function verifyQuotaMutationCaller() {
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
-  // Doctor must run before loadConfig(), which creates and migrates data files.
-  if (cmd === 'doctor') {
-    const { doctorCommand } = await import('./doctor.js');
-    const code = await doctorCommand(args);
+  // Onboarding must run before loadConfig(), which creates and migrates data files.
+  if (cmd === 'doctor' || cmd === 'setup') {
+    const command = cmd === 'doctor' ? (await import('./doctor.js')).doctorCommand : (await import('./setup.js')).setupCommand;
+    const code = await command(args);
     // Flush queued report writes before leaving any tool-created handles behind.
     await new Promise((resolve, reject) => process.stdout.write('', (error) => error ? reject(error) : resolve()));
     process.exit(code);
