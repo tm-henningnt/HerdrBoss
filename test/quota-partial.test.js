@@ -39,6 +39,34 @@ test('a codexbar exit 1 without JSON output returns one failed row for each prov
   assert.match(quotas.find((row) => row.provider === 'claude').error, /Claude usage probe exited with code 1/);
 });
 
+const missingReader = Object.assign(new Error('spawn codexbar ENOENT'), { code: 'ENOENT', syscall: 'spawn codexbar', path: 'codexbar' });
+
+test('a missing usage reader is an unknown reading with a reason, never a probe failure', async () => {
+  const quotas = await collectQuotas({ runner: async () => { throw missingReader; } });
+  for (const row of quotas) {
+    assert.equal(row.unavailable, true, `${row.provider} must be marked unavailable`);
+    assert.match(row.reason, /no usage reader in this factory/);
+    assert.doesNotMatch(row.error, /failed|ENOENT/i);
+  }
+  const text = bulletin(quotas);
+  assert.match(text, /Usage limits are unknown for Codex, Claude, OpenCode Go: no usage reader in this factory\. Not a probe failure\./);
+  assert.doesNotMatch(text, /Quota data unavailable/);
+  assert.doesNotMatch(text, /No quota or active machine restrictions/);
+  const lane = laneStatus(quotas, structuredClone(POLICY_DEFAULTS), Date.parse('2026-09-28T01:00:00Z')).claude;
+  assert.equal(lane.state, 'unknown');
+  assert.match(lane.reason, /no usage reader in this factory/);
+});
+
+test('a missing harness login is an unknown reading with its reason', async () => {
+  const row = { provider: 'claude', error: { message: 'Claude CLI is not logged in on this machine.' } };
+  const quotas = await collectQuotas({ runner: async () => JSON.stringify([row]) });
+  const claude = quotas.find((q) => q.provider === 'claude');
+  assert.equal(claude.unavailable, true);
+  assert.match(claude.reason, /no login for this harness in this factory/);
+  const text = bulletin(quotas);
+  assert.match(text, /Usage limits are unknown for Claude: no login for this harness in this factory\./);
+});
+
 const cfg = { quota: { warnPercent: 80 }, port: 4477, host: '127.0.0.1' };
 const snap = (quotas) => ({ updatedAt: Date.parse('2026-09-28T01:00:00Z'), quotas, herdr: { panes: [] }, projects: [] });
 const bulletin = (quotas) => renderBulletin(snap(quotas), { alerts: [], advice: [] }, cfg);

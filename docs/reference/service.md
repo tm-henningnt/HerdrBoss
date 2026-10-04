@@ -23,9 +23,16 @@ When a quota read fails, Herdr Boss keeps the last good quotas. The error text n
 - `Claude usage probe timed out after 90 s`: the probe exceeded its timeout.
 - `Claude usage probe exited with code N`: the probe failed. The text adds the first line of its error output when there is one.
 
+A missing usage reader or login is not a failure. The reading is unknown, and the row carries the reason:
+
+- `no usage reader in this factory`: the probe command is not installed. A container factory has no CodexBar on Linux.
+- `no login for this harness in this factory`: the harness has no login.
+
+This state raises no Boss warning, no provider back-off, and no fleet alert. The bulletin says "Usage limits are unknown for Claude: no usage reader in this factory. Not a probe failure." The provider card, the lane, and the Boss node show the reason. If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss. A missing reader never starts that warning.
+
 `codexbar` can exit with code 1 and still return a good provider row. Herdr Boss keeps that row. A Claude timeout starts the back-off. Other errors wait for the next quota interval. The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Each row records the provider, duration, timeout, outcome, ended step, killed PID and PID state, and kill signal. The file does not store probe error text.
 
-When a probe fails, Herdr Boss keeps the last good row of that provider and adds the new error. The bulletin quota table shows the row as "Claude quota from HH:MM (probe failed)". The rules line is "Quota data for Claude is from HH:MM; the last probe failed." The dashboard shows the same text on the provider card. Pacing, quota notices, and provider lanes use the last good row as data. Automatic handover does not use it after a failed probe. The reading becomes stale after three hours, but it stays available. Without a last good row, the bulletin says "Quota data unavailable for Claude". If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss.
+When a probe fails, Herdr Boss keeps the last good row of that provider and adds the new error. The bulletin quota table shows the row as "Claude quota from HH:MM (probe failed)". The rules line is "Quota data for Claude is from HH:MM; the last probe failed." The dashboard shows the same text on the provider card. Pacing, quota notices, and provider lanes use the last good row as data. Automatic handover does not use it after a failed probe. The reading becomes stale after three hours, but it stays available. Without a last good row, the bulletin says "Quota data unavailable for Claude". A reading that is unknown, because the reader or the login is absent, says "Usage limits are unknown for Claude" with the reason instead.
 
 At start, Herdr Boss loads the saved quotas from `state.json` when they are younger than 15 minutes. The dashboard shows "Quotas from HH:MM" for these saved quotas until the first new read succeeds. Automatic handover does not use saved quotas.
 

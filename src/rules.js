@@ -416,9 +416,15 @@ export function renderBulletin(snap, evaluation, cfg) {
   const rules = [...evaluation.advice, ...shared.map((a) => a.text)];
   // Without quota data, pacing is blind. Say so, and never claim that no restriction applies.
   const quotaRows = snap.quotas || [];
-  const failed = quotaRows.filter((q) => !hasQuotaData(q)).map((q) => providerName(q.provider));
+  const unknown = quotaRows.filter((q) => q.unavailable && !q.stale);
+  const failed = quotaRows.filter((q) => !hasQuotaData(q) && !q.unavailable).map((q) => providerName(q.provider));
   const stale = quotaRows.filter((q) => q.error && q.stale);
   rules.unshift(...stale.map((q) => `Quota data for ${providerName(q.provider)} is from ${fmtTime(q.staleSince)}; the last probe failed.`));
+  // A missing usage reader or login is an unknown reading, not a probe failure. A container factory has no CodexBar.
+  if (unknown.length) {
+    const reason = unknown.find((q) => typeof q.reason === 'string' && q.reason)?.reason || 'the usage reader is not available';
+    rules.unshift(`Usage limits are unknown for ${unknown.map((q) => providerName(q.provider)).join(', ')}: ${reason}. Not a probe failure.`);
+  }
   if (!quotaRows.length) rules.unshift('Quota data unavailable: the quota collector failed. Pace work carefully until the data returns.');
   else if (failed.length) rules.unshift(`Quota data unavailable for ${failed.join(', ')}. Pace work on those providers carefully.`);
   // An active watch state comes last into the list, so it is the first line. An orchestrator reads the Owner rule first.
@@ -492,7 +498,7 @@ export function renderBulletin(snap, evaluation, cfg) {
       const planText = provider === 'codex' && lane.planGuidance ? quotaPlanLaneText(lane.planGuidance) : '';
       const planReplacesPace = planText && !lane.ignored && lane.state === 'open';
       const holdText = claudePaceHoldText(lane.paceHold);
-      const text = holdText && lane.state === 'open' ? `${holdText}.` : planReplacesPace ? `${planText}.` : lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? 'unknown: no quota data.'
+      const text = holdText && lane.state === 'open' ? `${holdText}.` : planReplacesPace ? `${planText}.` : lane.state === 'open' ? (lane.onPace ? `on pace (${lane.onPace.usedPercent}% used, expected ${lane.onPace.expectedPercent}%, tolerance ${lane.onPace.tolerancePoints} points).` : 'open.') : lane.state === 'unknown' ? `unknown: ${lane.reason || 'no quota data'}.`
         : lane.state === 'exhausted' ? `exhausted: ${lane.usedPercent}% used in the ${lane.window} window; exhausted until ${lane.resetAt || '?'}.`
           : lane.state === 'trickle' ? `trickle (${lane.window} ${lane.usedPercent}% used, ahead of pace): about ${lane.allowancePercent.toFixed(1)}%/day, ${(lane.usedTodayPercent || 0).toFixed(1)}% used today.`
         : `${lane.state === 'reserve' ? 'near exhaustion' : 'ahead of pace'}: ${lane.usedPercent}% used${lane.expectedPercent != null ? ` against ${lane.expectedPercent}% expected` : ''} in the ${lane.window} window${lane.expectedPercent != null && Number.isFinite(lane.tolerancePoints) ? `, tolerance ${lane.tolerancePoints} points` : ''}.${back}`;

@@ -182,6 +182,18 @@ test('the engine ignores saved quotas older than 15 minutes', { timeout: 30000 }
 
 const BOTH = [...QUOTAS, { provider: 'claude', plan: 'max', windows: [{ key: 'primary', label: 'Session', usedPercent: 20, resetsAt: '2026-09-27T14:00:00.000Z', windowMinutes: 300 }] }];
 const CLAUDE_FAILED = [...NEWER, { provider: 'claude', error: 'Claude usage probe timed out.' }];
+const CLAUDE_UNKNOWN = [...NEWER, { provider: 'claude', error: 'no usage reader in this factory', reason: 'no usage reader in this factory', unavailable: true }];
+
+test('an unavailable Claude reader stays unknown and never warns the Boss', { timeout: 30000 }, (t) => {
+  const out = runScenario(t, { steps: [
+    { tick: true }, { resolve: CLAUDE_UNKNOWN }, { tick: true },
+    { advance: 2 * 60 * MIN, tick: true }, { advance: 30000, tick: true },
+  ] });
+  assert.equal(out.steps[1].claudeQuotaProbeFailure, null, 'an unknown reading is not a probe failure');
+  assert.deepEqual(out.steps[2].probeAlerts, [], 'no Boss warning after an hour for an unknown reader');
+  assert.deepEqual(out.steps[3].probeAlerts, [], 'the unknown reader still raises no warning');
+  assert.deepEqual(out.steps[1].quotas.find((q) => q.provider === 'claude').unavailable, true);
+});
 
 test('a failed provider keeps its last good row beyond three hours and marks its age', { timeout: 30000 }, (t) => {
   const out = runScenario(t, { steps: [

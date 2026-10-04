@@ -1684,7 +1684,8 @@ function laneLine(provider, lane) {
   const tone = ['exhausted', 'closed'].includes(lane.state) ? 'crit' : hold ? 'warn' : planReplacesPace ? plan.laneState === 'Use now' ? 'ok' : 'warn' : ['pace', 'reserve', 'trickle'].includes(lane.state) ? 'warn' : lane.state === 'open' ? 'ok' : '';
   const planAside = plan && !planReplacesPace ? ` · plan ${plan.laneState}` : '';
   const shareError = lane.factoryShareError ? ` · ${esc(lane.factoryShareError)}` : '';
-  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}${shareError}</span></li>`;
+  const unknown = lane.state === 'unknown' && lane.reason ? ` · ${esc(lane.reason)}` : '';
+  return `<li class="lane-chip ${tone}"><b>${esc(name)}</b><span>${esc(text)}${used}${planAside}${readingText}${shareError}${unknown}</span></li>`;
 }
 
 // The current guidance on the Overview: the same rules as the bulletin, collapsed by default under a one-line summary.
@@ -1698,6 +1699,8 @@ function guidanceFold(s) {
 
 function quotaCard(q, s = state) {
   const name = PROVIDERS[q.provider] || q.provider;
+  // A missing usage reader is an unknown reading. Show the reason, never a probe failure.
+  if (!hasQuotaData(q) && q.unavailable) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b><span class="tag">unknown</span></div><div class="muted">Usage limit unknown: ${esc(q.reason || q.error)}.</div></div>`;
   if (!hasQuotaData(q)) return `<div class="panel provider"><div class="provider-head"><b>${esc(name)}</b></div><div class="err">${esc(q.error)}</div></div>`;
   const lane = state?.lanes?.[q.provider];
   const thresholds = quotaThresholds(s);
@@ -4876,7 +4879,10 @@ function orgMeter(agent, quota) {
 
 function orgQuota(s, kind) {
   const w = orgQuotaWindow(s, kind);
-  return w ? `${PROVIDERS[kind]} ${w.usedPercent}% · ${w.label}` : NOT_REPORTED;
+  if (w) return `${PROVIDERS[kind]} ${w.usedPercent}% · ${w.label}`;
+  const q = (s.quotas || []).find((x) => x.provider === kind);
+  if (q?.unavailable) return `${PROVIDERS[kind]} usage limit unknown · ${q.reason || q.error}`;
+  return NOT_REPORTED;
 }
 
 function orgSince(s, pane) {
@@ -6463,7 +6469,7 @@ const HELP = {
     <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the project lead, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
     <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss mark, the menu button with the page name, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
-    <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
+    <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. A missing usage reader or login shows the reading as unknown with its reason; it is not a failure and raises no warning. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
     <p>Select a project card. The detail below it shows what the project lead published and what runs now.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
