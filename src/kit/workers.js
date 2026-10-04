@@ -19,7 +19,8 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
-import { activeLaunchRecords, detectLaunchBlock, isPaneStartupBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
+import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
+import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
 import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
@@ -778,7 +779,7 @@ function addExclude(worktree) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const lines = current.split(/\r?\n/);
-  const missing = ['/.worker/', '/.orchestration/local/'].filter((entry) => !lines.includes(entry));
+  const missing = ['/.worker/', '/.orchestration/local/', `/${OPEN_CODE_CONFIG_NAME}`].filter((entry) => !lines.includes(entry));
   if (missing.length) fs.appendFileSync(file, `${current && !current.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`, 'utf8');
 }
 
@@ -1209,21 +1210,6 @@ function copyLocalOrchestration(mainRoot, worktree) {
 }
 
 // A model that shows a launch block is marked unavailable. A start without --model then picks the next model of the lane.
-// A pane that shows the shell text "Did you mean this?" after a launch gets this many more launches.
-const PANE_RELAUNCHES = 2;
-const PANE_RELAUNCH_DELAY_MS = 15_000;
-const PROBE_TIMEOUT_MS = 60_000;
-
-// True when `opencode run` answers with the model. A failure, a timeout, or an empty answer is false.
-export function probeOpenCodeModel(model, { timeoutMs = PROBE_TIMEOUT_MS, cwd } = {}) {
-  try {
-    const answer = execFileSync('opencode', ['run', '--model', model, 'reply with ok'], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs,
-    });
-    return answer.trim().length > 0;
-  } catch { return false; }
-}
-
 export function startWorker(name, options, deps = {}) {
   for (let attempt = 1; ; attempt++) {
     try { return startWorkerOnce(name, options, deps); }
@@ -1251,8 +1237,7 @@ function startWorkerOnce(name, options, {
   leaseOptions = null,
   browserLookup,
   refreshKit = refreshKitIfRequired,
-  launchRetryDelayMs = PANE_RELAUNCH_DELAY_MS,
-  probeModel = probeOpenCodeModel,
+  tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -1297,7 +1282,10 @@ function startWorkerOnce(name, options, {
     : null;
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
-  const { model, modelSource, modelFallback, effort, effortSource, launchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0);
+  const { model, modelSource, modelFallback, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0);
+  // A v2 OpenCode TUI rejects --model and --agent. Select the model and the worker agent in a project config file instead.
+  const openCodeConfig = options.kind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
+  const launchArgs = openCodeConfig ? [] : modelLaunchArgs;
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1527,6 +1515,11 @@ function startWorkerOnce(name, options, {
       }
     }
     addExclude(worktree);
+    if (openCodeConfig) {
+      // A v2 TUI reads the project config of its working folder. The exclude keeps the file out of the worker commit.
+      fs.writeFileSync(path.join(worktree, OPEN_CODE_CONFIG_NAME), openCodeConfigText(model), { mode: 0o600 });
+      output(`Wrote ${OPEN_CODE_CONFIG_NAME} in ${worktree} with model ${model} and agent worker.`);
+    }
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
     fs.mkdirSync(plan.tmpDir, { recursive: true });
     const servePort = leases.find((lease) => lease.pool === 'serve-ports');
@@ -1561,14 +1554,12 @@ function startWorkerOnce(name, options, {
       error.blockedModel = model;
       throw error;
     };
-    // The shell text "Did you mean this?" can come from a busy machine. Close the TUI and let the relaunch loop decide.
-    const stopForLaunchBlock = (block) => {
-      if (!isPaneStartupBlock(block)) markAndStop(block);
-      try { herdr(['agent', 'close', name]); } catch { /* The pane cleanup below closes what remains. */ }
-      const error = new Error(`Worker pane ${paneId} shows "${block.phrase}" at launch.`);
-      error.code = 'opencode_pane_startup';
-      error.launchBlock = block;
-      throw error;
+    // The TUI refused a launch flag. This is a CLI version problem, not a model problem. Stop without a record.
+    const openCodeFlagError = (flag) => {
+      const error = new Error(`OpenCode refused the launch flag ${flag}: the pane shows "Unrecognized flag: ${flag} in command opencode". The installed OpenCode TUI does not accept this flag. Worker start stopped, and Herdr Boss marks no model.`);
+      error.code = 'opencode_unsupported_flag';
+      error.unsupportedFlag = flag;
+      return error;
     };
     const readPaneSnapshot = () => {
       try {
@@ -1589,15 +1580,19 @@ function startWorkerOnce(name, options, {
         const at = lines.findIndex((line) => line.includes(marker));
         if (at >= 0) lines = lines.slice(0, at);
       }
-      const block = detectLaunchBlock(lines.join('\n'));
-      if (block) stopForLaunchBlock(block);
+      const joined = lines.join('\n');
+      // A refused flag is a CLI problem, not a model problem. Fail without a record.
+      const refusedFlag = unsupportedOpenCodeFlag(joined);
+      if (refusedFlag) throw openCodeFlagError(refusedFlag);
+      const block = detectLaunchBlock(joined);
+      if (block) markAndStop(block);
     };
     const waitForShell = () => {
       try {
         waitForWorkerPane(paneId, workspaceId, worktree, herdr, wait,
           options.kind === 'opencode' && launchBaseline != null ? { launchBlock: { baseline: launchBaseline } } : {});
       } catch (error) {
-        if (error?.code === 'model_launch_blocked' && options.kind === 'opencode') stopForLaunchBlock(error.launchBlock);
+        if (error?.code === 'model_launch_blocked' && options.kind === 'opencode') markAndStop(error.launchBlock);
         throw error;
       }
     };
@@ -1675,31 +1670,9 @@ function startWorkerOnce(name, options, {
       if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
       return { ...record, recordFile, dryRun: false };
     };
-    // Launch again in the same pane when the shell text shows that the TUI process exited. After the last
-    // launch, `opencode run` decides: an answer means the model works, so nothing is marked.
-    const startWithPaneRelaunch = (attempt = 1) => {
-      for (let launch = 1; ; launch++) {
-        try { return startAndDeliver(attempt); }
-        catch (error) {
-          if (error?.code !== 'opencode_pane_startup') throw error;
-          if (launch > PANE_RELAUNCHES) {
-            let answered = false;
-            try { answered = probeModel(model, { timeoutMs: PROBE_TIMEOUT_MS, cwd: worktree }) === true; } catch { /* A probe that throws did not answer. */ }
-            if (!answered) markAndStop(error.launchBlock);
-            const failure = new Error(`OpenCode pane startup failed for ${model} after ${launch} launch attempts: the pane shows "${error.launchBlock.phrase}", but "opencode run" answers with this model. Herdr Boss did not mark the model. Retry later or when the machine is less busy.`, { cause: error });
-            failure.code = 'opencode_pane_startup_failed';
-            throw failure;
-          }
-          output(`Relaunching OpenCode worker ${name} (${launch + 1}/${PANE_RELAUNCHES + 1}) in ${Math.round(launchRetryDelayMs / 1000)} s: the pane shows "${error.launchBlock.phrase}".`);
-          wait(launchRetryDelayMs);
-          // The pane text of the failed launch stays on screen. Hide it from the next launch.
-          launchBaseline = readPaneSnapshot();
-        }
-      }
-    };
     if (options.kind === 'opencode') {
       return withOpenCodeStartLock(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'),
-        () => retryOpenCodeStart(name, paneId, startWithPaneRelaunch, { herdr, output }), { wait, output });
+        () => retryOpenCodeStart(name, paneId, startAndDeliver, { herdr, output }), { wait, output });
     }
     return startAndDeliver();
   } catch (error) {

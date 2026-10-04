@@ -135,8 +135,8 @@ export function retryOpenCodeStart(name, paneId, operation, { herdr, output = co
   for (let attempt = 1; attempt <= 3; attempt++) {
     try { return operation(attempt); }
     catch (error) {
-      // A launch block marks the model. Another launch of the same model cannot work.
-      if (error?.code === 'model_launch_blocked' || error?.code === 'opencode_pane_startup_failed') throw error;
+      // A launch block marks the model. A refused flag is a CLI problem. Another launch of the same model cannot work.
+      if (error?.code === 'model_launch_blocked' || error?.code === 'opencode_unsupported_flag') throw error;
       const failure = (detail = '') => new Error(`OpenCode worker ${name} failed after ${attempt} launch attempts: ${error.message}${detail}`, { cause: error });
       if (attempt === 3) throw failure();
       let agent;

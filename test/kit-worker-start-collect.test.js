@@ -1591,7 +1591,7 @@ function openCodeFixture(t, name) {
     exit: () => { registered = false; },
     start: (override = herdr, options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
       config: f.config, models: loadModels(), herdr: override, env: f.env, rulesFile: f.rulesFile,
-      wait: () => {}, output: () => {}, probeModel: () => false,
+      wait: () => {}, output: () => {}, tuiSupportsModelFlags: () => true,
     }),
     herdr,
   };
@@ -1681,6 +1681,7 @@ test('OpenCode starts in separate processes share a lock through brief delivery'
     try {
       startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'] }, {
         config: f.config, models: loadModels(), env: f.env, rulesFile: f.rulesFile, wait: () => {},
+        tuiSupportsModelFlags: () => true,
         output: (line) => { if (line.includes('Waiting for OpenCode start lock')) event('waiting'); },
         herdr: (args) => {
           if (args[0] === 'agent' && args[1] === 'start') {
@@ -2440,9 +2441,8 @@ function blockedLaunchFixture(t, name, blockedModel, phrase) {
   return { ...fixture, herdr, launched, closedPanes, records, startWith: (options = {}) => fixture.start(herdr, options) };
 }
 
-// The last value is the number of launches of the blocked model. "Did you mean this?" gets 3 launches, then a failing probe.
+// The last value is the number of launches of the blocked model. A country block and a rate limit fail once.
 const LAUNCH_BLOCK_CASES = [
-  ['Did you mean this?', 'Did you mean this?', true, 3],
   ['not available in your country', 'This model is not available in your country', true, 1],
   ['Rate limit exceeded', 'Error: rate limit exceeded', false, 1],
 ];
@@ -2498,7 +2498,7 @@ test('A model marked until re-enabled is refused with --model and skipped withou
 });
 
 test('waitForWorkerPane raises model_launch_blocked for each launch phrase before the interactive question check', () => {
-  for (const text of ['Did you mean this?', 'This model is not available in your country', 'Rate limit exceeded']) {
+  for (const text of ['This model is not available in your country', 'Rate limit exceeded']) {
     const herdr = (args) => {
       if (args[1] === 'get') return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: '/work' } };
       if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
@@ -2594,7 +2594,7 @@ test('startWorker stops once with a clear error when a launch block names no mod
   const herdr = (args) => {
     if (args[0] === 'agent' && args[1] === 'start') {
       launches++;
-      throw Object.assign(new Error('blocked'), { code: 'model_launch_blocked', launchBlock: { phrase: 'Did you mean this?', untilReenabled: true } });
+      throw Object.assign(new Error('blocked'), { code: 'model_launch_blocked', launchBlock: { phrase: 'Rate limit exceeded', untilReenabled: false } });
     }
     return fixture.herdr(args);
   };

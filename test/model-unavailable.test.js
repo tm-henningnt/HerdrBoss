@@ -15,7 +15,7 @@ const tempDir = (t) => {
 };
 
 test('detectLaunchBlock finds each phrase in any letter case and ignores other text', () => {
-  assert.deepEqual(detectLaunchBlock('DID YOU MEAN THIS?'), { phrase: 'Did you mean this?', untilReenabled: true });
+  assert.equal(detectLaunchBlock('DID YOU MEAN THIS?'), null, 'the shell text is not a launch block');
   assert.deepEqual(detectLaunchBlock('Error: This model is Not Available In Your Country.'), { phrase: 'not available in your country', untilReenabled: true });
   assert.deepEqual(detectLaunchBlock('\u001b[31mrate LIMIT exceeded\u001b[0m'), { phrase: 'Rate limit exceeded', untilReenabled: false });
   assert.equal(detectLaunchBlock('Free usage exceeded'), null);

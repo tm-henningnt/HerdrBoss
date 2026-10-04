@@ -15,12 +15,7 @@ export const TRIAL_RESULT_TARGET = 5;
 // The end of a record in words: an ISO time, or `re-enabled` for a record without an end.
 export const untilText = (retryAt) => (retryAt >= UNTIL_REENABLED_AT ? 're-enabled' : new Date(retryAt).toISOString());
 
-// The shell prints this text when the TUI process exits at startup. A busy machine causes it as often as a bad model.
-export const PANE_STARTUP_PHRASE = 'Did you mean this?';
-export const isPaneStartupBlock = (block) => block?.phrase === PANE_STARTUP_PHRASE;
-
 const LAUNCH_BLOCKS = [
-  { pattern: /did you mean this\?/i, phrase: PANE_STARTUP_PHRASE, untilReenabled: true },
   { pattern: /not available in your country/i, phrase: 'not available in your country', untilReenabled: true },
   { pattern: /rate limit exceeded/i, phrase: 'Rate limit exceeded', untilReenabled: false },
 ];
