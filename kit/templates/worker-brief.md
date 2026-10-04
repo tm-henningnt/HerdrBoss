@@ -36,7 +36,7 @@ List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
 Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
 
-Stop only a process that you started, by the PID that you saved when you started it. Save `$!` right after a background start, for example `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 & echo $! > .worker/tmp/serve.pid`, or use the PID that the server prints. Stop it with `kill <pid>`. Never use `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`. A name pattern can stop another project's server.
+Stop only a process that you started, by the PID that you saved when you started it. Save `$!` right after a background start, for example `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 & echo $! > .worker/tmp/serve.pid`, or use the PID that the server prints. {{stopRule}} A name pattern can stop another project's server.
 
 Never run `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. The exception is a resource that carries the label `herdr-factory-spike=<worker>`. Give every Docker resource that you create this label. Use a dedicated buildx builder or Docker context for factory work, and remove only that one.
 
@@ -67,6 +67,8 @@ Do not start or direct another agent.
 Do not commit, merge, rebase, push, deploy, or publish unless this brief grants that action.
 
 Do not run cherry-pick, rebase, or merge. The orchestrator does them. Commit only when the brief asks.
+
+{{kindCommitRule}}
 
 ## Read first
 

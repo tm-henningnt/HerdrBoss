@@ -28,6 +28,11 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 - Use `--no-worktree` only when the orchestrator has chosen shared-tree work. Each such worker gets its own `.worker/<name>/` folder for its brief and reports.
 - Run `herdr-boss worker park <name> --reason TEXT` for a worker that waits on purpose, for example for the Owner. Idle notices then skip it. Run `worker unpark <name>` when it resumes.
 
+## Worker commit and stop
+
+- A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree and says so in its report. After review, commit the change from the orchestrator side with `herdr-boss worker commit <name> -m MESSAGE`. The command stages the changed paths inside the worker scope and refuses every path outside it. Inspect the full diff first.
+- A Codex worker stops a process that it started with `herdr-boss worker stop-own <name> --pid PID`. The command stops the PID only when the process is a descendant of the worker pane shell or its current directory is inside the worker worktree. It refuses every other PID, the shared Codex app-server, and the caller's own process tree. It prints only the PID and the command name. A Codex worker must never run `kill`, `pkill`, or `killall`.
+
 ## Waiting
 
 - After a dispatch, end the turn. The worker sends a `WORKER REPORT` or `WORKER QUESTION` message.

@@ -8,7 +8,7 @@ import { activeLaunchRecords, enableModel, markModelUnavailable } from './model-
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, listWorkers, parkWorker, startWorker } from './workers.js';
+import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, startWorker, stopOwnWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
@@ -20,6 +20,8 @@ import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
   worker collect <name> [--no-record] [--keep-pane] [--allow PATH]... [--outcome done|partial|failed --gate-passed|--gate-failed]
+  worker commit <name> -m MESSAGE
+  worker stop-own <name> --pid PID
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
@@ -392,6 +394,19 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         modelReason: flags.modelreason || null,
       }, { config, output, schedulePaneCloseFn });
     }
+    if (action === 'commit') {
+      const normalized = rest.map((token) => token === '-m' ? '--message' : token);
+      const { positional, flags } = parseArgs(normalized);
+      knownFlags(flags, ['message']);
+      if (positional.length !== 1) fail('Usage: worker commit <name> -m MESSAGE');
+      return commitWorker(positional[0], { message: flags.message }, { config, output });
+    }
+    if (action === 'stop-own') {
+      const { positional, flags } = parseArgs(rest);
+      knownFlags(flags, ['pid']);
+      if (positional.length !== 1) fail('Usage: worker stop-own <name> --pid PID');
+      return stopOwnWorker(positional[0], { pid: flags.pid }, { config, output });
+    }
     if (action === 'allow') {
       const { positional, flags } = parseArgs(rest);
       knownFlags(flags, ['reason']);
@@ -412,7 +427,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       if (rest.length) fail('Usage: worker list');
       return listWorkers(config, { herdr, output });
     }
-    fail('Usage: worker start|collect|list|park|unpark|allow|scope add');
+    fail('Usage: worker start|collect|commit|stop-own|list|park|unpark|allow|scope add');
   }
 
   if (command === 'worktree') {
