@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DOCTOR_INSTALL_FIXES } from './doctor.js';
+import { assertSetupFiles, readDataFile } from './data-file-safety.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -37,13 +38,18 @@ export function hasSetupProject(dataDir) {
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(row?.slug) || typeof row.repo !== 'string') return false;
     try {
       const project = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', `${row.slug}.json`), 'utf8'));
-      return project.slug === row.slug && fs.statSync(path.join(row.repo, '.git')).isDirectory();
+      const metadata = fs.lstatSync(path.join(row.repo, '.git'));
+      if (project.slug !== row.slug || (!metadata.isDirectory() && !metadata.isFile())) return false;
+      const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+      for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CEILING_DIRECTORIES']) delete env[name];
+      const result = execFileSync('git', ['-C', row.repo, 'rev-parse', '--is-inside-work-tree', '--show-toplevel'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }).trim().split('\n');
+      return result[0] === 'true' && result.length === 2 && fs.realpathSync(result[1]) === fs.realpathSync(row.repo);
     } catch { return false; }
   });
 }
 
 export function readSetupPacing(dataDir) {
-  try { return JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8'))?.providerModes?.claude; }
+  try { return JSON.parse(readDataFile(path.join(dataDir, 'policy.json'), dataDir))?.providerModes?.claude; }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
@@ -52,9 +58,10 @@ async function savePacing(choice, dataDir) {
   const { loadModels } = await import('./kit/config.js');
   const models = loadModels();
   const file = path.join(dataDir, 'policy.json');
+  assertSetupFiles(dataDir);
   const policy = loadPolicy({ file, models, warn: () => {} });
   policy.providerModes.claude = choice === 'paced' ? 'managed' : 'ignore';
-  const errors = savePolicy(policy, models, { file, caller: 'setup' });
+  const errors = savePolicy(policy, models, { file, caller: 'setup', strictLog: true });
   if (errors.length) throw new Error('The pacing policy is not valid. Correct it in Settings.');
 }
 

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { runDoctor } from '../src/doctor.js';
 import { SETUP_STEPS, readSetupState, runSetup, setupCommand } from '../src/setup.js';
+import { hasSetupProject } from '../src/setup-actions.js';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-unit-'));
@@ -40,7 +42,7 @@ function fixture(t) {
   };
   function project() {
     const repo = path.join(home, 'InventedProject');
-    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main', repo], { env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, 'gitconfig') } });
     fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'project-repos.json'), JSON.stringify([{ slug: 'invented', repo }]));
     fs.writeFileSync(path.join(dataDir, 'projects/invented.json'), '{"slug":"invented"}');
@@ -232,4 +234,107 @@ test('step failures and hostile saved fields cannot disclose secrets or execute 
   assert.deepEqual(f.commands, []);
   fs.writeFileSync(file, '{invalid');
   await assert.rejects(setupCommand(['--resume'], f.options), /Check the data folder and setup.json/);
+});
+
+test('F1 setup refuses escaping progress, policy and policy-log destinations before probes or actions', async (t) => {
+  for (const name of ['setup.json', 'policy.json', 'policy-changes.jsonl']) {
+    await t.test(name, async (t) => {
+      const f = fixture(t);
+      f.project();
+      const sentinel = path.join(f.home, 'outside-sentinel');
+      const bytes = name === 'setup.json' ? '{"schema":"herdr-boss.setup/1","steps":{}}\n' : '{}\n';
+      fs.writeFileSync(sentinel, bytes, { mode: 0o644 });
+      fs.symlinkSync(sentinel, path.join(f.dataDir, name));
+      const code = await setupCommand(['--pacing', 'paced'], { ...f.options, ask: async () => 'yes' }).catch(() => 1);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), bytes, 'outside bytes stay intact');
+      assert.equal(fs.statSync(sentinel).mode & 0o777, 0o644, 'outside mode stays intact');
+      assert.equal(code, 1);
+      assert.deepEqual(f.requests, [], 'refuse before reading progress or checking tools');
+      assert.deepEqual(f.commands, []);
+    });
+  }
+});
+
+test('F2 overlapping setup runs refuse the competitor without reading or replacing progress', async (t) => {
+  const f = fixture(t);
+  f.project();
+  let enter;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  let release;
+  const consent = new Promise((resolve) => { release = resolve; });
+  const first = runSetup({ ...f.options, runner: async ({ id }) => id === 'node' ? '' : f.values[id], ask: async () => { enter(); return consent; } });
+  await entered;
+  try {
+    const before = fs.readFileSync(path.join(f.dataDir, 'setup.json'));
+    const alias = path.join(f.home, 'data-alias');
+    fs.symlinkSync(f.dataDir, alias);
+    const second = await runSetup({ ...f.options, dataDir: alias, pacing: 'paced', ask: async () => 'yes' });
+    assert.equal(second.exitCode, 1);
+    assert.equal(f.lines.at(-1), 'Setup is already running for this data folder.');
+    assert.deepEqual(fs.readFileSync(path.join(f.dataDir, 'setup.json')), before);
+    assert.deepEqual(f.requests, []);
+    assert.deepEqual(f.commands, []);
+  } finally { release('no'); await first; }
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+  assert.equal((await runSetup({ ...f.options, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+});
+
+test('F1 setup revalidates destinations after a terminal prompt yields', async (t) => {
+  for (const name of ['setup.json', 'policy.json', 'policy-changes.jsonl']) {
+    await t.test(name, async (t) => {
+      const f = fixture(t);
+      f.project();
+      const sentinel = path.join(f.home, 'late-outside-sentinel');
+      fs.writeFileSync(sentinel, '{}\n', { mode: 0o644 });
+      const code = await setupCommand([], { ...f.options, ask: async () => {
+        const file = path.join(f.dataDir, name);
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+        fs.symlinkSync(sentinel, file);
+        return 'paced';
+      } }).catch(() => 1);
+      assert.equal(code, 1);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), '{}\n');
+      assert.equal(fs.statSync(sentinel).mode & 0o777, 0o644);
+      assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+      assert.deepEqual(f.commands, []);
+    });
+  }
+});
+
+test('F2 setup releases its lock on waiting, refusal, completed and thrown paths', async (t) => {
+  const f = fixture(t);
+  f.values.node = '';
+  let lockedDuringPrompt = false;
+  assert.equal((await runSetup({ ...f.options, ask: async () => {
+    lockedDuringPrompt = fs.existsSync(path.join(f.dataDir, 'setup.lock'));
+    return null;
+  } })).exitCode, 3);
+  assert.equal(lockedDuringPrompt, true);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+  assert.equal((await runSetup({ ...f.options, ask: async () => 'no' })).exitCode, 1);
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+  fs.writeFileSync(path.join(f.dataDir, 'setup.json'), '{invalid');
+  await assert.rejects(runSetup(f.options));
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'setup.lock')), false);
+});
+
+test('F3 setup accepts a registered Git worktree and rejects invalid or missing Git metadata', async (t) => {
+  const f = fixture(t);
+  const primary = path.join(f.home, 'primary');
+  const worktree = path.join(f.home, 'worktree');
+  const env = { ...process.env, HOME: f.home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(f.home, 'gitconfig') };
+  execFileSync('git', ['init', '-q', '-b', 'main', primary], { env });
+  execFileSync('git', ['-C', primary, 'worktree', 'add', '--orphan', '-b', 'fixture-branch', worktree], { env, stdio: 'pipe' });
+  assert.equal(fs.statSync(path.join(worktree, '.git')).isFile(), true);
+  f.project();
+  fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([{ slug: 'invented', repo: worktree }]));
+  assert.equal(hasSetupProject(f.dataDir), true);
+  assert.equal((await runSetup({ ...f.options, pacing: 'paced', ask: async () => 'yes' })).exitCode, 0);
+  fs.writeFileSync(path.join(worktree, '.git'), 'gitdir: missing-metadata\n');
+  assert.equal(hasSetupProject(f.dataDir), false);
+  fs.unlinkSync(path.join(worktree, '.git'));
+  assert.equal(hasSetupProject(f.dataDir), false);
+  fs.mkdirSync(path.join(worktree, '.git'));
+  assert.equal(hasSetupProject(f.dataDir), false);
 });

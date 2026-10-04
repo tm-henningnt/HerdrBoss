@@ -2,9 +2,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { resolveAlias } from './config.js';
+import { assertSetupFiles, readDataFile, writeDataFile } from './data-file-safety.js';
+import { SETUP_LOCKED_MESSAGE, takeSetupLock } from './setup-lock.js';
 import { runDoctor } from './doctor.js';
 import { SETUP_ACTIONS, createSetupExecutor, hasSetupProject, readSetupPacing, runSetupAction } from './setup-actions.js';
 
@@ -37,7 +38,7 @@ function parseArgs(args) {
 
 export function readSetupState(dataDir) {
   let saved;
-  try { saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'setup.json'), 'utf8')); }
+  try { saved = JSON.parse(readDataFile(path.join(dataDir, 'setup.json'), dataDir)); }
   catch (error) { if (error.code === 'ENOENT') return null; throw new Error('Cannot read setup progress. Check setup.json in the data folder.'); }
   if (saved?.schema !== 'herdr-boss.setup/1' || !saved.steps || typeof saved.steps !== 'object') throw new Error('The setup progress is not valid. Check setup.json in the data folder.');
   // Copy only allowed values. Never carry an arbitrary field or command into a new write.
@@ -53,15 +54,8 @@ export function readSetupState(dataDir) {
 }
 
 function writeState(dataDir, state) {
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const file = path.join(dataDir, 'setup.json');
-  const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-    fs.renameSync(temp, file);
-  } finally {
-    try { fs.unlinkSync(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+  assertSetupFiles(dataDir);
+  writeDataFile(path.join(dataDir, 'setup.json'), `${JSON.stringify(state, null, 2)}\n`, dataDir);
 }
 
 async function terminalAsk(question) {
@@ -94,6 +88,21 @@ export async function runSetup({ env = process.env, home = env.HOME || os.homedi
   const privateDir = resolveAlias(path.join(home, '.config', 'herdr-boss'));
   const relative = path.relative(privateDir, resolveAlias(dataDir));
   if (!relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) throw new Error('The setup data folder must be outside the private access folder.');
+  dataDir = resolveAlias(dataDir);
+  assertSetupFiles(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const release = takeSetupLock(dataDir);
+  if (!release) {
+    output(SETUP_LOCKED_MESSAGE);
+    return { exitCode: 1, steps, waitingStep: null };
+  }
+  try {
+    return await runLockedSetup({ home, env, dataDir, resume, pacing, runner, timeoutMs, ask, output, execute, steps });
+  } finally { release(); }
+}
+
+async function runLockedSetup({ home, env, dataDir, resume, pacing, runner, timeoutMs, ask, output, execute, steps }) {
+  assertSetupFiles(dataDir);
   const state = readSetupState(dataDir) ?? { schema: 'herdr-boss.setup/1', steps: Object.fromEntries(steps.map(({ id, name }) => [id, { name, status: 'pending' }])) };
   const context = { home, env: { ...env, platform: os.platform() }, state, dataDir, pacing, ask, output, execute };
   output(resume ? 'Resume setup.' : 'Start setup. Saved progress continues.');
@@ -109,6 +118,7 @@ export async function runSetup({ env = process.env, home = env.HOME || os.homedi
       const red = report?.items.filter((item) => item.status === 'red') ?? [];
       for (const item of red) output(`Fix: ${item.fix}`);
       try {
+        assertSetupFiles(dataDir);
         status = await runSetupAction(step.id, { ...context, red });
         if (status === 'done') {
           report = await check();

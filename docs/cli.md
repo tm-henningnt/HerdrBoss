@@ -51,7 +51,9 @@ The other provider modes keep their values.
 
 Name your first project with `herdr-boss project new <slug> --group <folder> --start`.
 Then run `herdr-boss setup --resume`.
-The wizard checks the project registration and opens the local dashboard.
+The wizard checks the project registration and the Git repository.
+It accepts a Git worktree with a valid `.git` file.
+It then opens the local dashboard.
 Answer your first Mailbox question and submit your first review pack there.
 Resume setup in your terminal after each action.
 Confirm each action with `yes` when the wizard asks.
@@ -60,6 +62,14 @@ If no question or pack exists, ask the Boss in Chat.
 Progress is in `setup.json` in the data directory.
 The file holds step names, states, the pacing choice, and your confirmations.
 It holds no secret.
+Setup refuses a progress, policy, or policy-log file that links outside the data folder.
+Its file readers and writers do not follow symbolic links.
+Run one setup command for each data folder at a time.
+The command holds `setup.lock` while a terminal prompt is open.
+It releases the lock when it exits.
+A second run exits 1 with `Setup is already running for this data folder.`
+Run it again after the first command ends.
+If a crash leaves the lock file, remove it only after you verify that no setup command runs.
 Each run checks the computer again.
 `--resume` continues the saved progress.
 A plain rerun also continues it.

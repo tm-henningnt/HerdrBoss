@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -45,7 +45,11 @@ cp.spawn = (command, args) => {
   });
   return child;
 };
-cp.execFileSync = () => { throw new Error('setup must not run a write command without consent'); };
+const execRead = cp.execFileSync;
+cp.execFileSync = (command, args, options) => {
+  if (command === 'git' && args[2] === 'rev-parse') return execRead(command, args, options);
+  throw new Error('setup must not run a write command without consent');
+};
 http.get = (_options, callback) => {
   const req = new EventEmitter();
   req.destroy = (error) => req.emit('error', error);
@@ -78,7 +82,7 @@ syncBuiltinESMExports();
     write('.codex/rules/herdr.rules', ['ps:e', 'ps:-E', 'ps:eww', 'ps:auxe', 'ps:auxeww', 'pkill', 'killall'].map((rule) => `prefix_rule(pattern=${JSON.stringify(rule.split(':'))}, decision="forbidden")`).join('\n'));
     write('.config/opencode/opencode.json', '{"agent":{"worker":{}}}');
     const repo = path.join(home, 'InventedProject');
-    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main', repo], { env: { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, 'gitconfig') } });
     write('data/project-repos.json', JSON.stringify([{ slug: 'invented', repo }]));
     write('data/projects/invented.json', '{"slug":"invented"}');
     write('data/policy.json', '{"providerModes":{"claude":"managed"}}');
