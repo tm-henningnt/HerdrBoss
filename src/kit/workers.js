@@ -48,7 +48,7 @@ const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
-  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection',
+  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule',
 ]);
 const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
 const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
@@ -276,7 +276,7 @@ export function renderBrief(template, slots) {
   for (const name of names) if (!BRIEF_SLOTS.has(name)) throw new Error(`Unknown brief template slot: {{${name}}}.`);
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, name) => {
     const value = slots[name];
-    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection'].includes(name) && (value === undefined || value === null || value === '')) return '';
+    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule'].includes(name) && (value === undefined || value === null || value === '')) return '';
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
@@ -1472,6 +1472,12 @@ function startWorkerOnce(name, options, {
       model === 'gpt-6-luna' ? 'Report a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.' : '',
     ].filter(Boolean).join('\n'),
     kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit. Do not run sleep and then poll. Do not run herdr-boss wait: it waits on other workers.' : '',
+    stopRule: options.kind === 'codex'
+      ? `Stop it with \`herdr-boss worker stop-own ${name} --pid <pid>\`. Never run \`kill\`, \`pkill\`, \`killall\`, or \`kill\` with a name pattern such as \`kill $(pgrep …)\`.`
+      : 'Stop it with `kill <pid>`. Never use `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`.',
+    kindCommitRule: options.kind === 'codex'
+      ? `Codex worker commit rule: do not run \`git add\` or \`git commit\`. Leave the change in the working tree. Say in your report that the change is uncommitted. The orchestrator commits the change with \`herdr-boss worker commit ${name} -m MESSAGE\`.`
+      : '',
     portInstruction: leases.some((lease) => lease.pool === 'serve-ports')
       ? `Use only the port in \`${path.posix.join(plan.workerDir, 'port')}\`. Take no other serve port.`
       : '',
@@ -1490,7 +1496,7 @@ function startWorkerOnce(name, options, {
   if (briefSlots.copyPaths.length && !/{{\s*copyPaths\s*}}/.test(template)) {
     missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
   }
-  for (const slot of ['kindHeaderNote', 'kindWaitNote', 'portInstruction']) {
+  for (const slot of ['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'stopRule', 'kindCommitRule']) {
     if (briefSlots[slot] && !new RegExp(`{{\\s*${slot}\\s*}}`).test(template)) missingBriefDetails.push(briefSlots[slot]);
   }
   const brief = `${renderBrief(template, briefSlots)}${missingBriefDetails.length ? `\n\n## Worker start details\n\n${missingBriefDetails.join('\n\n')}` : ''}`;
@@ -1905,6 +1911,107 @@ export function deriveModelOutcome(options, reportJson = {}) {
   return { result: 'first-time', reason: '' };
 }
 
+// Stop one process of a worker. The caller runs in the worker pane. The target must be a descendant
+// of the worker pane shell, or have its current directory inside the worker worktree. Nothing else is
+// stopped. The command prints only the pid and the command name.
+export function stopOwnWorker(name, { pid = null } = {}, {
+  config,
+  output = console.log,
+  listProcesses = listCwdProcesses,
+  kill = (target, signal) => process.kill(target, signal),
+  callerPid = process.pid,
+  callerPpid = process.ppid,
+} = {}) {
+  const { run } = readRun(config, name);
+  const target = Number(pid);
+  if (!Number.isSafeInteger(target) || target <= 1) throw new Error('worker stop-own needs --pid PID with a process id greater than 1.');
+  const processes = listProcesses();
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const targetProcess = byPid.get(target);
+  const callerPids = new Set(callerProcessTree(processes, callerPid, callerPpid).map((item) => Number(item.pid)));
+  if (callerPids.has(target)) throw new Error(`worker stop-own refuses pid ${target}: it is the caller or one of its parents.`);
+  const shellPid = Number(run.shellPid);
+  if (Number.isSafeInteger(shellPid) && shellPid > 1 && target === shellPid) {
+    throw new Error(`worker stop-own refuses pid ${target}: it is the worker pane shell.`);
+  }
+  const inShellTree = (() => {
+    let current = targetProcess;
+    const seen = new Set();
+    while (current && !seen.has(Number(current.pid))) {
+      if (Number(current.pid) === shellPid && Number.isSafeInteger(shellPid) && shellPid > 1) return true;
+      seen.add(Number(current.pid));
+      current = byPid.get(Number(current.ppid));
+    }
+    return false;
+  })();
+  if (!targetProcess || (!inShellTree && !isInWorktree(targetProcess, path.resolve(run.worktree)))) {
+    throw new Error(`worker stop-own refuses pid ${target}: it is not in the process tree or worktree of worker ${name}.`);
+  }
+  const command = targetProcess.command || 'unknown';
+  if (/^app-server/.test(command)) throw new Error(`worker stop-own refuses pid ${target}: the Codex app-server is shared. Do not stop it.`);
+  try { kill(target, 'SIGTERM'); }
+  catch (error) { throw new Error(`worker stop-own could not stop pid ${target} (${error.code || error.message}).`); }
+  output(`${target} ${command}`);
+  return { pid: target, command };
+}
+
+// A path that worker commit never stages, even inside the allowed scope. It names the reason, or null.
+export function commitDeniedReason(relative) {
+  const item = String(relative).replaceAll('\\', '/');
+  if (item === '.worker' || item.startsWith('.worker/')) return 'under .worker/';
+  if (item === '.orchestration' || item.startsWith('.orchestration/')) return 'under .orchestration/';
+  const name = item.split('/').pop() ?? '';
+  if (name === '.env' || name.startsWith('.env.')) return 'a dotenv file';
+  if (name.endsWith('.pem') || name.endsWith('.key')) return 'a key file';
+  if (name.startsWith('id_rsa')) return 'a private key';
+  if (/token|secret/i.test(name)) return 'a token or secret file';
+  if (name.startsWith('credentials')) return 'a credentials file';
+  if (name === 'opencode.json') return 'an OpenCode config file';
+  return null;
+}
+
+// Keep the line breaks and tabs of a commit message, strip every other control character, and limit
+// the message to 2000 characters.
+export function cleanCommitMessage(message) {
+  return String(message ?? '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 2000)
+    .trimEnd();
+}
+
+// Commit the scoped change of one worker on its own branch. The orchestrator runs this from its own
+// pane, because a Codex worker cannot write the shared Git metadata of a worktree. The command stages
+// the changed paths inside the worker scope and refuses every path outside it, every secret-bearing
+// path, and the worker bookkeeping paths.
+export function commitWorker(name, { message = null } = {}, { config, output = console.log } = {}) {
+  const { run } = readRun(config, name);
+  const text = cleanCommitMessage(message);
+  if (!text) throw new Error('worker commit needs -m MESSAGE.');
+  const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
+  if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
+  const baseRef = run.baseCommit || run.base;
+  // The worker's own brief and report files never count. The kit writes its own files in the worktree.
+  const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/') || KIT_MANAGED_PATHS.includes(String(item));
+  const extensionPaths = (Array.isArray(run.scopeExtensions) ? run.scopeExtensions : []).flatMap((extension) => Array.isArray(extension?.paths) ? extension.paths : []);
+  const allowedPaths = [...new Set([...(run.allowedPaths ?? []), ...extensionPaths])];
+  const changedAll = gitWorkerChangedPaths(run.worktree, baseRef, run.base);
+  const denied = changedAll.filter((item) => commitDeniedReason(item));
+  if (denied.length) throw new Error(`Worker ${name} changed a path that worker commit refuses to stage: ${denied.join(', ')}.`);
+  const changed = changedAll.filter((item) => !ownFile(item));
+  const outOfScope = compareChangedPaths(changed, allowedPaths);
+  if (outOfScope.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${outOfScope.join(', ')}.`);
+  if (!changed.length) {
+    output(`Nothing to commit for worker ${name}.`);
+    return { committed: false, paths: [] };
+  }
+  git(run.worktree, ['add', '--', ...changed]);
+  git(run.worktree, ['commit', '-m', text, '--', ...changed]);
+  const commit = git(run.worktree, ['rev-parse', '--short', 'HEAD']).trim();
+  output(`Committed ${commit} on ${run.branch}: ${text.split('\n')[0]}`);
+  return { committed: true, commit, paths: changed };
+}
+
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
@@ -1976,6 +2083,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       throw new Error('--reason needs --accept-scope FILE[,FILE].');
     }
     if (unlistedErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${unlistedErrors.join(', ')}.`);
+    // A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree.
+    // Collection accepts that state and names it, so the orchestrator commits with worker commit.
+    const uncommitted = run.kind === 'codex' && !log.trim() && changed.length > 0;
+    if (uncommitted) output(`Codex worker ${name} left ${changed.length} changed path(s) uncommitted; the orchestrator commits with herdr-boss worker commit ${name} -m MESSAGE.`);
     const recordedPaths = omitted.length ? changed : reported;
     try {
       const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
@@ -2001,6 +2112,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       actualPaths: changed,
       recordedPaths,
       outOfScope: unlistedErrors,
+      ...(uncommitted ? { uncommitted: true } : {}),
       ...(scopeException ? { scopeException } : {}),
       scopeExtensions: run.scopeExtensions ?? [],
       artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),

@@ -15,6 +15,7 @@ Read this file before you dispatch work, stage or integrate a change, or clean u
 - Do not delete a worktree with unmerged or user-owned work.
 - Do not use destructive reset, clean, force-push, or discard checkout as a shortcut.
 - Record the verified commit or uncommitted state before the next task.
+- A Codex worker cannot commit. Leave its change in the worker worktree and commit it from the orchestrator side with `herdr-boss worker commit <name> -m MESSAGE` after review. The command refuses a changed path outside the worker scope.
 - Use `herdr-boss worktree prune` to review stale worktrees.
 - Inspect prune candidates before applying cleanup.
 - Use `herdr-boss worktree prune --apply` only after verifying the candidates and their ownership.
