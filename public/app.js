@@ -1236,6 +1236,7 @@ function settingsView(s) {
     'workers.staleIdleMinutes': [5, 1440],
     'workers.paneCloseDelayMinutes': [0, 60],
     'workers.uncollectedNoticeMinutes': [1, 1440],
+    'workers.leaseGraceMinutes': [1, 1440],
     'watch.maxWorkers': [1, 40],
     'watch.maxWorkersByLane': [1, 40],
     'browsers.staleOwnedMinutes': [5, 1440],

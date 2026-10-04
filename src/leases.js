@@ -178,7 +178,7 @@ function idleReason(lease, pool, now) {
 
 // A lease of a ports pool also ends when its bound server process is gone, and when its port has had no listener for idleMinutes.
 // lease.idleSince records when the first tick saw no listener. A listener clears it.
-function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours = false }) {
+function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours = false, graceMinutes = 0 }) {
   if (pool?.check === 'cdp') {
     // A hung Chrome still has its process. Only a missing process counts, so a browser that does not respond keeps its lease.
     const present = typeof browserProcess === 'function' ? browserProcess(lease) : null;
@@ -218,17 +218,29 @@ function reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidI
   if (lease.pid == null && hasIdleRule(pool) && typeof probeTcp === 'function') {
     const listening = probeTcp(lease.item, lease.pool);
     if (listening === true) delete lease.idleSince;
-    else if (listening === false) return idleReason(lease, pool, now);
+    else if (listening === false) {
+      const idle = idleReason(lease, pool, now);
+      if (idle) return idle;
+    }
+  }
+  // The grace time bounds the idle rule: a lease of a pool with an idle rule that has no bound process
+  // and no listener goes back after graceMinutes, also when the idle time of the pool is longer.
+  // A pool without an idle rule and a missing pool never apply this rule, so a live worker pane,
+  // a project lease, and a lease of an unknown pool keep the lease.
+  if (lease.pid == null && graceMinutes > 0 && hasIdleRule(pool) && lease.idleSince) {
+    if (now - Date.parse(lease.idleSince) >= graceMinutes * 60000) {
+      return { text: `no listener on port ${lease.item} for ${graceMinutes} minutes`, idleMinutes: graceMinutes };
+    }
   }
   return null;
 }
 
-function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pidInfo = processInfo, quietHours = false }) {
+function reclaimInStore(store, { pools, panes, now, probeTcp, browserProcess, pidInfo = processInfo, quietHours = false, graceMinutes = 0 }) {
   const reclaimed = [];
   const held = [];
   store.leases = store.leases.filter((lease) => {
     const pool = pools.find((candidate) => candidate.name === lease.pool);
-    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours });
+    const reason = reclaimReason(lease, { pool, panes, now, probeTcp, browserProcess, pidInfo, quietHours, graceMinutes });
     if (reason?.held) {
       held.push({ pool: lease.pool, item: lease.item, project: lease.project, worker: lease.worker ?? null, pane: lease.pane ?? null, held: reason.held });
       return true;
@@ -252,11 +264,11 @@ export function reclaimNoticeText(item) {
 
 // Reclaim leases whose holder is gone. `panes` is the set of pane IDs from a successful pane list, or null.
 // `browserProcess` checks the leases of a cdp pool. Without it, a cdp lease is not checked.
-export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS } = {}) {
+export function reclaimLeases({ pools, dataDir = DATA_DIR, panes = null, now = Date.now(), night = null, probeTcp = null, browserProcess = null, pidInfo = processInfo, log = () => {}, waitMs = MUTATION_GUARD_WAIT_MS, graceMinutes = 0 } = {}) {
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return { reclaimed: [], held: [] };
   const at = timeValue(now);
   const quietHours = quietHoursActive(night ?? readNight({ dataDir, now: at }));
-  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo, quietHours }), waitMs);
+  const { reclaimed, held } = changeLeases(dataDir, (store) => reclaimInStore(store, { pools, panes, now: at, probeTcp, browserProcess, pidInfo, quietHours, graceMinutes }), waitMs);
   for (const item of reclaimed) log(item);
   for (const item of held) log(item);
   return { reclaimed, held };

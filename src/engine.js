@@ -1043,6 +1043,7 @@ export class Engine extends EventEmitter {
         try {
           reclaimLeases({
             pools: resourcePools, dataDir: DATA_DIR, now, waitMs: 0,
+            graceMinutes: this.cfg.workers?.leaseGraceMinutes ?? 30,
             probeTcp: (item, pool) => listenerOf(pool, item),
             panes: currentHerdrSnapshot && currentPaneList ? new Set(herdr.panes.map((pane) => pane.id)) : null,
             browserProcess: browserProcessCheck(processesKnown ? procs : null, Object.fromEntries(browserSessions.map((b) => [b.project, b]))),

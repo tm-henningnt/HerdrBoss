@@ -2164,10 +2164,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       run.collectedAt = run.collectedAt || entry.endedAt;
       if (scopeException) run.scopeException = scopeException;
       writeJsonAtomic(file, run);
-      if (run.leases?.length) {
-        const taken = new Set(run.leases.map((lease) => `${lease.pool}\n${lease.item}`));
-        releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseDataDir }));
-      }
+      // Give back every lease that names this worker, also a lease that the worker took after its start.
+      releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir }));
     }
     if (omitted.length) output(`report.json omits ${omitted.length} changed path(s); recorded the diff paths`);
     // The collected worker is done, so its planner session ends. A later result goes to the orch pane.
@@ -2219,7 +2217,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
 }
 
 // A parked worker waits on purpose, for example for the Owner. Its pane label tells Herdr Boss to leave it out of idle notices.
-export function parkWorker(name, { reason = null, unpark = false } = {}, { config, herdr = createHerdrRunner(), output = console.log } = {}) {
+export function parkWorker(name, { reason = null, unpark = false } = {}, { config, herdr = createHerdrRunner(), output = console.log, leaseDataDir = DATA_DIR } = {}) {
   const { file, run } = readRun(config, name);
   if (run.finishedAt) throw new Error(`Run ${name} is already finished.`);
   if (!run.pane) throw new Error(`Run ${name} has no pane.`);
@@ -2234,6 +2232,11 @@ export function parkWorker(name, { reason = null, unpark = false } = {}, { confi
     output(`Worker ${name} is parked: ${reason}. Idle notices skip pane ${run.pane}.`);
   }
   writeJsonAtomic(file, run);
+  // A parked worker does not use its leases, so give them back. Unpark does not take them again.
+  if (!unpark) {
+    const released = dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir });
+    for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
+  }
   return run;
 }
 
