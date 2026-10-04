@@ -48,6 +48,18 @@ test('doctor returns each onboarding item with its shared step ID when all check
   assert.ok(lines.every((line) => /^green: [^\n]+$/.test(line)));
 });
 
+test('doctor can verify one setup step without probing later steps', async () => {
+  const ids = [];
+  const report = await runDoctor({ home: HOME, stepId: 'tools', runner: async (request) => {
+    ids.push(request.id);
+    return fake({ os: 'linux', node: '' })(request);
+  } });
+  assert.deepEqual(report.items.map((item) => item.id), ['node', 'git', 'git-name', 'herdr', 'claude-installed', 'codex-installed', 'opencode-installed', 'pi-installed', 'gh', 'codexbar']);
+  assert.deepEqual(ids, ['os', ...report.items.map((item) => item.id)]);
+  assert.equal(report.ok, false);
+  assert.equal(report.items[0].fix, 'Follow the Node vendor instructions. Install Node 26.10 or later. Put node on PATH.');
+});
+
 const FIXES = {
   os: 'Use macOS or Linux. On Windows, install Ubuntu under WSL2 and run this command in Ubuntu.',
   node: 'Run brew install node. Use Node 26.10 or later. Put node on PATH.', git: 'Run brew install git. Put git on PATH.',

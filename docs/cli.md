@@ -17,6 +17,7 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | Command | Action |
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
+| `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
 | `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the launchd agent. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
@@ -26,6 +27,52 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
 
 On Linux, `serve` checks for `lsof` and the procps `ps` command at start. A missing tool gives an installation warning in standard error and in the dashboard event log. The service continues. The check runs beside the first tick and does not delay it. The read-only preview skips the check. Install the named package to enable its process checks.
+
+### First-hour setup
+
+Run `bin/herdr-boss setup` from the downloaded repository.
+The wizard uses the [shared onboarding steps](onboarding.md#the-shared-step-names).
+It checks one step at a time with `doctor`.
+It skips a step when its checks pass.
+It checks each step again after an action.
+
+The wizard prints each install command before it asks for your yes in the terminal.
+Type `no` to refuse the command.
+Without a terminal, it prints the action and stops.
+Run the command yourself, or resume setup in your terminal.
+Only you sign in and add the Claude settings in your editor.
+Never type a password, a key, or a token into the wizard or a chat.
+
+Choose `paced` or `unpaced` when the wizard asks about Claude.
+You can also run `herdr-boss setup --resume --pacing paced` or `herdr-boss setup --resume --pacing unpaced`.
+`paced` sets the Claude provider mode to `managed` in the policy.
+`unpaced` sets it to `ignore`.
+The other provider modes keep their values.
+
+Name your first project with `herdr-boss project new <slug> --group <folder> --start`.
+Then run `herdr-boss setup --resume`.
+The wizard checks the project registration and opens the local dashboard.
+Answer your first Mailbox question and submit your first review pack there.
+Resume setup in your terminal after each action.
+Confirm each action with `yes` when the wizard asks.
+If no question or pack exists, ask the Boss in Chat.
+
+Progress is in `setup.json` in the data directory.
+The file holds step names, states, the pacing choice, and your confirmations.
+It holds no secret.
+Each run checks the computer again.
+`--resume` continues the saved progress.
+A plain rerun also continues it.
+`--dry-run` prints the full plan and changes nothing.
+
+Exit code 0 means that all steps pass, or that a dry run ends.
+Exit code 1 means a usage error, a refusal, or a failed action.
+Exit code 3 means that a step waits for you.
+The last lines name that step and give the next action.
+On Linux, follow the printed tool and service instructions yourself.
+The native Linux install flow is a separate onboarding task.
+
+### Service checks
 
 `GET /api/health` returns the health body: `schema`, `contractVersion`, `version`, `kitRevision`, `tickAgeSeconds`, `herdrReachable`, and `clockOffsetSeconds`. Use `curl -fsS http://127.0.0.1:4477/api/health` on the machine of the service. The body holds no path and no secret. The route answers HTTP 503 with `{"error":"kit revision unknown"}` when the kit revision cannot be read. `/api/health` stays behind the access check. A prober on another machine sends the read token. See the Health route section of the user guide.
 

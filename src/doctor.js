@@ -273,11 +273,13 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
   return run;
 }
 
-export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
+export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('The doctor timeout must be a positive number.');
   const items = [];
   let platform = 'linux';
   for (const check of checks({ home, env, factoryHost })) {
+    // Setup checks one shared step at a time. The OS probe selects its installer text.
+    if (stepId && check.stepId !== stepId && check.id !== 'os') continue;
     const controller = new AbortController();
     let timer;
     let timedOut = false;
@@ -291,6 +293,7 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
       good = check.pass(value) === true;
     } catch { /* Print fixed words only, never a probe error or its output. */ }
     finally { clearTimeout(timer); }
+    if (stepId && check.stepId !== stepId) continue;
     const fix = DOCTOR_INSTALL_FIXES[check.id]?.[platform] ?? check.fix;
     items.push({ id: check.id, stepId: check.stepId, name: check.name, status: good ? 'green' : 'red', message: good ? `${check.name} is good.` : `${check.name} ${timedOut ? 'check timed out' : 'needs a fix'}.`, fix: good ? null : fix });
   }
