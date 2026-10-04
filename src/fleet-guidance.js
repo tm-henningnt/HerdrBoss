@@ -44,6 +44,8 @@ export function createFleetGuidance({ dir, settings, deliver, now = Date.now }) 
       nudges: [...nudges.filter((row) => !incoming.some((next) => next.nudgeId === row.nudgeId)), ...incoming] };
     if (saved.nudges.length > 2000) throw guidanceError('This head office term has reached its limit of 2000 nudge IDs.');
     writeFleetFile(file, saved);
+    // A newer head office term also updates the role record, which holds the term for the whole factory.
+    if (!role || body.senderEpoch > role.epoch) writeFleetFile(roleFile, { schema: 1, contractVersion: '1.0.0', headOfficeFactoryId: body.headOfficeFactoryId, epoch: body.senderEpoch, updatedAt: body.sentAt });
     const delivery = [];
     for (const nudge of saved.nudges.filter((row) => !row.delivered || incoming.includes(row))) {
       if (!nudge.delivered) {

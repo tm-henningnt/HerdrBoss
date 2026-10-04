@@ -26,3 +26,9 @@ Send guidance credentials only over HTTPS. HTTP is permitted only for a loopback
 The factory refuses an epoch more than 1000 above its highest stored guidance or role epoch. To recover from an incorrect epoch or holder, rotate the guide credential at the receiving factory. Rotation resets both stored epochs and holders. It clears the nudge IDs of the old term and keeps the last accepted shares. Import the new credential at the head office through private provisioning.
 
 If a fleet share file is invalid, the pacing view shows the problem and the service logs one warning. The local policy still loads with factory shares unset. A metered worker start refuses a failed share check. Unmetered worker starts do not read factory shares. Repair the fleet files to clear the problem.
+
+## Head office role
+
+The Head office panel shows the factory that holds the head office role and the epoch of its term. Only the holder polls the other factories and sends factory shares and nudges. A factory that sees a higher epoch stops both.
+
+Move the role on the factory that takes it. Run `herdr-boss hub promote` in an Owner terminal. The command refuses when a registered factory cannot be reached. Run it with `--force` to continue without that factory. The new holder gets the registry and the factory shares from the former holder, or keeps its own copy. See the move runbook in the factory chapter of the user guide.

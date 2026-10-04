@@ -9,6 +9,7 @@ Choose the chapter for your task.
 - [I want to use it from my phone](guide/phone.md)
 - [I want to add a project](guide/project.md)
 - [I want to add a factory](guide/factory.md)
+- [I want to move the head office](guide/factory.md#move-the-head-office)
 - [Something went wrong](guide/trouble.md)
 
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

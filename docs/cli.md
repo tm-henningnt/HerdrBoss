@@ -2056,7 +2056,7 @@ The factory refuses an additional ID when it reaches this limit.
 A failed Boss delivery stays pending and retries when guidance arrives again.
 If the remote request fails, select **Send nudge** again with the same text.
 
-The guidance credential permits only `POST /api/fleet/guidance`.
+The guidance credential permits only `POST /api/fleet/guidance`, `POST /api/fleet/role`, `GET /api/fleet/role`, and `GET /api/fleet/handover`.
 It gets 403 for policy changes, worker start or stop, message reads, and every other route or method.
 The read credential gets 403 on the guidance route.
 A missing guidance credential gets 401.
@@ -2064,3 +2064,35 @@ An invalid guidance credential gets 403.
 Owner access cannot submit directly to the guidance route.
 Use the head office share and nudge routes instead.
 A read-only preview refuses all three write routes.
+
+### Head office role
+
+Each factory stores the head office factory ID and the epoch in one role record.
+The file is `head-office-role.json` in the Herdr Boss data folder.
+The file has mode 0600.
+A factory that has head office polling on and no role record holds the role at epoch 1.
+Keep head office polling off on a factory until it takes the role.
+
+- `herdr-boss hub promote`: Take the head office role on this factory. The new epoch is the highest epoch that any registered factory reports, plus one. The command checks each registered factory first. It refuses to start when a factory cannot be reached or has no guide credential, and it names that factory with a reason code. It then writes the role record, turns on head office polling on this factory, and sends the record to each factory with `POST /api/fleet/role`. The command prints the epoch, the factories told, the factories not told, and the result of the handover. It prints no credential.
+- `herdr-boss hub promote --force`: Continue when a factory cannot be reached. The command lists that factory as not told. The service of the new holder sends the record to that factory after the next successful poll. A factory also accepts the role from newer head office guidance.
+
+A factory that already holds the role prints that fact and changes nothing.
+The new holder needs the guide credential of each registered factory.
+Import each one with `herdr-boss fleet guide-token set FACTORY --from-file FILE` before the promotion.
+
+The registry and the factory shares move with the role.
+The new holder asks the former holder for them with `GET /api/fleet/handover`.
+It adds each host and each factory that its own registry lacks.
+It keeps its own record when both registries have the same ID.
+It replaces its factory shares with the shares of the former holder.
+If the former holder cannot be reached, or sends an invalid body, the new holder keeps its own copy.
+The result line says `received` or `kept its own copy`.
+
+- `GET /api/fleet/role`: Read the holder, the epoch, the time of the record, and whether this factory holds the role. The `fleetGuide` credential and Owner access are accepted.
+- `POST /api/fleet/role`: Accept a role record with the `fleetGuide` credential. Use the head office role contract 1.0.0: `schema`, `contractVersion`, `headOfficeFactoryId`, `epoch`, and `updatedAt`. The factory accepts a higher epoch and an exact repeat. It refuses a lower epoch, another holder at the same epoch, and an epoch more than 1000 above the stored epoch, with 409. It refuses an invalid body with 400. A missing credential gets 401.
+- `GET /api/fleet/handover`: Return the registry and the factory shares with the `fleetGuide` credential. Only the holder answers. Another factory gets 409.
+
+A factory that sees a higher epoch stops polling the fleet and refuses to send guidance.
+Newer head office guidance also updates the role record.
+Rotation of the guide credential deletes the role record.
+`GET /api/fleet` returns the same data as `role`.
