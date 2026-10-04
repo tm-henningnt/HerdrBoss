@@ -115,6 +115,7 @@ try {
     'workers.staleIdleMinutes',
     'workers.paneCloseDelayMinutes',
     'workers.uncollectedNoticeMinutes',
+    'workers.leaseGraceMinutes',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'chromePath',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'analytics.actionsMinutes',
@@ -122,7 +123,7 @@ try {
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
-    'config', 'config', 'default', 'default', 'config', 'config', 'default',
+    'config', 'config', 'default', 'default', 'default', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
     'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',
   ]);
