@@ -163,6 +163,8 @@ const DEFAULTS = {
   },
   // A published project status older than this is stale while workers run or new commits land.
   staleStatusMinutes: 120,
+  // A published phase or summary that keeps the same text for this long is stale text. See staleTextStatuses().
+  staleTextMinutes: 360,
   // Shared resources that projects lease, for example local serve ports. See validateResourcePools().
   resourcePools: [],
   // codexbar provider -> herdr agent kinds that consume it.
@@ -187,6 +189,7 @@ const SERVICE_SETTINGS = [
   ['Quota plan', 'quotaPlan.slowFactor'],
   ['Quota plan', 'quotaPlan.planMode'],
   ['Status', 'staleStatusMinutes'],
+  ['Status', 'staleTextMinutes'],
   ['Workers', 'workers.staleIdleMinutes'],
   ['Workers', 'workers.paneCloseDelayMinutes'],
   ['Workers', 'workers.uncollectedNoticeMinutes'],
@@ -422,6 +425,7 @@ const SERVICE_SETTING_RANGES = new Map([
   ['quota.criticalPercent', [51, 100]],
   ['quotaPlan.applyThreshold', [50, 100]],
   ['staleStatusMinutes', [5, 1440]],
+  ['staleTextMinutes', [5, 10080]],
   ['workers.staleIdleMinutes', [5, 1440]],
   ['workers.paneCloseDelayMinutes', [0, 60]],
   ['workers.uncollectedNoticeMinutes', [1, 1440]],

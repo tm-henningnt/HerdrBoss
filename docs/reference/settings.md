@@ -68,6 +68,8 @@ A paused project is never stale. Herdr Boss finds the repository in `project-rep
 
 The stale notice text is `Your published status is <age> old while <workers ran | new commits landed>. Run herdr-boss publish <slug> <file> with the current plan and progress.` The notice uses one key for each project and `updated` time. It joins the shared pane digest. The digest normally waits until the orchestrator is idle or done. If an item stays due for more than 3 hours, Herdr Boss can send the digest while the orchestrator works. The pane gets an info digest at most once in 2 hours. A new publish ends the stale status. When the new status becomes stale, Herdr Boss sends a new notice.
 
+A published `phase` or `summary` is stale text when its value stays the same for `staleTextMinutes` (default 360 minutes). Herdr Boss keeps the hash and the first time of each text per project in `memory.json`. It sends one notice for each stale period to the project lead. The notice names the unchanged fields and says `Rewrite it at the next publish`. A field that changes starts a new period. A paused project never gets this notice.
+
 `HERDR_BOSS_PUSH=0` turns off prompts for one run.
 
 ### Current guidance

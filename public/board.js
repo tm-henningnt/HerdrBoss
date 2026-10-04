@@ -42,6 +42,13 @@ export function taskState(t, map = new Map()) {
   return 'ready';
 }
 
+// Whether a task shows as an open wait for the Owner. Only a real signal counts: waitingOn owner, or a
+// linked Mailbox item. The published phase and summary text never decides this.
+export function waitsForOwner(t) {
+  if (!t || (FLOW_SET.has(t.state) ? t.state === 'done' : (t.status || 'todo') === 'done')) return false;
+  return t.waitingOn === 'owner' || (typeof t.mailboxId === 'string' && t.mailboxId.trim().length > 0);
+}
+
 // What a blocked task waits on: each open blocker task first, then the waiting party.
 export function blockReasons(t, map) {
   if (taskState(t, map) !== 'blocked') return [];
@@ -258,7 +265,7 @@ export function fleetFilter(items, { project = '', who = '', state = '', query =
     const t = item.task;
     if (project && item.slug !== project) return false;
     if (state && item.state !== state) return false;
-    if (who === 'owner' && t.waitingOn !== 'owner') return false;
+    if (who === 'owner' && !waitsForOwner(t)) return false;
     if (who === 'worker' && !t.worker) return false;
     if (who.startsWith('kind:') && t.worker?.kind !== who.slice(5)) return false;
     if (who.startsWith('model:') && t.worker?.model !== who.slice(6)) return false;

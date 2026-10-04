@@ -10,7 +10,7 @@ const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-stale-status-'));
 process.env.HERDR_BOSS_DIR = DATA;
 process.on('exit', () => fs.rmSync(DATA, { recursive: true, force: true }));
 const { Engine } = await import('../src/engine.js');
-const { evaluate, renderBulletin, staleStatuses, STALE_STATUS_NOTICE_AFTER_MINUTES } = await import('../src/rules.js');
+const { evaluate, renderBulletin, staleStatuses, staleTextStatuses, staleTextAlerts, STALE_STATUS_NOTICE_AFTER_MINUTES } = await import('../src/rules.js');
 const { NO_WORKER_MINUTES } = await import('../src/task-state.js');
 const { loadConfig } = await import('../src/config.js');
 const { listProjects } = await import('../src/projects.js');
@@ -70,6 +70,96 @@ test('a status is not stale under 2 hours, when paused, or without activity afte
 
 test('the default configuration has staleStatusMinutes 120', () => {
   assert.equal(loadConfig().staleStatusMinutes, 120);
+});
+
+test('the default configuration has staleTextMinutes 360', () => {
+  assert.equal(loadConfig().staleTextMinutes, 360);
+});
+
+// A project whose published file changes while its phase and summary text stay the same. The text fields
+// need only the project row and the control entry.
+function textSnapshot({ phase = 'Waiting for the Owner', summary = 'Waiting for the Owner.', mode = 'auto' } = {}) {
+  const project = { slug: 'alpha', project: 'Alpha', status: 'active', updated: iso(NOW), tasks: [] };
+  if (phase !== null) project.phase = phase;
+  if (summary !== null) project.summary = summary;
+  return {
+    projects: [project],
+    control: { projects: { alpha: { slug: 'alpha', label: 'Alpha', workspace: 'w1', effectiveMode: mode, running: 0 } } },
+  };
+}
+
+test('a phase and summary that stay the same for the stale text limit give one notice that names them', () => {
+  const cfg = { ...CFG, staleTextMinutes: 360 };
+  const snap = textSnapshot();
+  // Before the limit no notice goes out.
+  assert.deepEqual(staleTextAlerts(snap, cfg, NOW, staleTextStatuses(snap, cfg, NOW, {})), []);
+  // At the limit one notice names both unchanged fields. They share one period, so they share one alert.
+  const at = NOW + 6 * HOUR;
+  const state = staleTextStatuses(snap, cfg, at, staleTextStatuses(snap, cfg, NOW, {}));
+  const alerts = staleTextAlerts(snap, cfg, at, state);
+  assert.equal(alerts.length, 1, 'one notice for one stale period');
+  assert.match(alerts[0].text, /`phase` and `summary`/);
+  assert.equal(alerts[0].scope, 'w1');
+  assert.equal(alerts[0].once, true, 'the notice goes out once for the period');
+  // The same stale period keeps its key, so the deliver gate holds it and does not send it again.
+  const later = at + MIN;
+  const repeated = staleTextAlerts(snap, cfg, later, staleTextStatuses(snap, cfg, later, state));
+  assert.deepEqual(repeated.map((a) => a.key), alerts.map((a) => a.key), 'the same period keeps its key');
+  // A changed summary starts a new period with a new key and names only the summary.
+  const changed = textSnapshot({ summary: 'Build is in progress.' });
+  const changedState = staleTextStatuses(changed, cfg, later, state);
+  const restarted = staleTextAlerts(changed, cfg, later + 6 * HOUR, changedState);
+  const summary = restarted.find((a) => a.text.includes('`summary`'));
+  assert.ok(summary, 'the changed summary gets its own notice after the limit');
+  assert.doesNotMatch(summary.text, /`phase`/);
+  assert.notEqual(summary.key, alerts[0].key, 'a new period gets a new key');
+});
+
+test('stale text notice names only the fields whose text did not change', () => {
+  const cfg = { ...CFG, staleTextMinutes: 360 };
+  const phaseOnly = textSnapshot({ summary: null });
+  const state = staleTextStatuses(phaseOnly, cfg, NOW, {});
+  const alerts = staleTextAlerts(phaseOnly, cfg, NOW + 6 * HOUR, state);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].text, /`phase`/);
+  assert.doesNotMatch(alerts[0].text, /`summary`/);
+});
+
+test('a project without phase or summary text, or paused, gets no stale text notice', () => {
+  const cfg = { ...CFG, staleTextMinutes: 360 };
+  const bare = textSnapshot({ phase: null, summary: null });
+  assert.deepEqual(staleTextStatuses(bare, cfg, NOW, {}), {});
+  assert.deepEqual(staleTextAlerts(bare, cfg, NOW + 6 * HOUR, {}), []);
+  const paused = textSnapshot({ mode: 'paused' });
+  assert.deepEqual(staleTextStatuses(paused, cfg, NOW, {}), {});
+  assert.deepEqual(staleTextAlerts(paused, cfg, NOW + 6 * HOUR, {}), []);
+});
+
+test('a republish with the same text keeps the stale text period', () => {
+  const cfg = { ...CFG, staleTextMinutes: 360 };
+  const snap = textSnapshot();
+  const first = staleTextStatuses(snap, cfg, NOW, {});
+  const republished = structuredClone(snap);
+  republished.projects[0].updated = iso(NOW + 5 * HOUR);
+  const second = staleTextStatuses(republished, cfg, NOW + 5 * HOUR, first);
+  assert.equal(second.alpha.phase.since, first.alpha.phase.since, 'the text period starts at the first sight of the text');
+});
+
+test('the evaluate step sends one stale text notice to the project workspace', () => {
+  const cfg = { ...CFG, staleTextMinutes: 360 };
+  const base = snapshot();
+  const snap = {
+    ...base,
+    projects: [{ slug: 'alpha', project: 'Alpha', status: 'active', updated: iso(NOW), phase: 'Waiting for the Owner', summary: 'Waiting for the Owner.', tasks: [] }],
+    statusActivity: {}, taskWorkers: {},
+  };
+  snap.staleText = staleTextStatuses(snap, cfg, NOW, {});
+  assert.deepEqual(evaluate(snap, cfg, {}, NOW).alerts.filter((a) => a.key.startsWith('status:text:')), []);
+  snap.staleText = staleTextStatuses(snap, cfg, NOW + 6 * HOUR, snap.staleText);
+  const alerts = evaluate(snap, cfg, {}, NOW + 6 * HOUR).alerts.filter((a) => a.key.startsWith('status:text:'));
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].scope, 'w1');
+  assert.match(alerts[0].text, /`phase` and `summary`/);
 });
 
 test('the stale status notice delay uses the no-worker threshold', () => {

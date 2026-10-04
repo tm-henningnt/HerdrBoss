@@ -4,6 +4,7 @@ import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { waitsForOwner } from '../public/board.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const guide = readUserGuide();
@@ -11,7 +12,7 @@ const guide = readUserGuide();
 // Load top-level functions of the dashboard script into one context, with the helpers they read.
 function load(names, context = {}) {
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const ctx = { esc, isDone: (t) => (t.status || 'todo') === 'done', ...context };
+  const ctx = { esc, waitsForOwner, isDone: (t) => (t.status || 'todo') === 'done', ...context };
   const code = names.map((name) => {
     const start = source.indexOf(`function ${name}(`);
     assert.ok(start >= 0, `${name} exists in public/app.js`);

@@ -69,7 +69,7 @@ The item viewer shows one item. On a screen of 899 px or less it fills the scree
 | Type | Viewer |
 |---|---|
 | `image` | The image at the fit size in a stage. Pins show over it. |
-| `image-pair` | Both images in one stage. **Toggle** shows one image, and the toggle at the top uses the two labels of the manifest. **Slider** shows A at the left and B at the right of a split line. The range under the stage moves the line. The zoom and the pan stay the same when you change the image. |
+| `image-pair` | Both images in one stage. The `a` image is the before image, and the `b` image is the after image. **Toggle** shows one image, and the toggle at the top uses the two labels of the manifest. **Slider** shows the `a` image at the left of a split line and the `b` image at the right. The range under the stage moves the line. The zoom and the pan stay the same when you change the image. |
 | `gallery` | A grid of the images. Select an image to open it in the stage. **All images** goes back to the grid. The arrows show the previous and the next image. |
 | `video` | The native player with controls and the poster. The player does not start by itself. The file route serves ranges. |
 | `markdown` | The text through the Markdown renderer. Raw HTML shows as text. An external link opens in a new tab and has an arrow mark. A table scrolls sideways in its own box. |
