@@ -19,7 +19,7 @@ You want a host that never stops and that your Mac can reach. Choose the host ty
 
 WARNING: Docker safety (H12). Run no `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. Put a label on each resource that you create. Use one buildx builder for each host.
 
-- Windows with WSL2: follow [windows-host.md](windows-host.md). It has the 25 steps below, with the commands.
+- Windows with WSL2: follow [windows-host.md](../windows-host.md). It has the 25 steps below, with the commands.
 - Linux: do the Docker, Tailscale, and SSH steps of the Windows list inside the Linux system. Skip the BIOS, Windows, WSL, and boot task steps.
 - Mac with OrbStack: install OrbStack. Keep its memory limit at 4 GB. Start one factory at a time.
 

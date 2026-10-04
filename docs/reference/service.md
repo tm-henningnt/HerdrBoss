@@ -73,13 +73,13 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "port": 4477,
   "host": "0.0.0.0",
   "push": true,
-  "access": { "tokenFile": "/Users/you/.config/herdr-boss/access-token", "sessionDays": 30 },
+  "access": { "tokenFile": "/path/to/private/access-token", "sessionDays": 30 },
   "quota": { "warnPercent": 90, "criticalPercent": 98 },
   "machine": { "memFreeWarnPercent": 15, "loadWarnFactor": 2 },
   "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30, "sweepCodeSignClones": true },
   "browser": { "idleCloseMinutes": 20 },
   "workers": { "staleIdleMinutes": 120, "paneCloseDelayMinutes": 2, "uncollectedNoticeMinutes": 30 },
-  "roamgate": { "port": 8787, "tokenFile": "/Users/you/.config/roamgate/auth-token" },
+  "roamgate": { "port": 8787, "tokenFile": "/path/to/private/access-token" },
   "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] },
   "resourcePools": [
     { "name": "serve-ports", "range": "8000-8004", "split": { "herdrboss": ["8000", "8001"] }, "env": "HERDR_SERVE_PORT", "ttlMinutes": 240, "check": "tcp", "graceMinutes": 10 }
