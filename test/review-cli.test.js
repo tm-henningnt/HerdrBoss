@@ -10,7 +10,7 @@ import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { openSqliteStore } from '../src/sqlite-store.js';
 import { getPack, getFile, getResultRecord, submitPack, putAnswer, publishVersion } from '../src/review-store.js';
 import { reviewCommand } from '../src/review-cli.js';
-import { readMessages } from '../src/messages.js';
+import { readMessages, appendMessage, closeReviewItems } from '../src/messages.js';
 import { startSession, getSession, endSession } from '../src/planner-sessions.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -753,6 +753,26 @@ test('a --note on the same version is refused, and a changed folder still opens 
   assert.equal(openItems(data).length, 1, 'one open item per pack');
 });
 
+test('a new version closes only the linked item of the same pack, and leaves an unlinked item and a Boss item open', (t) => {
+  const { data, run } = inProcess(t);
+  const folder = packFolder();
+  assert.equal(run(['publish', 'shop', folder]).code, 0);
+  const linked = openItems(data)[0];
+  // An unlinked review record has no review link, so the close cannot match it.
+  const unlinked = appendMessage({ thread: 'shop', from: 'orch', to: 'owner', kind: 'review', text: 'Unlinked.', action: 'decide', status: 'new' }, { dir: data, now: T + 10 });
+  // A Boss-posted item is not a review record, so the close cannot match it.
+  const bossItem = appendMessage({ thread: 'shop', from: 'boss', to: 'owner', kind: 'report', title: 'Boss report', text: 'Read this.', action: 'read', status: 'new' }, { dir: data, now: T + 11 });
+  const changed = run(['publish', 'shop', packFolder({ tag: 1 })], {}, T + 2000);
+  assert.equal(changed.code, 0, changed.err);
+  const stored = readMessages({ dir: data });
+  assert.ok(stored.find((record) => record.id === linked.id).closedAt, 'the linked item of the previous version closes');
+  assert.equal(stored.find((record) => record.id === unlinked.id).closedAt, undefined, 'the unlinked item stays open');
+  assert.equal(stored.find((record) => record.id === bossItem.id).closedAt, undefined, 'the Boss item stays open');
+  const packItems = stored.filter((record) => record.kind === 'review' && record.review?.pack === 'checkout-redesign');
+  assert.equal(packItems.filter((record) => !record.closedAt).length, 1, 'one open item for the pack');
+  assert.equal(packItems.find((record) => !record.closedAt).review.version, 2, 'the open item belongs to the new version');
+});
+
 test('a repeat of unchanged content is refused, and changed content makes a new version', (t) => {
   const { data, run } = inProcess(t);
   const folder = packFolder();
@@ -774,9 +794,22 @@ test('an unchanged publish repairs a closed item, and a submitted pack opens as 
   const { data, run } = inProcess(t);
   const folder = packFolder();
   assert.equal(run(['publish', 'shop', folder]).code, 0);
-  submitPack({ dir: data, now: T, slug: 'shop', pack: 'checkout-redesign', verdict: 'deny', note: '' });
-  const reopened = run(['publish', 'shop', folder], {}, T + 1000);
-  assert.equal(reopened.code, 0, reopened.err);
+  const first = openItems(data);
+  assert.equal(first.length, 1);
+  // The item is closed while the pack stays open, so the next publish repairs it.
+  closeReviewItems({ slug: 'shop', pack: 'checkout-redesign' }, { dir: data, now: T + 1 });
+  assert.equal(openItems(data).length, 0, 'the linked item is closed');
+  const repaired = run(['publish', 'shop', folder], {}, T + 1000);
+  assert.equal(repaired.code, 0, repaired.err);
+  assert.match(repaired.out, /Repaired/);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 1, 'the repair makes no new version');
+  assert.equal(openItems(data).length, 1, 'the repair posts the item again');
+  assert.equal(openItems(data)[0].review.version, 1);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).mailId, openItems(data)[0].id, 'the item is linked again');
+  // A submitted pack always takes the next version.
+  submitPack({ dir: data, now: T + 2000, slug: 'shop', pack: 'checkout-redesign', verdict: 'deny', note: '' });
+  const next = run(['publish', 'shop', folder], {}, T + 3000);
+  assert.equal(next.code, 0, next.err);
   assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 2, 'a submitted pack takes the next version');
   assert.equal(openItems(data).length, 1);
 });
