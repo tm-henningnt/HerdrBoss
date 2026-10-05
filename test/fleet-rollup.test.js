@@ -53,6 +53,22 @@ function allAlerts(result) {
   return result.factories.flatMap((row) => row.alerts);
 }
 
+function assertUnknownTotals(totals, coverage) {
+  for (const metric of ['workers', 'spend', 'quota']) {
+    assert.equal(totals[metric].value, 'unknown', `${metric} value`);
+    assert.equal(totals[metric].asOf, null, `${metric} asOf`);
+    assert.match(totals[metric].coverage, new RegExp(coverage), `${metric} coverage`);
+  }
+}
+
+function deepFreeze(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 test('totals use fresh known readings and label cached, unknown, and unpriced coverage', () => {
   const rows = [
     factory('factory-zero', {
@@ -93,7 +109,86 @@ test('totals use fresh known readings and label cached, unknown, and unpriced co
   assert.equal(totals.quota.value, 40);
   assert.equal(totals.quota.asOf, 15);
   assert.match(totals.quota.coverage, /1 of 3 factories reporting/);
-  assert.match(totals.quota.coverage, /win2 \(quota unknown\)/);
+  assert.match(totals.quota.coverage, /win2 \(quota unknown: codex\/weekly\)/);
+});
+
+test('an empty fleet has unknown totals and no contributing factories', () => {
+  const totals = rollup([]).totals;
+  assertUnknownTotals(totals, '^0 of 0 factories reporting$');
+});
+
+test('cached-only inputs have unknown totals and no contributing factories', () => {
+  const row = factory('win1', {
+    ageSeconds: 91,
+    summary: summary('win1', {
+      workers: { running: 7, max: 8 },
+      spend: [{ day: today, role: 'worker', harness: 'codex', usd: 12.5 }],
+      quotas: [{ harness: 'codex', accountKey, lane: 'weekly', usedPercent: 65, status: 'ok' }],
+    }),
+  });
+
+  const totals = rollup([row]).totals;
+  assertUnknownTotals(totals, '^0 of 1 factories reporting');
+  for (const metric of ['workers', 'spend', 'quota']) assert.match(totals[metric].coverage, /win1 \(cached\)/);
+});
+
+test('fresh unknown readings have unknown totals and no contributing factories', () => {
+  const row = factory('factory-zero', {
+    summary: summary('factory-zero', {
+      workers: { running: null, max: 8 },
+      spend: [{ day: today, role: 'worker', harness: 'codex', usd: null }],
+      quotas: [{ harness: 'codex', accountKey, lane: 'weekly', usedPercent: null, status: 'unknown' }],
+    }),
+  });
+
+  const totals = rollup([row]).totals;
+  assertUnknownTotals(totals, '^0 of 1 factories reporting');
+  assert.match(totals.workers.coverage, /factory-zero \(workers unknown\)/);
+  assert.match(totals.spend.coverage, /factory-zero \(unpriced spend for 2026-10-05\)/);
+  assert.match(totals.quota.coverage, /factory-zero \(quota unknown: codex\/weekly\)/);
+});
+
+test('known zero readings stay numeric zero for workers, spend, and quota', () => {
+  const row = factory('factory-zero', {
+    ageSeconds: 25,
+    summary: summary('factory-zero', {
+      workers: { running: 0, max: 8 },
+      spend: [{ day: today, role: 'worker', harness: 'codex', usd: 0 }],
+      quotas: [{ harness: 'codex', accountKey, lane: 'weekly', usedPercent: 0, status: 'ok' }],
+    }),
+  });
+
+  const totals = rollup([row]).totals;
+  for (const metric of ['workers', 'spend', 'quota']) {
+    assert.equal(totals[metric].value, 0, `${metric} value`);
+    assert.equal(totals[metric].asOf, 25, `${metric} asOf`);
+    assert.match(totals[metric].coverage, /^1 of 1 factories reporting/);
+  }
+});
+
+test('the rollup does not mutate a deeply frozen summary, poller row, or options', () => {
+  const row = factory('factory-zero', {
+    summary: summary('factory-zero', {
+      pending: [{ step: 'login-claude', since: '2026-10-04T08:00:00Z' }],
+      projects: [{ slug: 'sample-project', phase: 'build', status: 'doing', statusAgeSeconds: 100, board: { doing: 2, review: 1, blocked: 0, done7d: 3 } }],
+      quotas: [{ harness: 'codex', accountKey, lane: 'weekly', usedPercent: 41, status: 'ok' }, { harness: 'codex', accountKey, lane: 'daily', usedPercent: null, status: 'unknown' }],
+      spend: [{ day: today, role: 'worker', harness: 'codex', usd: 1.25 }],
+      ownerItems: { total: 1, needsOwner: 1, rows: [{ id: 'item-one', kind: 'decide' }] },
+      reviewPacks: [{ id: 'pack-one', waitingItems: 3 }],
+    }),
+  });
+  const rows = [row];
+  const options = { now, role: { headOfficeFactoryId: 'factory-zero', epoch: 4 } };
+  const beforeRows = structuredClone(rows);
+  const beforeOptions = structuredClone(options);
+  deepFreeze(rows);
+  deepFreeze(options);
+
+  const first = buildFleetRollup(rows, options);
+  const second = buildFleetRollup(rows, options);
+  assert.deepEqual(rows, beforeRows);
+  assert.deepEqual(options, beforeOptions);
+  assert.deepEqual(second, first);
 });
 
 test('spend uses the factory calendar and carries latest factory days into the fleet label', () => {
@@ -208,6 +303,23 @@ test('shared quota lanes keep the highest fresh reading instead of adding factor
   assert.equal(result.totals.quota.asOf, 35);
   assert.equal(result.factories[0].quota.usedPercent, 41);
   assert.equal(result.factories[1].quota.usedPercent, 64);
+});
+
+test('quota coverage names a null lane when another lane contributes', () => {
+  const row = factory('factory-zero', {
+    summary: summary('factory-zero', {
+      quotas: [
+        { harness: 'codex', accountKey, lane: 'weekly', usedPercent: 41, status: 'ok' },
+        { harness: 'codex', accountKey, lane: 'daily', usedPercent: null, status: 'unknown' },
+      ],
+    }),
+  });
+
+  const quota = rollup([row]).totals.quota;
+  assert.equal(quota.value, 41);
+  assert.equal(quota.asOf, 20);
+  assert.match(quota.coverage, /1 of 1 factories reporting/);
+  assert.match(quota.coverage, /unknown.*daily|daily.*unknown/);
 });
 
 test('drift remains a separate alert and signed clock offsets keep their value and severity', () => {

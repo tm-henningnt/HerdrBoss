@@ -55,11 +55,22 @@ function factoryQuota(summary) {
   return { harness: best.harness, lane: best.lane, usedPercent: best.usedPercent, resetAt: best.resetAt ?? null };
 }
 
+function unknownQuotaLanes(row) {
+  const readings = Array.isArray(row.summary?.quotas) ? row.summary.quotas : [];
+  return readings
+    .filter((reading) => !isNumber(reading?.usedPercent) || reading.usedPercent < 0 || reading.usedPercent > 100)
+    .map((reading) => `${reading.harness ?? 'unknown harness'}/${reading.lane ?? 'unknown lane'}`);
+}
+
 function coverageReason(row, metric) {
   if (row.freshness !== 'fresh') return row.freshness;
   if (metric === 'workers') return isReading(row.summary?.workers?.running) ? null : 'workers unknown';
   if (metric === 'spend') return row.spend.reason;
-  if (metric === 'quota') return row.hasQuota ? null : 'quota unknown';
+  if (metric === 'quota') {
+    if (row.hasQuota) return null;
+    const lanes = unknownQuotaLanes(row);
+    return lanes.length ? `quota unknown: ${lanes.join(', ')}` : 'quota unknown';
+  }
   return 'unknown';
 }
 
@@ -68,8 +79,15 @@ function coverageLabel(known, rows, metric, dateLabels = []) {
     .map((row) => ({ name: row.name, reason: coverageReason(row, metric) }))
     .filter((entry) => entry.reason)
     .map((entry) => `${entry.name} (${entry.reason})`);
+  const unknownLanes = metric === 'quota'
+    ? rows.flatMap((row) => {
+      if (row.freshness === 'fresh' && !row.hasQuota) return [];
+      return unknownQuotaLanes(row).map((lane) => `${row.name} ${lane}`);
+    })
+    : [];
   const dates = dateLabels.length ? `; selected spend days: ${dateLabels.join(', ')}` : '';
-  return `${known.length} of ${rows.length} factories reporting${unavailable.length ? `; unavailable: ${unavailable.join(', ')}` : ''}${dates}`;
+  const unknown = unknownLanes.length ? `; unknown quota lanes: ${unknownLanes.join(', ')}` : '';
+  return `${known.length} of ${rows.length} factories reporting${unavailable.length ? `; unavailable: ${unavailable.join(', ')}` : ''}${unknown}${dates}`;
 }
 
 function total(known, rows, metric, value, dateLabels = []) {
