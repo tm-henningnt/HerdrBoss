@@ -51,7 +51,8 @@ test('project standby prompt names the project memory file and says it is presen
   const prompt = calls.find((args) => args[0] === 'agent' && args[1] === 'prompt')[3];
   assert.match(prompt, /docs\/orchestration\/memory\.md/);
   assert.match(prompt, /Read docs\/orchestration\/memory\.md first\./);
-  assert.ok(prompt.indexOf('docs/orchestration/memory.md') < prompt.indexOf('project AGENTS.md'), 'the successor reads project memory first');
+  // K27: the bootstrap read is capped to the memory file, the published status, and the open items.
+  assert.ok(prompt.indexOf('docs/orchestration/memory.md') < prompt.indexOf('published project status'), 'the successor reads project memory first');
   assert.match(prompt, /memory file is present/i);
 });
 

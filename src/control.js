@@ -574,10 +574,50 @@ export function selectModel(kind, explicitModel, models, policy = null) {
   return explicitModel ?? policy?.preferredModels?.[kind] ?? models.kinds[kind]?.defaultModel;
 }
 
-// The first eligible non-Opus rung, or the first eligible Opus rung when no non-Opus choice can start.
-// A rung is skipped when its model is exhausted or the last good Pi result does not list it.
+const WEEKLY_WINDOW_MINUTES = 10080;
+const CODEX_SUCCESSOR_WEEKLY_LIMIT_PERCENT = 85;
+
+// The most percent that each provider has used of its weekly window. Only a live window of at least
+// one week counts. An extra window or a window that already reset does not count. A provider without
+// such a window stays absent, so an unknown quota never blocks a successor.
+export function weeklyUseByProvider(quotas = [], now = Date.now()) {
+  const result = {};
+  for (const quota of quotas || []) {
+    if (!quota || quota.error || typeof quota.provider !== 'string') continue;
+    for (const window of quota.windows || []) {
+      if (!window || window.extra || !(Number(window.windowMinutes) >= WEEKLY_WINDOW_MINUTES) || !Number.isFinite(window.usedPercent)) continue;
+      if (window.resetsAt && !(Date.parse(window.resetsAt) > now)) continue;
+      result[quota.provider] = Math.max(result[quota.provider] ?? 0, window.usedPercent);
+    }
+  }
+  return result;
+}
+
+// Why the automatic successor selection refuses a target because of the weekly quota. A Codex
+// successor is refused above 85 percent weekly use. A Claude successor is refused only at 100 percent.
+// The function returns null when the lane stays eligible or when there is no weekly reading.
+export function successorQuotaRefusal(provider, weeklyUse) {
+  const used = weeklyUse?.[provider];
+  if (!Number.isFinite(used)) return null;
+  if (provider === 'codex' && used > CODEX_SUCCESSOR_WEEKLY_LIMIT_PERCENT) return `the codex weekly quota is at ${used}%, above the ${CODEX_SUCCESSOR_WEEKLY_LIMIT_PERCENT}% successor limit`;
+  if (provider === 'claude' && used >= 100) return `the claude weekly quota is at ${used}%, so no Claude successor can start`;
+  return null;
+}
+
+// A lane with no weekly reading counts as unused, so a metered lane never wins over an unread one.
+function weeklyScore(candidate, weeklyUse) {
+  const used = weeklyUse[candidate.provider];
+  return Number.isFinite(used) ? used : 0;
+}
+
+// The eligible rung with the lowest weekly use, or the first eligible Opus rung when no non-Opus choice
+// can start. A rung is skipped when its model is exhausted or the last good Pi result does not list it,
+// and when the weekly quota refuses the lane. A provider that weekly use cannot compare keeps the order
+// of the ladder, because a stable sort keeps the first rung of a tie.
 export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
+  const weeklyUse = control.weeklyUse || {};
   let opus = null;
+  const eligible = [];
   for (const rung of policy.orchestratorLadder || []) {
     const provider = providerFor(rung.kind, rung.model, policy);
     const lane = provider && control.lanes?.[provider];
@@ -587,15 +627,17 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
         project.excludedKinds.includes(rung.kind) || project.excludedModels.includes(rung.model) ||
         (!provider && Number.isFinite(control.exhaustedFreeModels?.[rung.model]?.retryAt) && control.exhaustedFreeModels[rung.model].retryAt > now) ||
         (rung.kind === 'pi' && unavailablePiModels([rung.model], control.piModels).length) ||
-        (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit) continue;
-    const candidate = { ...rung, provider: provider || 'unmetered' };
+        (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit ||
+        successorQuotaRefusal(provider, weeklyUse)) continue;
+    const candidate = { ...rung, provider: provider || 'unmetered', weeklyUsePercent: weeklyUse[provider] ?? null };
     if (/(^|[-/])opus($|[-.\d]|\[)/i.test(String(rung.model))) {
       opus ||= candidate;
       continue;
     }
-    return candidate;
+    eligible.push(candidate);
   }
-  return opus;
+  const [best] = eligible.sort((a, b) => weeklyScore(a, weeklyUse) - weeklyScore(b, weeklyUse));
+  return best || opus || null;
 }
 
 export function workspaceProjects(snap, policy = POLICY_DEFAULTS) {
@@ -1178,6 +1220,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     }
   }
   const risks = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaRisk(q, policy, now)]));
+  const weeklyUse = weeklyUseByProvider(snap.quotas || [], now);
   const exhausted = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaExhaustion(q, now)]));
   const pressures = Object.fromEntries((snap.quotas || []).map((q) => [q.provider, quotaPressure(q, policy, now)]));
   const globalAllowed = Object.fromEntries(Object.entries(models.kinds).filter(([kind]) => policy.allowedKinds.includes(kind)).map(([kind, cfg]) => [kind, cfg.allowedModels.filter((m) => modelEnabled(kind, m, policy))]));
@@ -1188,7 +1231,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
-    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes }, now);
+    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse }, now);
     handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
   }
   let bossHandoff = null;
@@ -1198,7 +1241,7 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
     const window = risks[currentProvider] || null;
     const bossProject = { excludedKinds: [], excludedModels: [] };
-    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes }, now) : null;
+    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse }, now) : null;
     bossHandoff = {
       project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
       fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,
@@ -1206,5 +1249,5 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
       ...(!bossPane.agent ? { defaultMode: 'fresh' } : {}),
     };
   }
-  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers, globalAllowed, risks, exhausted, pressures, handoffs, bossHandoff };
+  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers, globalAllowed, risks, exhausted, pressures, weeklyUse, handoffs, bossHandoff };
 }
