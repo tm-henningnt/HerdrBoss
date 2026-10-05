@@ -2,18 +2,32 @@ import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { EventEmitter, once } from 'node:events';
-import { serve } from '../src/server.js';
-import { loadConfig } from '../src/config.js';
-import { writeFleetFile } from '../src/fleet-store.js';
-import { Engine } from '../src/engine.js';
-import { readAgentMessages } from '../src/agent-messages.js';
-import { loadPolicy, pacingGoal, laneStatus, POLICY_DEFAULTS } from '../src/control.js';
-import { providerGate } from '../src/kit/workers.js';
+import { isTempDir } from './helpers/test-env.js';
 
-const root = process.env.HERDR_BOSS_DIR;
+// The test runner shares one data directory between the test files that run at the same time. This file writes the
+// fleet files, the share plans, and the guidance state, so it owns a temporary data directory. Other test files that
+// run at the same time write their own fleet-accounts.json and fleet-settings.json in the shared directory, and a
+// shared fleet-accounts.json changes the answer of every fleet route here. Give this file its directory before the
+// source modules read process.env.HERDR_BOSS_DIR, so the imports below stay dynamic.
+const inheritedDataDir = process.env.HERDR_BOSS_DIR;
+// Keep the path that mkdtemp gives. A sandbox can set TMPDIR to a symlink such as /tmp, and realpathSync() would
+// return /private/tmp, which isTempDir() does not accept as a temporary directory.
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-fleet-guidance-'));
+process.env.HERDR_BOSS_DIR = root;
+process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
+// Keep the directory that the runner shares for the other test files, and keep this one temporary.
+if (!isTempDir(root)) throw new Error(`This test file needs a temporary data directory, not ${root}.`);
+if (inheritedDataDir && path.resolve(inheritedDataDir) === root) throw new Error('This test file cannot share the data directory of the runner.');
+
+const [{ serve }, { loadConfig }, { writeFleetFile }, { Engine }, { readAgentMessages },
+  { loadPolicy, pacingGoal, laneStatus, POLICY_DEFAULTS }, { providerGate }] = await Promise.all([
+  import('../src/server.js'), import('../src/config.js'), import('../src/fleet-store.js'), import('../src/engine.js'),
+  import('../src/agent-messages.js'), import('../src/control.js'), import('../src/kit/workers.js'),
+]);
 const key = 'a'.repeat(64);
 const account = { harness: 'codex', accountKey: key, scope: ['factory-a', 'factory-b'] };
 const clock = () => Date.parse('2026-10-03T12:00:00Z');
