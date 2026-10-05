@@ -20,5 +20,5 @@ Read this file before you dispatch work, stage or integrate a change, or clean u
 - Inspect prune candidates before applying cleanup.
 - Use `herdr-boss worktree prune --apply` only after verifying the candidates and their ownership.
 - Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`. Set the command tool timeout to at least 3,600,000 ms. Do not run a long gate in a background shell with its default timeout. The `--wait` value is the maximum time to wait for the full-suite lock.
-- Start a suite with the background option of your harness, so the harness wakes your turn when the suite ends. Or rely on the finished notice: the suite sends `suite finished: exit N` to the calling pane when the run ends and that pane is idle or done. `--no-notify` turns the notice off. Never end a turn while a detached suite runs.
+- Start a suite with the background option of your harness, so the harness wakes your turn when the suite ends. Or rely on the finished notice: the suite sends `suite finished: exit N` to the calling pane when a command runs and ends and that pane is idle or done. A `--reuse` or `--skip-docs` run sends no notice. `--no-notify` turns the notice off. Never end a turn while a detached suite runs.
 - Never take the full-suite lock with a bare lock acquire for a suite.

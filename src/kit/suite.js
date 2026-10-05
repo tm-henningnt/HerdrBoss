@@ -164,14 +164,17 @@ export function suiteFinishedText(exitCode) {
 }
 
 // Tell the caller pane that a suite run ended. The pane comes from HERDR_PANE_ID. The notice goes out only
-// when the pane is idle or done: a working, blocked, or unknown pane gets no prompt. A failed notice never
-// changes the suite exit code, so a detached suite always ends on its own.
+// inside Herdr, and only when the pane is idle or done: a working, blocked, or unknown pane gets no prompt.
+// The pane get and the prompt carry a bounded timeout, so a hanging Herdr cannot block the suite exit. A
+// failed notice never changes the suite exit code, so a detached suite always ends on its own.
 export function notifySuiteFinished(exitCode, { env = process.env, herdr = createHerdrRunner(), timeoutMs = agentPromptTimeoutMs() } = {}) {
+  if (env.HERDR_ENV !== '1') return { sent: false, reason: 'not a Herdr pane' };
   const paneId = env.HERDR_PANE_ID;
   if (!paneId) return { sent: false, reason: 'no caller pane' };
+  const options = { timeout: Math.min(timeoutMs, 2500), killSignal: 'SIGKILL' };
   let pane;
   try {
-    const response = herdr(['pane', 'get', paneId]);
+    const response = herdr(['pane', 'get', paneId], options);
     pane = response?.pane ?? response;
   } catch { return { sent: false, reason: 'the caller pane is gone' }; }
   const returnedId = pane?.pane_id ?? pane?.paneId ?? pane?.id ?? null;
@@ -179,7 +182,7 @@ export function notifySuiteFinished(exitCode, { env = process.env, herdr = creat
   const status = pane.agent_status ?? pane.status ?? null;
   if (!['idle', 'done'].includes(status)) return { sent: false, reason: 'the caller pane is busy' };
   try {
-    herdr(['agent', 'prompt', paneId, suiteFinishedText(exitCode)], { timeout: Math.min(timeoutMs, 2500), killSignal: 'SIGKILL' });
+    herdr(['agent', 'prompt', paneId, suiteFinishedText(exitCode)], options);
     return { sent: true };
   } catch { return { sent: false, reason: 'the notice was not delivered' }; }
 }

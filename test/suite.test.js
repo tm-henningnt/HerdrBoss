@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { loadProjectConfig } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
+import { notifySuiteFinished } from '../src/kit/suite.js';
 import { acquireProjectLock, listProjectLocks, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock, reownProjectLocks, withMutationLock } from '../src/kit/locks.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { writeNight } from '../src/night.js';
@@ -296,6 +297,56 @@ test('suite --no-notify sends no notice', (t) => {
   const result = f.run(['--no-notify'], 0, { herdr });
   assert.equal(result.exitCode, 0);
   assert.deepEqual(prompts, [], '--no-notify sends nothing');
+});
+
+test('notifySuiteFinished sends the finished line to an idle or done pane', () => {
+  for (const status of ['idle', 'done']) {
+    const calls = [];
+    const herdr = (args, options) => {
+      calls.push({ args, options });
+      if (args[0] === 'pane' && args[1] === 'get') return { pane: { pane_id: 'ws:orch', agent_status: status } };
+      return {};
+    };
+    assert.deepEqual(notifySuiteFinished(7, { env: { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:orch' }, herdr }), { sent: true }, status);
+    assert.deepEqual(calls[1], { args: ['agent', 'prompt', 'ws:orch', 'suite finished: exit 7'], options: calls[0].options });
+  }
+});
+
+test('notifySuiteFinished sends nothing without Herdr, without a pane, or with a gone or changed pane', () => {
+  const none = () => { throw new Error('the notice must not call Herdr'); };
+  assert.deepEqual(notifySuiteFinished(0, { env: { HERDR_PANE_ID: 'ws:orch' }, herdr: none }), { sent: false, reason: 'not a Herdr pane' });
+  assert.deepEqual(notifySuiteFinished(0, { env: { HERDR_ENV: '1' }, herdr: none }), { sent: false, reason: 'no caller pane' });
+  const gone = () => { throw new Error('pane_not_found'); };
+  assert.deepEqual(notifySuiteFinished(0, { env: { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:orch' }, herdr: gone }), { sent: false, reason: 'the caller pane is gone' });
+  const changed = () => ({ pane: { pane_id: 'ws:other', agent_status: 'idle' } });
+  assert.deepEqual(notifySuiteFinished(0, { env: { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:orch' }, herdr: changed }), { sent: false, reason: 'the caller pane changed' });
+});
+
+test('notifySuiteFinished sends nothing to a working, blocked, or unknown pane', () => {
+  for (const pane of [{ pane_id: 'ws:orch', agent_status: 'working' }, { pane_id: 'ws:orch', agent_status: 'blocked' }, { pane_id: 'ws:orch' }]) {
+    const calls = [];
+    const herdr = (args) => { calls.push(args); return { pane }; };
+    assert.deepEqual(notifySuiteFinished(0, { env: { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:orch' }, herdr }), { sent: false, reason: 'the caller pane is busy' }, pane.agent_status ?? 'unknown');
+    assert.equal(calls.length, 1, 'only the pane get runs');
+  }
+});
+
+test('notifySuiteFinished gives the pane get call a bounded timeout for a hanging Herdr', () => {
+  const calls = [];
+  const herdr = (args, options = {}) => {
+    calls.push({ args, options });
+    if (args[0] === 'pane' && args[1] === 'get') {
+      execFileSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...options });
+    }
+    return {};
+  };
+  const started = Date.now();
+  const result = notifySuiteFinished(0, { env: { HERDR_ENV: '1', HERDR_PANE_ID: 'ws:orch' }, herdr, timeoutMs: 60 });
+  assert.equal(result.sent, false);
+  assert.ok(Date.now() - started < 2000, 'the hanging pane get call was stopped');
+  assert.deepEqual(calls[0].args, ['pane', 'get', 'ws:orch']);
+  assert.equal(calls[0].options.timeout, 60);
+  assert.equal(calls[0].options.killSignal, 'SIGKILL');
 });
 
 test('suite --wait accepts 3600 seconds without truncating the queue deadline', (t) => {
