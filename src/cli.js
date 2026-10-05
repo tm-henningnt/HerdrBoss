@@ -187,7 +187,7 @@ const USAGE = `herdr-boss <command>
   lease release POOL ITEM  Release a lease of your project; the Boss can release any lease.
   lease list [POOL]     Print the pool items and their leases as JSON.
   push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
-  suite [--wait SECONDS] [--keep NAME]... -- <command...>  Run a full test suite inside the full-suite lock, without tokens in its environment.
+  suite [--wait SECONDS] [--keep NAME]... [--no-notify] -- <command...>  Run a full test suite inside the full-suite lock, without tokens in its environment.
   worktree prune        List safe worktree removals; --apply removes them and archives worker reports.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.

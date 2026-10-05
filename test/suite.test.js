@@ -81,6 +81,22 @@ function fixture(t, prefix) {
   return { base, root, dataDir, config, env, lines, livePanes, lockFile, script, options, run, runCommand, readSeen };
 }
 
+// A fake Herdr for the finished notice. It records each `agent prompt` and gives the caller pane an agent status.
+function noticeHerdr(f, { status = 'idle', name = 'orch-a', label = 'orch' } = {}) {
+  const prompts = [];
+  const herdr = (args, options) => {
+    if (args[0] === 'pane' && args[1] === 'get') {
+      return { pane: { pane_id: args[2], workspace_id: 'ws', label, name, agent_status: status } };
+    }
+    if (args[0] === 'agent' && args[1] === 'prompt') {
+      prompts.push({ pane: args[2], text: args[3] });
+      return {};
+    }
+    return f.options().herdr(args, options);
+  };
+  return { herdr, prompts };
+}
+
 function readQueueFiles(dataDir) {
   const directory = path.join(dataDir, 'locks', 'machine', 'queue', 'full-suite');
   try {
@@ -253,6 +269,33 @@ test('suite holds the full-suite lock around the command and passes the exit cod
   assert.equal(f.readSeen().locked, true);
   assert.equal(fs.existsSync(f.lockFile), false, 'the lock is released after a failed command');
   assert.ok(f.lines.some((line) => /acquired/.test(line)) && f.lines.some((line) => /released/.test(line)), f.lines.join('\n'));
+});
+
+test('suite sends a finished notice with the exit code to an idle caller pane', (t) => {
+  const f = fixture(t, 'herdr-suite-notice-');
+  const { herdr, prompts } = noticeHerdr(f);
+  const passed = f.run([], 0, { herdr });
+  assert.equal(passed.exitCode, 0);
+  assert.deepEqual(prompts, [{ pane: 'ws:orch', text: 'suite finished: exit 0' }]);
+  const failed = f.run([], 3, { herdr });
+  assert.equal(failed.exitCode, 3);
+  assert.deepEqual(prompts[1], { pane: 'ws:orch', text: 'suite finished: exit 3' });
+});
+
+test('suite sends no notice to a busy caller pane', (t) => {
+  const f = fixture(t, 'herdr-suite-notice-busy-');
+  const { herdr, prompts } = noticeHerdr(f, { status: 'working' });
+  const result = f.run([], 0, { herdr });
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(prompts, [], 'a working pane takes no prompt');
+});
+
+test('suite --no-notify sends no notice', (t) => {
+  const f = fixture(t, 'herdr-suite-notice-off-');
+  const { herdr, prompts } = noticeHerdr(f);
+  const result = f.run(['--no-notify'], 0, { herdr });
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(prompts, [], '--no-notify sends nothing');
 });
 
 test('suite --wait accepts 3600 seconds without truncating the queue deadline', (t) => {

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
+import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { createHerdrRunner } from './workers.js';
 import { DEFAULT_RULES_FILE } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
@@ -66,6 +67,7 @@ export function runSuite(command, {
   keep = [],
   reuse = false,
   skipDocs = false,
+  notify = true,
   output = console.log,
   now = Date.now,
   pause,
@@ -149,5 +151,35 @@ export function runSuite(command, {
       }
     }
   }
+  if (notify) {
+    try { notifySuiteFinished(exitCode, { env, herdr }); } catch { /* A failed notice never changes the suite result. */ }
+  }
   return { exitCode, removed };
+}
+
+// The one line that a finished suite sends to its caller pane. The text does not hold a passed or failed count:
+// a suite is one command, so such a count would be invented.
+export function suiteFinishedText(exitCode) {
+  return `suite finished: exit ${exitCode}`;
+}
+
+// Tell the caller pane that a suite run ended. The pane comes from HERDR_PANE_ID. The notice goes out only
+// when the pane is idle or done: a working, blocked, or unknown pane gets no prompt. A failed notice never
+// changes the suite exit code, so a detached suite always ends on its own.
+export function notifySuiteFinished(exitCode, { env = process.env, herdr = createHerdrRunner(), timeoutMs = agentPromptTimeoutMs() } = {}) {
+  const paneId = env.HERDR_PANE_ID;
+  if (!paneId) return { sent: false, reason: 'no caller pane' };
+  let pane;
+  try {
+    const response = herdr(['pane', 'get', paneId]);
+    pane = response?.pane ?? response;
+  } catch { return { sent: false, reason: 'the caller pane is gone' }; }
+  const returnedId = pane?.pane_id ?? pane?.paneId ?? pane?.id ?? null;
+  if (returnedId !== paneId) return { sent: false, reason: 'the caller pane changed' };
+  const status = pane.agent_status ?? pane.status ?? null;
+  if (!['idle', 'done'].includes(status)) return { sent: false, reason: 'the caller pane is busy' };
+  try {
+    herdr(['agent', 'prompt', paneId, suiteFinishedText(exitCode)], { timeout: Math.min(timeoutMs, 2500), killSignal: 'SIGKILL' });
+    return { sent: true };
+  } catch { return { sent: false, reason: 'the notice was not delivered' }; }
 }
