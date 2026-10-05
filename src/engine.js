@@ -1999,6 +1999,8 @@ export class Engine extends EventEmitter {
     for (const [key, at] of Object.entries(this.memory.autoHandoverAttempts)) if (now - at > 7 * 86400 * 1000) delete this.memory.autoHandoverAttempts[key];
     const records = listHandoffs();
     for (const item of records.filter((x) => x.status === 'prepared' && x.automatic && x.readyAt && !x.promptError)) {
+      // Context handovers have additional memory-commit and source-idle guards below.
+      if (item.memoryUpdateStatus || this.memory.contextHandovers?.[item.id]) continue;
       const targetProvider = providerFor(item.toKind, item.model, policy);
       const targetLane = lanes[targetProvider];
       if (targetLane?.state === 'trickle' && targetLane.usedTodayPercent >= targetLane.allowancePercent) continue;
@@ -2283,6 +2285,7 @@ export class Engine extends EventEmitter {
     const target = panes.find((p) => p.id === item.newPane);
     const settled = (pane) => ['idle', 'done'].includes(pane?.status);
     const block = (reason, ownerDecision = false) => ({ reason, ownerDecision });
+    if (item.memoryUpdateStatus && item.memoryUpdateStatus !== 'committed') return block('the memory.md update is not committed');
     if (!item.readyAt) return block(`successor not ready: ${this.successorNotReady(item, target)}`);
     if (!source) return block('the source pane is gone');
     if (isBossHandoff(item, herdr) || isBossName(source.label)) return block('the Boss pane is never handed over');
@@ -2432,9 +2435,37 @@ export class Engine extends EventEmitter {
     this.memory.autoHandoverAttempts ||= {};
     this.memory.contextHandoverMemoryUpdates ||= {};
     const panes = herdr?.panes || [];
-    const records = listHandoffs();
+    let records = listHandoffs();
     const open = ['prepared', 'preparing', 'needs-inspection'];
     const memoryUpdates = this.memory.contextHandoverMemoryUpdates;
+    for (const [paneId, update] of Object.entries(memoryUpdates)) {
+      if (!update.handoffId) continue;
+      const tracked = records.find((item) => item.id === update.handoffId);
+      if (!tracked || !open.includes(tracked.status) || tracked.memoryUpdateStatus === 'committed') {
+        delete memoryUpdates[paneId];
+        continue;
+      }
+      if (!update.baselineCommit) continue;
+      const repo = readProjectRepos(DATA_DIR).find((row) => row.slug === update.project)?.repo;
+      if (!repo) continue;
+      let commit = '';
+      try {
+        commit = String(await this.gitRunner(['-C', repo, 'log', '-1', '--format=%H', `${update.baselineCommit}..HEAD`, '--', 'docs/orchestration/memory.md'])).trim();
+      } catch {
+        // A repository read failure keeps the timed-out handover blocked.
+      }
+      if (!/^[a-f0-9]{40,64}$/i.test(commit)) continue;
+      const latest = listHandoffs();
+      const record = latest.find((item) => item.id === update.handoffId && item.status === 'prepared');
+      if (record) {
+        record.memoryUpdateStatus = 'committed';
+        record.memoryUpdateCommit = commit;
+        saveHandoffs(latest);
+        delete memoryUpdates[paneId];
+        writeJson(MEMORY_FILE, this.memory);
+      }
+    }
+    records = listHandoffs();
     for (const id of Object.keys(this.memory.contextHandovers)) {
       if (!records.some((x) => x.id === id && open.includes(x.status))) delete this.memory.contextHandovers[id];
     }
@@ -2496,6 +2527,16 @@ export class Engine extends EventEmitter {
         entry.armed = false;
         continue;
       }
+      const normalThreshold = policy.autoHandoverContextTokens;
+      const forceThreshold = policy.autoHandoverForceContextTokens;
+      const thresholdsValid = Number.isInteger(normalThreshold) && normalThreshold >= 50000 && normalThreshold <= 2000000
+        && Number.isInteger(forceThreshold) && forceThreshold >= 50000 && forceThreshold <= 2000000
+        && forceThreshold > normalThreshold;
+      if (!thresholdsValid) {
+        once(`context-invalid-thresholds:${project.slug}`, `Context handover for ${name} is skipped because its normal and forced token limits are invalid.`, { project: project.slug, pane: pane.id });
+        entry.armed = false;
+        continue;
+      }
       const tokens = memoryUpdate?.tokens ?? usage.tokens;
       const forced = !!memoryUpdate || tokens > policy.autoHandoverForceContextTokens;
       if (!forced && (!entry.armed || !settled(pane))) continue;
@@ -2510,8 +2551,8 @@ export class Engine extends EventEmitter {
       }
       const allowedEfforts = this.models.kinds[orch.kind]?.allowedEfforts || [];
       const effort = allowedEfforts.includes(pane.effort) ? ['--effort', pane.effort] : [];
-      let memoryUpdateStatus = null;
-      let memoryUpdateCommit = null;
+      let memoryUpdateStatus = memoryUpdate?.memoryUpdateStatus || null;
+      let memoryUpdateCommit = memoryUpdate?.memoryUpdateCommit || null;
       if (forced) {
         if (!memoryUpdate) {
           const repo = readProjectRepos(DATA_DIR).find((row) => row.slug === project.slug)?.repo || pane.cwd;
@@ -2536,6 +2577,10 @@ export class Engine extends EventEmitter {
             this.log('error', `Memory update prompt for forced context handover to ${name} failed (${memoryUpdate.promptError}).`, { project: project.slug, pane: pane.id });
           }
           writeJson(MEMORY_FILE, this.memory);
+          continue;
+        }
+        if (memoryUpdate.handoffId) {
+          // The prepared successor stays blocked until the poll above verifies a later commit.
           continue;
         }
         if (memoryUpdate.baselineCommit) {
@@ -2567,11 +2612,18 @@ export class Engine extends EventEmitter {
             record.memoryUpdateStatus = memoryUpdateStatus;
             if (memoryUpdateCommit) record.memoryUpdateCommit = memoryUpdateCommit;
             saveHandoffs(latest);
+            if (memoryUpdateStatus === 'not-updated') {
+              memoryUpdate.handoffId = prepared.id;
+              memoryUpdate.memoryUpdateStatus = memoryUpdateStatus;
+            } else {
+              delete memoryUpdates[pane.id];
+            }
           } else {
             this.log('error', `Could not record the memory update result for forced context handover ${prepared.id}.`, { project: project.slug, pane: pane.id });
           }
+        } else {
+          delete memoryUpdates[pane.id];
         }
-        delete memoryUpdates[pane.id];
         entry.armed = false;
         const threshold = forced ? policy.autoHandoverForceContextTokens : policy.autoHandoverContextTokens;
         const thresholdName = forced ? 'forced limit' : 'limit';

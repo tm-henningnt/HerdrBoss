@@ -189,6 +189,15 @@ test('handoff prepare derives a safe agent name for a new record and keeps the r
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].id, result.id);
 });
 
+test('handoff prepare preserves a readiness signal accepted while prompt delivery is in progress', (t) => {
+  const f = handoffFixture(t, { readyDuringPrompt: true, successorAgent: 'pi' });
+  const result = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh', '--auto'], f.env));
+  const [stored] = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+  assert.ok(stored.readyAt, 'the accepted ready signal remains stored');
+  assert.equal(result.readyAt, stored.readyAt, 'the prepare result includes the latest readiness state');
+  assert.equal(stored.promptDelivery, 'sent');
+});
+
 test('handoff prepare sanitizes punctuation and caps the derived agent name at 32 characters', (t) => {
   const existingPane = 'ws:p9';
   const id = `9 Handoff!${'x'.repeat(40)}`;

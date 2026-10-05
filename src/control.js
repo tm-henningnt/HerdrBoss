@@ -135,6 +135,17 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
     });
   }
   const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  if (!Object.hasOwn(stored, 'autoHandoverForceContextTokens')) {
+    const maxContextTokens = 2000000;
+    const contextStep = 10000;
+    if (Number.isInteger(policy.autoHandoverContextTokens)
+      && policy.autoHandoverContextTokens >= POLICY_DEFAULTS.autoHandoverForceContextTokens
+      && policy.autoHandoverContextTokens <= maxContextTokens) {
+      if (policy.autoHandoverContextTokens === maxContextTokens) policy.autoHandoverContextTokens -= contextStep;
+      policy.autoHandoverForceContextTokens = Math.min(maxContextTokens,
+        Math.ceil((policy.autoHandoverContextTokens + 1) / contextStep) * contextStep);
+    }
+  }
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   try {
     const factoryShares = readFactoryShares(path.dirname(file));

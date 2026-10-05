@@ -139,10 +139,14 @@ function run(t, scenario) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo: '/work/alpha' }]));
-  const policy = structuredClone(POLICY_DEFAULTS);
-  policy.autoHandover = scenario.autoHandover ?? true;
-  Object.assign(policy, scenario.policy || {});
-  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
+  if (scenario.legacyPolicy) {
+    fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(scenario.legacyPolicy));
+  } else {
+    const policy = structuredClone(POLICY_DEFAULTS);
+    policy.autoHandover = scenario.autoHandover ?? true;
+    Object.assign(policy, scenario.policy || {});
+    fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
+  }
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {}, ...(scenario.memory || {}) }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), JSON.stringify(scenario.handoffs || []));
   if (scenario.tokens !== undefined) {
@@ -284,6 +288,28 @@ test('the forced context threshold defaults to 400000 and stays above the normal
     .some((error) => /autoHandoverForceContextTokens must be greater than autoHandoverContextTokens/.test(error)));
 });
 
+test('legacy normal thresholds do not start forced memory handover below their migrated limit', { timeout: 30000 }, (t) => {
+  for (const [normal, tokens] of [[400000, 405000], [500000, 425000], [2000000, 425000]]) {
+    const out = run(t, {
+      tokens,
+      legacyPolicy: { autoHandover: true, autoHandoverContextTokens: normal },
+      steps: [{ at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } }],
+    });
+    assert.equal(out.herdrCalls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-alpha:p1'), false, `normal threshold ${normal}`);
+    assert.deepEqual(prepares(out), [], `normal threshold ${normal}`);
+  }
+});
+
+test('an invalid legacy threshold pair does not run the forced context path', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 600000,
+    legacyPolicy: { autoHandover: true, autoHandoverContextTokens: 500000, autoHandoverForceContextTokens: 400000 },
+    steps: [{ at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } }],
+  });
+  assert.equal(out.herdrCalls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-alpha:p1'), false);
+  assert.deepEqual(prepares(out), []);
+});
+
 test('a forced context handover waits for the memory commit before preparation and activates only when idle', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 425000,
@@ -305,7 +331,7 @@ test('a forced context handover waits for the memory commit before preparation a
   assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateCommit, 'b'.repeat(40));
 });
 
-test('a forced context handover prepares after 20 minutes and records a missing memory update', { timeout: 30000 }, (t) => {
+test('a forced context handover waits for a late memory commit after the 20-minute preparation timeout', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 425000,
     createPreparedRecord: true,
@@ -313,11 +339,16 @@ test('a forced context handover prepares after 20 minutes and records a missing 
       { at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
       { at: at(19), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
       { at: at(20), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+      { at: at(21), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(0) } },
+      { at: at(22), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(0) }, memoryCommit: 'b'.repeat(40) },
     ],
   });
   assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-alpha:p1').length, 1);
   assert.deepEqual(prepares(out).map(({ step }) => step), [2]);
-  assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateStatus, 'not-updated');
+  assert.equal(out.snapshots[2].handoffs.find(({ id }) => id === 'fake-handoff')?.memoryUpdateStatus, 'not-updated');
+  assert.deepEqual(activates(out).map(({ step }) => step), [4], 'no activation occurs before the late memory commit is verified');
+  assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateStatus, 'committed');
+  assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateCommit, 'b'.repeat(40));
 });
 
 test('the context threshold counts tokens, not a share of a model window', { timeout: 30000 }, (t) => {
@@ -471,6 +502,17 @@ test('a ready context successor activates when the source pane is idle', { timeo
 test('a ready context successor waits while the source pane works', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000, memory: { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1 } } }, handoffs: [readyRecord()],
+    steps: [{ at: at(1), herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } }],
+  });
+  assert.deepEqual(activates(out), []);
+});
+
+test('quota readiness cannot activate a forced context successor while its source works', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 425000,
+    memory: { contextHandovers: { 'ctx-1': { pane: 'w-alpha:p1', at: 1, tokens: 425000, sourceModel: 'claude-sonnet-5-5' } } },
+    handoffs: [readyRecord({ memoryUpdateStatus: 'committed' })],
+    quotas: [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 99, expectedPercent: 60, resetsAt: '2026-10-01T12:00:00.000Z' }] }],
     steps: [{ at: at(1), herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } }],
   });
   assert.deepEqual(activates(out), []);

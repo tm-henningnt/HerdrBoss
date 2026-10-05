@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor, selectModel, validatePolicy } from '../src/control.js';
+import { deriveControl, loadPolicy, machineLimits, POLICY_DEFAULTS, providerFor, savePolicy, selectModel, validatePolicy } from '../src/control.js';
 import * as controlModule from '../src/control.js';
 import { validateUsage, usageProvider, usageSummary } from '../src/usage.js';
 import { loadModels } from '../src/kit/config.js';
@@ -571,6 +571,28 @@ test('saved guard fields and thresholds stay unchanged when guardEnabled is pres
   fs.writeFileSync(file, JSON.stringify({ machine }));
   assert.deepEqual(loadPolicy({ file, models }).machine, { ...POLICY_DEFAULTS.machine, ...machine });
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('legacy context thresholds migrate to a valid force threshold and save the migrated pair', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-context-handover-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const cases = [
+    { saved: 400000, normal: 400000, forced: 410000 },
+    { saved: 500000, normal: 500000, forced: 510000 },
+    { saved: 2000000, normal: 1990000, forced: 2000000 },
+  ];
+  for (const item of cases) {
+    fs.writeFileSync(file, JSON.stringify({ autoHandoverContextTokens: item.saved }));
+    const loaded = loadPolicy({ file, models });
+    assert.equal(loaded.autoHandoverContextTokens, item.normal, `normal threshold from ${item.saved}`);
+    assert.equal(loaded.autoHandoverForceContextTokens, item.forced, `force threshold from ${item.saved}`);
+    assert.deepEqual(validatePolicy(loaded, models), []);
+    assert.deepEqual(savePolicy(loaded, models, { file }), []);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(stored.autoHandoverContextTokens, item.normal);
+    assert.equal(stored.autoHandoverForceContextTokens, item.forced);
+  }
 });
 
 test('policy defaults override legacy machine and cooldown config values', () => {

@@ -521,7 +521,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'autoHandoverForceContextTokens', 'Force handover at context tokens', {
-    what: 'The context size above which Herdr Boss asks a Claude project lead to update and commit project memory before it prepares a fresh successor. It prepares the successor after the commit or after 20 minutes. The successor uses the same model. Herdr Boss activates it when the project lead pane is idle or done. This value must be higher than Hand over at context tokens.',
+    what: 'The context size above which Herdr Boss asks a Claude project lead to update and commit project memory before it prepares a fresh successor. It prepares the successor after the commit or after 20 minutes. After a timeout, it cannot activate until it verifies a later memory commit. The successor uses the same model. Herdr Boss activates it when the project lead pane is idle or done. This value must be higher than Hand over at context tokens.',
     default: '400000', unit: 'Tokens', range: '50000 to 2000000',
     raise: 'A higher value gives the source more time before a forced handover.',
     lower: 'A lower value asks for a memory update sooner.',
