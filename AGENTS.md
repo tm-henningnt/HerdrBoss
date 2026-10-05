@@ -32,12 +32,15 @@ Decide implementation, product, and design details, naming, thresholds, test des
 ## Integrate and release
 
 1. Review each worker diff. A worker runs only the changed test files, as the worker brief says. Do not run the full suite in the worker worktree.
+   - Before you merge, write a release checkpoint in `docs/orchestration/memory.md`. Name each reviewed branch and the acceptance evidence that you verified. Make this edit in the integration tree, so it merges with the branches.
 2. Merge the branch in a separate integration worktree, never in the `main` checkout. The CLI and the dashboard run straight from `main`, so a conflict marker there breaks `herdr-boss` for every project. Resolve conflicts in the integration worktree. Run the docs gate there: `node scripts/docs-gate.js --base main`. The gate must pass. Run the full suite there once: `herdr-boss suite -- npm test`. Then move `main` forward with `git merge --ff-only`.
 3. On `main`, run `herdr-boss suite --reuse -- npm test`. The command reuses the pass of the same tree and runs no second suite.
 4. Restart the service: `launchctl kickstart -k gui/$(id -u)/no.tallmaker.herdr-boss`.
 5. Check that it serves: `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:4477/api/state` must print `200` within 30 seconds.
 6. If the check fails, revert the merge, restart again, and tell the Boss.
 7. Push `main` with `herdr-boss push origin main`, after the diff check in the safety rules.
+8. Complete the same checkpoint in `docs/orchestration/memory.md`: released commit, suite result, service result, push state, open blockers and next ready task. If this final edit changes the file after the push, ship it with the next ordinary commit. Never make a memory-only release. Never run a full suite again only for this final memory record. A changed implementation tree still needs the full suite of step 2.
+9. End the release only with current facts. `planned`, `integrated`, `served` and `pushed` are four different states, and each fact goes into the record only after you verify it. Before you end, publish a current status with `herdr-boss publish herdrboss <file> --sync`.
 
 ## Documentation
 
