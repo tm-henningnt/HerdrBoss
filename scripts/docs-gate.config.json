@@ -21,5 +21,23 @@
     "docs/spikes/**",
     "docs/gate-exemptions"
   ],
+  "tokens": [
+    "public/**",
+    "bin/**",
+    "factory/**",
+    "release/**",
+    "releases/**",
+    "dist/**",
+    "build/**",
+    "demo/**",
+    "demos/**",
+    "fixture/**",
+    "fixtures/**",
+    "test-app/**",
+    "test-apps/**",
+    "test/fixtures/**",
+    "test/apps/**",
+    "test/demos/**"
+  ],
   "exemptionFile": "docs/gate-exemptions"
 }

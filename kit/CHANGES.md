@@ -249,3 +249,7 @@ Summary: `harness check` reports a missing `stop-own` rule in `~/.codex/rules/he
 ## 105496445d71
 Impact: useful
 Summary: Integrate copied read-only review inputs and exact stop-own harness checks. Preserve explicit forbidden rules. The release steps record verified checkpoints in project memory.
+
+## 062853cb89e7
+Impact: useful
+Summary: Add the rule that a license is never inline to the kit, the worker brief, the project template, and the review task rules; the docs gate fails a branch whose shipped artifact holds a token-shaped string, and `check agents` tells a project whose kit file lacks the rule to run `herdr-boss kit install`.

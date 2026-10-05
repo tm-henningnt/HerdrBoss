@@ -108,6 +108,8 @@ Do not weaken acceptance criteria or remove an existing test to get a pass.
 
 Keep each change inside the allowed paths.
 
+A license is never inline. Do not add license text, a license token, key text, or a licensed state to a release, a bundle, a demo, a fixture, or a test app, also not for testing. The Owner issues the license in a license extension for the tenant. That extension is the carrier extension. Public verification keys in code stay allowed.
+
 The task can list decisions already made. Do not reopen them.
 
 When you change a shared contract, such as copy, a schema, or a public API, update every snapshot and test assertion that it reaches in the same change.
@@ -154,7 +156,7 @@ Write `manifest.json` with `"schema": "herdr-boss.review-pack/1"`, an `id`, a `t
 
 Include one item for each thing that the Owner must decide. Add light and dark images for a visual change. Add before and after images for a changed screen. Add the exact text for a document change. Add a `link` item for each live check.
 
-Use only invented or public sample data. Do not add secrets, tokens, or private names.
+Use only invented or public sample data. Do not add secrets, tokens, or private names. Do not add license text, a license token, or a licensed state. Use a public verification key.
 
 Check the folder with `herdr-boss review check .worker/review-pack`. Name the folder in the report.
 

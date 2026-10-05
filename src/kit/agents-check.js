@@ -303,6 +303,12 @@ export function kitSnapshot(entries = readKitChanges(), current = kitRevision())
   return { current, changes: entries.map((entry) => ({ revision: entry.revision, impact: entry.impact })) };
 }
 
+// The rules that the kit file of a project must carry. Each entry names the rule, a pattern that matches the rule
+// line in the kit template, and the message that names the rule for a project that lacks it.
+export const KIT_RULES = Object.freeze([
+  { id: 'license-never-inline', pattern: /^-\s*A license is never inline\./m, message: 'has no rule that a license is never inline; run herdr-boss kit install' },
+]);
+
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.
 export function checkKitText(text, revision) {
   const findings = [];
@@ -313,6 +319,7 @@ export function checkKitText(text, revision) {
   if (!match) { add(`has no version line; ${INSTALL}`); return findings; }
   const version = match[1];
   const body = lines.slice(lines[1]?.trim() === KIT_NOTE ? 2 : 1).join('\n').replace(/^\n+/, '');
+  for (const rule of KIT_RULES) if (!rule.pattern.test(body)) add(rule.message);
   if (version !== revision) add(`has old kit revision ${version || '(none)'}; ${INSTALL}`);
   else if (normalize(body) !== normalize(fs.readFileSync(KIT_TEMPLATE, 'utf8'))) add(`was edited by hand; ${INSTALL}`);
   return findings;
