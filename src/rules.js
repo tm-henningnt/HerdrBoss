@@ -64,13 +64,18 @@ function taskKeyPart(task) {
 const OPEN_TASK_STATUS = new Set(['todo', 'doing', 'review']);
 const FRONTIER_RANK = { current: 0, next: 2 };
 
+// The ids of the groups that a held flag parks. Work in a held group is not actionable.
+function heldGroupIds(groups) {
+  return new Set((Array.isArray(groups) ? groups : []).filter((group) => group?.held === true).map((group) => group.id));
+}
+
 // Open work whose blockers are all done in the same status file. An unknown blocker stays unresolved.
 // A task in a held group is not actionable. An epic card only groups other tasks, and a task that waits
 // on the Owner needs an Owner answer; the orchestrator cannot start either one now.
 // The current frontier wins, then work without a frontier value, then the next frontier. File order breaks a tie.
 function actionableTask(tasks, groups) {
   const list = Array.isArray(tasks) ? tasks : [];
-  const held = new Set((Array.isArray(groups) ? groups : []).filter((group) => group?.held === true).map((group) => group.id));
+  const held = heldGroupIds(groups);
   const byId = new Map(list.filter((task) => task?.id).map((task) => [task.id, task]));
   let best = null;
   for (const task of list) {
@@ -83,8 +88,30 @@ function actionableTask(tasks, groups) {
   return best?.task || null;
 }
 
+// The open work that holds the idle-orchestrator notice back. An open review pack, a task in status
+// `review`, a `spec` task in `doing` with no live worker, and a published phase or summary text that
+// kept the same value for staleTextMinutes all mean that the orchestrator waits instead of starting work.
+// A held group and an epic card do not hold the notice back: the ready-work picker skips them too.
+// A null reviewPacks value means that the pack reader failed, so the pack state is unknown and the
+// notice holds back. An absent value means that the caller has no pack data, which is an empty list.
+function idleOpenWork(snap, entry, published, now, cfg) {
+  const packsUnknown = snap.reviewPacks === null;
+  const openPacks = Array.isArray(snap.reviewPacks) ? snap.reviewPacks.filter((pack) => pack.slug === entry.slug && pack.state === 'open') : [];
+  const tasks = Array.isArray(published.tasks) ? published.tasks : [];
+  const held = heldGroupIds(published.groups);
+  const holds = (task) => !held.has(task.group) && task.kind !== 'epic';
+  const pendingReview = tasks.find((task) => task?.status === 'review' && holds(task));
+  const live = snap.taskWorkers?.[entry.slug] || [];
+  const doingSpec = tasks.find((task) => task?.status === 'doing' && task?.kind === 'spec' && holds(task)
+    && !live.some((worker) => worker?.phase === 'live' && String(worker.taskId) === String(task.id)));
+  const limitMs = (Number.isFinite(cfg?.staleTextMinutes) ? cfg.staleTextMinutes : STALE_TEXT_DEFAULT_MINUTES) * MINUTE_MS;
+  const stale = Object.entries(snap.staleText?.[entry.slug] || {})
+    .find(([, field]) => Number.isFinite(field?.since) && now - field.since >= limitMs);
+  return { packsUnknown, openPacks, pendingReview, doingSpec, stale };
+}
+
 // One scoped notice per project: an orchestrator that stayed idle while its published status still has ready work.
-function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy = null) {
+function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy = null, cfg = null) {
   const control = snap.control?.projects;
   if (!control) return [];
   const idleMs = (Number.isFinite(policy?.idleMinutes) ? policy.idleMinutes : POLICY_DEFAULTS.idleMinutes) * 60000;
@@ -105,6 +132,25 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
     if (!Number.isFinite(since) || now - since < idleMs) continue;
     const local = panes.filter((p) => p.workspace === workspace);
     if (local.some((p) => p.agent && !p.orch && ['working', 'blocked', 'failed'].includes(p.status))) continue;
+    const open = idleOpenWork(snap, entry, published, now, cfg);
+    // The engine logs the reason when the pack reader fails. Do not fire the ready-work notice then.
+    if (open.packsUnknown) continue;
+    if (open.openPacks.length || open.pendingReview || open.doingSpec || open.stale) {
+      const minutes = Math.round((now - since) / 60000);
+      const reasons = [];
+      if (open.openPacks.length) reasons.push(`${open.openPacks.length} open review ${open.openPacks.length === 1 ? 'pack' : 'packs'} (${open.openPacks.map((pack) => pack.pack).join(', ')})`);
+      if (open.pendingReview) reasons.push(`task ${open.pendingReview.id ? `${open.pendingReview.id} ` : ''}"${open.pendingReview.title}" is in review`);
+      if (open.doingSpec) reasons.push(`spec task ${open.doingSpec.id ? `${open.doingSpec.id} ` : ''}"${open.doingSpec.title}" is in progress without a live worker`);
+      if (open.stale) reasons.push(`the published \`${open.stale[0]}\` text did not change for ${fmtDuration(Math.floor((now - open.stale[1].since) / 1000))}`);
+      notices.push({
+        key: `nudge:idle-open:${entry.slug || taskKeyPart(label)}`,
+        project: entry.slug, taskId: null,
+        severity: 'info', scope: workspace, prompt: false,
+        title: open.openPacks.length ? `Orchestrator idle with open packs in ${label}` : `Orchestrator idle with a pending status review in ${label}`,
+        text: `The ${label} orchestrator has been idle for ${minutes} minutes with open work: ${reasons.join('; ')}. Finish or close the open items; do not start new work.`,
+      });
+      continue;
+    }
     const task = actionableTask(published.tasks, published.groups);
     if (!task) continue;
     const ready = local.filter((p) => p.agent && !p.orch && ['idle', 'done'].includes(p.status));
@@ -267,7 +313,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null, 
   const advice = [];
   const avoidKinds = new Set();
   alerts.push(...blockedWorkerAlerts(snap, paneSince, now));
-  alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy));
+  alerts.push(...idleOrchestratorNudges(snap, paneSince, now, policy, cfg));
   alerts.push(...staleStatusAlerts(snap, now));
   alerts.push(...staleTextAlerts(snap, cfg, now, snap.staleText || {}));
 

@@ -31,6 +31,8 @@ The failure labels are `API Error`, `401`, `429`, `Connection lost`, `usage limi
 
 An idle-orchestrator nudge reads the published project status file. Herdr Boss sends it only when the project mode is `auto` or `active`. It skips the `idle` and `paused` modes and the Boss workspace. The `orch` pane must be `idle` or `done` for at least the configured idle minutes. No other worker in that workspace may be `working`, `blocked`, or `failed`.
 
+Herdr Boss holds the ready-work nudge back while the project has open work. Open work is an open review pack, a task in status `review`, a `spec` task in status `doing` with no live worker, or a published `phase` or `summary` text that kept the same value for `staleTextMinutes`. A task in a held group and an epic card do not count; the ready-work picker skips them too. A failed review pack read also holds the nudge back, and Herdr Boss logs the reason. The notice then says `Orchestrator idle with open packs` or `Orchestrator idle with a pending status review` instead. That notice is in the bulletin only, so it does not prompt the waiting orchestrator. It names the open items and does not ask for new work.
+
 A task is actionable when its status is `todo`, `doing`, or `review` and every ID in its `blockedBy` list is `done` in the same project. An unknown blocker stays unresolved. A task with status `blocked` is never actionable. Herdr Boss picks one actionable task: current frontier first, then a task without a frontier value, then next frontier. Status-file order decides a tie.
 
 A task in a group with `"held": true` is not actionable. A task with `kind` `epic` and a task that waits on the Owner are not actionable. The nudge then names the next actionable task outside the held group, or sends no notice.

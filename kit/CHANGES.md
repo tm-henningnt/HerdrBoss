@@ -229,3 +229,7 @@ Summary: The kit update line for a useful-only change is optional to act on now 
 ## e90c411a41ac
 Impact: useful
 Summary: Add the status review step: rewrite the published phase and summary at each publish and remove an Owner wait when no Mailbox item is open; Herdr Boss sends one stale text notice when a field keeps the same text for staleTextMinutes (default 360).
+
+## 2493db657302
+Impact: useful
+Summary: The idle-orchestrator notice holds back while a project has an open review pack, a task in status `review`, a `spec` task in `doing` with no live worker, or a stale `phase` or `summary` text; a held group and an epic card do not hold it back; a failed pack read holds it back and is logged; the notice then names the open work instead of ready work.
