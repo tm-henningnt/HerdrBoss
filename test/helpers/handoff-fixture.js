@@ -8,7 +8,7 @@ export function writeExecutable(file, source) {
   fs.chmodSync(file, 0o755);
 }
 
-export function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sourceLabel = 'orch', sessionId = null, busyAttempts = 0, existingPane = null, readyDuringPrompt = false, successorAgent = null } = {}) {
+export function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sourceLabel = 'orch', sessionId = null, busyAttempts = 0, existingPane = null, readyDuringPrompt = false, successorAgent = null, agents = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-handoff-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -54,7 +54,7 @@ if (args[0] === 'pane' && args[1] === 'close' && process.env.TEST_CANCEL_RACE_ST
 }
 if (args[0] === 'tab' && args[1] === 'create') result = process.env.TEST_NO_TAB_ID === '1' ? { root_pane: { pane_id: 'ws:p2' } }
   : { tab: { tab_id: 'ws:t2' }, root_pane: { pane_id: 'ws:p2', tab_id: 'ws:t2' } };
-if (args[0] === 'agent' && args[1] === 'list') result = { agents: [] };
+if (args[0] === 'agent' && args[1] === 'list') result = { agents: process.env.TEST_AGENTS ? JSON.parse(process.env.TEST_AGENTS) : [] };
 if (args[0] === 'agent' && args[1] === 'start') {
   const count = Number(fs.readFileSync(process.env.TEST_AGENT_START_FILE, 'utf8') || 0) + 1;
   fs.writeFileSync(process.env.TEST_AGENT_START_FILE, String(count));
@@ -150,6 +150,7 @@ exec node "$(dirname "$0")/session-migrate.cjs" "$@"
       TEST_READY_DURING_PROMPT: readyDuringPrompt ? '1' : '0',
       TEST_HANDOFF_CLI: new URL('../../src/cli.js', import.meta.url).pathname,
       ...(successorAgent ? { TEST_SUCCESSOR_AGENT: successorAgent } : {}),
+      ...(agents ? { TEST_AGENTS: JSON.stringify(agents) } : {}),
       ...(sessionId ? { TEST_SESSION_ID: sessionId } : {}),
     },
   };

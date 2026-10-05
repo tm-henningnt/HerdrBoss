@@ -31,6 +31,9 @@ export const POLICY_DEFAULTS = {
   autoHandoverForceContextTokens: 400000,
   // The /goal text for a new orchestrator that has no goal. A handover copies it to the successor. An empty string turns it off.
   defaultOrchestratorGoal: 'Keep the build moving end to end. Work through the published plan in priority order, and start the next ready task as soon as a slot is free, on a Use now lane with the free models first. Decide product, design and technical details yourself with good judgment and taste: check docs/orchestration/memory.md for a recorded Owner decision first, choose the simpler and more robust option, and record each decision. Respect herdr-boss messages, the kit and the Boss. When something is unclear, risky or needs a second opinion, ask the Boss, who decides with you. Stop only when no task can progress without a human. Then escalate through the Boss with one mail or chat item that names the decision, the options and your recommendation. Keep your main thread small: use subagents for reviews and reading, end your turn after a dispatch, and wait for worker reports. Before you stop, leave memory.md, the published status and the next task current. A running worker, a gate, a push or a lock wait is progress: dispatch, end the turn, wait for the report, and treat the goal as met for that turn.',
+  // The standing rules that the handover bootstrap prompt gives to every successor: the Boss rules, the
+  // pane map, and the open items. The Owner edits the text in Settings. An empty text omits the section.
+  bossRules: 'The Boss decides kit changes and reports between projects. Read the Herdr Boss kit file and the [herdr-boss] notices. Use subagents for reviews, long reads, and code surveys, and keep the main thread for decisions. Send no prompt to a pane of another project; the Boss relays it. Do not take the machine-wide full-suite lock with a bare lock acquire, and push with herdr-boss push. Never print a secret to a pane or a report. Decide implementation, product, and design details yourself. Report to the Boss when work is merged and live, or when you are blocked.',
   goals: { autoCommand: false },
   // After backoffAfterTimeouts Claude quota probe timeouts in a row, probe every backoffMinutes.
   quotaProbe: { backoffAfterTimeouts: 2, backoffMinutes: 20 },
@@ -60,6 +63,8 @@ export const POLICY_DEFAULTS = {
 };
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// The most characters of the bossRules policy text. It is also the cap of the Boss rules section of the handover bootstrap prompt.
+export const BOSS_RULES_MAX = 1200;
 const KINDS = new Set(POLICY_DEFAULTS.allowedKinds);
 const PROVIDERS = new Set(Object.keys(POLICY_DEFAULTS.providerModes));
 const WINDOW_KEYS = new Set(['primary', 'secondary', 'tertiary']);
@@ -253,6 +258,8 @@ export function validatePolicy(value, models) {
   if (!Number.isInteger(value.autoHandoverForceContextTokens) || value.autoHandoverForceContextTokens < 50000 || value.autoHandoverForceContextTokens > 2000000) errors.push('autoHandoverForceContextTokens must be an integer from 50000 to 2000000.');
   else if (Number.isInteger(value.autoHandoverContextTokens) && value.autoHandoverForceContextTokens <= value.autoHandoverContextTokens) errors.push('autoHandoverForceContextTokens must be greater than autoHandoverContextTokens.');
   { const goalError = goalTextError(value.defaultOrchestratorGoal); if (goalError) errors.push(`defaultOrchestratorGoal ${goalError}`); }
+  if (typeof value.bossRules !== 'string') errors.push('bossRules must be a string.');
+  else if (value.bossRules.length > BOSS_RULES_MAX) errors.push(`bossRules must be at most ${BOSS_RULES_MAX} characters.`);
   for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceMinUsePercent', 100]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }

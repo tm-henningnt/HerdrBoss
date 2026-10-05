@@ -556,6 +556,14 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
 
+  S('capacity', 'bossRules', 'Boss rules', {
+    what: 'The standing rules that Herdr Boss gives to every successor in the handover bootstrap prompt. The text is the Boss rules section of that prompt. Each prepared successor reads the section, so the Boss does not send the rules again. The other two generated sections are the pane map and the open items. An empty text leaves the section out.',
+    default: 'The standing rules of the fleet', unit: 'Text', range: 'One line of at most 1200 characters, or empty for no rules',
+    raise: 'A longer text gives the successor more rules and uses more of the prompt.',
+    lower: 'A shorter text leaves out the rules that you remove, and a text over 1200 characters is refused.',
+    apply: 'policy',
+  }),
+
   S('capacity', 'succession.ladder', 'Project lead succession', {
     what: 'The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable usage limits, and global or project exclusions.',
     default: 'The list in policy.json', unit: 'List of choices', range: 'Up to 20 choices',
