@@ -2384,7 +2384,7 @@ export class Engine extends EventEmitter {
         this.memory.handoverRecoveredNotices ||= {};
         if (this.memory.handoverRecoveredNotices[item.id] !== reason) {
           this.memory.handoverRecoveredNotices[item.id] = reason;
-          this.log('handoff', `Handoff ${item.id} stays unprepared: ${reason}`, { project: item.project, pane: item.newPane });
+          this.log('handoff', `Handoff ${item.id} stays unready for the Boss: ${reason}`, { project: item.project, pane: item.newPane });
         }
         continue;
       }
@@ -2470,11 +2470,15 @@ export class Engine extends EventEmitter {
       const preparedAt = Date.parse(item.preparedAt);
       if (!Number.isFinite(preparedAt) || now - preparedAt < UNREADY_SUCCESSOR_NOTICE_MS) continue;
       const target = panes.find((pane) => pane.id === item.newPane);
-      const reason = target?.agent === item.toKind && !settled(target)
-        ? 'the successor pane works'
-        : target?.agent !== item.toKind ? 'the successor pane does not run the target agent' : 'the successor pane is not idle yet';
+      // Name the accurate reason first. An absent pane is not a wrong agent, and a pane that is not
+      // idle is not reported as working or idle from a settled helper.
+      const reason = !target ? 'the successor pane is absent'
+        : target.agent !== item.toKind ? 'the successor pane does not run the target agent'
+          : 'the successor pane is not idle yet';
+      // A read of an absent pane cannot work. Every pane that exists can be read.
+      const read = target ? `Read it with herdr agent read ${item.newPane}. ` : '';
       const sent = await this.retryOperation(item, now, 'preparing', 'the preparing Boss notice', () => this.promptHandoverBoss(herdr,
-        `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: still preparing 10 minutes after preparation (${reason}). Inspect it with herdr agent read ${item.newPane}, then run herdr-boss handoff repair ${item.id} to promote it, or herdr-boss handoff cancel ${item.id} to drop it.`), { project: item.project, pane: item.newPane });
+        `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: still preparing 10 minutes after preparation (${reason}). ${read}Herdr Boss promotes the record on its own once the successor pane runs ${item.toKind} and is idle. Inspect the record with herdr-boss handoff repair ${item.id} --dry-run. Run herdr-boss handoff repair ${item.id} only after that. You can drop the record with herdr-boss handoff cancel ${item.id}.`), { project: item.project, pane: item.newPane });
       if (sent) this.memory.handoverPreparingNotices[item.id] = now;
     }
   }

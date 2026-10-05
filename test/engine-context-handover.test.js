@@ -977,6 +977,10 @@ test('the engine holds a promoted prompt-less successor and does not auto-ready 
   assert.equal(out.records[0].readyAt, undefined);
   assert.deepEqual(activates(out), []);
   assert.equal(out.logs.filter((entry) => /no bootstrap prompt evidence/.test(entry.message)).length, 1, 'one bounded hold reason');
+  const held = out.logs.filter((entry) => /no bootstrap prompt evidence/.test(entry.message));
+  assert.equal(held.length, 1);
+  assert.match(held[0].message, /stays unready/, 'the log names the record as unready, not as unprepared');
+  assert.equal(out.logs.some((entry) => /stays unprepared/.test(entry.message)), false);
 });
 
 test('a promoted successor with recorded prompt evidence still becomes ready and activates', { timeout: 30000 }, (t) => {
@@ -997,6 +1001,48 @@ test('the engine logs one reason while a preparing successor stays stuck and not
   const notices = bossNotes(out);
   assert.equal(notices.length, 1);
   assert.match(notices[0].args[3], /handoff repair ctx-1/);
+});
+
+// K26 copy closure: the notice names the accurate reason first. It never offers a read of an absent
+// pane and never offers a repair that the shared guard refuses in the state where the notice fires.
+const preparingNoticeSteps = (successorPane, broken = false) => [1, 11].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), worker, bossPane, ...(broken ? [{ workspace: 'w-alpha', label: 'broken' }] : [successorPane])), published: { alpha: status(1) } }));
+
+test('the preparing notice names an absent successor pane and does not tell the Boss to read it', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing', preparedAt: at(0) };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: preparingNoticeSteps(null, true) });
+  assert.equal(out.records[0].status, 'preparing');
+  const notices = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && /still preparing/.test(String(args[3])));
+  assert.equal(notices.length, 1);
+  const text = notices[0].args[3];
+  assert.match(text, /the successor pane is absent/);
+  assert.equal(/does not run the target agent/.test(text), false, 'an absent pane is not a wrong agent');
+  assert.equal(/herdr agent read/.test(text), false, 'the notice never names a read of a pane that is absent');
+  assert.match(text, /handoff repair ctx-1 --dry-run/);
+});
+
+test('the preparing notice names a successor pane that runs another agent', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing', preparedAt: at(0) };
+  const other = { ...successor, agent: 'codex' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: preparingNoticeSteps(other) });
+  const notices = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && /still preparing/.test(String(args[3])));
+  assert.equal(notices.length, 1);
+  const text = notices[0].args[3];
+  assert.match(text, /the successor pane does not run the target agent/);
+  assert.match(text, /herdr agent read w-alpha:p9/, 'an existing pane can be read');
+});
+
+test('the preparing notice does not promise a repair that the guard refuses', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing', preparedAt: at(0) };
+  const working = { ...successor, status: 'working' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: preparingNoticeSteps(working) });
+  const notices = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && /still preparing/.test(String(args[3])));
+  assert.equal(notices.length, 1);
+  const text = notices[0].args[3];
+  assert.match(text, /the successor pane is not idle yet/, 'the notice does not guess a busy or idle state');
+  assert.match(text, /herdr agent read w-alpha:p9/);
+  assert.equal(/to promote it/.test(text), false, 'the notice never advertises an immediate repair');
+  assert.match(text, /promotes the record/);
+  assert.match(text, /handoff repair ctx-1 --dry-run/);
 });
 
 test('a ghost suggestion in an idle successor input does not block readiness', { timeout: 30000 }, (t) => {

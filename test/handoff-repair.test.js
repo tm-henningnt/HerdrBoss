@@ -3,7 +3,8 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { activationFixture, runHandoffCli, runHandoffModule } from './helpers/handoff-fixture.js';
+import { spawnSync } from 'node:child_process';
+import { activationFixture, runHandoffCli, runHandoffModule, writeExecutable } from './helpers/handoff-fixture.js';
 
 const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
 
@@ -15,6 +16,33 @@ function moduleError(f, source) {
   try { runHandoffModule(f.root, source, f.env); }
   catch (error) { return String(error.stderr || error.message); }
   return '';
+}
+
+// The exit status of the command, so a test can separate a refusal from a no-op.
+function repairCli(f, args) {
+  const cliPath = new URL('../src/cli.js', import.meta.url).pathname;
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
+    cwd: path.join(f.root, 'project'), env: f.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+// A concurrent writer that expires the record between the read and the guarded write of a repair.
+function concurrentExpiry(f) {
+  const bin = path.join(f.root, '.local', 'bin');
+  writeExecutable(path.join(bin, 'race.cjs'), `
+const fs = require('node:fs');
+const path = require('node:path');
+const file = path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json');
+const records = JSON.parse(fs.readFileSync(file, 'utf8'));
+records[0].status = 'expired';
+records[0].expiredReason = 'concurrent update';
+fs.writeFileSync(file, JSON.stringify(records));
+`);
+  writeExecutable(path.join(bin, 'herdr'), `#!/bin/sh
+if [ "$1" = "pane" ] && [ "$2" = "get" ]; then node "$(dirname "$0")/race.cjs"; fi
+exec node "$(dirname "$0")/herdr.cjs" "$@"
+`);
 }
 
 const repairSource = (options = '') => `import { repairHandoff } from ${JSON.stringify(handoffUrl)};
@@ -76,12 +104,100 @@ test('handoff repair refuses a record that is not preparing or prepared', (t) =>
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'active');
 });
 
+// K26: an already prepared record needs no repair. The check runs before the successor pane read,
+// so an absent or busy pane cannot report a pane fault for a record that is already prepared.
+test('handoff repair reports an already prepared record as a successful no-op before it reads the pane', (t) => {
+  const f = activationFixture(t, { record: { status: 'prepared', newPane: 'ws:p9' } });
+  const result = repairModule(f, repairSource());
+  assert.equal(result.repaired, false);
+  assert.equal(result.noop, true);
+  assert.equal(result.refused, undefined);
+  assert.equal(result.status, 'prepared');
+  assert.match(result.reason, /already prepared; nothing to repair/);
+  assert.equal(fs.existsSync(path.join(f.root, 'herdr-calls.jsonl')), false, 'a prepared record needs no successor pane read');
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.equal(stored.status, 'prepared');
+  assert.equal(stored.repairedAt, undefined, 'a no-op writes no repair field');
+});
+
+test('handoff repair --dry-run on an already prepared record is a no-op and writes nothing', (t) => {
+  const f = activationFixture(t, { record: { status: 'prepared', newPane: 'ws:p9' } });
+  const file = path.join(f.root, 'handoffs.json');
+  const before = fs.readFileSync(file);
+  const result = repairModule(f, repairSource(', { dryRun: true }'));
+  assert.equal(result.noop, true);
+  assert.equal(result.wouldRepair, undefined);
+  assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('a refused repair returns structured refusal metadata for every refused state', (t) => {
+  const refused = [
+    { record: { status: 'expired' }, reason: /the record is expired/ },
+    { record: { status: 'preparing', newPane: 'ws:p9' }, reason: /absent/ },
+    { record: { status: 'preparing', newPane: 'ws:p3', toKind: 'pi' }, reason: /works/ },
+    { record: { status: 'preparing', newPane: 'ws:p3', toKind: 'codex' }, reason: /another agent/ },
+  ];
+  for (const item of refused) {
+    const f = activationFixture(t, { record: item.record });
+    const result = repairModule(f, repairSource());
+    assert.equal(result.refused, true, item.record.status);
+    assert.equal(result.noop, undefined, item.record.status);
+    assert.match(result.reason, item.reason);
+  }
+});
+
+test('a repair that loses a concurrent change is refused, not repaired', (t) => {
+  const f = activationFixture(t, { record: { status: 'preparing' } });
+  concurrentExpiry(f);
+  const result = repairModule(f, repairSource());
+  assert.equal(result.repaired, false);
+  assert.equal(result.refused, true);
+  assert.match(result.reason, /changed during the repair/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].repairedAt, undefined);
+});
+
+test('the handoff repair CLI exits 0 for a repair, an eligible dry run, and a prepared no-op', (t) => {
+  const repaired = activationFixture(t, { record: { status: 'preparing' } });
+  const done = repairCli(repaired, ['handoff', 'repair', 'handoff-activate']);
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /Repaired handoff handoff-activate/);
+
+  const eligible = activationFixture(t, { record: { status: 'preparing' } });
+  const dry = repairCli(eligible, ['handoff', 'repair', 'handoff-activate', '--dry-run']);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /would repair/);
+
+  const noop = activationFixture(t, { record: { status: 'prepared', newPane: 'ws:p9' } });
+  const nothing = repairCli(noop, ['handoff', 'repair', 'handoff-activate']);
+  assert.equal(nothing.status, 0, nothing.stderr);
+  assert.match(nothing.stdout, /already prepared/);
+});
+
+test('the handoff repair CLI exits 1 for every refused state and a refused dry run writes nothing', (t) => {
+  const expired = activationFixture(t, { record: { status: 'expired' } });
+  assert.equal(repairCli(expired, ['handoff', 'repair', 'handoff-activate']).status, 1);
+
+  const working = activationFixture(t, { record: { status: 'preparing', newPane: 'ws:p3', toKind: 'pi' } });
+  assert.equal(repairCli(working, ['handoff', 'repair', 'handoff-activate']).status, 1);
+
+  const file = path.join(working.root, 'handoffs.json');
+  const before = fs.readFileSync(file);
+  const dry = repairCli(working, ['handoff', 'repair', 'handoff-activate', '--dry-run']);
+  assert.equal(dry.status, 1, dry.stderr);
+  assert.deepEqual(fs.readFileSync(file), before, 'a refused dry run writes nothing');
+
+  const raced = activationFixture(t, { record: { status: 'preparing' } });
+  concurrentExpiry(raced);
+  assert.equal(repairCli(raced, ['handoff', 'repair', 'handoff-activate']).status, 1);
+});
+
 test('the handoff repair CLI prints the guard result and the dry run', (t) => {
   const f = activationFixture(t, { record: { status: 'preparing' } });
   const printed = runHandoffCli(f.root, ['handoff', 'repair', 'handoff-activate'], f.env);
   assert.match(printed, /handoff-activate/);
   assert.match(printed, /preparing/);
-  const dry = runHandoffCli(f.root, ['handoff', 'repair', 'handoff-activate', '--dry-run'], { ...f.env, HERDR_BOSS_DIR: f.root });
+  const inspect = activationFixture(t, { record: { status: 'preparing' } });
+  const dry = runHandoffCli(inspect.root, ['handoff', 'repair', 'handoff-activate', '--dry-run'], { ...inspect.env, HERDR_BOSS_DIR: inspect.root });
   assert.match(dry, /dry/i);
 });
 

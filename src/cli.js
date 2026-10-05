@@ -951,9 +951,13 @@ async function main() {
         // A dry run writes nothing, so it performs no writable-data probe.
         if (!dryRun) assertDataWritable();
         const result = repairHandoff(target, { dryRun });
+        // The exit status follows the structured result, not the reason text. Exit 0 means the command
+        // did what it was asked: a repair, an eligible dry run, or a record that needs no repair.
         if (result.repaired) console.log(`Repaired handoff ${result.id}: preparing -> prepared (${result.reason}).`);
+        else if (result.noop) console.log(`Handoff ${result.id} ${result.reason}.`);
         else if (result.dryRun) console.log(`Handoff ${result.id} dry run: ${result.wouldRepair ? 'would repair preparing -> prepared' : 'no change'} (${result.reason}).`);
         else console.log(`Handoff ${result.id} left ${result.status}: ${result.reason}.`);
+        if (result.refused) process.exitCode = 1;
         break;
       }
       if (action === 'cancel') {

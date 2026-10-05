@@ -673,22 +673,26 @@ export function autoReadyHandoff(id, note) {
 
 // Inspect one record and apply the same guarded transition that `handoff ready` and the engine use.
 // A dry run inspects only: it writes nothing, prompts nobody, and activates nobody.
+// The result carries structured metadata, not only a reason. `repaired` is a completed transition,
+// `noop` is a record that needs no transition, and `refused` is a state in which the command does nothing.
 export function repairHandoff(id, { dryRun = false } = {}) {
   const item = listHandoffs().find((x) => x.id === id);
   if (!item) throw new Error('Handoff not found.');
   const base = { id: item.id, status: item.status, dryRun, repaired: false };
   if (!['preparing', 'prepared'].includes(item.status)) {
-    return { ...base, reason: `the record is ${item.status}, not preparing or prepared` };
+    return { ...base, refused: true, reason: `the record is ${item.status}, not preparing or prepared` };
   }
+  // A prepared record is already recovered. This check runs before the pane read, so an absent or
+  // busy pane cannot report a pane fault for a record that needs no repair.
+  if (item.status === 'prepared') return { ...base, noop: true, reason: 'the record is already prepared; nothing to repair' };
   const target = successorPane(item);
   const gate = successorPaneState(item, target);
-  if (!gate.ready) return { ...base, reason: gate.reason };
-  if (item.status === 'prepared') return { ...base, reason: 'the record is already prepared; nothing to repair' };
+  if (!gate.ready) return { ...base, refused: true, reason: gate.reason };
   if (dryRun) return { ...base, status: 'prepared', previousStatus: 'preparing', wouldRepair: true, reason: gate.reason };
   const record = patchHandoffRecord(id, {
     status: 'prepared', preparedFrom: 'preparing', preparedNote: 'handoff repair', repairedAt: new Date().toISOString(),
   }, { expectStatus: ['preparing'] });
-  if (!record) return { ...base, status: null, reason: 'the record changed during the repair' };
+  if (!record) return { ...base, status: null, refused: true, reason: 'the record changed during the repair' };
   return { ...base, status: 'prepared', previousStatus: 'preparing', repaired: true, wouldRepair: true, reason: gate.reason, item: record };
 }
 
