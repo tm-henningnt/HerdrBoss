@@ -257,7 +257,7 @@ function previousSubmittedPack(slug, session, dir, excludePack) {
 }
 
 // Validate, then publish or dry-run one pack folder. `imported` allows the page item type.
-function publishFolder({ slug, folder, caller, note, judgePass, warnJudgePass = false, dryRun, imported = false, round: wantedRound, carryOpen = false }, ctx) {
+function publishFolder({ slug, folder, caller, note, judgePass, requireJudgePass = false, dryRun, imported = false, round: wantedRound, carryOpen = false }, ctx) {
   const { out, err, dir, now, deps } = ctx;
   const validation = validatePack(folder, { allowPage: imported });
   printWarnings(validation, ctx);
@@ -268,8 +268,11 @@ function publishFolder({ slug, folder, caller, note, judgePass, warnJudgePass = 
   }
   const { manifest, totals } = validation;
   // The judge pass is publish metadata, not folder content. It rides on the stored manifest of this version.
+  // An Owner-facing pack must carry the record of an independent judge pass, so the publish is refused without one.
   if (judgePass !== undefined) manifest.judgePass = judgePass;
-  if (warnJudgePass && judgePass === undefined) out(`Warning: The pack has no judge pass. Pass --judge-pass TEXT with the model and the date of the independent judge pass that ran.`);
+  if (requireJudgePass && judgePass === undefined) {
+    throw new ReviewCliError('Refused: the pack has no judgePass record. Pass --judge-pass TEXT with the model and the date of the independent judge pass that ran, for example "claude-opus-5-5, 2026-10-04". Nothing was published.');
+  }
   let carried = { count: 0, fileSources: {}, answers: {} };
   let previous = null;
   if (carryOpen) {
@@ -375,7 +378,7 @@ function publishCommand(args, ctx) {
     if (!caller.planner) throw new ReviewCliError('--round is only for a pane with a planner session.');
     round = Number(flags['--round']);
   }
-  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], judgePass, warnJudgePass: true, dryRun: !!flags['--dry-run'], round, carryOpen: !!flags['--carry-open'] }, ctx);
+  return publishFolder({ slug, folder: positional[1], caller, note: flags['--note'], judgePass, requireJudgePass: true, dryRun: !!flags['--dry-run'], round, carryOpen: !!flags['--carry-open'] }, ctx);
 }
 
 function reopenCommand(args, ctx) {

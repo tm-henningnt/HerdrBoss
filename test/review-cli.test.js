@@ -69,6 +69,14 @@ function packFolder({ id = 'checkout-redesign', tag = 0, edit } = {}) {
 
 const CONTROL = { projects: { shop: { slug: 'shop', workspace: 'wA', orch: { pane: 'wA:p1' } }, blog: { slug: 'blog', workspace: 'wC', orch: { pane: 'wC:p1' } } } };
 
+// A publish carries the independent judge pass that the CLI requires. The fixture adds it to a
+// `review publish` call unless the call passes one. A test that checks the refusal uses `rawCli`.
+const JUDGE_PASS = 'claude-opus-5-5, 2026-10-05';
+const withJudgePass = (args) => {
+  const publish = (args[0] === 'review' && args[1] === 'publish') || args[0] === 'publish';
+  return publish && !args.includes('--judge-pass') ? [...args, '--judge-pass', JUDGE_PASS] : args;
+};
+
 // A CLI fixture with a fake herdr binary. `label` is the pane label. label === false runs as a plain terminal.
 function fixture(t, label = 'orch', workspace = 'wA', paneId = 'wA:p1') {
   const root = tmp('herdr-review-cli-');
@@ -87,9 +95,10 @@ else { console.error('unexpected herdr call'); process.exit(3); }
   const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: data, PATH: `${bin}:${process.env.PATH}` };
   for (const key of ['NODE_TEST_CONTEXT', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_BOSS_LIVE_DIR']) delete env[key];
   if (label !== false) Object.assign(env, { HERDR_ENV: '1', HERDR_PANE_ID: paneId, HERDR_WORKSPACE_ID: workspace });
-  const cli = (...args) => spawnSync(process.execPath, [path.join(repo, 'src', 'cli.js'), ...args], { cwd: root, env, encoding: 'utf8' });
+  const rawCli = (...args) => spawnSync(process.execPath, [path.join(repo, 'src', 'cli.js'), ...args], { cwd: root, env, encoding: 'utf8' });
+  const cli = (...args) => rawCli(...withJudgePass(args));
   t.after(() => openSqliteStore({ dir: data }).close());
-  return { cli, data, root };
+  return { cli, rawCli, data, root };
 }
 
 const output = (result) => `${result.stdout}${result.stderr}`;
@@ -312,20 +321,25 @@ test('publish refuses the sixth open pack and names the limit', (t) => {
   assert.equal(reviewRecords(data).length, 5);
 });
 
-test('review publish warns once without a judge pass and stores the flag when given', (t) => {
-  const { cli, data } = fixture(t);
-  const warnings = (text) => text.split('\n').filter((line) => line.startsWith('Warning:') && /judge pass/i.test(line));
-  const missing = cli('review', 'publish', 'shop', packFolder());
-  assert.equal(missing.status, 0, output(missing));
-  assert.equal(warnings(missing.stdout).length, 1);
-  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).manifest.judgePass, undefined);
+test('review publish refuses a pack with no judge pass and stores the flag when given', (t) => {
+  const { cli, rawCli, data } = fixture(t);
+  const refused = rawCli('review', 'publish', 'shop', packFolder());
+  assert.equal(refused.status, 1, output(refused));
+  assert.match(refused.stderr, /judgePass/);
+  assert.match(refused.stderr, /--judge-pass TEXT/);
+  assert.ok(noStore(data), 'a refused publish writes nothing');
+  assert.deepEqual(reviewRecords(data), []);
 
-  const pass = 'claude-opus-5-5, 2026-10-04';
-  const result = cli('review', 'publish', 'shop', packFolder({ tag: 1 }), '--judge-pass', pass);
+  const dry = rawCli('review', 'publish', 'shop', packFolder(), '--dry-run');
+  assert.equal(dry.status, 1, output(dry));
+  assert.match(dry.stderr, /judgePass/);
+  assert.ok(noStore(data), 'a refused dry run writes nothing');
+
+  const pass = 'claude-opus-5-5, 2026-10-05';
+  const result = cli('review', 'publish', 'shop', packFolder(), '--judge-pass', pass);
   assert.equal(result.status, 0, output(result));
-  assert.equal(warnings(result.stdout).length, 0);
   const pack = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
-  assert.equal(pack.version, 2);
+  assert.equal(pack.version, 1);
   assert.equal(pack.manifest.judgePass, pass);
 });
 
@@ -657,7 +671,7 @@ function inProcess(t) {
   const run = (args, deps = {}, now = T) => {
     const out = [];
     const err = [];
-    const code = reviewCommand(args, { env: {}, dir: data, now, baseUrl: 'http://127.0.0.1:1', deps, out: (line) => out.push(line), err: (line) => err.push(line) });
+    const code = reviewCommand(withJudgePass(args), { env: {}, dir: data, now, baseUrl: 'http://127.0.0.1:1', deps, out: (line) => out.push(line), err: (line) => err.push(line) });
     return { code, out: out.join('\n'), err: err.join('\n') };
   };
   return { data, run };
