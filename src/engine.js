@@ -17,7 +17,7 @@ import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
-import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd } from './watch-routines.js';
+import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd, WATCH_SNAPSHOT_ID, watchSnapshotText } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser, rememberBrowserTabs } from './browser-pool.js';
 import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { agentBrowserTabIds, browserCommandActivity } from './browser-activity.js';
@@ -3058,7 +3058,17 @@ export class Engine extends EventEmitter {
         continue;
       }
       try {
-        const text = routinePromptText({ ...definition, ...item, prompt: definition.prompt }, record.adhoc);
+        const projects = Object.values(this.communicationControl?.projects || {});
+        const snapshot = item.id === WATCH_SNAPSHOT_ID
+          ? watchSnapshotText({
+              panes: herdr.panes,
+              paneSince: this.memory.paneSince,
+              pausedPanes: new Set(projects.filter((project) => project?.effectiveMode === 'paused' && project?.orch?.pane).map((project) => project.orch.pane)),
+              workspaces: new Set(projects.map((project) => project?.workspace).filter(Boolean)),
+              now,
+            })
+          : '';
+        const text = routinePromptText({ ...definition, ...item, prompt: definition.prompt }, record.adhoc, snapshot);
         await this.promptService(boss.id, text, { herdr, now, messages: [{ text, kind: 'task' }] });
       } catch (error) {
         const message = String(error.stderr || error.message).slice(0, 200);

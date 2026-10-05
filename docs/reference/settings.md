@@ -247,6 +247,8 @@ At each run time the service sends one prompt to the pane labeled `boss`: the ro
 
 The service writes the state of each routine to `watch.json`. A restart repeats no routine. The Agents page shows the next run and the last run of each routine. The log has one line for each sent, waiting, and skipped run.
 
+The Hourly check routine lists the locks and each project orchestrator pane before it decides to nudge. First it runs `herdr-boss lock list` and names each holder, its age, and each queued job. The service then adds a snapshot of the project orchestrator panes of the managed projects to the prompt. The snapshot gives the idle age in minutes from a usable clock and pane state time. It prints `idle age unknown` when the clock or the pane state time is not usable: missing, in the future, or out of range. It prints `idle age unavailable` for every pane that is not idle or done. An empty managed set lists no pane. The routine nudges only an idle or done pane with ready work and a known age. It never nudges a working or paused pane, and it never infers an age.
+
 The start notice to the orchestrators and the Boss carries the instructions in one line.
 
 ## Quota lanes

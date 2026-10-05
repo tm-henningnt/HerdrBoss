@@ -237,3 +237,7 @@ Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss su
 ## 27166ea39b6a
 Impact: useful
 Summary: `review publish` refuses a pack with no judge pass and writes nothing; pass the record with `--judge-pass TEXT`; `review import` does not need the record; the orchestrator skill names the flag. Every Pi guard refusal names the form that a worker may use instead: `kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)` for `pkill` and `killall`, and one exact path in the worktree `.worker` folder or a temporary directory for a blocked `rm -rf`. The `worker collect` scope refusal shows the exact `--accept-scope` command form with an example that lists every unlisted file, comma separated, and shell-quotes the value.
+
+## 79716b4d22ad
+Impact: useful
+Summary: The Hourly check routine lists the locks and each managed project orchestrator pane's idle age before it decides to nudge; the service snapshot lists only managed workspaces, gives a numeric age only when the clock and the pane state time are usable and in order, prints unknown or unavailable otherwise, and the routine never nudges a working or paused pane or infers an age.
