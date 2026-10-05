@@ -344,6 +344,26 @@ async function resume(docker, name) {
   await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']);
 }
 
+// The update stops the factory service. Every path that stops it starts it again, whatever fails later.
+function recoveryCommand(name) { return `herdr-boss factory docker ${name} -- exec hf-${name} ${S6_SVC} -u /run/service/herdr-boss-serve`; }
+
+// The message names the command that starts the service and the command that shows the state.
+function recoveryHint(name) {
+  return `If the factory service is down, run '${recoveryCommand(name)}' to start it. Then run 'herdr-boss factory status ${name}' to check the state. Retry the update only after the service writes a new state file.`;
+}
+
+// Return null when the service runs and answers /api/health. Return a message when it stays down.
+async function recoverService(docker, name, timeoutMs) {
+  if (!stoppedAt.has(name)) return null;
+  try {
+    if (await serviceState(docker, name) === 'true') return null;
+    await resume(docker, name);
+    await waitFor(docker, name, async () => { try { await readHealth(docker, name); return true; } catch { return false; } },
+      'The factory service did not answer /api/health.', timeoutMs);
+    return null;
+  } catch (error) { return `${error.message} ${recoveryHint(name)}`; }
+}
+
 async function createBackup(name, docker, io) {
   await factoryRecoveryBackup(name, { ...io, updateQuiescedBackup: true });
   const receipt = readPrivate(factoryFile(io.env, name, 'backup.json'), null);
@@ -483,7 +503,9 @@ async function updateService(name, factory, docker, owner, flags, initial) {
   const original = { commit, schemaVersion: schema, state: initial };
   await quiesce(docker, name);
   const backup = await takeQuiescedBackup(name, docker, factory.io);
+  const timeoutMs = factory.io.updateTimeoutMs ?? 30_000;
   let mergeStarted = false;
+  let failure = null;
   try {
     await assertUpdateStillSafe(docker, name, 'service', false);
     mergeStarted = true;
@@ -497,17 +519,21 @@ async function updateService(name, factory, docker, owner, flags, initial) {
     fs.rmSync(pendingFile(factory.io.env, name), { force: true });
     factory.io.stdout.write(`Updated factory ${name} service. Idle panes remain available.\n`);
     return 0;
-  } catch (error) {
-    if (!mergeStarted) return abortBeforeChange(docker, name, 'service', error);
+  } catch (error) { failure = error; }
+  let ending = '';
+  if (!mergeStarted) {
+    try { await resume(docker, name); ending = resumePath(name, 'service'); }
+    catch (resumeError) { ending = `The factory could not resume: ${resumeError.message} Run 'herdr-boss factory configure ${name} --resume' to check it.`; }
+  } else {
     try {
       const health = await rollbackService(name, docker, factory.io, original, backup, flags['--accept-data-loss'] === true);
       updateRecord(name, factory, health);
       fs.rmSync(pendingFile(factory.io.env, name), { force: true });
-    } catch (rollbackError) {
-      throw new Error(`${error.message} ${rollbackError.message}`);
-    }
-    throw new Error(`${error.message} The factory service was rolled back.`);
+      ending = 'The factory service was rolled back.';
+    } catch (rollbackError) { failure = new Error(`${failure.message} ${rollbackError.message}`); }
   }
+  const recovery = await recoverService(docker, name, timeoutMs);
+  throw new Error(`${failure.message} ${ending}${recovery ? ` ${recovery}` : ` ${recoveryHint(name)}`}`);
 }
 
 async function updateImage(name, factory, docker, owner, flags, initial, orchestrators, bossPane) {
@@ -521,11 +547,23 @@ async function updateImage(name, factory, docker, owner, flags, initial, orchest
   if (oldSchema === null) throw new Error('The factory database version cannot be read.');
   await quiesce(docker, name);
   const backup = await takeQuiescedBackup(name, docker, factory.io);
+  try {
+    await runImageUpdate({ name, factory, docker, owner, flags, initial, orchestrators, bossPane, backup, oldSchema, imageTag, imageMeta });
+    return 0;
+  } catch (error) {
+    // The update stopped the service. Start it again before the command ends, whatever failed.
+    const recovery = await recoverService(docker, name, factory.io.updateTimeoutMs ?? 30_000);
+    throw new Error(recovery ? `${error.message} ${recovery}` : `${error.message} ${recoveryHint(name)}`);
+  }
+}
+
+async function runImageUpdate({ name, factory, docker, owner, flags, initial, orchestrators, bossPane, backup, oldSchema, imageTag, imageMeta }) {
   let replacementStartAttempted = false;
+  const onStartAttempt = () => { replacementStartAttempted = true; };
   try {
     await assertUpdateStillSafe(docker, name, 'image', flags['--allow-boss-restart'] === true);
     await removeOwnedContainer(docker, name, owner);
-    await recreate(docker, name, factory.record, factory.host, owner, imageTag, () => { replacementStartAttempted = true; });
+    await recreate(docker, name, factory.record, factory.host, owner, imageTag, onStartAttempt);
     const health = await waitForCleanTick(docker, name, initial, factory.io.updateTimeoutMs ?? 30_000);
     await startFreshOrchestrators(docker, name, orchestrators);
     updateRecord(name, factory, health, imageTag, { builtAt: imageMeta.builtAt, pinsHash: imageMeta.pinsHash });

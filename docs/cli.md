@@ -1878,6 +1878,12 @@ After the backup, the tool takes a fresh work snapshot before it merges code or 
 
 The tool checks that `/api/state` returns 200 and that one clean service tick passes within 30 seconds. It rolls back a failed update when the schema has not increased.
 
+The update stops the factory service before it backs up the factory. After a failure at any later step, the tool starts the service again. It then waits until the service answers `/api/health`, within the same update timeout. A service that stays down is a failure.
+
+Every failure after the stop prints two commands. The first command starts the service: `herdr-boss factory docker NAME -- exec hf-NAME /command/s6-svc -u /run/service/herdr-boss-serve`. The second command reads the state: `herdr-boss factory status NAME`. The name is the real factory name. Retry the update only after the service writes a new state file. An old state file stops the next update with `The factory cannot prove that work is idle.`
+
+The service tier rolls back to the previous commit when a step after the merge fails. The rollback starts the previous service. The image tier has no rollback for a step that fails before the container changes. The tool starts the stopped service in both tiers.
+
 If the schema increased or cannot be read after the new container starts, the tool keeps a private pending record. Review the failure, then repeat the same command with `--accept-data-loss` to restore the backup and the previous code or image. This rollback can discard data written after the backup. If the new container never starts, the tool rolls back without restoring data or asking for this flag.
 
 ### Backup and recovery
@@ -1967,6 +1973,8 @@ A stopped factory is already frozen.
 Use `--off` to resume a paused container.
 These commands bypass the service version gate.
 They still check container ownership and safety.
+A failed factory update prints the command that starts the service.
+Run that command when the service does not answer.
 Docker must be reachable.
 Do not print a login file or token from a shell.
 

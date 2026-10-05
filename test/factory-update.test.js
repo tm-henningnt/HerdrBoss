@@ -73,7 +73,8 @@ function updateFixture() {
   const oldCommit = 'a'.repeat(40), newCommit = 'b'.repeat(40);
   let currentCommit = oldCommit, schema = 1, failUpdated = false, migrateOnUpdate = false, failNewImageCreate = false, failNewImageStart = false, failSchemaReadAfterStart = false, schemaUnreadableAfterStart = false;
   const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
-  let remoteUrl = expectedOrigin, failFetch = false, failMerge = false;
+  let remoteUrl = expectedOrigin, failFetch = false, failMerge = false, failGitReset = false, failServiceStart = false;
+  let transportFault = () => false;
   const dirty = new Set();
   const git = {};
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
@@ -81,6 +82,7 @@ function updateFixture() {
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
   const docker = { async run(args, options = {}) {
     f.calls.push({ args, options });
+    if (transportFault(args)) throw Object.assign(new Error('The factory host is unreachable.'), { code: 'FACTORY_HOST_UNREACHABLE' });
     if (args[0] === 'container' && args[1] === 'inspect') {
       const found = args[2] === 'hf-demo' ? container : helpers.get(args[2]);
       return found ? ok([found]) : missing();
@@ -100,7 +102,12 @@ function updateFixture() {
       if (failNextSnapshots > 0) { failNextSnapshots -= 1; return { code: 1, stdout: '', stderr: 'simulated snapshot read failure' }; }
       return ok({ updatedAt: f.state?.updatedAt ?? new Date(tickAt).toISOString(), workers: f.state?.workers ?? 0, locks: f.state?.locks ?? [], handoffs: f.state?.handoffs ?? [], errors: f.state?.errors ?? [], orchestrators: f.state?.orchestrators ?? [], bossPane: f.state?.bossPane ?? false });
     }
-    if (args[0] === 'exec' && args.includes('/command/s6-svc')) { serviceUp = args.includes('-u'); if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; } return ok(); }
+    if (args[0] === 'exec' && args.includes('/command/s6-svc')) {
+      if (args.includes('-u') && failServiceStart) return { code: 1, stdout: '', stderr: 'simulated service start failure' };
+      serviceUp = args.includes('-u');
+      if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; }
+      return ok();
+    }
     if (args[0] === 'exec' && args.includes('/command/s6-svstat')) return ok(serviceUp ? 'true' : 'false');
     if (args[0] === 'exec' && args.includes('git')) {
       if (args.includes('config') && args.includes('--global')) {
@@ -118,7 +125,7 @@ function updateFixture() {
       if (args.includes('merge') && dirty.size) return { code: 128, stdout: '', stderr: `error: Your local changes would be overwritten by merge: ${[...dirty].join(' ')}` };
       if (args.includes('merge') && failMerge) return { code: 128, stdout: '', stderr: 'fatal' };
       if (args.includes('merge')) { currentCommit = newCommit; if (migrateOnUpdate) schema = 2; if (failSnapshotAfterMerge > 0) failNextSnapshots = failSnapshotAfterMerge; return ok(); }
-      if (args.includes('reset')) { currentCommit = oldCommit; return ok(); }
+      if (args.includes('reset')) { if (failGitReset) return { code: 128, stdout: '', stderr: 'fatal: could not reset' }; currentCommit = oldCommit; return ok(); }
       return ok();
     }
     if (args[0] === 'exec' && args.includes('curl')) {
@@ -162,7 +169,8 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
+    set failServiceStart(value) { failServiceStart = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
@@ -602,5 +610,51 @@ test('service update names the merge step when the merge fails', async () => {
   try {
     f.failMerge = true;
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge/i);
+  } finally { f.cleanup(); }
+});
+
+const RECOVERY = 'herdr-boss factory docker demo -- exec hf-demo /command/s6-svc -u /run/service/herdr-boss-serve';
+
+test('service update starts the service again and prints the recovery command when the rollback fails after the stop', async () => {
+  const f = updateFixture();
+  try {
+    f.transportFault = (args) => args.includes('merge');
+    f.failGitReset = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), (error) => {
+      assert.match(error.message, new RegExp(RECOVERY.replaceAll('/', '\\/')));
+      assert.match(error.message, /herdr-boss factory status demo/);
+      return true;
+    });
+    assert.equal(f.serviceUp, true, 'the factory service must be up after a failed update');
+    const mergeAt = f.calls.findIndex(({ args }) => args.includes('merge'));
+    const healthAfter = f.calls.slice(mergeAt).some(({ args }) => args[0] === 'exec' && args.includes('curl') && String(args.at(-1)).endsWith('/api/health'));
+    assert.equal(healthAfter, true, 'the restarted service must answer /api/health');
+  } finally { f.cleanup(); }
+});
+
+test('service update prints the recovery command when the service cannot start', async () => {
+  const f = updateFixture();
+  try {
+    f.failServiceStart = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), (error) => {
+      assert.match(error.message, new RegExp(RECOVERY.replaceAll('/', '\\/')));
+      assert.match(error.message, /herdr-boss factory status demo/);
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('image update starts the stopped service and prints the recovery command when a rollback needs the Owner', async () => {
+  const f = updateFixture();
+  try {
+    f.failUpdated = true;
+    f.migrateOnUpdate = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'image'], f.io), (error) => {
+      assert.match(error.message, /--accept-data-loss/);
+      assert.match(error.message, new RegExp(RECOVERY.replaceAll('/', '\\/')));
+      return true;
+    });
+    assert.equal(f.serviceUp, true);
+    assert.notEqual(f.container.State.Paused, true);
   } finally { f.cleanup(); }
 });
