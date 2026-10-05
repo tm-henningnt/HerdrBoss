@@ -136,7 +136,7 @@ What you do:
 2. Run `herdr-boss factory connect --check <name>`.
 3. Open the Fleet page. Turn on **Poll registered factories** in **Fleet settings**.
 
-What you should see: the check prints the name of the factory, its state, and the age of its summary. The Fleet page lists the factory.
+What you should see: the check prints the name of the factory, its state, and the age of its summary. The Fleet page lists the factory. The page copies the fix command of each alert behind a **Fix** control. A host action opens a confirm sheet with **Confirm copy** and **Cancel**, and it runs no command.
 
 If you do not see it:
 

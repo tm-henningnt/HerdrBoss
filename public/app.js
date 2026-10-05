@@ -3,7 +3,7 @@ import { HOST_GUIDE_PATH } from './host-guide-view.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText, waitsForOwner } from './board.js';
 import { patchHtml } from './keyed.js';
-import { installCopy, copyFieldHtml, messageCopyHtml } from './copy.js';
+import { installCopy, copyFieldHtml, messageCopyHtml, confirmCopy } from './copy.js';
 import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
 import { showImportFallback } from './docs-fallback.js';
 import { installTableHints } from './table-hint.js';
@@ -3114,6 +3114,84 @@ function messageSourceText(id) {
 
 installCopy(document, { messageText: messageSourceText });
 installTableHints();
+
+// The Fleet confirm sheet. A card action opens it with the exact host command. The page never runs the command.
+function fleetConfirmSheetHtml() {
+  return `<h2 id="fleet-confirm-title">Host action</h2>`
+    + `<p id="fleet-confirm-effect" class="muted"></p>`
+    + `<p><code class="cmd" id="fleet-confirm-command"></code></p>`
+    + `<p class="setting-help">Run this command in the Owner terminal on the host machine.</p>`
+    + `<p class="lease-confirm-status" id="fleet-confirm-status" role="status"></p>`
+    + `<div class="lease-confirm-actions"><button type="button" class="quiet" id="fleet-confirm-cancel">Cancel</button>`
+    + `<button type="button" class="go" id="fleet-confirm-copy">Confirm copy</button></div>`;
+}
+
+function fleetConfirmSheet() {
+  let sheet = document.getElementById('fleet-confirm');
+  if (sheet) return sheet;
+  sheet = document.createElement('dialog');
+  sheet.id = 'fleet-confirm';
+  sheet.className = 'lease-confirm';
+  sheet.setAttribute('aria-labelledby', 'fleet-confirm-title');
+  sheet.innerHTML = fleetConfirmSheetHtml();
+  document.body.append(sheet);
+  sheet.querySelector('#fleet-confirm-cancel').addEventListener('click', () => sheet.close());
+  sheet.querySelector('#fleet-confirm-copy').addEventListener('click', () => confirmFleetAction(sheet));
+  return sheet;
+}
+
+// Shows the kind-specific command that the card or the alert action named. The Owner copies it; the page runs nothing.
+function openFleetConfirm(button, sheet = fleetConfirmSheet()) {
+  sheet.querySelector('#fleet-confirm-title').textContent = button.textContent.trim();
+  sheet.querySelector('#fleet-confirm-effect').textContent = button.dataset.effect || '';
+  sheet.querySelector('#fleet-confirm-command').textContent = button.dataset.command || '';
+  sheet.querySelector('#fleet-confirm-status').textContent = '';
+  if (!sheet.open) sheet.showModal();
+  return sheet;
+}
+
+async function confirmFleetAction(sheet = fleetConfirmSheet()) {
+  const command = sheet.querySelector('#fleet-confirm-command');
+  const result = await confirmCopy(command.textContent);
+  return applyFleetConfirmResult(sheet, result, selectElementText);
+}
+
+// Writes the outcome into the open sheet. A failed write keeps the sheet open and selects the exact command.
+function applyFleetConfirmResult(sheet, result, select, close = () => sheet.close()) {
+  sheet.querySelector('#fleet-confirm-status').textContent = result.message;
+  if (result.copied) { close(); return true; }
+  select(sheet.querySelector('#fleet-confirm-command'));
+  return false;
+}
+
+function selectElementText(element, view = globalThis) {
+  const range = view.document?.createRange?.();
+  if (!range) return false;
+  range.selectNodeContents(element);
+  const selection = view.getSelection?.();
+  if (!selection) return false;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+// The Fix control of an alert and the lane button of a card open their detail and keep aria-expanded accurate.
+function toggleFleetDetail(button, selector) {
+  const container = button.closest(selector);
+  if (!container) return null;
+  const open = container.classList.toggle('open');
+  button.setAttribute('aria-expanded', String(open));
+  return open;
+}
+
+document.addEventListener('click', (event) => {
+  const alertToggle = event.target.closest?.('[data-fleet-alert-toggle]');
+  if (alertToggle) { toggleFleetDetail(alertToggle, '.alert'); return; }
+  const laneToggle = event.target.closest?.('[data-fleet-lane-toggle]');
+  if (laneToggle) { toggleFleetDetail(laneToggle, '.lanes'); return; }
+  const action = event.target.closest?.('[data-action][data-command]');
+  if (action) openFleetConfirm(action);
+});
 
 function messageState(m) {
   if (m.from !== 'owner') return m.action ? `Action: ${m.action}` : '';
