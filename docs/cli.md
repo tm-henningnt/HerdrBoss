@@ -2087,6 +2087,8 @@ Credentials have no dashboard field because they are secrets.
 
 `GET /api/fleet/summary` returns contract 1.0.0 from the local factory.
 `GET /api/fleet` returns the head office's last good summaries and their ages.
+It adds the field `rollup` with the fleet totals and the per-factory alerts.
+A failed rollup returns `rollup: null` and a short `rollupError`.
 `GET /api/fleet/settings` reads the local settings and account digests.
 `PUT /api/fleet/settings` replaces `name`, `dashboardUrl`, `headOffice`, `shareItemTitles`, and `accounts`.
 Each account has `harness`, `accountKey`, and `scope`.

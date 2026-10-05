@@ -38,6 +38,7 @@ import { createFleetRole } from './fleet-role.js';
 import { createFleetSettings } from './fleet-settings.js';
 import { createProjectTransfer } from './project-transfer.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
+import { buildFleetRollup } from './fleet-rollup.js';
 import { readFleetLogins } from './fleet-login.js';
 import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
@@ -520,7 +521,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         const view = fleetPoller.view();
         let role = null;
         try { role = fleetRole.view(); } catch { /* The page shows no role when the settings are invalid. */ }
-        return send(res, 200, { ...view, role, factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
+        // The rollup is one add-only field. Its failure must not fail the route, and its error must carry no stack or path.
+        let rollup = null, rollupError = null;
+        try { rollup = buildFleetRollup(view.factories, { now: fleetClock, role }); }
+        catch { rollupError = 'The fleet rollup is unavailable.'; }
+        return send(res, 200, { ...view, role, rollup, ...(rollupError ? { rollupError } : {}), factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
       }
       if (p === '/api/health' && req.method === 'GET') {
         const body = await health(engine);
