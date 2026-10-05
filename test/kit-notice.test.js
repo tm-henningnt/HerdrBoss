@@ -359,6 +359,26 @@ test('the notice text stays under 1200 characters with long subjects', () => {
   assert.match(text, /; and 20 more\. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs\/orchestration\/herdr-boss\.md, and publish\. The command prints the current kit file\.$/);
 });
 
+test('a useful-only batch takes the short line, a required or mixed batch keeps the adopt steps', () => {
+  const useful = [{ hash: 'a', subject: 'A useful change', impact: 'useful' }];
+  assert.equal(
+    formatKitNotice(useful, 'abcdef012345'),
+    '[herdr-boss] Kit revision abcdef012345 (1 change(s)): A useful change. Run herdr-boss kit update at the next task boundary.',
+  );
+  const required = [{ hash: 'a', subject: 'A change that needs action', impact: 'required' }];
+  assert.equal(
+    formatKitNotice(required, 'abcdef012345'),
+    '[herdr-boss] Kit revision abcdef012345 (1 change(s)): A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.',
+  );
+  const mixed = [{ hash: 'a', subject: 'A useful change', impact: 'useful' }, { hash: 'b', subject: 'A change that needs action', impact: 'required' }];
+  assert.equal(
+    formatKitNotice(mixed, 'abcdef012345'),
+    '[herdr-boss] Kit revision abcdef012345 (2 change(s)): A useful change; A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.',
+  );
+  // An entry without a known impact stays conservative and keeps the adopt steps.
+  assert.match(formatKitNotice([{ hash: 'a', subject: 'An unclassified change' }], 'abcdef012345'), /Run herdr-boss kit update, set kitRevision/);
+});
+
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {
   const root = makeRepo(t);
   const base = gitSync(root, ['rev-parse', 'HEAD']);
@@ -689,9 +709,11 @@ test('readKitNotice keeps unsent required changes across restarts', async (t) =>
   const first = commit(root, 'kit/models.md', 'First kit change', REQUIRED);
   const one = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.deepEqual(one.state.pending.map((p) => p.subject), ['First kit change']);
+  assert.deepEqual(one.state.pending.map((p) => p.impact), ['required']);
   commit(root, 'kit/models.md', 'Second kit change', REQUIRED);
   const two = await readKitNotice({ root, stored: one.state, git: recordingGit(), now: NOW + 60000 });
   assert.deepEqual(two.state.pending.map((p) => p.subject), ['Second kit change', 'First kit change']);
+  assert.deepEqual(two.state.pending.map((p) => p.impact), ['required', 'required']);
   assert.match(two.alert.text, /Second kit change; First kit change/);
   commit(root, 'README.md', 'Unrelated');
   const three = await readKitNotice({ root, stored: two.state, git: recordingGit(), now: NOW + 120000 });

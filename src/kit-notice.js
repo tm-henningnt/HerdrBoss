@@ -24,19 +24,24 @@ const MAX_PENDING = 50;
 // The steps that finish a kit adoption. The reminder in src/engine.js uses the same sentence.
 export const KIT_ADOPT_STEPS = 'Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish.';
 const TAIL = `. ${KIT_ADOPT_STEPS} The command prints the current kit file.`;
+// A batch of useful changes only needs an update at the next task boundary, so it takes a short line.
+// Any required entry keeps the full adopt steps.
+const USEFUL_TAIL = '. Run herdr-boss kit update at the next task boundary.';
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();
   return text.length > MAX_SUBJECT_LENGTH ? `${text.slice(0, MAX_SUBJECT_LENGTH - 3)}...` : text;
 }
 
-// commits: [{ hash, subject }], newest first. revision is the kit revision of HEAD.
+// commits: [{ hash, subject, impact? }], newest first. revision is the kit revision of HEAD.
+// A batch whose entries all have impact 'useful' takes the short line; any other impact keeps the adopt steps.
 export function formatKitNotice(commits, revision = kitRevision()) {
+  const tail = commits.length && commits.every((c) => c.impact === 'useful') ? USEFUL_TAIL : TAIL;
   const shown = commits.slice(0, MAX_SUBJECTS).map((c) => shortSubject(c.subject));
   const head = `[herdr-boss] Kit revision ${revision ?? 'unknown'} (${commits.length} change(s)): `;
   const list = () => [...shown, ...(commits.length > shown.length ? [`and ${commits.length - shown.length} more`] : [])].join('; ');
-  while (shown.length > 1 && head.length + list().length + TAIL.length > MAX_TEXT_LENGTH) shown.pop();
-  return `${head}${list()}${TAIL}`;
+  while (shown.length > 1 && head.length + list().length + tail.length > MAX_TEXT_LENGTH) shown.pop();
+  return `${head}${list()}${tail}`;
 }
 
 function parseLog(stdout) {
@@ -66,7 +71,7 @@ function commitImpacts(commits, assetHashes, entries, stored) {
 // the cap, an entry leaves the list.
 function mergePending(previous, added, now) {
   const seen = new Set();
-  const merged = [...added.map((c) => ({ hash: c.hash, subject: c.subject, at: now })), ...(Array.isArray(previous) ? previous : [])];
+  const merged = [...added.map((c) => ({ hash: c.hash, subject: c.subject, at: now, ...(c.impact ? { impact: c.impact } : {}) })), ...(Array.isArray(previous) ? previous : [])];
   const live = merged.filter((e) => e?.hash && Number.isFinite(e.at) && now - e.at <= PENDING_MS && !seen.has(e.hash) && seen.add(e.hash));
   const expired = (Array.isArray(previous) ? previous : []).filter((e) => !(Number.isFinite(e?.at) && now - e.at <= PENDING_MS)).length;
   return { list: live.slice(0, MAX_PENDING), expired, capped: Math.max(0, live.length - MAX_PENDING) };
@@ -113,7 +118,7 @@ export async function readKitNotice({ root, stored, git, now, changesFile = CHAN
   try { assetHashes = parseLog(await git(['-C', root, 'log', '--format=%h%x00', `${stored.commit}..HEAD`, '--', ...KIT_REVISION_PATHS])).map((c) => c.hash); }
   catch { assetHashes = []; }
   const impacts = commitImpacts(commits, assetHashes, readKitChanges(changesFile), stored);
-  const required = commits.filter((_, index) => impacts[index] === 'required');
+  const required = commits.filter((_, index) => impacts[index] === 'required').map((commit) => ({ ...commit, impact: 'required' }));
   if (!required.length) return reset(null);
   const { list: pending, capped } = mergePending(stored?.pending, required, now);
   const alert = kitAlert(head, pending, revision);
