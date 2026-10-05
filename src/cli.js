@@ -195,7 +195,7 @@ const USAGE = `herdr-boss <command>
   check kit             List each published project with its loaded kit revision.
   harness check [--live-codex]  Check the harness settings that orchestration needs. Exit 1 on a missing entry.
                         --live-codex also runs one codex exec to check the worker shell variables.
-  harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and print the Claude autoMode lines.
+  harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and the stop-own rule, and print the Claude autoMode lines.
   harness change <harness> <label> [--date YYYY-MM-DD]  Mark a harness fix on the denial chart of the Analytics page.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
   kit update [--quiet]    Install the kit, print the kit changes since the installed kit revision, and print the kit file.

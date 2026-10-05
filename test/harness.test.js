@@ -63,7 +63,7 @@ function codexConfig(roots, { extraBefore = '', extraAfter = '' } = {}) {
 function healthy(f, repos) {
   const roots = [path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt'), ...repos.map((repo) => path.join(repo, '.git'))];
   writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig(roots));
-  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${[...FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`), 'prefix_rule(pattern=["pkill"], decision="forbidden")', 'prefix_rule(pattern=["killall"], decision="forbidden")'].join('\n')}\n`);
+  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${[...FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`), 'prefix_rule(pattern=["pkill"], decision="forbidden")', 'prefix_rule(pattern=["killall"], decision="forbidden")'].join('\n')}\n# A worker stops its own process through the helper, never with a raw signal.\nprefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")\n`);
   writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({
     apiKeyHelper: 'SECRET-HELPER-VALUE',
     autoMode: { environment: [`**Herdr Boss projects**: ${repos.map((repo) => `${repo} (o/${path.basename(repo)})`).join(', ')}.`], allow: ['$defaults'] },
@@ -175,6 +175,7 @@ test('harness check passes on a complete setup and prints no setting value that 
   assert.match(result.stdout, /^ok +codex writable_roots: .*Alpha\/\.git \(alpha\)$/m);
   assert.ok(result.stdout.split('\n').some((line) => /^ok +codex writable_roots: /.test(line) && line.endsWith(`${path.join(f.home, 'Projects', '.herdr-wt')} (worker worktrees)`)), result.stdout);
   assert.match(result.stdout, /^ok +claude autoMode: \*\*Herdr Boss projects\*\* names .*Alpha \(alpha\)$/m);
+  assert.match(result.stdout, /^ok +codex rules: stop-own is allowed in .*herdr\.rules$/m);
   assert.match(result.stdout, /^ok +opencode: agent worker exists$/m);
   // The printed rule line for a stop by pid holds the word allow. It is a fixed text, not a setting value.
   assert.doesNotMatch((result.stdout + result.stderr).replaceAll('decision="allow"', ''), /SECRET|apiKey|primary|allow\b/);
@@ -199,6 +200,70 @@ test('harness check reports a missing project .git and a missing Claude line and
   assert.match(sibling.stdout, /^ok +claude autoMode: .*names .*Beta \(beta\)$/m);
 });
 
+// K19: the check must report a missing stop-own rule, name the rules file, and print the line to add.
+test('harness check reports a missing stop-own rule with the rules file and the line to add', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const rulesFile = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const original = 'prefix_rule(pattern=["ps", "e"], decision="forbidden")\n';
+  fs.writeFileSync(rulesFile, original);
+  const result = run(f, ['harness', 'check']);
+  assert.equal(result.status, 1);
+  const line = result.stdout.split('\n').find((entry) => entry.startsWith('missing') && entry.includes('codex rules') && entry.includes('stop-own'));
+  assert.ok(line, `no missing stop-own finding in:\n${result.stdout}`);
+  assert.ok(line.includes(rulesFile), line);
+  assert.ok(line.includes('prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")'), line);
+  // The check reads only. It adds nothing.
+  assert.equal(fs.readFileSync(rulesFile, 'utf8'), original);
+});
+
+// K19: harness sync adds the rule to the Codex rules file, keeps every other line, and makes a backup.
+test('harness sync adds the stop-own rule to the Codex rules file and keeps the other lines', (t) => {
+  const f = fixture(t);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt')]));
+  const rulesFile = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const before = [
+    'prefix_rule(pattern=["ps"], decision="allow")',
+    'prefix_rule(pattern=["ps", "e"], decision="forbidden")',
+    'prefix_rule(pattern=["pkill"], decision="forbidden")',
+    '',
+  ].join('\n');
+  writeFile(rulesFile, before);
+
+  const dry = run(f, ['harness', 'sync', '--codex-only', '--dry-run']);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.ok(dry.stdout.includes('stop-own'), dry.stdout);
+  assert.equal(fs.readFileSync(rulesFile, 'utf8'), before, 'a dry run writes nothing');
+
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const after = fs.readFileSync(rulesFile, 'utf8');
+  assert.equal((after.match(/stop-own/g) ?? []).length, 1, after);
+  assert.ok(after.includes('prefix_rule(pattern=["ps"], decision="allow")'), after);
+  assert.ok(after.indexOf('stop-own') < after.indexOf('"ps", "e"'), 'the allow rule comes before the forbidden rules');
+  const backups = fs.readdirSync(path.dirname(rulesFile)).filter((name) => /^herdr\.rules\.bak-\d{8}T\d{6}Z$/.test(name));
+  assert.equal(backups.length, 1, backups.join(', '));
+  assert.equal(fs.readFileSync(path.join(path.dirname(rulesFile), backups[0]), 'utf8'), before);
+
+  const again = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /Codex rules in .*herdr\.rules: nothing to add/);
+  assert.equal(fs.readdirSync(path.dirname(rulesFile)).filter((name) => name.startsWith('herdr.rules.bak-')).length, 1);
+});
+
+// Without a rules file the sync cannot add anything. It prints the line and writes nothing.
+test('harness sync without a Codex rules file prints the stop-own line and writes nothing', (t) => {
+  const f = fixture(t);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt')]));
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /No Codex rules at .*herdr\.rules/);
+  assert.ok(result.stdout.includes('prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")'), result.stdout);
+  assert.equal(fs.existsSync(path.join(f.home, '.codex', 'rules', 'herdr.rules')), false);
+});
+
 test('harness check reports each fixed entry', (t) => {
   const f = fixture(t);
   registry(f, []);
@@ -217,8 +282,11 @@ test('harness check reports each fixed entry', (t) => {
   assert.match(out, /^ok +codex rules: ps e is forbidden$/m);
   for (const arg of ['-E', 'eww', 'auxe', 'auxeww']) assert.match(out, new RegExp(`^missing +codex rules: ps ${arg} is not forbidden`, 'm'));
   for (const command of ['pkill', 'killall']) assert.match(out, new RegExp(`^missing +codex rules: ${command} is not forbidden`, 'm'));
-  // The check prints the optional rule for a stop-own. It does not add the rule.
-  assert.match(out, /^ok +codex rules: optional rule for a stop-own, not added: prefix_rule\(pattern=\["herdr-boss", "worker", "stop-own"\], decision="allow"\)$/m);
+  // The check reports the missing stop-own rule with the file and the line to add. It adds nothing.
+  const stopOwn = out.split('\n').find((line) => line.startsWith('missing') && line.includes('stop-own'));
+  assert.ok(stopOwn, out);
+  assert.ok(stopOwn.includes(path.join(f.home, '.codex', 'rules', 'herdr.rules')), stopOwn);
+  assert.ok(stopOwn.includes('prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")'), stopOwn);
   assert.doesNotMatch(fs.readFileSync(path.join(f.home, '.codex', 'rules', 'herdr.rules'), 'utf8'), /stop-own/);
   assert.match(out, /^missing +opencode: agent worker/m);
   assert.match(out, /^missing +pi: .*herdr-guard\.ts$/m);

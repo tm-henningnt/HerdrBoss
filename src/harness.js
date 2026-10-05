@@ -13,6 +13,8 @@ const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
 const MODELS_FILE = path.join(ROOT, 'kit', 'models.json');
 const SECTION = '[sandbox_workspace_write]';
 const STOP_OWN_RULE = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")';
+const STOP_OWN_PATTERN = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"herdr-boss"\s*,\s*"worker"\s*,\s*"stop-own"\s*\]/;
+const STOP_OWN_COMMENT = '# A worker stops its own process through the helper, never with a raw signal.';
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
 const PROJECTS_LABEL = 'Herdr Boss projects';
 const PROJECTS_LINE = `**${PROJECTS_LABEL}**`;
@@ -35,6 +37,8 @@ const LAUNCH_LABELS = {
 function homeDir() { return os.homedir(); }
 function registryFile(dataDir = DATA_DIR) { return path.join(dataDir, 'project-repos.json'); }
 function codexConfigFile(home) { return path.join(home, '.codex', 'config.toml'); }
+function codexRulesFile(home) { return path.join(home, '.codex', 'rules', 'herdr.rules'); }
+function hasStopOwnRule(text) { return String(text).split('\n').some((line) => STOP_OWN_PATTERN.test(line)); }
 
 // Remove the user information of an http(s) URL and the password of any other URL.
 // An scp-style remote such as git@host:owner/repo holds no credential.
@@ -193,6 +197,32 @@ export function syncCodex({ home = homeDir(), dataDir = DATA_DIR, dryRun = false
   fs.renameSync(`${file}.tmp`, file);
   out.push(`Backed up ${file} to ${backup}.`, `Codex writable_roots: added ${missing.map((root) => root.path).join(', ')}.`);
   return { ok: true, changed: true, added: missing.map((root) => root.path), backup, lines: out };
+}
+
+// Add the stop-own allow rule to ~/.codex/rules/herdr.rules. Keep every other line.
+// The rule goes before the first forbidden rule, as in the template. A missing rules file is not a
+// failure: the Owner copies the template, and harness check reports the missing file.
+export function syncCodexRules({ home = homeDir(), dryRun = false, now = new Date() } = {}) {
+  const file = codexRulesFile(home);
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch {
+    return { ok: true, changed: false, lines: [`No Codex rules at ${file}. Nothing was changed. Add this line to it:`, STOP_OWN_RULE] };
+  }
+  if (hasStopOwnRule(text)) return { ok: true, changed: false, lines: [`Codex rules in ${file}: nothing to add.`] };
+  if (dryRun) return { ok: true, changed: false, lines: [`Dry run. harness sync would add this line to ${file}:`, `+ ${STOP_OWN_RULE}`] };
+  let body = text.replace(/\n+$/, '').split('\n');
+  if (body.length === 1 && body[0] === '') body = [];
+  const index = body.findIndex((line) => /decision\s*=\s*"forbidden"/.test(line));
+  const at = index < 0 ? body.length : index;
+  const next = [...body.slice(0, at), STOP_OWN_COMMENT, STOP_OWN_RULE, ...body.slice(at)].join('\n');
+  const backup = `${file}.bak-${stamp(now)}`;
+  const mode = fs.statSync(file).mode & 0o777;
+  fs.copyFileSync(file, backup);
+  fs.chmodSync(backup, mode);
+  fs.writeFileSync(`${file}.tmp`, `${next}\n`, { mode });
+  fs.chmodSync(`${file}.tmp`, mode);
+  fs.renameSync(`${file}.tmp`, file);
+  return { ok: true, changed: true, backup, lines: [`Backed up ${file} to ${backup}.`, `Codex rules: added the stop-own rule to ${file}.`] };
 }
 
 function normalizedClaudeLine(line, home) {
@@ -362,9 +392,11 @@ export function claudeLines(options = {}) {
 
 export function syncHarness({ codexOnly = false, ...options } = {}) {
   const codex = syncCodex(options);
-  const lines = [...codex.lines];
+  const rules = syncCodexRules(options);
+  // The roots decide the exit code. A rules file that is missing stays a report line, not a failure.
+  const lines = [...codex.lines, ...rules.lines];
   if (!codexOnly) lines.push('', ...claudeLines(options));
-  return { ...codex, lines };
+  return { ...codex, changed: codex.changed || rules.changed, lines };
 }
 
 function readJson(file) {
@@ -454,10 +486,9 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
       const has = rules.split('\n').some((line) => new RegExp(`^\\s*prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${command}"\\s*\\]\\s*,\\s*decision\\s*=\\s*"forbidden"\\s*\\)`).test(line));
       add(has ? 'ok' : 'missing', 'codex rules', `Forbidden ${command} rule`, has ? `${command} is forbidden` : `${command} is not forbidden in ${rulesFile}`);
     }
-    // The Boss can add this line so that a worker stops its own process by pid without an escalation. The check never adds it.
-    if (!rules.split('\n').some((line) => /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"herdr-boss"\s*,\s*"worker"\s*,\s*"stop-own"\s*\]/.test(line))) {
-      add('ok', 'codex rules', 'Stop-own rule', `optional rule for a stop-own, not added: ${STOP_OWN_RULE}`);
-    }
+    // A Codex worker stops its own process with stop-own only when the rules file allows the command.
+    if (hasStopOwnRule(rules)) add('ok', 'codex rules', 'Stop-own rule', `stop-own is allowed in ${rulesFile}`);
+    else add('missing', 'codex rules', 'Stop-own rule', `${rulesFile} has no stop-own rule; run herdr-boss harness sync or add: ${STOP_OWN_RULE}`);
     for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
   }
 

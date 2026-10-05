@@ -237,3 +237,7 @@ Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss su
 ## 27166ea39b6a
 Impact: useful
 Summary: `review publish` refuses a pack with no judge pass and writes nothing; pass the record with `--judge-pass TEXT`; `review import` does not need the record; the orchestrator skill names the flag. Every Pi guard refusal names the form that a worker may use instead: `kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)` for `pkill` and `killall`, and one exact path in the worktree `.worker` folder or a temporary directory for a blocked `rm -rf`. The `worker collect` scope refusal shows the exact `--accept-scope` command form with an example that lists every unlisted file, comma separated, and shell-quotes the value.
+
+## fc77a47e05e3
+Impact: useful
+Summary: `harness check` reports a missing `stop-own` rule in `~/.codex/rules/herdr.rules`, names the file, and prints the line to add; `harness sync` adds the rule with a `herdr.rules.bak-<UTC timestamp>` backup; the Codex setup docs, the CLI help, and the orchestrator skill name the rule.
