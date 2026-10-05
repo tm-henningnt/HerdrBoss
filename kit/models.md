@@ -93,7 +93,7 @@ Disable extensions that can start unpinned subagents.
 
 Keep the Herdr state reporter enabled.
 
-Keep the Herdr guard enabled. `~/.pi/agent/extensions/herdr-guard.ts` blocks file tools outside the worktree, the temporary directories, and `~/.herdr-boss`. It blocks `git push`, `git reset --hard`, `git clean`, `git branch -D`, `git worktree remove`, `rm -rf` outside the temporary directories, `sudo`, `launchctl`, the private Herdr Boss directory, and credential files. It never asks. A blocked call returns a reason to the worker.
+Keep the Herdr guard enabled. `~/.pi/agent/extensions/herdr-guard.ts` blocks file tools outside the worktree, the temporary directories, and `~/.herdr-boss`. It blocks `git push`, `git reset --hard`, `git clean`, `git branch -D`, `git worktree remove`, `rm -rf` outside the temporary directories, `sudo`, `launchctl`, the private Herdr Boss directory, and credential files. It never asks. A blocked call returns a reason to the worker. Each reason names the form that the worker may use instead. A blocked `pkill` or `killall` names `kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)`. A blocked `rm -rf` names one exact path in the worktree `.worker` folder or in a temporary directory.
 
 `--no-approve` stops Pi from loading project-local settings, resources, and packages in a worker.
 

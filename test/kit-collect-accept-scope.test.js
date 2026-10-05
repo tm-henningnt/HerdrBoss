@@ -71,6 +71,20 @@ test('an outside file that is not listed still refuses and is named', () => {
   }
 });
 
+test('the scope refusal shows the exact --accept-scope form with an example', () => {
+  const { collect } = setup('as-form', ['docs/extra.md']);
+  assert.throws(() => collect({ ...noRecord }), (error) =>
+    /The allowed command form is: herdr-boss worker collect as-form --accept-scope FILE\[,FILE\] --reason TEXT\./.test(error.message)
+    && /Example: herdr-boss worker collect as-form --accept-scope 'docs\/extra\.md' --reason "approved by the orchestrator"\./.test(error.message));
+});
+
+test('the scope refusal example lists every unlisted file, comma separated and shell-quoted', () => {
+  const { collect } = setup('as-two', ['docs/extra.md', 'README.md']);
+  assert.throws(() => collect({ ...noRecord }), (error) =>
+    /changed paths outside its allowed scope: docs\/extra\.md, README\.md\./.test(error.message)
+    && /Example: herdr-boss worker collect as-two --accept-scope 'docs\/extra\.md,README\.md' --reason "approved by the orchestrator"\./.test(error.message));
+});
+
 test('an empty or blank reason refuses', () => {
   for (const reason of ['', '   ', undefined, null]) {
     const { collect } = setup(`as-blank-${String(reason).length}-${typeof reason}`, ['docs/extra.md']);

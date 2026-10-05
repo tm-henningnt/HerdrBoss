@@ -1244,7 +1244,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 1. The reason is required. The command refuses an empty or blank reason.
 2. `--accept-scope` without a value is an error. `--reason` without `--accept-scope` is an error. No bare override flag exists.
 3. Each listed file must be changed and must lie outside the allowed scope. The command refuses a listed file that is inside the scope or that did not change. The error names the file.
-4. A changed file outside the scope that is not listed still refuses. The error names the unlisted files.
+4. A changed file outside the scope that is not listed still refuses. The error names the unlisted files. It also shows the exact allowed command form: `herdr-boss worker collect NAME --accept-scope FILE[,FILE] --reason TEXT`. It gives an example that lists every unlisted file, comma separated, and shell-quotes the `--accept-scope` value: `herdr-boss worker collect NAME --accept-scope 'FILE[,FILE]' --reason "approved by the orchestrator"`.
 5. The accepted files and the reason go into the run record as `scopeException`. The run record is written only with `--record`.
 6. The printed report shows a `Scope exception` block with the files and the reason, and the summary has a `scopeException` field. The command masks secrets in the reason.
 

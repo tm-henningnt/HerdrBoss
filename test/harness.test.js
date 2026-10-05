@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { guardCause } from '../src/denials.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -526,5 +527,48 @@ test('the Pi guard allows a removal of an exact path in the worktree .worker fol
   }
   for (const blocked of ['rm -rf .worker', 'rm -rf .', 'rm -rf ..', 'rm -rf /etc/hosts', 'rm -rf src/index.js']) {
     assert.ok((await bashDecision(guard, blocked)).reason, `${blocked} stays blocked`);
+  }
+});
+
+// Every refusal names the form that the worker may run instead, and every refusal keeps its guard class.
+test('each Pi guard refusal names the allowed form', async (t) => {
+  const guard = await guardHandler(t);
+  fs.mkdirSync(path.join(guard.cwd, '.worker', 'tmp'), { recursive: true });
+  const blocked = async (command) => {
+    const decision = await bashDecision(guard, command);
+    assert.ok(decision?.reason, `${command} is blocked`);
+    assert.match(decision.reason, /^Herdr guard: /);
+    assert.match(decision.reason, /Allowed instead: /, decision.reason);
+    return decision.reason;
+  };
+
+  const pkillAllowed = 'kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)';
+  const pkill = await blocked('pkill node');
+  assert.equal(pkill.includes('cwd check'), false, `no cwd check a worker cannot run: ${pkill}`);
+  assert.ok(pkill.includes(pkillAllowed), pkill);
+  const killall = await blocked('killall node');
+  assert.ok(killall.includes(pkillAllowed), killall);
+  // The new allowed text must run through the guard itself.
+  assert.equal(await bashDecision(guard, pkillAllowed), undefined, pkillAllowed);
+  assert.equal(await bashDecision(guard, 'kill 12345'), undefined, 'kill by saved PID stays allowed');
+
+  const push = await blocked('git push origin main');
+  assert.match(push, /is not allowed for a worker/, push);
+
+  const pattern = await blocked('rm -rf .worker/tmp/*');
+  assert.match(pattern, /\.worker\/tmp\/scratch/, pattern);
+  const outside = await blocked('rm -rf /etc/hosts');
+  assert.match(outside, /inside the worktree \.worker folder/, outside);
+
+  const fileBlock = (path) => guard.handler({ toolName: 'read', input: { path } }, { cwd: guard.cwd });
+  const protectedPath = (await fileBlock(path.join(guard.cwd, 'auth.json'))).reason;
+  assert.match(protectedPath, /is a protected path/, protectedPath);
+  assert.match(protectedPath, /Allowed instead: /, protectedPath);
+  const outOfWorktree = (await fileBlock('/etc/x')).reason;
+  assert.match(outOfWorktree, /is outside the worktree/, outOfWorktree);
+  assert.match(outOfWorktree, /Allowed instead: /, outOfWorktree);
+
+  for (const reason of [pkill, push, pattern, outside, protectedPath, outOfWorktree]) {
+    assert.notEqual(guardCause(reason), 'guard:other', reason);
   }
 });

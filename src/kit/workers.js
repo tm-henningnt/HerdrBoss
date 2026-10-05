@@ -2058,6 +2058,9 @@ export function commitWorker(name, { message = null } = {}, { config, output = c
   return { committed: true, commit, paths: changed };
 }
 
+// One shell argument for a copyable example. The value always gets single quotes, so a path with a space or a metacharacter stays one token.
+const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
+
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
@@ -2128,7 +2131,13 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     } else if (options.acceptScopeReason != null) {
       throw new Error('--reason needs --accept-scope FILE[,FILE].');
     }
-    if (unlistedErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${unlistedErrors.join(', ')}.`);
+    // The refusal names the exact allowed command form and gives one example with every unlisted file, so the orchestrator can rerun collect without a new search.
+    if (unlistedErrors.length) {
+      const list = unlistedErrors.join(', ');
+      const form = `herdr-boss worker collect ${name} --accept-scope FILE[,FILE] --reason TEXT`;
+      const example = `herdr-boss worker collect ${name} --accept-scope ${shellQuote(unlistedErrors.join(','))} --reason "approved by the orchestrator"`;
+      throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. The allowed command form is: ${form}. Example: ${example}.`);
+    }
     // A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree.
     // Collection accepts that state and names it, so the orchestrator commits with worker commit.
     const uncommitted = run.kind === 'codex' && !log.trim() && changed.length > 0;
