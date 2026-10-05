@@ -58,6 +58,10 @@ function alertCopyButton(html, code) {
 }
 
 async function load(names, context = {}) {
+  context.setTimeout = context.setTimeout || (() => 0);
+  context.clearTimeout = context.clearTimeout || (() => {});
+  // The slice of applyFleetConfirmResult reads the close delay from the page constant.
+  context.FLEET_CONFIRM_CLOSE_MS = Number(/const FLEET_CONFIRM_CLOSE_MS = (\d+);/.exec(source)[1]);
   const code = names.map((name) => {
     const start = source.indexOf(`function ${name}(`);
     assert.ok(start >= 0, `${name} exists in public/app.js`);
@@ -146,17 +150,46 @@ test('P2-5 a failed write keeps the sheet open and selects the exact command', a
   assert.equal(closed, false, 'the sheet stays open');
 });
 
-test('P2-5 a successful write closes the sheet and selects nothing', async () => {
+test('P2-5 a successful write shows the success text and closes the sheet after a short delay', async () => {
   const { applyFleetConfirmResult } = await load(['applyFleetConfirmResult']);
   const command = { name: 'command' };
   const status = { textContent: '' };
+  const cleared = [];
+  const scheduled = [];
   let closed = false;
   let selected = null;
-  const sheet = { querySelector: (selector) => (selector === '#fleet-confirm-command' ? command : status), close() { closed = true; } };
-  const done = applyFleetConfirmResult(sheet, { copied: true, message: 'Copied.' }, (node) => { selected = node; }, () => { closed = true; });
+  const sheet = { fleetCloseTimer: 7, querySelector: (selector) => (selector === '#fleet-confirm-command' ? command : status) };
+  const schedule = (fn, ms) => { scheduled.push({ fn, ms }); return 99; };
+  const cancel = (id) => { cleared.push(id); };
+  const done = applyFleetConfirmResult(sheet, { copied: true, message: 'Copied. Run it in the Owner terminal.' }, (node) => { selected = node; }, () => { closed = true; }, schedule, cancel);
   assert.equal(done, true);
+  assert.equal(status.textContent, 'Copied. Run it in the Owner terminal.', 'the success text shows');
   assert.equal(selected, null);
-  assert.equal(closed, true, 'the sheet closes only after the write');
+  assert.equal(closed, false, 'the sheet stays open while the Owner reads the success text');
+  assert.deepEqual(cleared, [7], 'the previous close timer is cleared');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].ms, 700, 'the sheet closes after about 700 ms');
+  assert.equal(sheet.fleetCloseTimer, 99);
+  scheduled[0].fn();
+  assert.equal(closed, true, 'the sheet closes after the delay');
+  assert.equal(sheet.fleetCloseTimer, null);
+});
+
+test('P2-5 a second open clears the pending close timer of an earlier success', async () => {
+  const { openFleetConfirm } = await load(['openFleetConfirm']);
+  const fields = Object.fromEntries(['#fleet-confirm-title', '#fleet-confirm-effect', '#fleet-confirm-command', '#fleet-confirm-status'].map((key) => [key, { textContent: 'stale' }]));
+  const cleared = [];
+  const sheet = { fleetCloseTimer: 42, open: false, showModal() { this.open = true; }, querySelector: (selector) => fields[selector] };
+  const button = { textContent: 'Factory update', dataset: { effect: 'Restarts the service and fast-forwards the code.', command: 'herdr-boss factory update win1 --tier service' } };
+  const opened = openFleetConfirm(button, sheet, (id) => { cleared.push(id); });
+  assert.equal(opened, sheet);
+  assert.deepEqual(cleared, [42]);
+  assert.equal(sheet.fleetCloseTimer, null);
+  assert.equal(fields['#fleet-confirm-title'].textContent, 'Factory update');
+  assert.equal(fields['#fleet-confirm-effect'].textContent, 'Restarts the service and fast-forwards the code.');
+  assert.equal(fields['#fleet-confirm-command'].textContent, 'herdr-boss factory update win1 --tier service');
+  assert.equal(fields['#fleet-confirm-status'].textContent, '');
+  assert.equal(sheet.open, true);
 });
 
 test('P2-5 the manual copy selects the text of the command', async () => {

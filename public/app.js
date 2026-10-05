@@ -3116,6 +3116,8 @@ installCopy(document, { messageText: messageSourceText });
 installTableHints();
 
 // The Fleet confirm sheet. A card action opens it with the exact host command. The page never runs the command.
+const FLEET_CONFIRM_CLOSE_MS = 700;
+
 function fleetConfirmSheetHtml() {
   return `<h2 id="fleet-confirm-title">Host action</h2>`
     + `<p id="fleet-confirm-effect" class="muted"></p>`
@@ -3137,11 +3139,16 @@ function fleetConfirmSheet() {
   document.body.append(sheet);
   sheet.querySelector('#fleet-confirm-cancel').addEventListener('click', () => sheet.close());
   sheet.querySelector('#fleet-confirm-copy').addEventListener('click', () => confirmFleetAction(sheet));
+  // A closed sheet never keeps a pending close timer for the next open.
+  sheet.addEventListener('close', () => { clearTimeout(sheet.fleetCloseTimer); sheet.fleetCloseTimer = null; });
   return sheet;
 }
 
 // Shows the kind-specific command that the card or the alert action named. The Owner copies it; the page runs nothing.
-function openFleetConfirm(button, sheet = fleetConfirmSheet()) {
+// A second open clears the close timer of an earlier success, so the reopened sheet stays visible.
+function openFleetConfirm(button, sheet = fleetConfirmSheet(), cancel = clearTimeout) {
+  cancel(sheet.fleetCloseTimer);
+  sheet.fleetCloseTimer = null;
   sheet.querySelector('#fleet-confirm-title').textContent = button.textContent.trim();
   sheet.querySelector('#fleet-confirm-effect').textContent = button.dataset.effect || '';
   sheet.querySelector('#fleet-confirm-command').textContent = button.dataset.command || '';
@@ -3157,9 +3164,14 @@ async function confirmFleetAction(sheet = fleetConfirmSheet()) {
 }
 
 // Writes the outcome into the open sheet. A failed write keeps the sheet open and selects the exact command.
-function applyFleetConfirmResult(sheet, result, select, close = () => sheet.close()) {
+// A successful write shows the success text and closes the sheet after a short delay, so the Owner reads it.
+function applyFleetConfirmResult(sheet, result, select, close = () => sheet.close(), schedule = setTimeout, cancel = clearTimeout) {
   sheet.querySelector('#fleet-confirm-status').textContent = result.message;
-  if (result.copied) { close(); return true; }
+  if (result.copied) {
+    cancel(sheet.fleetCloseTimer);
+    sheet.fleetCloseTimer = schedule(() => { sheet.fleetCloseTimer = null; close(); }, FLEET_CONFIRM_CLOSE_MS);
+    return true;
+  }
   select(sheet.querySelector('#fleet-confirm-command'));
   return false;
 }
