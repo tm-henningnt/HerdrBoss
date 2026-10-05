@@ -7,30 +7,37 @@ import { createDocument, find } from './fake-dom.js';
 import { patchHtml } from '../public/keyed.js';
 const fixture = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/fleet-summary.valid.personal.json', import.meta.url)));
 
-test('the Fleet table shows factory zero and both Windows factories with last seen and a red outage reason', async () => {
+test('the Fleet page shows both Windows factories in the compact comparison with last seen and a red outage reason', async () => {
   const { fleetView } = await import('../public/fleet.js');
-  const factories = ['factory-zero', 'win1', 'win2'].map((name, index) => ({ name, remote: index !== 0,
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const factories = ['factory-zero', 'win1', 'win2'].map((name, index) => ({ name, remote: index !== 0, kind: index === 0 ? 'native' : 'container',
     status: index === 2 ? 'offline' : 'healthy', error: index === 2 ? 'unreachable' : null, ageSeconds: index === 2 ? 90 : 0,
-    lastSeenAt: fixture.generatedAt, summary: { ...fixture, factoryId: name, name } }));
-  const html = fleetView({ factories, pollSeconds: 30 });
+    lastSeenAt: fixture.generatedAt, summary: { ...fixture, kind: index === 0 ? 'native' : 'container', factoryId: name, name } }));
+  const rollup = buildFleetRollup(factories, { now: Date.parse('2026-10-05T12:00:00Z') });
+  const html = fleetView({ factories, pollSeconds: 30, rollup });
   for (const name of ['factory-zero', 'win1', 'win2']) assert.match(html, new RegExp(name));
+  assert.match(html, /data-fleet-total="workers"/);
+  assert.match(html, /data-fleet-compare-row/);
+  assert.match(html, /data-fleet-factory="win1"/);
   assert.match(html, /Last seen/);
-  assert.match(html, /fleet-state-offline/);
+  assert.match(html, /state offline/);
   assert.match(html, /Host unreachable/);
   assert.match(html, /abcdef|012345/);
-  assert.match(html, /90 s old/);
+  assert.match(html, />2 min<\/time>/);
 });
 
-test('the Fleet page shows stale age, shared quota, spend, drift, and safe Owner item links', async () => {
+test('the Fleet page shows stale age, quota, spend, drift, safe Owner item links, and unknown without a summary', async () => {
   const { fleetView, fleetMailbox } = await import('../public/fleet.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
   const rows = [
-    { name: 'factory-a', status: 'healthy', ageSeconds: 0, summary: fixture },
-    { name: 'factory-b', status: 'offline', error: 'poll-failed', ageSeconds: 90, drift: 'head office older', summary: { ...fixture, name: 'factory-b', factoryId: 'factory-b', kitRevision: '012345abcdef', dashboardUrl: 'https://example.invalid', version: '0.2.0', ownerItems: { ...fixture.ownerItems, rows: [{ id: 'item-b', kind: 'decide', title: '<img src=x onerror=alert(1)>' }] } } },
+    { name: 'factory-a', status: 'healthy', ageSeconds: 0, kind: 'native', lastSeenAt: fixture.generatedAt, summary: { ...fixture, kind: 'native' } },
+    { name: 'factory-b', status: 'offline', error: 'poll-failed', ageSeconds: 200, kind: 'container', lastSeenAt: fixture.generatedAt, drift: 'head office older', summary: { ...fixture, kind: 'container', name: 'factory-b', factoryId: 'factory-b', kitRevision: '012345abcdef', dashboardUrl: 'https://example.invalid', version: '0.2.0', ownerItems: { ...fixture.ownerItems, rows: [{ id: 'item-b', kind: 'decide', title: '<img src=x onerror=alert(1)>' }] } } },
   ];
-  const html = fleetView({ factories: rows, pollSeconds: 30 });
-  assert.match(html, /factory-a/); assert.match(html, /90 s old/); assert.match(html, /offline/);
-  assert.match(html, /Shared account quota/); assert.match(html, /25|20/);
-  assert.match(html, /Spend/); assert.match(html, /0\.15/);
+  const rollup = buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') });
+  const html = fleetView({ factories: rows, pollSeconds: 30, rollup });
+  assert.match(html, /factory-a/); assert.match(html, /last good/); assert.match(html, /offline/);
+  assert.match(html, /20% codex/);
+  assert.match(html, /0\.21/);
   assert.match(html, /kit differs/); assert.match(html, /version differs/); assert.match(html, /head office older/);
   const mail = fleetMailbox({ factories: rows });
   assert.match(mail, /https:\/\/example.invalid\/mailbox\?item=item-b/);
@@ -78,19 +85,17 @@ test('a fleet refresh and submission keep the Owner draft including checkbox and
   assert.equal(draft.factoryId, undefined, 'the immutable identity is not sent as a setting');
 });
 
-test('a remote factory row shows the Attach state and a copy button for the attach command, with no host detail', async () => {
+test('a remote factory card shows the copy-attach command action and no host detail', async () => {
   const { fleetView } = await import('../public/fleet.js');
   const rows = [
-    { name: 'win1', remote: true, status: 'healthy', ageSeconds: 0, attach: 'attached', summary: { ...fixture, name: 'win1', factoryId: 'win1' } },
-    { name: 'win2', remote: true, status: 'offline', ageSeconds: null, attach: 'not-attached' },
+    { name: 'win1', remote: true, kind: 'container', status: 'healthy', ageSeconds: 0, summary: { ...fixture, name: 'win1', factoryId: 'win1' } },
+    { name: 'win2', remote: true, kind: 'container', status: 'offline', ageSeconds: null },
     { name: 'factory-zero', remote: false, status: 'healthy', ageSeconds: 0, summary: fixture },
   ];
   const html = fleetView({ factories: rows, pollSeconds: 30 });
-  assert.match(html, /Attach: attached/);
-  assert.match(html, /Attach: not attached/);
-  assert.match(html, /data-copy-text="herdr-boss factory attach win1"/);
-  assert.match(html, /data-copy-text="herdr-boss factory attach win2"/);
-  assert.equal(html.match(/Attach:/g).length, 2);
+  assert.match(html, /data-action="copy" data-copy="herdr-boss factory attach win1" data-copy-text="herdr-boss factory attach win1"/);
+  assert.match(html, /No summary is available/);
+  assert.doesNotMatch(html, /Attach:/);
   assert.doesNotMatch(html, /ssh|hf-win/i);
 });
 

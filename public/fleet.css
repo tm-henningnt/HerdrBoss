@@ -1,16 +1,104 @@
-/* Keep large comparisons inside their own scroll region on a phone. */
-.fleet-table-scroll { max-width: 100%; overflow-x: auto; }
-.fleet-table { width: 100%; min-width: 680px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.fleet-table th, .fleet-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.fleet-table th { font-weight: 600; }
+/* The Fleet page v2. Tokens come from style.css; this file adds no colour of its own.
+   The compact comparison fits 393 px, the alert strip is collapsed, and every control is at least 44 px. */
+
+.fleet-page { display: grid; gap: 12px; min-width: 0; }
+/* The dashboard dark theme sets button text to a dark colour. Keep the Fleet controls readable in both themes. */
+.fleet-page button.alert-toggle, .fleet-page button.lane-more, .fleet-page button.copy, .fleet-page .actions button { color: var(--text); }
+.fleet-head { margin-bottom: 0; }
+.fleet-role-alert { display: block; color: var(--warn); }
+.fleet-registry-error { margin: 0; }
 .fleet-secondary { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.fleet-state-offline { color: var(--crit); font-weight: 600; }
-.fleet-reason { display: block; font-size: 12px; }
+.fleet-unknown { color: var(--muted); }
 .fleet-key { display: block; max-width: 240px; overflow-wrap: anywhere; font-size: 12px; font-weight: 400; color: var(--muted); }
-.fleet-item-list { list-style: none; margin: 0; padding: 0; }
-.fleet-item-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.fleet-item-list a { overflow-wrap: anywhere; }
-.fleet-settings summary { cursor: pointer; font-weight: 600; }
+
+/* 1. Total line */
+.fleet-totals { display: grid; gap: 8px; min-width: 0; }
+.fleet-total-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.fleet-total { flex: 1 1 150px; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.fleet-total .fleet-k { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.fleet-total .fleet-v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.fleet-coverage { display: grid; gap: 2px; }
+.fleet-s { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.fleet-s .fleet-k { color: var(--text); font-weight: 600; }
+
+/* 2. Compact alert strip. Collapsed at every width; the label names the fix in words. */
+.fleet-alerts { margin: 0; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 10px; padding: 2px 0; }
+.alert { border-top: 1px solid var(--line); }
+.alert:first-child { border-top: 0; }
+.alert-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 14px; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.alert-toggle .grow { flex: 1 1 auto; min-width: 0; }
+.alert-toggle .tag { font-size: 12px; color: var(--accent); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+.alert-label { font-weight: 600; overflow-wrap: anywhere; }
+.sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.sev.error { background: var(--crit); } .sev.warning { background: var(--warn); } .sev.info { background: var(--info); }
+.alert-fix { display: none; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 14px 12px 36px; }
+.alert.open .alert-fix { display: flex; }
+code.cmd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+button.copy { min-height: 44px; min-width: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+
+/* 3. Compact factory comparison */
+.fleet-compare { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 0; }
+.cmp-row { display: grid; grid-template-columns: 1.3fr .8fr .8fr .6fr .6fr 1fr .6fr .5fr 1.1fr; border-top: 1px solid var(--line); align-items: center; min-width: 0; }
+.cmp-row:first-child { border-top: 0; }
+.cmp-row.cmp-head { background: var(--panel-2); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.cmp-cell { padding: 9px 10px; min-width: 0; overflow-wrap: anywhere; }
+.cmp-k { display: none; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.cmp-name { font-weight: 650; }
+.cmp-sum { display: none; }
+.state { font-weight: 650; display: inline-flex; align-items: center; gap: 6px; }
+.cmp-health .state { display: inline; }
+.state.healthy { color: var(--ok); } .state.degraded { color: var(--warn); } .state.offline { color: var(--crit); } .state.unknown { color: var(--muted); }
+.drift { color: var(--warn); font-weight: 600; }
+
+/* Factory card */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; }
+.card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.card-head h2 { margin: 0; font-size: 18px; }
+.role { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
+.card-head .grow { flex: 1 1 auto; }
+.wait-owner { margin: 0; padding: 10px 16px; background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; display: grid; gap: 6px; }
+.wait-owner b { color: var(--warn); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-bottom: 1px solid var(--line); }
+.fact { padding: 10px 16px; border-right: 1px solid var(--line); min-width: 0; }
+.fact .k { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.fact .v { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Quota lanes. The expansion button is visible at every width. */
+.lanes { padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.lanes h3 { margin: 6px 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+button.lane-more { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer; }
+.lane { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); }
+.lane:first-of-type { border-top: 0; }
+.lanes:not(.open) .lane.more { display: none; }
+.lanes.open button.lane-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.lane .who { overflow-wrap: anywhere; }
+.bar { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.bar i.warn { background: var(--warn); } .bar i.crit { background: var(--crit); }
+.pill { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); }
+
+/* Projects */
+.projects { padding: 0 16px 6px; }
+.projects h3 { margin: 12px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.proj { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--line); }
+.proj:first-of-type { border-top: 0; }
+.proj .slug { font-weight: 600; overflow-wrap: anywhere; }
+.board { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.board b { color: var(--text); font-variant-numeric: tabular-nums; }
+.stale { color: var(--warn); font-size: 12px; font-weight: 600; }
+
+/* Actions */
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel-2); }
+.actions button, .actions a, .actions .unavailable { min-height: 44px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); text-decoration: none; font: inherit; font-size: 13px; cursor: pointer; }
+.actions .primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.actions .note { flex: 1 1 100%; color: var(--muted); font-size: 12px; }
+
+/* Settings and shares stay collapsed */
+.fleet-panels > summary, .fleet-panels-body > .panel > summary, .fleet-settings > summary { padding: 14px 16px; cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.fleet-panels-body { padding: 0 16px 16px; }
+.fleet-panels-body > .panel { border: 0; padding: 0; background: none; }
+.fleet-panels-body > .fleet-settings { margin-top: 0; }
+.fleet-panels-body > .panel > h2 { font-size: 15px; }
 .fleet-settings form { display: grid; gap: 14px; max-width: 680px; margin-top: 16px; }
 .fleet-settings label { display: grid; gap: 6px; min-width: 0; }
 .fleet-settings input { width: 100%; min-width: 0; font: inherit; padding: 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
@@ -18,6 +106,7 @@
 .fleet-settings input[type="checkbox"] { width: auto; }
 .fleet-settings fieldset { display: grid; gap: 12px; border: 1px solid var(--line); min-width: 0; }
 .fleet-settings button { justify-self: start; }
+
 .fleet-shares form { display: grid; gap: 14px; max-width: 680px; margin-top: 16px; }
 .fleet-shares fieldset { min-width: 0; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .fleet-share-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
@@ -31,15 +120,42 @@
 .fleet-shares button, .fleet-shares summary { min-height: 44px; }
 .fleet-shares button { justify-self: start; }
 .fleet-shares summary { display: flex; align-items: center; cursor: pointer; }
-.fleet-shares input:focus-visible, .fleet-shares summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.fleet-shares input:focus-visible, .fleet-shares summary:focus-visible, .alert-toggle:focus-visible, .lane-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .fleet-deliveries { padding-left: 20px; overflow-wrap: anywhere; }
+
+/* The Mac page's Fleet Mailbox list, reused on the Mailbox page. */
+.fleet-item-list { list-style: none; margin: 0; padding: 0; }
+.fleet-item-list li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.fleet-item-list a { overflow-wrap: anywhere; }
 .fleet-mailbox-details { padding: 12px; border-top: 1px solid var(--line); }
 .fleet-mailbox-details summary { cursor: pointer; font-weight: 600; }
 .fleet-mailbox-details .fleet-mail { margin-top: 12px; }
-.fleet-table-scroll:focus-visible, .fleet-settings summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Phone layout, 393 px. C1: keep every fact and the 44 px controls, then tighten spacing. */
 @media (max-width: 760px) {
-  .fleet-table th, .fleet-table td { padding: 8px; }
+  .fleet-page { margin: 0 -4px; gap: 10px; }
+  .fleet-total { flex: 1 1 30%; padding: 6px 8px; }
+  .fleet-total .fleet-v { font-size: 19px; }
+  .fleet-total .fleet-k { font-size: 10px; letter-spacing: .04em; }
+  .fleet-s { font-size: 10px; line-height: 1.3; }
+  .fleet-head .muted { font-size: 12px; }
+  .fleet-role-holds { display: none; }
+  .alert-toggle { padding: 5px 12px; }
+  .alert-label { font-size: 13px; }
+  .cmp-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0; padding: 6px 0; }
+  .cmp-row.cmp-head { display: none; }
+  .cmp-cell { padding: 2px 12px; }
+  .cmp-k { display: inline; margin-right: 6px; }
+  .cmp-cell.hide-phone { display: none; }
+  .cmp-name { grid-column: 1; grid-row: 1; }
+  .cmp-health { grid-column: 2; grid-row: 1; text-align: right; }
+  .cmp-sum { display: block; grid-column: 1 / -1; grid-row: 2; padding: 2px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .card-head { padding: 12px; }
+  .fact { border-right: 0; border-bottom: 1px solid var(--line); }
+  .actions { padding: 10px 12px; }
+  .projects, .lanes { padding-left: 12px; padding-right: 12px; }
   .fleet-item-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .fleet-item-list .tag { justify-self: start; }
   .fleet-settings form { max-width: 100%; }
+  .fleet-page input, .fleet-page textarea, .fleet-page select { font-size: 16px; }
 }
