@@ -24,24 +24,19 @@ const MAX_PENDING = 50;
 // The steps that finish a kit adoption. The reminder in src/engine.js uses the same sentence.
 export const KIT_ADOPT_STEPS = 'Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish.';
 const TAIL = `. ${KIT_ADOPT_STEPS} The command prints the current kit file.`;
-// A batch of useful changes only needs an update at the next task boundary, so it takes a short line.
-// Any required entry keeps the full adopt steps.
-const USEFUL_TAIL = '. Run herdr-boss kit update at the next task boundary.';
 
 function shortSubject(subject) {
   const text = String(subject || '').replace(/\s+/g, ' ').trim();
   return text.length > MAX_SUBJECT_LENGTH ? `${text.slice(0, MAX_SUBJECT_LENGTH - 3)}...` : text;
 }
 
-// commits: [{ hash, subject, impact? }], newest first. revision is the kit revision of HEAD.
-// A batch whose entries all have impact 'useful' takes the short line; any other impact keeps the adopt steps.
+// commits: [{ hash, subject }], newest first. revision is the kit revision of HEAD.
 export function formatKitNotice(commits, revision = kitRevision()) {
-  const tail = commits.length && commits.every((c) => c.impact === 'useful') ? USEFUL_TAIL : TAIL;
   const shown = commits.slice(0, MAX_SUBJECTS).map((c) => shortSubject(c.subject));
   const head = `[herdr-boss] Kit revision ${revision ?? 'unknown'} (${commits.length} change(s)): `;
   const list = () => [...shown, ...(commits.length > shown.length ? [`and ${commits.length - shown.length} more`] : [])].join('; ');
-  while (shown.length > 1 && head.length + list().length + tail.length > MAX_TEXT_LENGTH) shown.pop();
-  return `${head}${list()}${tail}`;
+  while (shown.length > 1 && head.length + list().length + TAIL.length > MAX_TEXT_LENGTH) shown.pop();
+  return `${head}${list()}${TAIL}`;
 }
 
 function parseLog(stdout) {
@@ -56,22 +51,28 @@ function parseLog(stdout) {
 }
 
 // The impact of each commit, in the order of commits, which is newest first. A commit that carries
-// no usable Kit-Impact: trailer takes the impact of the change log entry that lines up with it. A
-// batch that does not line up with the change log, or a stored cursor without a known revision,
+// no usable Kit-Impact: trailer takes the impact of the change log entry for its own asset change.
+// A batch that does not line up with the change log, or a stored cursor without a known revision,
 // leaves every change at useful. Only a trailer or a change log entry sets required.
 function commitImpacts(commits, assetHashes, entries, stored) {
   const index = entries.findIndex((entry) => entry.revision === stored?.revision);
   const recorded = index >= 0 ? entries.slice(index + 1) : [];
   // Git lists newest first and the change log is chronological, so read the record in reverse.
   const aligned = recorded.length === assetHashes.length ? recorded.slice().reverse() : [];
-  return commits.map((commit) => parseKitImpact(commit.message) ?? aligned.shift()?.impact ?? 'useful');
+  // Advance the aligned records only for a commit that changed an installed kit asset. A commit that
+  // changed no installed kit asset may use its trailer, but it must not consume an asset record.
+  const assets = new Set(assetHashes);
+  return commits.map((commit) => {
+    const entry = assets.has(commit.hash) ? aligned.shift()?.impact : null;
+    return parseKitImpact(commit.message) ?? entry ?? 'useful';
+  });
 }
 
 // The required commits that no pane has received yet, newest first. Older than seven days or over
 // the cap, an entry leaves the list.
 function mergePending(previous, added, now) {
   const seen = new Set();
-  const merged = [...added.map((c) => ({ hash: c.hash, subject: c.subject, at: now, ...(c.impact ? { impact: c.impact } : {}) })), ...(Array.isArray(previous) ? previous : [])];
+  const merged = [...added.map((c) => ({ hash: c.hash, subject: c.subject, at: now })), ...(Array.isArray(previous) ? previous : [])];
   const live = merged.filter((e) => e?.hash && Number.isFinite(e.at) && now - e.at <= PENDING_MS && !seen.has(e.hash) && seen.add(e.hash));
   const expired = (Array.isArray(previous) ? previous : []).filter((e) => !(Number.isFinite(e?.at) && now - e.at <= PENDING_MS)).length;
   return { list: live.slice(0, MAX_PENDING), expired, capped: Math.max(0, live.length - MAX_PENDING) };
@@ -118,7 +119,7 @@ export async function readKitNotice({ root, stored, git, now, changesFile = CHAN
   try { assetHashes = parseLog(await git(['-C', root, 'log', '--format=%h%x00', `${stored.commit}..HEAD`, '--', ...KIT_REVISION_PATHS])).map((c) => c.hash); }
   catch { assetHashes = []; }
   const impacts = commitImpacts(commits, assetHashes, readKitChanges(changesFile), stored);
-  const required = commits.filter((_, index) => impacts[index] === 'required').map((commit) => ({ ...commit, impact: 'required' }));
+  const required = commits.filter((_, index) => impacts[index] === 'required');
   if (!required.length) return reset(null);
   const { list: pending, capped } = mergePending(stored?.pending, required, now);
   const alert = kitAlert(head, pending, revision);

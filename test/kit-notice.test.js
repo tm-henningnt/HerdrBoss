@@ -277,6 +277,56 @@ test('a batch of asset commits takes one record per commit, newest first', async
   assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Record the newer useful change. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
+test('a trailer does not shift the change log entry of a commit without one', async (t) => {
+  const root = makeRepo(t);
+  const base = gitSync(root, ['rev-parse', 'HEAD']);
+  commit(root, 'kit/templates/project-kit.md', 'The older useful change');
+  commit(root, 'kit/models.json', 'The newer required change', REQUIRED);
+  const file = changesFile(t, [
+    '## 111111111111', 'Impact: useful', 'Summary: Base.', '',
+    '## aaaa00001111', 'Impact: useful', 'Summary: The older useful change.', '',
+    '## bbbb00002222', 'Impact: required', 'Summary: The newer required change.', '',
+  ].join('\n'));
+  const result = await readKitNotice({ root, stored: { commit: base, revision: '111111111111', at: 0 }, git: recordingGit(), now: NOW, changesFile: file });
+  assert.ok(result.alert);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): The newer required change. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
+});
+
+test('a non-asset commit does not consume the change log entry of an asset commit', async (t) => {
+  const file = changesFile(t, [
+    '## 111111111111', 'Impact: useful', 'Summary: Base.', '',
+    '## aaaa00001111', 'Impact: useful', 'Summary: The older useful asset change.', '',
+    '## bbbb00002222', 'Impact: required', 'Summary: The newer required asset change.', '',
+  ].join('\n'));
+  const read = async (placement) => {
+    const root = makeRepo(t);
+    const base = gitSync(root, ['rev-parse', 'HEAD']);
+    for (const [path, subject, trailer] of placement) commit(root, path, subject, trailer);
+    return readKitNotice({ root, stored: { commit: base, revision: '111111111111', at: 0 }, git: recordingGit(), now: NOW, changesFile: file });
+  };
+  const placements = [
+    // The non-asset commit is the newest, so the impact scan sees it first.
+    [['kit/templates/project-kit.md', 'The older useful asset change', ''], ['kit/models.json', 'The newer required asset change', ''], ['src/kit/workers.js', 'The non-asset change that needs action', REQUIRED]],
+    // The non-asset commit sits between the two asset commits.
+    [['kit/templates/project-kit.md', 'The older useful asset change', ''], ['src/kit/workers.js', 'The non-asset change that needs action', REQUIRED], ['kit/models.json', 'The newer required asset change', '']],
+  ];
+  for (const [index, placement] of placements.entries()) {
+    const result = await read(placement);
+    assert.ok(result.alert, `placement ${index}`);
+    assert.match(result.alert.text, /The newer required asset change/, `placement ${index}`);
+    assert.match(result.alert.text, /The non-asset change that needs action/, `placement ${index}`);
+    assert.doesNotMatch(result.alert.text, /The older useful asset change/, `placement ${index}`);
+  }
+  // The non-asset commit has no trailer, so it is useful and must not appear. It must still not consume
+  // an asset record: only the true required asset change is named.
+  const noTrailer = [['kit/templates/project-kit.md', 'The older useful asset change', ''], ['kit/models.json', 'The newer required asset change', ''], ['src/kit/workers.js', 'The non-asset change that needs action', '']];
+  const result = await read(noTrailer);
+  assert.ok(result.alert);
+  assert.match(result.alert.text, /The newer required asset change/);
+  assert.doesNotMatch(result.alert.text, /The non-asset change that needs action/);
+  assert.doesNotMatch(result.alert.text, /The older useful asset change/);
+});
+
 test('a change log that does not line up with the commits sends no notice', async (t) => {
   const cases = [
     ['two asset commits and one entry', ['kit/templates/project-kit.md', 'kit/models.json']],
@@ -357,26 +407,6 @@ test('the notice text stays under 1200 characters with long subjects', () => {
   assert.ok(text.length < 1200, `length ${text.length}`);
   assert.match(text, /^\[herdr-boss\] Kit revision abcdef012345 \(30 change\(s\)\): /);
   assert.match(text, /; and 20 more\. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs\/orchestration\/herdr-boss\.md, and publish\. The command prints the current kit file\.$/);
-});
-
-test('a useful-only batch takes the short line, a required or mixed batch keeps the adopt steps', () => {
-  const useful = [{ hash: 'a', subject: 'A useful change', impact: 'useful' }];
-  assert.equal(
-    formatKitNotice(useful, 'abcdef012345'),
-    '[herdr-boss] Kit revision abcdef012345 (1 change(s)): A useful change. Run herdr-boss kit update at the next task boundary.',
-  );
-  const required = [{ hash: 'a', subject: 'A change that needs action', impact: 'required' }];
-  assert.equal(
-    formatKitNotice(required, 'abcdef012345'),
-    '[herdr-boss] Kit revision abcdef012345 (1 change(s)): A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.',
-  );
-  const mixed = [{ hash: 'a', subject: 'A useful change', impact: 'useful' }, { hash: 'b', subject: 'A change that needs action', impact: 'required' }];
-  assert.equal(
-    formatKitNotice(mixed, 'abcdef012345'),
-    '[herdr-boss] Kit revision abcdef012345 (2 change(s)): A useful change; A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.',
-  );
-  // An entry without a known impact stays conservative and keeps the adopt steps.
-  assert.match(formatKitNotice([{ hash: 'a', subject: 'An unclassified change' }], 'abcdef012345'), /Run herdr-boss kit update, set kitRevision/);
 });
 
 test('a git failure sends nothing, stores HEAD, and gives one event', async (t) => {
@@ -709,11 +739,9 @@ test('readKitNotice keeps unsent required changes across restarts', async (t) =>
   const first = commit(root, 'kit/models.md', 'First kit change', REQUIRED);
   const one = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.deepEqual(one.state.pending.map((p) => p.subject), ['First kit change']);
-  assert.deepEqual(one.state.pending.map((p) => p.impact), ['required']);
   commit(root, 'kit/models.md', 'Second kit change', REQUIRED);
   const two = await readKitNotice({ root, stored: one.state, git: recordingGit(), now: NOW + 60000 });
   assert.deepEqual(two.state.pending.map((p) => p.subject), ['Second kit change', 'First kit change']);
-  assert.deepEqual(two.state.pending.map((p) => p.impact), ['required', 'required']);
   assert.match(two.alert.text, /Second kit change; First kit change/);
   commit(root, 'README.md', 'Unrelated');
   const three = await readKitNotice({ root, stored: two.state, git: recordingGit(), now: NOW + 120000 });
