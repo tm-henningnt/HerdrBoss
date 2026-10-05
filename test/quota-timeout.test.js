@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { collectQuotas, runQuotaCommand } from '../src/collect.js';
 
+// Every quota fixture probe sets its own deadline. An interrupted test run leaves the cleanup hook unexecuted, so the
+// deadline is the only thing that still stops a probe. The deadline must stay above the probe timeout plus the grace
+// period of the kill.
+const fixtureHoldMs = 15000;
+
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-quota-timeout-'));
   const pidFile = path.join(dir, 'probe.pid');
@@ -31,6 +36,7 @@ test('a hung quota probe receives SIGTERM and exits before the timeout rejection
       process.exit(0);
     });
     fs.writeFileSync(process.argv[1], String(process.pid));
+    setTimeout(() => process.exit(0), ${fixtureHoldMs});
     setInterval(() => {}, 60000);
   `;
   let failure;
@@ -53,6 +59,7 @@ test('a Claude timeout kills its hung child and records one attempt without a re
     const fs = require('node:fs');
     process.on('SIGTERM', () => fs.writeFileSync(process.argv[2], String(Date.now())));
     fs.writeFileSync(process.argv[1], String(process.pid));
+    setTimeout(() => process.exit(0), ${fixtureHoldMs});
     setInterval(() => {}, 60000);
   `;
   const calls = [];

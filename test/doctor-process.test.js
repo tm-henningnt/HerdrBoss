@@ -10,6 +10,10 @@ import test from 'node:test';
 
 // The fake command starts a helper that holds both output pipes. Test cleanup
 // stops only these fixture PIDs, including when the old implementation hangs.
+// Every fixture process also sets its own deadline. An interrupted run leaves the cleanup hook unexecuted, so the
+// deadline is the only thing that still stops a fixture process. The deadline must stay above the command timeout of
+// 2000 ms and the 7000 ms deadline of the test.
+const fixtureHoldMs = 15000;
 test('a command timeout stops its helper and lets the caller leave the event loop', { timeout: 15000 }, async (t) => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-process-')));
   const ready = path.join(home, 'ready.json');
@@ -18,14 +22,19 @@ test('a command timeout stops its helper and lets the caller leave the event loo
   fs.writeFileSync(shim, `
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
-const helper = spawn(process.execPath, ['-e', "process.send('ready'); setInterval(() => {}, 60000)"], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+const hold = ${fixtureHoldMs};
+const helper = spawn(process.execPath, ['-e', "process.send('ready'); setTimeout(() => process.exit(0), " + hold + "); setInterval(() => {}, 60000)"], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
 helper.once('message', () => fs.writeFileSync(process.argv[2], JSON.stringify({ parent: process.pid, helper: helper.pid })));
+setTimeout(() => process.exit(0), ${fixtureHoldMs});
 setInterval(() => {}, 60000);
 `);
   const module = pathToFileURL(path.resolve('src/doctor.js')).href;
   fs.writeFileSync(driver, `
 import { createDoctorRunner } from ${JSON.stringify(module)};
 const controller = new AbortController();
+// This fixture process also keeps a deadline of its own. The deadline is cleared when the command ends, so it never
+// holds this process after the normal timeout path.
+const deadline = setTimeout(() => process.exit(0), ${fixtureHoldMs});
 const runner = createDoctorRunner({ home: process.env.HOME, env: process.env });
 try {
   await runner({ kind: 'command', command: process.execPath, args: [process.argv[2], process.argv[3]] }, { signal: controller.signal, timeout: 2000 });
@@ -33,6 +42,7 @@ try {
 } catch {
   process.stdout.write('timeout completed');
 }
+clearTimeout(deadline);
 `);
   const child = spawn(process.execPath, [driver, shim, ready], { env: { ...process.env, HOME: home, HERDR_BOSS_DIR: path.join(home, 'data') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
