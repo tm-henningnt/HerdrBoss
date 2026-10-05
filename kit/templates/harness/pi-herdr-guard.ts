@@ -58,8 +58,8 @@ const BASH_DENY: [RegExp, string, string][] = [
 	[/\blaunchctl\b/, "launchctl", "no form for a worker; the Boss restarts the service"],
 	[/\.config\/herdr-boss\b/, "the private Herdr Boss directory", "no path for a worker; read the project kit in the worktree"],
 	[/\bauth\.json\b/, "a credential file", "no path for a worker; a credential file holds a secret"],
-	[/\bpkill\b/, "pkill (stop your process by its saved PID)", "kill <pid> with the PID you saved, after the cwd check"],
-	[/\bkillall\b/, "killall (stop your process by its saved PID)", "kill <pid> with the PID you saved, after the cwd check"],
+	[/\bpkill\b/, "pkill (stop your process by its saved PID)", "kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)"],
+	[/\bkillall\b/, "killall (stop your process by its saved PID)", "kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)"],
 	[/\bkill\b[^;&|]*\$\(\s*pgrep\b/, "kill with a pgrep name pattern", "kill <pid> with the PID you saved, after pgrep -l NAME names it"],
 ];
 

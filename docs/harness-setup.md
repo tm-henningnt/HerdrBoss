@@ -156,7 +156,7 @@ To apply the agent:
 | `--no-approve` | `kit/models.json` | Herdr Boss. |
 | `--no-extensions` and `-e` for each extension | `kit/models.json` | Herdr Boss. |
 
-`herdr-guard.ts` keeps a worker inside its worktree. File tools can use only the worktree, the temporary folders, and `~/.herdr-boss`. The guard blocks the same commands as the OpenCode `worker` agent. It allows `rm -rf` on a path inside the worktree `.worker` folder and on a path inside a temporary folder. It blocks `rm -rf` with a pattern, and `rm -rf` on the worktree or on the `.worker` folder itself. It never asks. A blocked call returns a reason to the worker. Each reason names the form that the worker may use instead, with an example for a blocked `rm -rf`. A blocked `pkill` or `killall` names `kill <pid>` with the saved PID after the cwd check.
+`herdr-guard.ts` keeps a worker inside its worktree. File tools can use only the worktree, the temporary folders, and `~/.herdr-boss`. The guard blocks the same commands as the OpenCode `worker` agent. It allows `rm -rf` on a path inside the worktree `.worker` folder and on a path inside a temporary folder. It blocks `rm -rf` with a pattern, and `rm -rf` on the worktree or on the `.worker` folder itself. It never asks. A blocked call returns a reason to the worker. Each reason names the form that the worker may use instead, with an example for a blocked `rm -rf`. A blocked `pkill` or `killall` names `kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)`.
 
 `--no-approve` stops Pi from loading project-local settings, resources, and packages. `--no-extensions` stops the automatic extension load. Each `-e` then loads one named extension, so the guard is always loaded.
 

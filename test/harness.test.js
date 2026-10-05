@@ -542,9 +542,15 @@ test('each Pi guard refusal names the allowed form', async (t) => {
     return decision.reason;
   };
 
+  const pkillAllowed = 'kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)';
   const pkill = await blocked('pkill node');
-  assert.match(pkill, /kill <pid>/, pkill);
-  assert.match(pkill, /cwd check/, pkill);
+  assert.equal(pkill.includes('cwd check'), false, `no cwd check a worker cannot run: ${pkill}`);
+  assert.ok(pkill.includes(pkillAllowed), pkill);
+  const killall = await blocked('killall node');
+  assert.ok(killall.includes(pkillAllowed), killall);
+  // The new allowed text must run through the guard itself.
+  assert.equal(await bashDecision(guard, pkillAllowed), undefined, pkillAllowed);
+  assert.equal(await bashDecision(guard, 'kill 12345'), undefined, 'kill by saved PID stays allowed');
 
   const push = await blocked('git push origin main');
   assert.match(push, /is not allowed for a worker/, push);

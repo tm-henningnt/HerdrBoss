@@ -234,6 +234,6 @@ Summary: Add the status review step: rewrite the published phase and summary at 
 Impact: useful
 Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss suite` command runs and ends and that pane is idle or done; add `--no-notify`; a `--reuse` or `--skip-docs` run sends no notice; the kit text says to start a suite with the harness background option or rely on the notice, and never to end a turn while a detached suite runs. The idle-orchestrator notice holds back while a project has an open review pack, a task in status `review`, a `spec` task in `doing` with no live worker, or a stale `phase` or `summary` text; a held group and an epic card do not hold it back; a failed pack read holds it back and is logged; the notice then names the open work instead of ready work.
 
-## 87cc7aa038c4
+## 3f00dd3fd779
 Impact: useful
-Summary: Every Pi guard refusal names the form that a worker may use instead: `kill <pid>` after the cwd check for `pkill` and `killall`, and one exact path in the worktree `.worker` folder or a temporary directory for a blocked `rm -rf`. The `worker collect` scope refusal shows the exact `--accept-scope` command form with an example.
+Summary: Every Pi guard refusal names the form that a worker may use instead: `kill <pid> of a process that you started, with the PID you saved (pgrep -l NAME shows the PID)` for `pkill` and `killall`, and one exact path in the worktree `.worker` folder or a temporary directory for a blocked `rm -rf`. The `worker collect` scope refusal shows the exact `--accept-scope` command form with an example that lists every unlisted file, comma separated, and shell-quotes the value.
