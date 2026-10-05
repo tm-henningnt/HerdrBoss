@@ -112,13 +112,40 @@ function summaryHealthInfo(row) {
 
 // ---- Totals --------------------------------------------------------------------------------
 
+// The rollup coverage string is one long line. The card shows one short line and keeps the full
+// text in a collapsed element, so the names of the non-fresh factories stay visible in text.
+function coverageCounts(total) {
+  const match = /(\d+)\s+of\s+(\d+)/.exec(typeof total?.coverage === 'string' ? total.coverage : '');
+  return match ? `${match[1]} of ${match[2]}` : 'coverage unknown';
+}
+function coverageNames(total) {
+  const segment = /unavailable:\s*([^;]*)/.exec(typeof total?.coverage === 'string' ? total.coverage : '');
+  if (!segment) return [];
+  const names = [];
+  const entry = /([^()]+?)\s*\([^()]*\)/g;
+  let match;
+  while ((match = entry.exec(segment[1]))) names.push(match[1].trim());
+  return names;
+}
+function coverageLine(key, label, total) {
+  const asOf = num(total?.asOf) ? ageText(total.asOf) : UNKNOWN;
+  const parts = [`as of ${esc(asOf)}`, esc(coverageCounts(total))];
+  // Keep the line short so every comparison row stays in the first phone viewport.
+  const names = coverageNames(total);
+  if (names.length) parts.push(`${esc(names.join(', '))} unavailable`);
+  return `<p class="fleet-s" data-fleet-coverage="${esc(key)}"><span class="fleet-k">${esc(label)}</span> ${parts.join(' · ')}</p>`;
+}
+// One collapsed element holds the long coverage text for all three totals, so the short lines stay
+// small and the reasons and the selected spend days stay reachable.
+function coverageDetail(entries) {
+  const rows = entries
+    .filter(([, , total]) => typeof total?.coverage === 'string' && total.coverage)
+    .map(([key, label, total]) => `<p data-fleet-coverage-detail="${esc(key)}"><span class="fleet-k">${esc(label)}</span> ${esc(total.coverage)}</p>`);
+  if (!rows.length) return '';
+  return `<details class="fleet-coverage-detail" data-fleet-coverage-details data-key="fleet-coverage-details" data-keep-attrs="open"><summary>Coverage detail</summary>${rows.join('')}</details>`;
+}
 function totalCard(key, label, info) {
   return `<article class="fleet-total" data-fleet-total="${esc(key)}"><span class="fleet-k">${esc(label)}</span><span class="fleet-v">${valueHtml(info)}</span></article>`;
-}
-function totalCoverage(key, label, total) {
-  const asOf = num(total?.asOf) ? ageText(total.asOf) : null;
-  const coverage = typeof total?.coverage === 'string' ? total.coverage : 'no reading';
-  return `<p class="fleet-s" data-fleet-coverage="${esc(key)}"><span class="fleet-k">${esc(label)}</span> as of ${esc(asOf ?? UNKNOWN)} · ${esc(coverage)}</p>`;
 }
 export function fleetTotals(totals) {
   const workers = totals?.workers || {};
@@ -126,19 +153,16 @@ export function fleetTotals(totals) {
   const quota = totals?.quota || {};
   const mixedDays = typeof spend.coverage === 'string' && spend.coverage.includes('latest factory day');
   const spendLabel = mixedDays ? 'Spend · latest factory days' : 'Spend today';
+  const entries = [['workers', 'Workers', workers], ['spend', spendLabel, spend], ['quota', 'Quota burn', quota]];
   return `<section class="fleet-totals" data-fleet-totals aria-label="Fleet totals"><div class="fleet-total-row">${
-    totalCard('workers', 'Workers', num(workers.value) ? { text: String(workers.value) } : { text: UNKNOWN, reason: 'no fresh reading' })
+    totalCard('workers', 'Workers', num(workers.value) ? { text: String(workers.value) } : { text: UNKNOWN })
   }${
-    totalCard('spend', spendLabel, num(spend.value) ? { text: money(spend.value) } : { text: UNKNOWN, reason: 'no fresh reading' })
+    totalCard('spend', spendLabel, num(spend.value) ? { text: money(spend.value) } : { text: UNKNOWN })
   }${
-    totalCard('quota', 'Quota burn', num(quota.value) ? { text: `${quota.value}%` } : { text: UNKNOWN, reason: 'no fresh reading' })
+    totalCard('quota', 'Quota burn', num(quota.value) ? { text: `${quota.value}%` } : { text: UNKNOWN })
   }</div><div class="fleet-coverage">${
-    totalCoverage('workers', 'Workers', workers)
-  }${
-    totalCoverage('spend', spendLabel, spend)
-  }${
-    totalCoverage('quota', 'Quota burn', quota)
-  }</div></section>`;
+    entries.map(([key, label, total]) => coverageLine(key, label, total)).join('')
+  }</div>${coverageDetail(entries)}</section>`;
 }
 
 // ---- Alerts --------------------------------------------------------------------------------

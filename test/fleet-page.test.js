@@ -67,6 +67,11 @@ function visibleTotal(html, key) {
   return find(root, (node) => node.getAttribute('data-fleet-coverage') === key).textContent;
 }
 
+function coverageDetail(html, key) {
+  const root = createDocument().html(html);
+  return find(root, (node) => node.getAttribute('data-fleet-coverage-detail') === key);
+}
+
 test('the Fleet page renders the T5 DOM hooks for the totals, alerts, comparison, cards, and panels', async () => {
   const { html } = await render();
   for (const hook of ['data-fleet-totals', 'data-fleet-total="workers"', 'data-fleet-total="spend"', 'data-fleet-total="quota"',
@@ -98,10 +103,26 @@ test('the compact comparison carries every hand-computed fact for each factory',
   assert.match(html, /data-fleet-total="spend"><span class="fleet-k">Spend · latest factory days<\/span><span class="fleet-v">\$14\.30<\/span>/);
   assert.match(html, /data-fleet-total="quota"><span class="fleet-k">Quota burn<\/span><span class="fleet-v">61%<\/span>/);
   // F1: the named non-fresh factory is visible, not only in a title attribute.
-  assert.match(visibleTotal(html, 'workers'), /2 of 3 factories reporting/);
-  assert.match(visibleTotal(html, 'workers'), /unavailable: win2 \(never seen\)/);
-  assert.match(visibleTotal(html, 'spend'), /unavailable: win2 \(never seen\)/);
+  assert.match(visibleTotal(html, 'workers'), /2 of 3 · win2 unavailable/);
+  assert.match(visibleTotal(html, 'spend'), /win2 unavailable/);
   assert.doesNotMatch(html, /title="2 of 3 factories reporting/);
+});
+
+test('each total shows one short coverage line and keeps the long detail in a collapsed element', async () => {
+  const { html } = await render();
+  for (const key of ['workers', 'spend', 'quota']) {
+    const line = visibleTotal(html, key);
+    assert.match(line, /as of 12 s · 2 of 3 · win2 unavailable/, `${key} short line`);
+    assert.doesNotMatch(line, /reporting/, `${key} drops the long wording`);
+    assert.doesNotMatch(line, /never seen/, `${key} drops the per-factory reason`);
+    assert.doesNotMatch(line, /selected spend days/, `${key} drops the day detail`);
+    assert.match(coverageDetail(html, key).textContent, /unavailable: win2 \(never seen\)/, `${key} detail keeps the reason`);
+  }
+  const details = find(createDocument().html(html), (node) => node.getAttribute('data-fleet-coverage-details') !== null);
+  assert.ok(details, 'a shared coverage detail element exists');
+  assert.equal(details.tagName, 'DETAILS');
+  assert.equal(details.hasAttribute('open'), false, 'the coverage detail starts collapsed');
+  assert.match(coverageDetail(html, 'spend').textContent, /selected spend days: factory-zero 2026-10-05, win1 latest factory day 2026-10-04/);
 });
 
 test('the alert strip is collapsed at every width and names each fix command', async () => {
@@ -142,7 +163,7 @@ test('the C3 selected-date label shows latest factory day when the factory offse
   const { html } = await render();
   assert.match(html, /Spend · latest factory days/);
   assert.match(html, /latest factory day 2026-10-04/);
-  assert.match(visibleTotal(html, 'spend'), /selected spend days: factory-zero 2026-10-05, win1 latest factory day 2026-10-04/);
+  assert.match(coverageDetail(html, 'spend').textContent, /selected spend days: factory-zero 2026-10-05, win1 latest factory day 2026-10-04/);
 });
 
 test('a hostile factory name is escaped everywhere it appears', async () => {
