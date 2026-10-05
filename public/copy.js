@@ -47,6 +47,19 @@ export async function copyText(text, env = globalThis) {
   return fallbackCopy(value, env.document);
 }
 
+// The outcome of the Confirm copy control of the Fleet sheet. Success appears only after a successful write.
+// A refused write or a missing clipboard API keeps the sheet open and asks for a manual copy.
+export const CONFIRM_COPY_DONE = 'Copied. Run it in the Owner terminal.';
+export const CONFIRM_COPY_MANUAL = 'Copy failed. The command is selected. Copy it by hand.';
+// The sheet copies only through navigator.clipboard, so a refusal or a missing API never shows a false success.
+export async function confirmCopy(text, env = globalThis) {
+  const value = String(text ?? '');
+  const clipboard = env.navigator?.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== 'function') return { copied: false, manual: true, message: CONFIRM_COPY_MANUAL };
+  try { await clipboard.writeText(value); } catch { return { copied: false, manual: true, message: CONFIRM_COPY_MANUAL }; }
+  return { copied: true, manual: false, message: CONFIRM_COPY_DONE };
+}
+
 // The text that a copy button stands for, or null.
 // A code block copies the source of the fence. The attribute holds the source only when it differs from the shown text (tabs).
 // A line of a file or a diff copies its marker and text, without the line numbers.
@@ -64,10 +77,12 @@ export function copySource(button, { messageText = () => null } = {}) {
   }
   if (button.hasAttribute('data-copy-message')) return messageText(button.getAttribute('data-copy-message'));
   if (button.hasAttribute('data-copy-text')) return button.getAttribute('data-copy-text');
+  // A Fleet alert fix and a card host command carry the exact command in data-copy.
+  if (button.hasAttribute('data-copy')) return button.getAttribute('data-copy');
   return null;
 }
 
-const ALL = '[data-copy-code], [data-copy-lines], [data-copy-message], [data-copy-text]';
+const ALL = '[data-copy-code], [data-copy-lines], [data-copy-message], [data-copy-text], [data-copy]';
 const timers = new WeakMap();
 
 // Shows "Copied" for COPIED_MS. A second click restarts the time.
