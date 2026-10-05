@@ -51,15 +51,21 @@ function parseLog(stdout) {
 }
 
 // The impact of each commit, in the order of commits, which is newest first. A commit that carries
-// no usable Kit-Impact: trailer takes the impact of the change log entry that lines up with it. A
-// batch that does not line up with the change log, or a stored cursor without a known revision,
+// no usable Kit-Impact: trailer takes the impact of the change log entry for its own asset change.
+// A batch that does not line up with the change log, or a stored cursor without a known revision,
 // leaves every change at useful. Only a trailer or a change log entry sets required.
 function commitImpacts(commits, assetHashes, entries, stored) {
   const index = entries.findIndex((entry) => entry.revision === stored?.revision);
   const recorded = index >= 0 ? entries.slice(index + 1) : [];
   // Git lists newest first and the change log is chronological, so read the record in reverse.
   const aligned = recorded.length === assetHashes.length ? recorded.slice().reverse() : [];
-  return commits.map((commit) => parseKitImpact(commit.message) ?? aligned.shift()?.impact ?? 'useful');
+  // Advance the aligned records only for a commit that changed an installed kit asset. A commit that
+  // changed no installed kit asset may use its trailer, but it must not consume an asset record.
+  const assets = new Set(assetHashes);
+  return commits.map((commit) => {
+    const entry = assets.has(commit.hash) ? aligned.shift()?.impact : null;
+    return parseKitImpact(commit.message) ?? entry ?? 'useful';
+  });
 }
 
 // The required commits that no pane has received yet, newest first. Older than seven days or over
