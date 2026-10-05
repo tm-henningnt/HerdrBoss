@@ -688,7 +688,7 @@ A review pack is a folder of evidence with one question for each item. The Owner
 | Command | Action |
 |---|---|
 | `herdr-boss review check FOLDER` | Validate a pack folder. Write nothing. Any pane and any terminal can run it. |
-| `herdr-boss review publish SLUG FOLDER [--note TEXT] [--round N] [--dry-run]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
+| `herdr-boss review publish SLUG FOLDER [--note TEXT] --judge-pass TEXT [--round N] [--dry-run] [--carry-open]` | Validate the folder, store it as the next version of its pack, and post a Mailbox item for the Owner. |
 | `herdr-boss review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]` | Turn a folder of HTML files, or one HTML file, into a pack, and publish it. |
 | `herdr-boss review result [SLUG] PACK [--version N] [--format json\|md]` | Print the stored result of a submitted review. The default format is Markdown. `--version N` selects a version. The default is the newest submitted version. `--json` means `--format json`. |
 | `herdr-boss review delete [SLUG] PACK` | Delete the pack with its files and answers. Close its Mailbox items. |
@@ -1057,7 +1057,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Worktree root | `worktreeRoot` | The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place. | ~/Projects/.herdr-wt | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set another folder for new worker worktrees. Run herdr-boss agent app sync to check agent app access. | The value does not move or delete existing worktrees. | Select Save in the group. The change takes effect at once. |
+| Worktree root | `worktreeRoot` | The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place. | ~/Projects/.herdr-wt | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set another folder for new worker worktrees. Run herdr-boss harness sync to check agent app access. | The value does not move or delete existing worktrees. | Select Save in the group. The change takes effect at once. |
 | Project root | `projectRoot` | The suggested group folder for New project in the dashboard. An entered group or exact path takes precedence. | ~/Projects | Path | An absolute path or a path that starts with ~. No .. segment, not / | Set another suggested group folder. The CLI still requires --group or --path. | The value does not move or delete existing projects. | Select Save in the group. The change takes effect at once. |
 | Stale status minutes | `staleStatusMinutes` | The age after which a published project status is stale while workers run or new commits land. | 120 | Minutes | 5 to 1440 | A higher value gives the stale notice later. | A lower value gives the stale notice sooner. | Select Save in the group. The change takes effect at once. |
 | Stale text minutes | `staleTextMinutes` | The time that a published phase or summary can keep the same text before the project lead gets a stale text notice. The project lead must rewrite the text at each publish. | 360 | Minutes | 5 to 10080 | A higher value sends the stale text notice later. | A lower value sends the stale text notice sooner. | Select Save in the group. The change takes effect at once. |
@@ -1116,7 +1116,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 - Controls: A read-only table that shows if each agent app entry that orchestration needs is present.
 - Effect: Nothing. The table only reports.
-- Safe to change: Nothing to change. Run herdr-boss agent app sync to see what to fix.
+- Safe to change: Nothing to change. Run herdr-boss harness sync to see what to fix.
 - Restart: No restart.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |

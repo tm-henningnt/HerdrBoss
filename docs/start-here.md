@@ -106,7 +106,7 @@ You should see your choice saved on the page.
 
 A *project* is one product that you build with agents. Herdr Boss makes the folder, the files, and the *project lead*.
 
-1. Run `herdr-boss project new <name> --start`.
+1. Run `herdr-boss project new <name> --group <folder> --start`. The folder is the parent directory: the command makes `<folder>/<name>`.
 2. Enter a goal in one line when it asks, or add `--goal "<text>"`.
 3. Choose a private repository when it asks about a remote.
 

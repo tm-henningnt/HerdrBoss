@@ -20,7 +20,7 @@ const STATES = ['open', 'done', 'all'];
 
 const USAGE = {
   check: 'Usage: review check FOLDER',
-  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] [--judge-pass TEXT] [--round N] [--dry-run] [--carry-open]',
+  publish: 'Usage: review publish SLUG FOLDER [--note TEXT] --judge-pass TEXT [--round N] [--dry-run] [--carry-open]',
   import: 'Usage: review import SLUG FOLDER-OR-FILE [--id ID] [--title TEXT] [--dry-run]',
   result: 'Usage: review result [SLUG] PACK [--version N] [--format json|md]. PACK can also be SLUG/PACK. --json means --format json.',
   delete: 'Usage: review delete [SLUG] PACK. PACK can also be SLUG/PACK.',
