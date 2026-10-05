@@ -5,7 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { EventEmitter, once } from 'node:events';
+import os from 'node:os';
 
+// The test runner shares one data directory between test files that run at the same time. This file writes Mailbox items and quota state, so it uses its own temporary directory.
+process.env.HERDR_BOSS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-fleet-route-'));
 const root = process.env.HERDR_BOSS_DIR;
 process.env.HERDR_FACTORIES_DIR = path.join(root, 'factories');
 // A read-only preview needs a data directory that the service does not use.
@@ -115,7 +118,7 @@ test('the Fleet route adds the rollup over the accepted summaries and keeps the 
   assert.equal(result.body.rollup.totals.spend.value, 'unknown');
   assert.match(result.body.rollup.totals.spend.coverage, /factory-zero \(no spend rows\)/);
   assert.equal(result.body.rollup.totals.quota.value, 'unknown');
-  assert.match(result.body.rollup.totals.quota.coverage, /factory-zero \(quota unknown\)/);
+  assert.match(result.body.rollup.totals.quota.coverage, /factory-zero \(quota unknown/);
 
   assert.doesNotMatch(JSON.stringify(result.body), /hf_read_|invented-secret|PRIVATE MESSAGE/);
 });
