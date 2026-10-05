@@ -233,3 +233,7 @@ Summary: Add the status review step: rewrite the published phase and summary at 
 ## 4c9047f5ba52
 Impact: useful
 Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss suite` command runs and ends and that pane is idle or done; add `--no-notify`; a `--reuse` or `--skip-docs` run sends no notice; the kit text says to start a suite with the harness background option or rely on the notice, and never to end a turn while a detached suite runs. The idle-orchestrator notice holds back while a project has an open review pack, a task in status `review`, a `spec` task in `doing` with no live worker, or a stale `phase` or `summary` text; a held group and an epic card do not hold it back; a failed pack read holds it back and is logged; the notice then names the open work instead of ready work.
+
+## 1c7b4997e28d
+Impact: useful
+Summary: `review publish` refuses a pack with no judge pass and writes nothing; pass the record with `--judge-pass TEXT`; `review import` does not need the record; the orchestrator skill names the flag.
