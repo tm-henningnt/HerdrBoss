@@ -557,7 +557,7 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   S('capacity', 'bossRules', 'Boss rules', {
-    what: 'The standing rules that Herdr Boss gives to every successor in the handover bootstrap prompt. The text is the Boss rules section of that prompt. Each prepared successor reads the section, so the Boss does not send the rules again. The other two generated sections are the pane map and the open items. An empty text leaves the section out.',
+    what: 'The standing rules that Herdr Boss gives to every successor in the handover bootstrap prompt. The text is the Boss rules section of that prompt. Each prepared successor reads the section, so the Boss does not send the rules again. The other two generated sections are the pane map and the open items. The open items section keeps only the memory lines of the last 48 hours whose text names the Owner or the Boss. Every value in the sections is rendered on one line, so a value cannot forge a section heading. An empty text leaves the section out.',
     default: 'The standing rules of the fleet', unit: 'Text', range: 'One line of at most 1200 characters, or empty for no rules',
     raise: 'A longer text gives the successor more rules and uses more of the prompt.',
     lower: 'A shorter text leaves out the rules that you remove, and a text over 1200 characters is refused.',

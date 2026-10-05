@@ -15,6 +15,8 @@ export const TRUNCATION_MARKER = '[truncated]';
 export const DECISION_WINDOW_MS = 48 * 60 * 60 * 1000;
 // The date prefix of a memory file line that records an Owner decision.
 const DECISION_LINE = /^\s*[-*]?\s*(\d{4}-\d{2}-\d{2})\s*:\s*(.+)$/;
+// The word that makes a dated memory line an Owner decision: the source is the Owner or the Boss.
+const DECISION_SOURCE = /\b(owner|boss)\b/i;
 const ORCHESTRATOR_SUFFIX = '-orch';
 // The Boss memory file is private. A Boss handover reads no project memory file, so it gets no decisions.
 export const BOSS_DECISIONS_OMITTED = 'The Boss memory file is private. A Boss handover generates no Owner decisions.';
@@ -25,16 +27,21 @@ function bound(text, limit) {
   return `${value.slice(0, limit - TRUNCATION_MARKER.length - 1).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
-function section(title, body) {
-  const text = bound(body, SECTION_LIMITS[keyOf(title)]);
+// Every value of a section goes on one line. A line break inside a value becomes one space, and runs of
+// whitespace collapse. A title with a line break can therefore not forge a section heading or an end line.
+export const singleLine = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+function section(title, body, limit) {
+  const text = bound(body, limit);
   return text ? { title, body: text, text: `${title}:\n${text}\nEnd ${title}.` } : null;
 }
 
-const keyOf = (title) => ({ 'Boss rules': 'bossRules', 'Pane map': 'paneMap', 'Open items': 'openItems' })[title];
+// A section with its cap as an argument. There is no lookup by title, so an unknown title cannot truncate.
+export const boundedSection = (title, body, limit) => section(title, body, limit);
 
 // The standing rules from the policy field `bossRules`. They are data for the successor, not a new source.
 export function bossRulesSection(rules) {
-  return section('Boss rules', String(rules ?? '').trim());
+  return boundedSection('Boss rules', singleLine(rules), SECTION_LIMITS.bossRules);
 }
 
 const agentName = (agent) => agent?.name ?? agent?.agent_name ?? null;
@@ -45,19 +52,19 @@ const agentPane = (agent) => agent?.pane_id ?? agent?.paneId ?? agent?.pane ?? n
 export function paneMapSection({ agents = [], projects = [] } = {}) {
   const panes = new Map();
   for (const agent of Array.isArray(agents) ? agents : []) {
-    const name = agentName(agent);
-    if (typeof name !== 'string') continue;
+    const name = singleLine(agentName(agent));
+    if (!name) continue;
     if (name !== 'boss' && !name.endsWith(ORCHESTRATOR_SUFFIX)) continue;
-    const pane = agentPane(agent);
-    if (typeof pane === 'string' && pane) panes.set(name, pane);
+    const pane = singleLine(agentPane(agent));
+    if (pane) panes.set(name, pane);
   }
   const lines = [`- Boss: ${panes.get('boss') || 'no live pane'}`];
   for (const project of Array.isArray(projects) ? projects : []) {
-    const slug = typeof project === 'string' ? project : project?.slug;
-    if (typeof slug !== 'string' || !slug) continue;
+    const slug = singleLine(typeof project === 'string' ? project : project?.slug);
+    if (!slug) continue;
     lines.push(`- ${slug}: ${panes.get(`${slug.toLowerCase()}${ORCHESTRATOR_SUFFIX}`) || 'no live pane'}`);
   }
-  return section('Pane map', lines.join('\n'));
+  return boundedSection('Pane map', lines.join('\n'), SECTION_LIMITS.paneMap);
 }
 
 const list = (title, rows) => `${title} (${rows.length}):\n${rows.join('\n')}`;
@@ -68,18 +75,18 @@ export function openItemsSection({ items = [], tasks = [], decisions = [], decis
   const rows = [];
   const mail = (Array.isArray(items) ? items : []).filter((item) => item && typeof item.id === 'string' && item.id);
   rows.push(mail.length
-    ? list('Mailbox items that are open', mail.map((item) => `- ${item.id} [${item.needsAction ? item.action || 'approve' : 'read'}]: ${item.title || '(no title)'}`))
+    ? list('Mailbox items that are open', mail.map((item) => `- ${singleLine(item.id)} [${item.needsAction ? singleLine(item.action) || 'approve' : 'read'}]: ${singleLine(item.title) || '(no title)'}`))
     : 'Mailbox items that are open (0): none.');
-  const linked = (Array.isArray(tasks) ? tasks : []).filter((task) => task && typeof task.mailboxId === 'string' && task.mailboxId);
+  const linked = (Array.isArray(tasks) ? tasks : []).filter((task) => task && singleLine(task.mailboxId));
   rows.push(linked.length
-    ? list('Tasks with a Mailbox item', linked.map((task) => `- ${task.id || task.title}: ${task.title} (mailboxId ${task.mailboxId})`))
+    ? list('Tasks with a Mailbox item', linked.map((task) => `- ${singleLine(task.id || task.title)}: ${singleLine(task.title)} (mailboxId ${singleLine(task.mailboxId)})`))
     : 'Tasks with a Mailbox item (0): none.');
-  const recent = (Array.isArray(decisions) ? decisions : []).filter((entry) => entry && entry.text);
-  if (decisionsOmitted) rows.push(decisionsOmitted);
+  const recent = (Array.isArray(decisions) ? decisions : []).filter((entry) => entry && singleLine(entry.text));
+  if (decisionsOmitted) rows.push(singleLine(decisionsOmitted));
   else rows.push(recent.length
-    ? list('Owner decisions of the last 48 hours', recent.map((entry) => `- ${entry.date}: ${entry.text}`))
+    ? list('Owner decisions of the last 48 hours', recent.map((entry) => `- ${singleLine(entry.date)}: ${singleLine(entry.text)}`))
     : 'Owner decisions of the last 48 hours (0): none.');
-  return section('Open items', rows.join('\n'));
+  return boundedSection('Open items', rows.join('\n'), SECTION_LIMITS.openItems);
 }
 
 // Every generated section of the bootstrap prompt, in a fixed order. A section with no content is dropped.
@@ -88,18 +95,21 @@ export function bootstrapSections(input = {}) {
   return { sections, text: sections.map((entry) => entry.text).join('\n') };
 }
 
-// The Owner decisions in a memory file: the lines that start with a date, inside the last 48 hours.
-// A line has a date, not a time. The window counts from the start of that date, so a decision of today
-// and one of yesterday stay in and a decision of an earlier day stays out.
+// The Owner decisions in a memory file: the dated lines inside the last 48 hours whose text names the
+// Owner or the Boss as the source. A dated release record or lesson names neither, so it stays out.
+// A line has a date, not a time. The date is read in the time zone of the machine, so a decision of today
+// stays in during the first hours of the local day.
 export function ownerDecisionsFrom(memory, { now = Date.now(), windowMs = DECISION_WINDOW_MS } = {}) {
   if (typeof memory !== 'string' || !memory) return [];
   const decisions = [];
   for (const line of memory.split('\n')) {
     const match = DECISION_LINE.exec(line);
     if (!match) continue;
-    const at = Date.parse(`${match[1]}T00:00:00.000Z`);
+    const text = singleLine(match[2]);
+    if (!DECISION_SOURCE.test(text)) continue;
+    const at = Date.parse(`${match[1]}T00:00:00`);
     if (!Number.isFinite(at) || at < now - windowMs || at > now) continue;
-    decisions.push({ date: match[1], text: match[2].trim() });
+    decisions.push({ date: match[1], text });
   }
   return decisions;
 }
