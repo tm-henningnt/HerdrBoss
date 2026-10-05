@@ -148,6 +148,55 @@ export function saveHandoffs(items) { const tmp = `${FILE}.${process.pid}.tmp`; 
 function save(items) { saveHandoffs(items); }
 export function listHandoffs() { return readFile(FILE, []); }
 
+// The shared guard for a `preparing` transition. The successor pane must run the target kind and be
+// exactly `idle`. `handoff ready`, `handoff activate`, `handoff repair`, and the engine use this one check.
+// The prepared path keeps its own settled rule (idle or done).
+export function successorPaneState(item, pane) {
+  if (!pane) return { ready: false, reason: 'the successor pane is absent' };
+  if (pane.agent !== item.toKind) return { ready: false, reason: 'the successor pane runs another agent' };
+  const status = pane.agent_status ?? pane.status ?? null;
+  if (status !== 'idle') return { ready: false, reason: status === 'working' ? 'it works' : `the successor pane is ${status || 'not settled'}` };
+  return { ready: true, reason: 'the successor pane is idle' };
+}
+
+// The successor pane read for a preparing transition. Only a real `pane_not_found` becomes an absent pane.
+// Every other Herdr error propagates, so an unknown pane state is not treated as a settled successor.
+function successorPane(item) {
+  try { return herdr(['pane', 'get', item.newPane]).pane ?? null; }
+  catch (error) { if (error.code === 'pane_not_found') return null; throw error; }
+}
+
+// Merge only the named fields of one record into the current file. A concurrent write that completed
+// before this re-read is kept, including a sibling record and a change to readyAt, active, or cancelled
+// status. The read-to-rename window stays open, and whole-list writers elsewhere are unchanged, so this
+// is not a global atomic guarantee.
+function patchHandoffRecord(id, patch, { expectStatus = null } = {}) {
+  const current = listHandoffs();
+  const record = current.find((x) => x.id === id);
+  if (!record) return null;
+  if (Array.isArray(expectStatus) && !expectStatus.includes(record.status)) return null;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete record[key];
+    else record[key] = value;
+  }
+  saveHandoffs(current);
+  return record;
+}
+
+// Promote a `preparing` record to `prepared` when its successor pane passes the shared guard.
+// The engine and `handoff repair` use this guarded transition. It never sets readyAt and never activates.
+export function promotePreparing(id, pane, { note = 'auto: successor idle', now = Date.now() } = {}) {
+  const current = listHandoffs();
+  const item = current.find((x) => x.id === id);
+  if (!item) return { found: false, promoted: false, reason: 'the handoff record is absent' };
+  if (item.status !== 'preparing') return { found: true, promoted: false, status: item.status, reason: `the record is ${item.status}, not preparing` };
+  const gate = successorPaneState(item, pane);
+  if (!gate.ready) return { found: true, promoted: false, status: item.status, reason: gate.reason };
+  const record = patchHandoffRecord(id, { status: 'prepared', preparedFrom: 'preparing', preparedNote: note, promotedAt: new Date(now).toISOString() }, { expectStatus: ['preparing'] });
+  if (!record) return { found: true, promoted: false, status: null, reason: 'the record changed during the promotion' };
+  return { found: true, promoted: true, status: 'prepared', previousStatus: 'preparing', reason: gate.reason, item: record };
+}
+
 export function supersedeHandoffs(records, now = Date.now()) {
   if (!Array.isArray(records)) return [];
   const supersededAt = new Date(now).toISOString();
@@ -402,7 +451,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     if (options.effort && options.effort !== item.effort) throw new Error(`Existing successor ${item.id} uses effort ${item.effort || '(default)'}. Repeat handoff prepare without --effort or with that effort.`);
     plan = item;
     migratedId = item.migratedId ?? null;
-    if (Object.hasOwn(item, 'ownerGoal') && !validOwnerGoal(item.ownerGoal)) { delete item.ownerGoal; save(records); }
+    if (Object.hasOwn(item, 'ownerGoal') && !validOwnerGoal(item.ownerGoal)) { delete item.ownerGoal; patchHandoffRecord(item.id, { ownerGoal: undefined }); }
     if (!Object.hasOwn(item, 'ownerGoal')) {
       const goal = ownerGoal(item.project, item.boss || item.label === 'boss');
       if (goal) item.ownerGoal = goal;
@@ -442,10 +491,19 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     item = { ...plan, id: name, newPane, ...(newTab ? { newTab } : {}), migratedId, ...(goal ? { ownerGoal: goal } : {}), ...captured,
       ...(context ? { sourceContext: context } : {}), ...(migrationFallbackReason ? { migrationFallbackReason, requestedMode } : {}),
       status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
+    // Re-read before the append, so a concurrent write to another record is not lost.
+    records = listHandoffs();
     records.push(item);
     save(records);
   }
 
+  // The resumed branch can add these fields in memory. The guarded merge must persist them, because the
+  // base code saved the whole list. A concurrent change to an unrelated field is still kept.
+  const carriedFields = () => {
+    const fields = {};
+    for (const key of ['ownerGoal', 'goal', 'goalSource', 'sourceContext']) if (Object.hasOwn(item, key)) fields[key] = item[key];
+    return fields;
+  };
   const { launchArgs } = handoffTarget(item.toKind, { model: item.model, effort: item.effort, force: item.force === true, command: 'prepare' }, loadPolicy(), loadModels());
   const agentArgs = successorAgentArgs(item, launchArgs, env, { browserLookup, tuiSupportsModelFlags });
   // The capability answer is cached for the process, so this check runs opencode --help at most once.
@@ -461,7 +519,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     catch (e) {
       item.status = 'needs-inspection';
       item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${e.message}` : e.message;
-      save(records);
+      patchHandoffRecord(item.id, { status: 'needs-inspection', promptError: item.promptError, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
       if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${e.message}`);
       throw e;
     }
@@ -469,20 +527,22 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     try { herdr(startArgs); }
     catch (startError) {
       if (!isAgentPaneBusy(startError)) {
-        item.status = 'needs-inspection'; item.promptError = startError.message; save(records);
+        item.status = 'needs-inspection'; item.promptError = startError.message;
+        patchHandoffRecord(item.id, { status: 'needs-inspection', promptError: startError.message, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
         throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${startError.message}`);
       }
       try { waitForPane(item.newPane, item.workspace, item.cwd, herdr, wait, readinessOptions); }
       catch (readinessError) {
         item.status = 'needs-inspection';
         item.promptError = resumed ? `Existing successor pane ${item.newPane} could not become ready: ${readinessError.message}` : readinessError.message;
-        save(records);
+        patchHandoffRecord(item.id, { status: 'needs-inspection', promptError: item.promptError, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
         if (resumed) throw new Error(`Existing successor pane ${item.newPane} could not become ready; its needs-inspection record is preserved: ${readinessError.message}`);
         throw readinessError;
       }
       try { herdr(startArgs); }
       catch (retryError) {
-        item.status = 'needs-inspection'; item.promptError = retryError.message; save(records);
+        item.status = 'needs-inspection'; item.promptError = retryError.message;
+        patchHandoffRecord(item.id, { status: 'needs-inspection', promptError: retryError.message, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
         throw new Error(`Successor may be in ${item.newPane}. Inspect it before retrying: ${retryError.message}`);
       }
     }
@@ -490,7 +550,7 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     if (flagError) {
       item.status = 'needs-inspection';
       item.promptError = flagError.message;
-      save(records);
+      patchHandoffRecord(item.id, { status: 'needs-inspection', promptError: flagError.message, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
       throw flagError;
     }
   } catch (error) {
@@ -500,7 +560,9 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   }
   item.status = 'prepared';
   delete item.promptError;
-  save(records);
+  // The guarded merge keeps a concurrent ready signal, activation, or sibling change, and persists the
+  // fields that the resumed branch added.
+  patchHandoffRecord(item.id, { status: 'prepared', promptError: undefined, ...carriedFields() }, { expectStatus: ['preparing', 'needs-inspection'] });
   if (item.toKind === 'claude' && item.force === true && isOpus(item.model)) {
     alertBossForOpus(handoffAgentName(item.id), item.model, {}, { slug: item.project }, env, herdr, Date.now(), (text) => console.error(text));
   }
@@ -509,12 +571,8 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
   const memoryText = handoffMemoryPrompt(item);
   const prompt = `[herdr-boss] You are the proposed successor orchestrator for ${item.project}. ${memoryText} Then read the project AGENTS.md and the Herdr Boss bulletin. ${migratedId ? 'Your session was migrated; verify the current repo and tool state because runtime config did not transfer.' : 'Discover the project state from files and issues.'}${goalText}${contextText} Standby rule until activation: act on no request from the migrated or earlier conversation, including historical context, send no prompts or keys to other panes, change no files, make no commits or pushes, restart no services, and start no workers. Only read and report. When ready, write READY FOR HANDOFF and summarize current work, active workers, blockers, quotas, and the next action.${item.automatic ? ` Then run herdr-boss handoff ready ${item.id} to signal readiness for automatic activation.` : ''} The source orchestrator keeps control until activation.`;
   const patchCurrentRecord = (patch) => {
-    const latest = listHandoffs();
-    const current = latest.find((record) => record.id === item.id);
-    if (!current) return;
-    Object.assign(current, patch);
-    save(latest);
-    Object.assign(item, current);
+    const current = patchHandoffRecord(item.id, patch);
+    if (current) Object.assign(item, current);
   };
   try {
     const promptDelivery = deliverPrompt(agentName, prompt, 'proposed successor orchestrator', { herdr });
@@ -579,34 +637,59 @@ export function cancelHandoff(id, { force = false } = {}) {
 
 export function markHandoffReady(id) {
   const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && x.automatic);
+  const item = records.find((x) => x.id === id && ['prepared', 'preparing'].includes(x.status) && x.automatic);
   if (!item) throw new Error('Automatic prepared handoff not found.');
-  const target = herdr(['pane', 'get', item.newPane]).pane;
-  if (target?.agent !== item.toKind) throw new Error('Successor agent is unavailable.');
-  item.readyAt = new Date().toISOString();
-  delete item.promptError;
-  save(records);
-  return item;
+  // Only a real pane_not_found becomes an absent pane; every other Herdr error propagates.
+  const target = successorPane(item);
+  // The prepared path keeps its contract. A record left in `preparing` also needs the shared guard,
+  // so a live successor that reports ready can close the interrupted preparation.
+  if (item.status === 'preparing') {
+    const gate = successorPaneState(item, target);
+    if (!gate.ready) throw new Error(`Automatic handoff is still preparing: ${gate.reason}.`);
+  } else if (target?.agent !== item.toKind) {
+    throw new Error('Successor agent is unavailable.');
+  }
+  const readyAt = new Date().toISOString();
+  const updated = patchHandoffRecord(item.id, {
+    status: 'prepared', readyAt, promptError: undefined,
+    ...(item.status === 'preparing' ? { preparedFrom: 'preparing', preparedNote: 'the successor reported ready' } : {}),
+  }, { expectStatus: ['prepared', 'preparing'] });
+  if (!updated) throw new Error('Automatic prepared handoff not found.');
+  return updated;
 }
 
 // The engine calls this for an idle successor that never ran `handoff ready`. The pane checks are the caller's.
 export function markSuccessorWorking(id, at) {
-  const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && !x.seenWorkingAt);
+  const item = listHandoffs().find((x) => x.id === id && x.status === 'prepared' && !x.seenWorkingAt);
   if (!item) return null;
-  item.seenWorkingAt = at;
-  save(records);
-  return item;
+  return patchHandoffRecord(id, { seenWorkingAt: at }, { expectStatus: ['prepared'] });
 }
 
 export function autoReadyHandoff(id, note) {
-  const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared' && !x.readyAt);
+  const item = listHandoffs().find((x) => x.id === id && x.status === 'prepared' && !x.readyAt);
   if (!item) return null;
-  item.readyAt = new Date().toISOString();
-  item.readyNote = note;
-  save(records);
-  return item;
+  return patchHandoffRecord(id, { readyAt: new Date().toISOString(), readyNote: note }, { expectStatus: ['prepared'] });
+}
+
+// Inspect one record and apply the same guarded transition that `handoff ready` and the engine use.
+// A dry run inspects only: it writes nothing, prompts nobody, and activates nobody.
+export function repairHandoff(id, { dryRun = false } = {}) {
+  const item = listHandoffs().find((x) => x.id === id);
+  if (!item) throw new Error('Handoff not found.');
+  const base = { id: item.id, status: item.status, dryRun, repaired: false };
+  if (!['preparing', 'prepared'].includes(item.status)) {
+    return { ...base, reason: `the record is ${item.status}, not preparing or prepared` };
+  }
+  const target = successorPane(item);
+  const gate = successorPaneState(item, target);
+  if (!gate.ready) return { ...base, reason: gate.reason };
+  if (item.status === 'prepared') return { ...base, reason: 'the record is already prepared; nothing to repair' };
+  if (dryRun) return { ...base, status: 'prepared', previousStatus: 'preparing', wouldRepair: true, reason: gate.reason };
+  const record = patchHandoffRecord(id, {
+    status: 'prepared', preparedFrom: 'preparing', preparedNote: 'handoff repair', repairedAt: new Date().toISOString(),
+  }, { expectStatus: ['preparing'] });
+  if (!record) return { ...base, status: null, reason: 'the record changed during the repair' };
+  return { ...base, status: 'prepared', previousStatus: 'preparing', repaired: true, wouldRepair: true, reason: gate.reason, item: record };
 }
 
 // The wait for the successor to answer before the old pane closes.
@@ -757,13 +840,19 @@ function reownHandoverResources(item) {
 export async function activateHandoff(id, { confirmed = false, goalSetter = setGoal } = {}) {
   if (!confirmed) throw new Error('Review the successor output, then pass --confirmed.');
   const records = listHandoffs();
-  const item = records.find((x) => x.id === id && x.status === 'prepared');
+  const item = records.find((x) => x.id === id && ['prepared', 'preparing'].includes(x.status));
   if (!item) throw new Error('Prepared handoff not found.');
   if (item.memoryUpdateStatus && item.memoryUpdateStatus !== 'committed') {
     throw new Error('Cannot activate this handoff until docs/orchestration/memory.md has a verified commit.');
   }
-  const target = herdr(['pane', 'get', item.newPane]).pane;
-  if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.agent_status)) throw new Error('Successor is not settled and ready.');
+  const target = successorPane(item);
+  // A record left in `preparing` takes the shared guard. The prepared path keeps its own check.
+  if (item.status === 'preparing') {
+    const gate = successorPaneState(item, target);
+    if (!gate.ready) throw new Error(`Successor is not settled and ready: ${gate.reason}.`);
+  } else if (target?.agent !== item.toKind || !['idle', 'done'].includes(target.agent_status)) {
+    throw new Error('Successor is not settled and ready.');
+  }
   const role = handoffRole(item);
   // Only pane_not_found means the Owner closed the source pane; other errors stop activation.
   let sourceMissing = false;

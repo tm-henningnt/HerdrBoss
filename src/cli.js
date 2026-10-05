@@ -176,6 +176,7 @@ const USAGE = `herdr-boss <command>
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
   handoff cancel ID [--force]  Cancel a prepared successor; --force closes a working successor.
   handoff activate ID --confirmed
+  handoff repair ID [--dry-run]  Promote a preparing record whose successor pane is idle.
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
   wait [<worker>...]    Block until the first report, question, block, stall, or lost pane of a worker.
@@ -935,13 +936,26 @@ async function main() {
       break;
     }
     case 'handoff': {
-      const { planHandoff, prepareHandoff, activateHandoff, cancelHandoff, markHandoffReady, listHandoffs } = await import('./handoff.js');
+      const { planHandoff, prepareHandoff, activateHandoff, cancelHandoff, markHandoffReady, repairHandoff, listHandoffs } = await import('./handoff.js');
       const [action, target] = args;
       // A sandbox cannot write handoff records. Fail before the first Herdr call or file write.
       if (['prepare', 'activate', 'ready', 'cancel'].includes(action)) assertDataWritable();
       if (action === 'list') { console.log(JSON.stringify(listHandoffs(), null, 2)); break; }
       if (action === 'activate') { console.log(JSON.stringify(await activateHandoff(target, { confirmed: args.includes('--confirmed') }), null, 2)); break; }
       if (action === 'ready') { console.log(JSON.stringify(markHandoffReady(target), null, 2)); break; }
+      if (action === 'repair') {
+        const usage = 'Usage: handoff repair ID [--dry-run]';
+        // Validate the shape before the writable-data probe and before any Herdr call.
+        if (!target || target.startsWith('--') || args.length > 3 || (args.length === 3 && args[2] !== '--dry-run')) throw new Error(usage);
+        const dryRun = args.includes('--dry-run');
+        // A dry run writes nothing, so it performs no writable-data probe.
+        if (!dryRun) assertDataWritable();
+        const result = repairHandoff(target, { dryRun });
+        if (result.repaired) console.log(`Repaired handoff ${result.id}: preparing -> prepared (${result.reason}).`);
+        else if (result.dryRun) console.log(`Handoff ${result.id} dry run: ${result.wouldRepair ? 'would repair preparing -> prepared' : 'no change'} (${result.reason}).`);
+        else console.log(`Handoff ${result.id} left ${result.status}: ${result.reason}.`);
+        break;
+      }
       if (action === 'cancel') {
         if (!target || args.length > 3 || (args.length === 3 && args[2] !== '--force')) throw new Error('Usage: handoff cancel ID [--force]');
         const result = cancelHandoff(target, { force: args.includes('--force') });

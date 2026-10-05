@@ -948,6 +948,57 @@ test('a non-Claude successor becomes ready by the idle rule without context evid
   assert.equal(out.records[0].readyNote, 'auto: successor idle');
 });
 
+// K26: a record left in `preparing` by an interrupted prepare keeps a live successor. The engine
+// applies the same guarded transition that `handoff ready` and `handoff repair` use.
+test('the engine promotes a preparing context successor with an idle matching pane', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord({ promptAt: '2026-09-29T11:59:00.000Z' }), status: 'preparing' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep(successor) });
+  assert.equal(out.records[0].status, 'prepared');
+  assert.equal(out.records[0].preparedFrom, 'preparing');
+  assert.equal(out.records[0].readyNote, 'auto: successor idle');
+  assert.ok(out.logs.some((entry) => /Promoted handoff ctx-1/.test(entry.message)));
+  assert.equal(activates(out).length, 1);
+});
+
+// F1: a `preparing` transition needs exactly `idle`. A `done` successor does not promote.
+test('the engine does not promote a preparing successor whose pane is done', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep({ ...successor, status: 'done' }) });
+  assert.equal(out.records[0].status, 'preparing');
+  assert.ok(out.logs.some((entry) => /stays preparing: the successor pane is done/.test(entry.message)));
+});
+
+// F5: a recovered record without a proven bootstrap prompt must not auto-ready or activate.
+test('the engine holds a promoted prompt-less successor and does not auto-ready or activate it', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord({ promptDelivery: undefined, promptAt: undefined }), status: 'preparing' };
+  const steps = [1, 11].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }));
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps });
+  assert.equal(out.records[0].status, 'prepared');
+  assert.equal(out.records[0].readyAt, undefined);
+  assert.deepEqual(activates(out), []);
+  assert.equal(out.logs.filter((entry) => /no bootstrap prompt evidence/.test(entry.message)).length, 1, 'one bounded hold reason');
+});
+
+test('a promoted successor with recorded prompt evidence still becomes ready and activates', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord({ promptAt: '2026-09-29T11:59:00.000Z' }), status: 'preparing' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep(successor) });
+  assert.equal(out.records[0].status, 'prepared');
+  assert.ok(out.records[0].readyAt);
+  assert.equal(activates(out).length, 1);
+});
+
+test('the engine logs one reason while a preparing successor stays stuck and notices the Boss after 10 minutes', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing', preparedAt: at(0) };
+  const workingSuccessor = { ...successor, status: 'working' };
+  const steps = [1, 2, 11, 12].map((minute) => ({ at: at(minute), herdr: herdrOf(pane('idle'), workingSuccessor, bossPane), published: { alpha: status(1) } }));
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps });
+  assert.equal(out.records[0].status, 'preparing');
+  assert.equal(out.logs.filter((entry) => /stays preparing/.test(entry.message)).length, 1, 'one reason log for the stuck episode');
+  const notices = bossNotes(out);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].args[3], /handoff repair ctx-1/);
+});
+
 test('a ghost suggestion in an idle successor input does not block readiness', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000, successorTokens: 12000, memory: tracked,

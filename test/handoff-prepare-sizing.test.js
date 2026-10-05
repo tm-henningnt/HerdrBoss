@@ -411,3 +411,92 @@ test('a quoted credential past the 500-character limit is redacted before the dr
   assert.doesNotMatch(saved, /S{20}/);
   assert.doesNotMatch(handoffPromptCalls(f.root).join('\n'), /S{20}/);
 });
+
+// A whole-list save loses a concurrent write. The guarded transition must merge only the fields of
+// the record it advances, so a sibling record written after the read survives.
+test('markHandoffReady merges the ready signal and preserves a concurrent sibling write', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-handoff-merge-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const callsFile = path.join(root, 'calls.jsonl');
+  const recordsFile = path.join(root, 'handoffs.json');
+  const herdr = path.join(bin, 'herdr.cjs');
+  fs.writeFileSync(herdr, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
+if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p3') {
+  // A concurrent writer appends a sibling record after markHandoffReady read the list.
+  const records = JSON.parse(fs.readFileSync(process.env.TEST_HANDOFFS_FILE, 'utf8'));
+  records.push({ id: 'late', status: 'prepared', sourcePane: 'ws:px', newPane: 'ws:py' });
+  fs.writeFileSync(process.env.TEST_HANDOFFS_FILE, JSON.stringify(records));
+  console.log(JSON.stringify({ result: { pane: { pane_id: 'ws:p3', agent: 'pi', agent_status: 'idle' } } }));
+  process.exit(0);
+}
+console.log(JSON.stringify({ result: {} }));
+`);
+  fs.chmodSync(herdr, 0o755);
+  fs.writeFileSync(path.join(bin, 'herdr'), '#!/bin/sh\nexec node "$(dirname "$0")/herdr.cjs" "$@"\n');
+  fs.chmodSync(path.join(bin, 'herdr'), 0o755);
+  fs.writeFileSync(recordsFile, JSON.stringify([
+    { id: 'prep', sourcePane: 'ws:p1', newPane: 'ws:p2', status: 'preparing', automatic: true, toKind: 'pi' },
+    { id: 'ready', sourcePane: 'ws:p1', newPane: 'ws:p3', status: 'prepared', automatic: true, toKind: 'pi' },
+  ]));
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `import { markHandoffReady } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(markHandoffReady('ready')));`], {
+    cwd: root,
+    env: { ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, TEST_CALLS: callsFile, TEST_HANDOFFS_FILE: recordsFile },
+    encoding: 'utf8',
+  }));
+  assert.ok(result.readyAt);
+  const records = JSON.parse(fs.readFileSync(recordsFile, 'utf8'));
+  assert.ok(records.some((item) => item.id === 'late'), 'the concurrent sibling record must survive the ready save');
+  assert.ok(records.find((item) => item.id === 'ready').readyAt);
+  assert.equal(records.find((item) => item.id === 'prep').status, 'preparing');
+});
+
+// F5: a record that a concurrent writer cancelled or activated during the pane read is not downgraded
+// and receives no stale ready side effect.
+test('handoff ready leaves a record that changed state during the pane read unchanged', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-handoff-race-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const recordsFile = path.join(root, 'handoffs.json');
+  const herdr = path.join(bin, 'herdr.cjs');
+  fs.writeFileSync(herdr, `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p3') {
+  const records = JSON.parse(fs.readFileSync(process.env.TEST_HANDOFFS_FILE, 'utf8'));
+  records[1].status = 'active';
+  records[1].activatedAt = 'concurrent-activation';
+  fs.writeFileSync(process.env.TEST_HANDOFFS_FILE, JSON.stringify(records));
+  console.log(JSON.stringify({ result: { pane: { pane_id: 'ws:p3', agent: 'pi', agent_status: 'idle' } } }));
+  process.exit(0);
+}
+console.log(JSON.stringify({ result: {} }));
+`);
+  fs.chmodSync(herdr, 0o755);
+  fs.writeFileSync(path.join(bin, 'herdr'), '#!/bin/sh\nexec node "$(dirname "$0")/herdr.cjs" "$@"\n');
+  fs.chmodSync(path.join(bin, 'herdr'), 0o755);
+  fs.writeFileSync(recordsFile, JSON.stringify([
+    { id: 'prep', sourcePane: 'ws:p1', newPane: 'ws:p2', status: 'preparing', automatic: true, toKind: 'pi' },
+    { id: 'ready', sourcePane: 'ws:p1', newPane: 'ws:p3', status: 'prepared', automatic: true, toKind: 'pi' },
+  ]));
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `import { markHandoffReady } from ${JSON.stringify(handoffUrl)};
+try { markHandoffReady('ready'); console.log('NO_ERROR'); } catch (error) { console.log(JSON.stringify({ error: error.message })); }`], {
+    cwd: root,
+    env: { ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`, TEST_HANDOFFS_FILE: recordsFile },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Automatic prepared handoff not found/);
+  const records = JSON.parse(fs.readFileSync(recordsFile, 'utf8'));
+  assert.equal(records.find((item) => item.id === 'ready').status, 'active');
+  assert.equal(records.find((item) => item.id === 'ready').readyAt, undefined);
+  assert.equal(records.find((item) => item.id === 'prep').status, 'preparing');
+});

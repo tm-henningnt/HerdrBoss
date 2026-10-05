@@ -299,6 +299,40 @@ test('activation keeps its confirmation and readiness checks', (t) => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
 });
 
+test('activation promotes a preparing record when its successor pane is idle and matches the kind', (t) => {
+  const f = activationFixture(t, { record: { status: 'preparing' } });
+  const item = f.activate();
+  assert.equal(item.status, 'active');
+  assert.equal(item.activation.successorLabel, 'orch');
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+  assert.equal(stored.find((x) => x.id === 'handoff-activate').status, 'active');
+});
+
+test('activation refuses a preparing record whose successor works, is absent, or runs another kind', (t) => {
+  const cases = [
+    { status: 'preparing', newPane: 'ws:p3', toKind: 'pi' },
+    { status: 'preparing', newPane: 'ws:p9' },
+    { status: 'preparing', newPane: 'ws:p3', toKind: 'codex' },
+  ];
+  for (const record of cases) {
+    const f = activationFixture(t, { record });
+    assert.throws(() => f.activate(), /not settled and ready/);
+    const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'));
+    assert.equal(stored[0].status, 'preparing', 'a refused activation leaves the record preparing');
+    assert.equal(f.calls().some((args) => args[0] === 'pane' && args[1] === 'rename'), false);
+  }
+});
+
+test('activation refuses a done successor for a preparing record but keeps the prepared settled rule', (t) => {
+  const extraPanes = [{ pane_id: 'ws:p8', workspace_id: 'ws', label: null, agent: 'codex', agent_status: 'done' }];
+  const preparing = activationFixture(t, { extraPanes, record: { status: 'preparing', newPane: 'ws:p8' } });
+  assert.throws(() => preparing.activate(), /not settled and ready: the successor pane is done/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(preparing.root, 'handoffs.json'), 'utf8'))[0].status, 'preparing');
+  // The prepared path still treats idle and done as settled.
+  const prepared = activationFixture(t, { extraPanes, record: { status: 'prepared', newPane: 'ws:p8' } });
+  assert.equal(prepared.activate().status, 'active');
+});
+
 test('forced context activation refuses a handoff whose memory update timed out', (t) => {
   const f = activationFixture(t, { record: { memoryUpdateStatus: 'not-updated' } });
   const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
