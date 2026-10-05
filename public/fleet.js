@@ -405,7 +405,7 @@ function fleetPanels(settings, message, shares) {
   if (!settings && !shares) return '';
   const sharesHtml = shares ? fleetSharesView(shares, settings) : '';
   const settingsHtml = settings ? settingsFieldsHtml(settings, message) : '';
-  return `<details class="panel fleet-panels" data-key="fleet-panels" data-keep-attrs="open"><summary>Fleet settings and factory shares</summary><div class="fleet-panels-body">${sharesHtml}${settingsHtml}</div></details>`;
+  return `<details class="panel fleet-panels" data-key="fleet-panels" data-keep-attrs="open"><summary>Fleet settings and factory shares</summary><div class="fleet-panels-body">${sharesHtml}<div class="fleet-settings" data-fleet-settings>${settingsHtml}</div></div></details>`;
 }
 
 // ---- The page ------------------------------------------------------------------------------
@@ -443,7 +443,9 @@ export function fleetView(data, settings, message = '', shares) {
   const rows = rollup && Array.isArray(rollup.factories) ? rollup.factories : viewFactories.map(fallbackRow);
   const reference = findReference(rows, viewFactories, data.role);
   const alerts = collectAlerts(rows);
-  const head = `<header class="page-head fleet-head"><div><h1>Fleet</h1><p class="muted">${rows.length} factories · poll every ${esc(String(data.pollSeconds || 30))} seconds · <a href="/fleet/add-host">Add a host</a>${roleView(data.role, viewFactories.concat(rows))}</p></div></header>`;
+  // The head keeps its fact line and its Add a host control side by side, so the phone header
+  // costs one row instead of two, and the action is a 44 by 44 target at every width.
+  const head = `<header class="page-head fleet-head"><h1>Fleet</h1><div class="fleet-head-row"><p class="muted">${rows.length} factories · poll every ${esc(String(data.pollSeconds || 30))} seconds${roleView(data.role, viewFactories.concat(rows))}</p><a class="fleet-add-host" data-fleet-add-host href="/fleet/add-host">Add a host</a></div></header>`;
   const registryError = data.registryError ? `<p role="alert" class="fleet-registry-error">Fleet data unavailable: ${esc(data.registryError)}. Check the fleet registry.</p>` : '';
   const rollupError = !rollup && data.rollupError ? `<p role="alert" class="fleet-registry-error">${esc(data.rollupError)}</p>` : '';
   return `<div class="fleet-page">${head}${registryError}${rollupError}`

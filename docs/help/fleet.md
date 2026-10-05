@@ -6,7 +6,11 @@ Each fleet total shows a short coverage line. The line gives the as-of age, the 
 
 Use factory connect NAME on the host tool machine to connect a registered container factory. Run it again to resume. Use factory connect --check NAME for one check with name, state, and age only. The command reuses a matching Tailscale Serve forward. If Serve needs Owner rights, it prints the masked error and two Owner command choices, then exits 3. Run one choice in the WSL Owner terminal. The dashboard access rule stays in force.
 
-Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.
+Each Fleet Mailbox link opens the factory that owns the item. Answer there. Open Fleet settings to change the name, dashboard base URL, polling, title sharing, or account scopes. Each field has its label above it. Each field uses the full width of the form. Credentials and account identities use private provisioning through the fleet command. They have no dashboard field.
+
+The Fleet header shows the factory count, the poll time, and the head office holder. Select Add a host to open the Add a host page. Its target is at least 44 by 44 pixels at every width.
+
+A quota lane badge and a project phase badge use a neutral background and the normal text colour. They stay readable in the light theme and in the dark theme.
 
 Each alert shows the fix in words. Select **Fix** to show the exact command, then select its copy button. A host action on a factory card, for example **Factory update**, opens a confirm sheet with the exact command, **Confirm copy**, and **Cancel**. The sheet reports success only after the copy reaches the clipboard. If the browser refuses the copy or has no clipboard, the sheet stays open and selects the command for a manual copy. The dashboard never runs a host command.
 

@@ -221,6 +221,84 @@ test('an unknown alert severity falls back to warning', async () => {
   assert.doesNotMatch(html, /sev crit/);
 });
 
+test('the Fleet header gives Add a host a 44 by 44 control beside the title', async () => {
+  const { html } = await render();
+  const root = createDocument().html(html);
+  const link = find(root, (node) => node.getAttribute('data-fleet-add-host') !== null);
+  assert.ok(link, 'the header carries the Add a host control');
+  assert.equal(link.getAttribute('href'), '/fleet/add-host');
+  assert.match(html, />Add a host</);
+  // The control sits next to the header text. It does not add a header line of its own.
+  assert.match(html, /<header class="page-head fleet-head">[\s\S]*data-fleet-add-host[\s\S]*<\/header>/);
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  assert.match(css, /\.fleet-add-host \{[^}]*min-height: 44px/);
+  assert.match(css, /\.fleet-add-host \{[^}]*min-width: 44px/);
+});
+
+test('the combined Fleet settings panel carries the settings form wrapper', async () => {
+  const { html } = await render();
+  const root = createDocument().html(html);
+  const form = find(root, (node) => node.getAttribute('data-fleet-settings-form') !== null);
+  let node = form.parentNode;
+  let wrapped = false;
+  while (node) {
+    const cls = node.getAttribute?.('class') || '';
+    if (cls.split(/\s+/).includes('fleet-settings')) wrapped = true;
+    node = node.parentNode;
+  }
+  assert.equal(wrapped, true, 'the settings form has a .fleet-settings ancestor, so the form grid applies');
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  assert.match(css, /\.fleet-settings label \{ display: grid/);
+  assert.match(css, /\.fleet-settings input \{[^}]*width: 100%/);
+  assert.match(css, /\.fleet-settings button \{[^}]*min-height: 44px/);
+});
+
+// WCAG 2.1 relative luminance and contrast ratio, computed from the shipped token values.
+function tokenPair(theme) {
+  const style = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const selector = theme === 'dark' ? ':root[data-theme="dark"] {' : ':root {';
+  const block = style.slice(style.indexOf(selector), style.indexOf('}', style.indexOf(selector)));
+  const tokens = Object.fromEntries([...block.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-f]{6})/g)].map((match) => [match[1], match[2]]));
+  const fleet = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  const rule = /\.fleet-page \.pill \{([^}]*)\}/.exec(fleet);
+  assert.ok(rule, 'the Fleet badge rule is scoped to the Fleet page');
+  const resolve = (value) => {
+    const name = /var\((--[a-z0-9-]+)\)/.exec(value);
+    assert.ok(name, `the badge uses a palette token: ${value}`);
+    return tokens[name[1]];
+  };
+  const declarations = Object.fromEntries(rule[1].split(';').map((part) => part.split(':').map((piece) => piece.trim())).filter((pair) => pair.length === 2));
+  const luminance = (hex) => {
+    const channel = (offset) => {
+      const part = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+      return part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+  };
+  const foreground = resolve(declarations.color);
+  const background = resolve(declarations.background);
+  const ratio = (Math.max(luminance(foreground), luminance(background)) + 0.05) / (Math.min(luminance(foreground), luminance(background)) + 0.05);
+  return { theme, foreground, background, ratio };
+}
+
+test('the Fleet badges use a readable token pair in both themes', () => {
+  for (const theme of ['light', 'dark']) {
+    const measured = tokenPair(theme);
+    assert.ok(measured.ratio >= 4.5, `${theme} badge contrast ${measured.ratio.toFixed(3)}:1 for ${measured.foreground} on ${measured.background}`);
+  }
+});
+
+test('the phone stylesheet removes the surplus header spacing', () => {
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
+  assert.match(phone, /\.fleet-head h1 \{ margin: 0/);
+  assert.match(phone, /\.fleet-head .muted \{[^}]*margin: 0/);
+  // The header keeps its fact line and its Add a host control.
+  assert.match(css, /\.fleet-head-row \{[^}]*display: flex/);
+  assert.match(phone, /\.fleet-head-row \{[^}]*gap: 10px/);
+  assert.match(phone, /\.fleet-page input, \.fleet-page textarea, \.fleet-page select \{ font-size: 16px; \}/);
+});
+
 test('the phone stylesheet keeps the C1 density and the 44 px controls', () => {
   const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
   const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
