@@ -2128,7 +2128,13 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     } else if (options.acceptScopeReason != null) {
       throw new Error('--reason needs --accept-scope FILE[,FILE].');
     }
-    if (unlistedErrors.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${unlistedErrors.join(', ')}.`);
+    // The refusal names the exact allowed command form and gives one example, so the orchestrator can rerun collect without a new search.
+    if (unlistedErrors.length) {
+      const list = unlistedErrors.join(', ');
+      const form = `herdr-boss worker collect ${name} --accept-scope FILE[,FILE] --reason TEXT`;
+      const example = `herdr-boss worker collect ${name} --accept-scope ${unlistedErrors[0]} --reason "approved by the orchestrator"`;
+      throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. The allowed command form is: ${form}. Example: ${example}.`);
+    }
     // A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree.
     // Collection accepts that state and names it, so the orchestrator commits with worker commit.
     const uncommitted = run.kind === 'codex' && !log.trim() && changed.length > 0;

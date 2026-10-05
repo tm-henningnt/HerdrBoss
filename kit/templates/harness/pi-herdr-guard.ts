@@ -2,6 +2,7 @@
  * Herdr Guard Extension
  *
  * Keeps a Herdr Boss worker inside its worktree. It never asks: a blocked call returns a reason.
+ * Each reason names the form that the worker may run instead (the `Allowed instead` clause).
  * - read, write, edit, grep, find, and ls may use only the worktree (the Pi working directory),
  *   the temporary directories, and ~/.herdr-boss.
  * - bash may not run the deny list below, and may not name a protected path.
@@ -46,34 +47,36 @@ function inside(p: string, root: string): boolean {
 const PROTECTED = [path.join(HOME, ".config", "herdr-boss"), path.join(HOME, ".pi", "agent", "auth.json")];
 const PROTECTED_NAMES = [/(^|\/)auth\.json$/];
 
-const BASH_DENY: [RegExp, string][] = [
-	[/\bgit\s+push\b/, "git push"],
-	[/\bgit\s+reset\s+[^;&|]*--hard\b/, "git reset --hard"],
-	[/\bgit\s+clean\b/, "git clean"],
-	[/\bgit\s+branch\s+[^;&|]*-D\b/, "git branch -D"],
-	[/\bgit\s+worktree\s+remove\b/, "git worktree remove"],
-	[/\bsudo\b/, "sudo"],
-	[/\blaunchctl\b/, "launchctl"],
-	[/\.config\/herdr-boss\b/, "the private Herdr Boss directory"],
-	[/\bauth\.json\b/, "a credential file"],
-	[/\bpkill\b/, "pkill (stop your process by its saved PID)"],
-	[/\bkillall\b/, "killall (stop your process by its saved PID)"],
-	[/\bkill\b[^;&|]*\$\(\s*pgrep\b/, "kill with a pgrep name pattern"],
+// Each entry holds the pattern, the name that the reason uses, and the form that a worker may run instead.
+const BASH_DENY: [RegExp, string, string][] = [
+	[/\bgit\s+push\b/, "git push", "the orchestrator pushes a reviewed branch"],
+	[/\bgit\s+reset\s+[^;&|]*--hard\b/, "git reset --hard", "the orchestrator restores a file in the main checkout"],
+	[/\bgit\s+clean\b/, "git clean", "the orchestrator removes untracked files after review"],
+	[/\bgit\s+branch\s+[^;&|]*-D\b/, "git branch -D", "the orchestrator deletes a branch after review"],
+	[/\bgit\s+worktree\s+remove\b/, "git worktree remove", "herdr-boss worktree prune"],
+	[/\bsudo\b/, "sudo", "no form for a worker; the orchestrator or the Owner runs it"],
+	[/\blaunchctl\b/, "launchctl", "no form for a worker; the Boss restarts the service"],
+	[/\.config\/herdr-boss\b/, "the private Herdr Boss directory", "no path for a worker; read the project kit in the worktree"],
+	[/\bauth\.json\b/, "a credential file", "no path for a worker; a credential file holds a secret"],
+	[/\bpkill\b/, "pkill (stop your process by its saved PID)", "kill <pid> with the PID you saved, after the cwd check"],
+	[/\bkillall\b/, "killall (stop your process by its saved PID)", "kill <pid> with the PID you saved, after the cwd check"],
+	[/\bkill\b[^;&|]*\$\(\s*pgrep\b/, "kill with a pgrep name pattern", "kill <pid> with the PID you saved, after pgrep -l NAME names it"],
 ];
 
 // rm -rf is allowed only when every target is inside a temporary directory or inside the worktree .worker folder.
-function rmBlocked(command: string, cwd: string): string | null {
+// The reason body starts with `rm -rf`, and the allowed clause names one exact path form.
+function rmBlocked(command: string, cwd: string): { body: string; allowed: string } | null {
 	const rm = /\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f?[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b([^;&|]*)/g;
 	let match: RegExpExecArray | null;
 	while ((match = rm.exec(command))) {
 		const targets = match[2].trim().split(/\s+/).filter((t) => t && !t.startsWith("-"));
-		if (!targets.length) return "rm -rf without a target";
+		if (!targets.length) return { body: "rm -rf without a target", allowed: "name one exact path, for example rm -rf .worker/tmp/scratch" };
 		// Each root is a boundary: the folder itself stays blocked, only its child folders are allowed.
 		const allowed = [...tempRoots(), real(path.join(cwd, ".worker"))];
 		for (const target of targets) {
-			if (/[*?$`]/.test(target)) return `rm -rf with a pattern or expansion (${target})`;
+			if (/[*?$`]/.test(target)) return { body: `rm -rf with a pattern or expansion (${target})`, allowed: "drop the pattern and name the exact path, for example rm -rf .worker/tmp/scratch" };
 			const resolved = expand(target.replace(/^['"]|['"]$/g, ""), cwd);
-			if (!allowed.some((root) => inside(resolved, root) && resolved !== root)) return `rm -rf outside the temporary directories and the worktree .worker folder (${target})`;
+			if (!allowed.some((root) => inside(resolved, root) && resolved !== root)) return { body: `rm -rf outside the temporary directories and the worktree .worker folder (${target})`, allowed: "rm -rf on an exact path inside the worktree .worker folder, for example rm -rf .worker/tmp/scratch, or inside a temporary directory" };
 		}
 	}
 	return null;
@@ -86,11 +89,11 @@ export default function (pi: ExtensionAPI) {
 
 		if (event.toolName === "bash") {
 			const command = String(event.input.command ?? "");
-			for (const [pattern, name] of BASH_DENY) {
-				if (pattern.test(command)) return { block: true, reason: `Herdr guard: ${name} is not allowed for a worker. Ask your orchestrator.` };
+			for (const [pattern, name, allowed] of BASH_DENY) {
+				if (pattern.test(command)) return { block: true, reason: `Herdr guard: ${name} is not allowed for a worker. Allowed instead: ${allowed}. Ask your orchestrator.` };
 			}
 			const rm = rmBlocked(command, cwd);
-			if (rm) return { block: true, reason: `Herdr guard: ${rm}. Ask your orchestrator.` };
+			if (rm) return { block: true, reason: `Herdr guard: ${rm.body}. Allowed instead: ${rm.allowed}. Ask your orchestrator.` };
 			return undefined;
 		}
 
@@ -99,10 +102,10 @@ export default function (pi: ExtensionAPI) {
 			if (typeof raw !== "string" || !raw) return undefined;
 			const target = expand(raw, cwd);
 			if (PROTECTED.some((p) => inside(target, real(p))) || PROTECTED_NAMES.some((p) => p.test(target))) {
-				return { block: true, reason: `Herdr guard: ${raw} is a protected path.` };
+				return { block: true, reason: `Herdr guard: ${raw} is a protected path. Allowed instead: a non-protected path in the worktree, a temporary directory, or ~/.herdr-boss.` };
 			}
 			if (!roots.some((root) => inside(target, root))) {
-				return { block: true, reason: `Herdr guard: ${raw} is outside the worktree. Work only in ${cwd}, the temporary directories, or ~/.herdr-boss.` };
+				return { block: true, reason: `Herdr guard: ${raw} is outside the worktree. Allowed instead: a path in ${cwd}, a temporary directory, or ~/.herdr-boss.` };
 			}
 		}
 		return undefined;
