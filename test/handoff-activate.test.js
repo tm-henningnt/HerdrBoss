@@ -323,11 +323,12 @@ test('activation refuses a preparing record whose successor works, is absent, or
   }
 });
 
-test('activation refuses a done successor for a preparing record but keeps the prepared settled rule', (t) => {
+// K27: the preparing guard accepts a settled pane, so a done successor activates like an idle one.
+test('activation accepts a done successor for a preparing record and keeps the prepared settled rule', (t) => {
   const extraPanes = [{ pane_id: 'ws:p8', workspace_id: 'ws', label: null, agent: 'codex', agent_status: 'done' }];
   const preparing = activationFixture(t, { extraPanes, record: { status: 'preparing', newPane: 'ws:p8' } });
-  assert.throws(() => preparing.activate(), /not settled and ready: the successor pane is done/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(preparing.root, 'handoffs.json'), 'utf8'))[0].status, 'preparing');
+  assert.equal(preparing.activate().status, 'active');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(preparing.root, 'handoffs.json'), 'utf8'))[0].status, 'active');
   // The prepared path still treats idle and done as settled.
   const prepared = activationFixture(t, { extraPanes, record: { status: 'prepared', newPane: 'ws:p8' } });
   assert.equal(prepared.activate().status, 'active');

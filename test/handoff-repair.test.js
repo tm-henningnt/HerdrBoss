@@ -45,6 +45,13 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
 `);
 }
 
+// The activation fixture successor pane is idle. K27 also accepts a pane whose agent state is done.
+function setSuccessorStatus(f, status, paneId = 'ws:p2') {
+  const file = path.join(f.root, 'panes.json');
+  const panes = JSON.parse(fs.readFileSync(file, 'utf8')).map((pane) => (pane.pane_id === paneId ? { ...pane, agent_status: status } : pane));
+  fs.writeFileSync(file, JSON.stringify(panes));
+}
+
 const repairSource = (options = '') => `import { repairHandoff } from ${JSON.stringify(handoffUrl)};
 console.log(JSON.stringify(repairHandoff('handoff-activate'${options})));`;
 
@@ -62,6 +69,47 @@ test('handoff repair promotes a preparing record with an idle matching successor
   const calls = f.calls();
   assert.equal(calls.some((args) => args[0] === 'pane' && args[1] === 'rename'), false, 'repair must not activate');
   assert.equal(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'), false, 'repair must prompt nobody');
+});
+
+// K27: a successor pane whose agent state is done is ready for the preparing guard, like idle.
+test('handoff repair promotes a preparing record whose successor pane is done', (t) => {
+  const f = activationFixture(t, { record: { status: 'preparing' } });
+  setSuccessorStatus(f, 'done');
+  const result = repairModule(f, repairSource());
+  assert.equal(result.repaired, true);
+  assert.equal(result.status, 'prepared');
+  assert.match(result.reason, /the successor pane is done/);
+  const stored = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
+  assert.equal(stored.status, 'prepared');
+  assert.equal(stored.readyAt, undefined, 'a done successor does not invent a ready signal');
+  const calls = f.calls();
+  assert.equal(calls.some((args) => args[0] === 'pane' && args[1] === 'rename'), false, 'repair must not activate');
+  assert.equal(calls.some((args) => args[0] === 'agent' && args[1] === 'prompt'), false, 'repair must prompt nobody');
+});
+
+test('handoff repair still refuses a successor that works or runs another agent', (t) => {
+  for (const [status, record] of [['working', { status: 'preparing' }], ['idle', { status: 'preparing', toKind: 'pi' }]]) {
+    const f = activationFixture(t, { record });
+    setSuccessorStatus(f, status);
+    const result = repairModule(f, repairSource());
+    assert.equal(result.repaired, false, `${status} ${record.toKind || 'codex'}`);
+    assert.equal(result.reason, status === 'working' ? 'it works' : 'the successor pane runs another agent');
+  }
+});
+
+test('handoff repair --dry-run states exactly what it would do for a done successor', (t) => {
+  const f = activationFixture(t, { record: { status: 'preparing' } });
+  setSuccessorStatus(f, 'done');
+  const file = path.join(f.root, 'handoffs.json');
+  const before = fs.readFileSync(file);
+  const result = repairModule(f, repairSource(', { dryRun: true }'));
+  assert.equal(result.wouldRepair, true);
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.previousStatus, 'preparing');
+  assert.match(result.reason, /the successor pane is done/);
+  assert.match(result.reason, /would set the record to prepared/, 'the dry run names the transition it would make');
+  assert.match(result.reason, /would not activate/, 'the dry run names what it would not do');
+  assert.deepEqual(fs.readFileSync(file), before);
 });
 
 test('handoff repair --dry-run inspects the guarded transition and writes nothing', (t) => {
@@ -226,20 +274,17 @@ test('handoff ready refuses a preparing record whose successor works, is absent,
   }
 });
 
-// F1: a `preparing` transition requires exactly `idle`. A `done` successor is refused.
+// K27: a done successor is a settled pane, so `handoff ready` accepts it for a preparing record.
 const donePane = [{ pane_id: 'ws:p8', workspace_id: 'ws', label: null, agent: 'codex', agent_status: 'done' }];
 
-test('handoff ready and repair refuse a done successor for a preparing record', (t) => {
+test('handoff ready accepts a done successor for a preparing automatic record', (t) => {
   const ready = activationFixture(t, { extraPanes: donePane, record: { status: 'preparing', automatic: true, newPane: 'ws:p8' } });
-  const readyError = moduleError(ready, `import { markHandoffReady } from ${JSON.stringify(handoffUrl)}; markHandoffReady('handoff-activate');`);
-  assert.match(readyError, /still preparing: the successor pane is done/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ready.root, 'handoffs.json'), 'utf8'))[0].status, 'preparing');
-
-  const repair = activationFixture(t, { extraPanes: donePane, record: { status: 'preparing', newPane: 'ws:p8' } });
-  const result = repairModule(repair, repairSource());
-  assert.equal(result.repaired, false);
-  assert.equal(result.reason, 'the successor pane is done');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(repair.root, 'handoffs.json'), 'utf8'))[0].status, 'preparing');
+  const result = JSON.parse(runHandoffModule(ready.root, `import { markHandoffReady } from ${JSON.stringify(handoffUrl)};
+console.log(JSON.stringify(markHandoffReady('handoff-activate')));`, ready.env));
+  assert.equal(result.status, 'prepared');
+  assert.equal(result.preparedFrom, 'preparing');
+  assert.ok(result.readyAt, 'the successor reported ready, so the record carries the ready signal');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(ready.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
 });
 
 // F3: only a real `pane_not_found` becomes an absent pane; other Herdr errors propagate.

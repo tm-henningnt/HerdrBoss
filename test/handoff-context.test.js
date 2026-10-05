@@ -96,7 +96,9 @@ for (const [name, goal] of [['a non-string', 42], ['a blank', '   '], ['an empty
   assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'ownerGoal'), false);
   const [prompt] = handoffPromptCalls(f.root);
   assert.match(prompt, /proposed successor orchestrator/);
-  assert.match(prompt, /Discover the project state from files and issues\./);
+  // K27: the bootstrap read is capped to three sources. The open-ended discovery line is gone.
+  assert.match(prompt, /Read only these three sources/);
+  assert.doesNotMatch(prompt, /Discover the project state from files and issues\./);
 });
 
 test('handoff prepare applies the Owner goal bound when it resumes a record', (t) => {

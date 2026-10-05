@@ -960,12 +960,34 @@ test('the engine promotes a preparing context successor with an idle matching pa
   assert.equal(activates(out).length, 1);
 });
 
-// F1: a `preparing` transition needs exactly `idle`. A `done` successor does not promote.
-test('the engine does not promote a preparing successor whose pane is done', { timeout: 30000 }, (t) => {
-  const record = { ...unreadyRecord(), status: 'preparing' };
+// K27: the preparing guard accepts a settled pane, so a successor whose turn finished and whose input
+// is ready promotes like an idle pane. Every other K26 rule stays: no automatic activation here,
+// the prompt-evidence hold, no resend, and no Owner-goal or context regression.
+test('the engine promotes a preparing successor whose pane is done and holds the record without prompt evidence', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord({ promptDelivery: undefined, promptAt: undefined }), status: 'preparing' };
   const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep({ ...successor, status: 'done' }) });
+  assert.equal(out.records[0].status, 'prepared');
+  assert.equal(out.records[0].preparedFrom, 'preparing');
+  assert.equal(out.records[0].preparedNote, 'engine: successor idle or done');
+  assert.ok(out.logs.some((entry) => /Promoted handoff ctx-1/.test(entry.message)));
+  assert.equal(out.records[0].readyAt, undefined, 'the prompt-evidence hold keeps the record unready');
+  assert.deepEqual(activates(out), [], 'the promoter never activates');
+  assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && /proposed successor/.test(String(args[3]))).length, 0, 'the promoter never resends the bootstrap prompt');
+});
+
+test('a done preparing successor with prompt evidence still becomes ready and activates', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord({ promptAt: '2026-09-29T11:59:00.000Z' }), status: 'preparing' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep({ ...successor, status: 'done' }) });
+  assert.equal(out.records[0].status, 'prepared');
+  assert.ok(out.records[0].readyAt);
+  assert.equal(activates(out).length, 1);
+});
+
+test('the engine does not promote a preparing successor whose pane works', { timeout: 30000 }, (t) => {
+  const record = { ...unreadyRecord(), status: 'preparing' };
+  const out = run(t, { tokens: 400000, memory: tracked, handoffs: [record], steps: autoStep({ ...successor, status: 'working' }) });
   assert.equal(out.records[0].status, 'preparing');
-  assert.ok(out.logs.some((entry) => /stays preparing: the successor pane is done/.test(entry.message)));
+  assert.ok(out.logs.some((entry) => /stays preparing: it works/.test(entry.message)));
 });
 
 // F5: a recovered record without a proven bootstrap prompt must not auto-ready or activate.
@@ -1038,7 +1060,7 @@ test('the preparing notice does not promise a repair that the guard refuses', { 
   const notices = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && /still preparing/.test(String(args[3])));
   assert.equal(notices.length, 1);
   const text = notices[0].args[3];
-  assert.match(text, /the successor pane is not idle yet/, 'the notice does not guess a busy or idle state');
+  assert.match(text, /the successor pane is not idle or done yet/, 'the notice does not guess a busy or settled state');
   assert.match(text, /herdr agent read w-alpha:p9/);
   assert.equal(/to promote it/.test(text), false, 'the notice never advertises an immediate repair');
   assert.match(text, /promotes the record/);

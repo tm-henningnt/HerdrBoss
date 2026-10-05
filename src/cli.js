@@ -176,7 +176,7 @@ const USAGE = `herdr-boss <command>
   handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
   handoff cancel ID [--force]  Cancel a prepared successor; --force closes a working successor.
   handoff activate ID --confirmed
-  handoff repair ID [--dry-run]  Promote a preparing record whose successor pane is idle.
+  handoff repair ID [--dry-run]  Promote a preparing record whose successor pane is idle or done.
   handoff ready ID      Signal automatic successor readiness.
   worker ...            Start, collect, or list workers.
   wait [<worker>...]    Block until the first report, question, block, stall, or lost pane of a worker.

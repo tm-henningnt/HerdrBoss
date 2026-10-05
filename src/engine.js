@@ -12,7 +12,7 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
-import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels } from './control.js';
+import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
@@ -2043,7 +2043,7 @@ export class Engine extends EventEmitter {
         this.log('handoff', `Automatically activated ${item.toKind} successor for ${item.label || item.project}`, item.boss ? { workspace: item.workspace, pane: item.newPane } : { project: item.project, pane: item.newPane });
       } catch (e) { this.log('error', `Automatic activation for ${item.label || item.project} failed: ${String(e.stderr || e.message).slice(0, 300)}`); }
     }
-    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, piModels: this.memory.piModels, lanes };
+    const successorLimits = { exhaustedFreeModels: this.memory.exhaustedFreeModels, piModels: this.memory.piModels, lanes, weeklyUse: weeklyUseByProvider(this.quotas || [], now) };
     const stopped = Object.values(control.projects).flatMap((p) => {
       const last = this.memory.lastOrchestrators[p.workspace];
       if (!p.orch || p.orch.kind || last?.pane !== p.orch.pane) return [];
@@ -2350,11 +2350,11 @@ export class Engine extends EventEmitter {
     this.memory.handoverPreparingReasons ||= {};
     for (const item of records.filter((x) => x.status === 'preparing')) {
       const target = panes.find((pane) => pane.id === item.newPane);
-      const result = promotePreparing(item.id, target, { note: 'engine: successor idle' });
+      const result = promotePreparing(item.id, target, { note: 'engine: successor idle or done' });
       if (result.promoted) {
         item.status = 'prepared';
         item.preparedFrom = 'preparing';
-        item.preparedNote = 'engine: successor idle';
+        item.preparedNote = 'engine: successor idle or done';
         delete this.memory.handoverPreparingReasons[item.id];
         this.log('handoff', `Promoted handoff ${item.id} from preparing to prepared: ${result.reason}`, { project: item.project, pane: item.newPane });
       } else if (result.found && this.memory.handoverPreparingReasons[item.id] !== result.reason) {
@@ -2471,14 +2471,14 @@ export class Engine extends EventEmitter {
       if (!Number.isFinite(preparedAt) || now - preparedAt < UNREADY_SUCCESSOR_NOTICE_MS) continue;
       const target = panes.find((pane) => pane.id === item.newPane);
       // Name the accurate reason first. An absent pane is not a wrong agent, and a pane that is not
-      // idle is not reported as working or idle from a settled helper.
+      // idle or done is not reported as working or settled from a settled helper.
       const reason = !target ? 'the successor pane is absent'
         : target.agent !== item.toKind ? 'the successor pane does not run the target agent'
-          : 'the successor pane is not idle yet';
+          : 'the successor pane is not idle or done yet';
       // A read of an absent pane cannot work. Every pane that exists can be read.
       const read = target ? `Read it with herdr agent read ${item.newPane}. ` : '';
       const sent = await this.retryOperation(item, now, 'preparing', 'the preparing Boss notice', () => this.promptHandoverBoss(herdr,
-        `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: still preparing 10 minutes after preparation (${reason}). ${read}Herdr Boss promotes the record on its own once the successor pane runs ${item.toKind} and is idle. Inspect the record with herdr-boss handoff repair ${item.id} --dry-run. Run herdr-boss handoff repair ${item.id} only after that. You can drop the record with herdr-boss handoff cancel ${item.id}.`), { project: item.project, pane: item.newPane });
+        `[herdr-boss] Handoff ${item.id}, pane ${item.newPane}, project ${item.project}: still preparing 10 minutes after preparation (${reason}). ${read}Herdr Boss promotes the record on its own once the successor pane runs ${item.toKind} and is idle or done. Inspect the record with herdr-boss handoff repair ${item.id} --dry-run. Run herdr-boss handoff repair ${item.id} only after that. You can drop the record with herdr-boss handoff cancel ${item.id}.`), { project: item.project, pane: item.newPane });
       if (sent) this.memory.handoverPreparingNotices[item.id] = now;
     }
   }
