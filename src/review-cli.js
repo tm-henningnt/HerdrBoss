@@ -142,12 +142,12 @@ function postItem({ slug, pack, version, title, text, caller }, { dir, now, deps
   }
 }
 
-// An open pack whose content did not change is not published again. The command only repairs a missing Mailbox item.
+// An open pack whose content did not change is not published again. A second publish of the same version is refused. The command only repairs a missing or unlinked Mailbox item.
 function republishUnchanged({ slug, existing, manifest, summary, caller }, ctx) {
   const item = readMessages({ dir: ctx.dir }).find((record) => record.kind === 'review' && !record.closedAt
     && record.review?.slug === slug && record.review?.pack === existing.pack && record.review?.version === existing.version);
   if (item) {
-    if (existing.mailId === item.id) { ctx.out(`Unchanged: ${slug}/${existing.pack} v${existing.version} holds the same content. Nothing was published.`); return EXIT.ok; }
+    if (existing.mailId === item.id) throw new ReviewCliError(`Refused: ${slug}/${existing.pack} v${existing.version} is already published with the same content. Nothing was published. Change the pack folder to make a new version. A --note alone does not make a new version.`);
     try { ctx.deps.setMailId({ dir: ctx.dir, slug, pack: existing.pack, mailId: item.id }); }
     catch (error) { throw new ReviewCliError(`The pack ${slug}/${existing.pack} v${existing.version} is stored, but Herdr Boss did not link its Mailbox item: ${safeText(error?.message, 300)}. Run the same herdr-boss review publish command again.`); }
     ctx.out(`Repaired: linked the Mailbox item ${item.id} to ${slug}/${existing.pack} v${existing.version}. No new version.`);
@@ -293,9 +293,10 @@ function publishFolder({ slug, folder, caller, note, judgePass, warnJudgePass = 
     return EXIT.ok;
   }
   const existing = getPack({ dir, slug, pack: manifest.id });
-  // A planner publish fills session and round, so the compare leaves both out.
+  // A second publish of the same version is refused. A planner publish fills session and round, so the compare leaves both out.
+  // A --note alone does not make a new version: it would create a duplicate version with no change.
   const content = (value) => { const { session, round, ...rest } = value; return caller.planner ? rest : value; };
-  if (existing && existing.state === 'open' && note === undefined && JSON.stringify(content(existing.manifest)) === JSON.stringify(content(manifest))) {
+  if (existing && existing.state === 'open' && JSON.stringify(content(existing.manifest)) === JSON.stringify(content(manifest))) {
     return republishUnchanged({ slug, existing, manifest, summary, caller }, ctx);
   }
   // A planner pane publishes in the name of its session. The next round is stored after the publish succeeds.

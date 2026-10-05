@@ -714,13 +714,52 @@ test('a failure of the store write posts nothing', (t) => {
   assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }), null);
 });
 
-test('a publish of unchanged content makes no new version and no new item', (t) => {
+test('a second publish of the same version is refused and makes no new version', (t) => {
+  const { data, run } = inProcess(t);
+  const folder = packFolder();
+  const first = run(['publish', 'shop', folder]);
+  assert.equal(first.code, 0, first.err);
+  const before = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  assert.equal(before.version, 1);
+  const again = run(['publish', 'shop', folder], {}, T + 1000);
+  assert.equal(again.code, 1, again.out);
+  assert.match(again.err, /already published/i);
+  assert.match(again.err, /shop\/checkout-redesign/);
+  assert.match(again.err, /v1/);
+  assert.match(again.err, /same content/i);
+  const after = getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' });
+  assert.equal(after.version, 1, 'the second publish makes no new version');
+  assert.equal(reviewRecords(data).length, 1, 'the second publish posts no new item');
+  assert.equal(openItems(data).length, 1);
+  assert.equal(after.mailId, openItems(data)[0].id, 'the item stays linked');
+});
+
+test('a --note on the same version is refused, and a changed folder still opens a new version and closes the old item', (t) => {
+  const { data, run } = inProcess(t);
+  const folder = packFolder();
+  assert.equal(run(['publish', 'shop', folder]).code, 0);
+  const first = openItems(data);
+  assert.equal(first.length, 1);
+  const noted = run(['publish', 'shop', folder, '--note', 'Please look again.'], {}, T + 1000);
+  assert.equal(noted.code, 1, noted.out);
+  assert.match(noted.err, /same content|already published/i);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 1, 'a note alone makes no new version');
+  const changed = run(['publish', 'shop', packFolder({ tag: 1 })], {}, T + 2000);
+  assert.equal(changed.code, 0, changed.err);
+  assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 2);
+  const records = reviewRecords(data);
+  assert.equal(records.find((record) => record.id === first[0].id).closedAt !== undefined, true, 'the previous version item is closed');
+  assert.equal(records.find((record) => record.id === first[0].id).closedBy, 'review');
+  assert.equal(openItems(data).length, 1, 'one open item per pack');
+});
+
+test('a repeat of unchanged content is refused, and changed content makes a new version', (t) => {
   const { data, run } = inProcess(t);
   const folder = packFolder();
   assert.equal(run(['publish', 'shop', folder]).code, 0);
   const again = run(['publish', 'shop', folder], {}, T + 1000);
-  assert.equal(again.code, 0, again.err);
-  assert.match(again.out, /unchanged/i);
+  assert.equal(again.code, 1, again.out);
+  assert.match(again.err, /already published/i);
   assert.equal(getPack({ dir: data, slug: 'shop', pack: 'checkout-redesign' }).version, 1);
   assert.equal(reviewRecords(data).length, 1);
   assert.equal(openItems(data).length, 1);
@@ -963,14 +1002,14 @@ test('a planner pane cannot import, read a result, or delete, and it can check a
   assert.equal(cli('review', 'check', packFolder()).status, 0);
 });
 
-test('a dry run and an unchanged republish do not move the round', (t) => {
+test('a dry run does not move the round, and a refused repeat of the same version does not either', (t) => {
   const { cli, data, record } = plannerFixture(t);
   assert.equal(cli('review', 'publish', 'shop', packFolder(), '--dry-run').status, 0);
   assert.equal(getSession({ dir: data, id: record.id }).round, 0);
   assert.equal(cli('review', 'publish', 'shop', packFolder()).status, 0);
   const same = cli('review', 'publish', 'shop', packFolder());
-  assert.equal(same.status, 0, output(same));
-  assert.match(output(same), /Unchanged/);
+  assert.equal(same.status, 1, output(same));
+  assert.match(output(same), /already published/i);
   assert.equal(getSession({ dir: data, id: record.id }).round, 1);
   assert.equal(storedManifest(data).round, 1);
 });

@@ -738,7 +738,7 @@ A pane labeled `planner` with an active session has these rights:
 - `review check FOLDER` works as for every pane.
 - `review import`, `review result`, `review list`, and `review delete` are refused.
 
-Only a planner pane can publish a pack with `session` or `round`. Any other publisher gets a refusal when the manifest has either field. The publish from a planner pane sets both and replaces a value that the manifest holds. `round` counts per pack. A new pack takes the next round of the session: 1, 2, 3, and so on. A republish of a pack of the same session keeps the round of that pack. `--round N` (1 to 9999) sets another round, and only a planner pane can pass it. The session keeps the highest round. A `--dry-run` and an `Unchanged` publish do not change the round. The Mailbox item of the pack names the session and the pane.
+Only a planner pane can publish a pack with `session` or `round`. Any other publisher gets a refusal when the manifest has either field. The publish from a planner pane sets both and replaces a value that the manifest holds. `round` counts per pack. A new pack takes the next round of the session: 1, 2, 3, and so on. A republish of a pack of the same session keeps the round of that pack. `--round N` (1 to 9999) sets another round, and only a planner pane can pass it. The session keeps the highest round. A `--dry-run` and a refused repeat of the same version do not change the round. The Mailbox item of the pack names the session and the pane.
 
 ### Publish
 
@@ -756,7 +756,7 @@ The command stores the files in the data folder and adds a Mailbox item to the t
 
 A publish with an existing pack ID makes the next version. The command closes the older open Mailbox item of that pack with `closedBy: "review"` and posts a new item. The Owner sees one open item for each pack. An Owner answer to a review item stays in the Mailbox thread of that item.
 
-If the publish fails after the store write, the command prints the pack ID and the version. The pack is stored and has no complete Mailbox item. Run the same `review publish` command again. An open pack with the same content gets no new version. The command only posts or links the missing Mailbox item and prints `Repaired`. The same command on an open pack with an open item for the current version prints `Unchanged` and does nothing. A submitted pack always takes the next version. A `--note` also takes the next version.
+If the publish fails after the store write, the command prints the pack ID and the version. The pack is stored and has no complete Mailbox item. Run the same `review publish` command again. An open pack with the same content gets no new version. The command only posts or links the missing Mailbox item and prints `Repaired`. A second publish of the same version is refused. The command prints `Refused` with the pack ID and the version. A `--note` alone does not make a new version. Change the pack folder to make a new version. A submitted pack always takes the next version.
 
 `--dry-run` validates the folder and prints what the command would publish. It writes no file, no database row, and no Mailbox item.
 
