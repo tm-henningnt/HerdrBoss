@@ -8,7 +8,7 @@ export function writeExecutable(file, source) {
   fs.chmodSync(file, 0o755);
 }
 
-export function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sourceLabel = 'orch', sessionId = null, busyAttempts = 0, existingPane = null } = {}) {
+export function handoffFixture(t, { shell = '% ', delayShell = false, paneListFails = false, sourceKind = 'codex', sourceLabel = 'orch', sessionId = null, busyAttempts = 0, existingPane = null, readyDuringPrompt = false, successorAgent = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-handoff-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -24,6 +24,14 @@ export function handoffFixture(t, { shell = '% ', delayShell = false, paneListFa
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
+if (args[0] === 'agent' && args[1] === 'prompt' && process.env.TEST_READY_DURING_PROMPT === '1') {
+  const readyId = String(args[3] || '').match(/herdr-boss handoff ready ([^\\s]+)/)?.[1];
+  if (readyId) {
+    const { spawnSync } = require('node:child_process');
+    const ready = spawnSync(process.execPath, [process.env.TEST_HANDOFF_CLI, 'handoff', 'ready', readyId], { env: process.env, encoding: 'utf8' });
+    if (ready.status !== 0) { process.stderr.write(ready.stderr || 'handoff ready failed\\n'); process.exit(ready.status || 1); }
+  }
+}
 let result = {};
 if (args[0] === 'pane' && args[1] === 'get' && args[2] === 'ws:p1') result = { pane: {
   pane_id: 'ws:p1', workspace_id: 'ws', label: process.env.TEST_SOURCE_LABEL, agent: process.env.TEST_SOURCE_KIND,
@@ -139,6 +147,9 @@ exec node "$(dirname "$0")/session-migrate.cjs" "$@"
       TEST_SOURCE_LABEL: sourceLabel,
       ...(existingPane ? { TEST_EXISTING_PANE: existingPane } : {}),
       TEST_SOURCE_KIND: sourceKind,
+      TEST_READY_DURING_PROMPT: readyDuringPrompt ? '1' : '0',
+      TEST_HANDOFF_CLI: new URL('../../src/cli.js', import.meta.url).pathname,
+      ...(successorAgent ? { TEST_SUCCESSOR_AGENT: successorAgent } : {}),
       ...(sessionId ? { TEST_SESSION_ID: sessionId } : {}),
     },
   };
@@ -165,7 +176,7 @@ export function handoffPromptCalls(root) {
 }
 
 // A fake Herdr CLI for activation. It prints the installed CLI's JSON envelope with raw pane fields. On an error it writes the envelope to stderr and exits 1, like the installed CLI.
-export function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [], agentNames = null, failAgentRenames = [], successorKind = 'codex', goalScreen = null } = {}) {
+export function activationFixture(t, { boss = false, failPrompts = [], paneListFails = false, record = {}, priorRecords = [], extraPanes = [], paneErrors = {}, failRenames = [], agentNames = null, failAgentRenames = [], successorKind = 'codex', goalScreen = null, sourceStatus = 'working' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-boss-activate-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const bin = path.join(root, '.local', 'bin');
@@ -175,7 +186,7 @@ export function activationFixture(t, { boss = false, failPrompts = [], paneListF
   const ws = boss ? 'wb' : 'ws';
   const agents = agentNames ?? [{ pane_id: `${ws}:p1`, name: 'source-agent' }];
   const panes = [
-    { pane_id: `${ws}:p1`, workspace_id: ws, label: boss ? 'boss' : 'orch', agent: 'claude', agent_status: 'working' },
+    { pane_id: `${ws}:p1`, workspace_id: ws, label: boss ? 'boss' : 'orch', agent: 'claude', agent_status: sourceStatus },
     { pane_id: `${ws}:p2`, workspace_id: ws, label: null, agent: successorKind, agent_status: 'idle' },
     { pane_id: `${ws}:p3`, workspace_id: ws, label: null, agent: 'pi', agent_status: 'working' },
     { pane_id: `${ws}:p4`, workspace_id: ws, label: null, agent: null, agent_status: null },

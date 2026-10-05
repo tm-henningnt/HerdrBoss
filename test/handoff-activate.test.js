@@ -299,6 +299,27 @@ test('activation keeps its confirmation and readiness checks', (t) => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
 });
 
+test('forced context activation refuses a handoff whose memory update timed out', (t) => {
+  const f = activationFixture(t, { record: { memoryUpdateStatus: 'not-updated' } });
+  const handoffUrl = new URL('../src/handoff.js', import.meta.url).href;
+  const result = JSON.parse(runHandoffModule(f.root, `import { activateHandoff } from ${JSON.stringify(handoffUrl)};
+let error = null;
+try { await activateHandoff('handoff-activate', { confirmed: true }); }
+catch (failure) { error = failure.message; }
+console.log(JSON.stringify({ error, record: JSON.parse((await import('node:fs')).readFileSync(process.env.HERDR_BOSS_DIR + '/handoffs.json', 'utf8'))[0] }));`, f.env));
+  assert.match(result.error, /memory\.md.*commit/i);
+  assert.equal(result.record.status, 'prepared');
+  assert.equal(result.record.memoryUpdateStatus, 'not-updated');
+  assert.equal(fs.existsSync(path.join(f.root, 'herdr-calls.jsonl')), false, 'activation stops before any Herdr command');
+});
+
+test('forced context activation waits while the source orchestrator works', (t) => {
+  const f = activationFixture(t, { record: { memoryUpdateStatus: 'committed' }, sourceStatus: 'working' });
+  assert.throws(() => f.activate(), /source orchestrator is working/i);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0].status, 'prepared');
+  assert.equal(f.calls().some((args) => args[0] === 'pane' && args[1] === 'rename'), false);
+});
+
 test('handoff activate CLI waits for the activation result', (t) => {
   const f = activationFixture(t);
   const item = JSON.parse(runHandoffCli(f.root, ['handoff', 'activate', 'handoff-activate', '--confirmed'], f.env));

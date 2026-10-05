@@ -836,6 +836,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const shared = 'opencode-go/deepseek-v4.1-flash';
   const current = await (await fetch(`${base}/api/policy`)).json();
   assert.deepEqual([current.extraModels, current.disabledModels, current.harnessRoutes], [{}, {}, {}], 'a policy without the new fields reads as empty assignments');
+  assert.equal(current.autoHandoverForceContextTokens, 400000, 'the policy API returns the default forced context threshold');
   assert.equal(current.machine.guardEnabled, true, 'the fresh policy enables the guard explicitly');
   assert.equal(current.machine.guardPausedUntil, null);
   const draft = {
@@ -845,6 +846,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
     extraModels: { pi: ['opencode-go/glm-5.2'] },
     disabledModels: { opencode: [shared] },
     harnessRoutes: { pi: { 'opencode-go/glm-5.2': 'opencodego' } },
+    autoHandoverForceContextTokens: 450000,
   };
   const put = (body) => fetch(`${base}/api/policy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const saved = await put(draft);
@@ -854,6 +856,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.deepEqual(stored.disabledModels, draft.disabledModels);
   assert.deepEqual(stored.harnessRoutes, draft.harnessRoutes);
   assert.deepEqual(stored.modelProviders, draft.modelProviders, 'the legacy route stays');
+  assert.equal(stored.autoHandoverForceContextTokens, draft.autoHandoverForceContextTokens);
   assert.equal(stored.machine.guardEnabled, false);
   assert.equal(stored.machine.guardPausedUntil, draft.machine.guardPausedUntil);
   assert.deepEqual([current.machine.swapWarnPercent, current.machine.swapRefusePercent, current.machine.swapMinUsedGB], [80, 95, 2], 'the fresh policy carries the swap defaults');
@@ -868,6 +871,9 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   const invalidGuard = await put({ ...draft, machine: { ...draft.machine, guardEnabled: 'off' } });
   assert.equal(invalidGuard.status, 400);
   assert.match((await invalidGuard.json()).errors.join(' '), /machine.guardEnabled/);
+  const invalidForceThreshold = await put({ ...draft, autoHandoverForceContextTokens: draft.autoHandoverContextTokens });
+  assert.equal(invalidForceThreshold.status, 400);
+  assert.match((await invalidForceThreshold.json()).errors.join(' '), /autoHandoverForceContextTokens must be greater than autoHandoverContextTokens/);
   const invalidPause = await put({ ...draft, machine: { ...draft.machine, guardPausedUntil: 'tomorrow' } });
   assert.equal(invalidPause.status, 400);
   assert.match((await invalidPause.json()).errors.join(' '), /machine.guardPausedUntil/);
