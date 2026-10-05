@@ -329,7 +329,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'start') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--force-swap', '--read-only', '--planner'], repeat: ['--allow', '--copy', '--lease'] });
       if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly', 'planner']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'reviewworktree', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly', 'planner']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -342,6 +342,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         copy: flags.copy ?? [],
         lease: flags.lease ?? [],
         base: flags.base,
+        reviewWorktree: flags.reviewworktree,
         orch: flags.orch,
         noWorktree: flags.noworktree,
         readOnly: flags.readonly,

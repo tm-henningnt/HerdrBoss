@@ -14,6 +14,14 @@ Read this file before you dispatch a reviewer or a review subagent.
 
 - Put this rule in a review task brief: do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only. A reviewer must not change the worktree that it reviews.
 
+## Review inputs
+
+- Give the review target to `worker start`, so the inputs land in the reviewer worktree.
+- Use `--base BRANCH` for a committed branch. `worker start` copies the diff of `BRANCH` against the project base branch, and the changed file list, into `.worker/inputs/`.
+- Use `--review-worktree PATH` for an uncommitted target. `worker start` copies `git diff` and `git status` of that worktree.
+- Give `--base` or `--review-worktree`, not both.
+- Put this rule in a review task brief: read the copied review inputs under `.worker/inputs/`. Do not read another worktree.
+
 ## Docs check
 
 - Put this rule in a review task brief: check that a change of behavior comes with a change of the docs and the page help in the same branch.
