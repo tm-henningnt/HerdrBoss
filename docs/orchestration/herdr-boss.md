@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=95184d586fff -->
+<!-- herdr-boss kit v=4c9047f5ba52 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -55,6 +55,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Keep evidence tiers separate. Local checks do not prove hosted or Owner acceptance.
 - Publish project status through Herdr Boss. Do not build a separate project dashboard.
 - Publish the status with `herdr-boss publish <slug> <file> --sync` at each task boundary. The option sets each card state from git, workers and issues before it installs the status, and prints how many cards changed.
+- Rewrite `phase` and `summary` at each publish. Remove an Owner wait from them when no Mailbox item is open. A wait is real only for a task with `waitingOn: owner` or `mailboxId` that is not done, or an open Mailbox item for the project.
+- Herdr Boss sends one stale text notice when `phase` or `summary` keeps the same text for `staleTextMinutes` (default 360 minutes).
 - Set `waitingOn: owner` only for the escalation categories.
 - Always post a Mailbox item that needs an Owner action, and set `mailboxId` to its id.
 - Use `blockedBy` for waits on other tasks.
@@ -79,6 +81,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Decide and run your own pushes, deployments, and releases. Nobody approves them. Before each push, read the full diff for secrets, private local paths, and other-project client or tenant names. Push one change set at a time. Run a long gate in the foreground with `herdr-boss suite --wait 3600 -- <command>`. Set the command tool timeout to at least 3,600,000 ms. Do not run a long gate in a background shell with its default timeout. The `--wait` value is the maximum time to wait for the full-suite lock. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push <args>`. Use `herdr-boss push` for a push; it takes the lock when a pre-push hook exists. The full-suite lock serves waiters in order. Start your suite once, and wait; do not restart it to jump the queue. Exit code 75 means the lock was busy and no test ran. The lock lane guard (policy `locks.guard`, Settings page, Locks section) holds a queued short-lane job while the 5-minute load is above 231 percent of the cores, swap is above 96 percent, or free memory is below 40 percent. The job waits until the load drops. The machine guard (`machine.guardEnabled`) is a separate setting. Send a deployment that spends money to the Owner through the Boss.
 - Read the lock wait line for the holder start, age, predicted end, and queue length. The line repeats at most once every 60 seconds. A slow holder also shows its PID and process state: `alive`, `zombie`, or `unknown`. `holder is slow` sends one notice to the agent named `boss` for that acquisition. It does not release the slot. The cause of the reported 45-minute wait is unverified. A zombie holder remains a hypothesis.
 - A pre-push hook may run `herdr-boss suite` or `herdr-boss suite --reuse`. When the suite runs under `herdr-boss push`, it reuses the push lock. A changed file always runs the suite again.
+- Start a suite with the background option of your harness, so the harness wakes your turn when the suite ends. Or rely on the finished notice: `herdr-boss suite` sends `suite finished: exit N` to the calling pane when a command runs and ends and that pane is idle or done. A `--reuse` or `--skip-docs` run sends no notice. `--no-notify` turns the notice off. Never end a turn while a detached suite runs.
 - Use `herdr-boss gh issue create|comment|edit ... --body-file FILE` for issues. Use `herdr-boss gh label create|list|edit|sync` for labels, for example `herdr-boss gh label sync --preset triage`, and `herdr-boss gh milestone create|list` for milestones. These commands refuse a delete and a secret in a value. Do not use raw `gh` for them.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
