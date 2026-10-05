@@ -157,6 +157,10 @@ The complete example sets every 1.x addition.
 The minimal example is an older summary without them.
 The null example uses an unavailable reading.
 
+### Rollup
+
+Build the Fleet rollup from accepted summaries and one injected time. Include only known readings from summaries that are at most 90 seconds old in totals. Name cached, never-seen, unknown, and unpriced readings in coverage. Do not count an unknown reading as zero. Show cached values only with their summary age. Select one spend day for each factory. If today's factory-calendar row is missing, use the latest factory day and show its date. Use the highest fresh value for each shared quota lane.
+
 ## Head office role record
 
 **Purpose:** Identify the current head office term.
