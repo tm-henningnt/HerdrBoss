@@ -295,10 +295,27 @@ function projectsHtml(row) {
   });
   return `<div class="projects"><h3>Projects${stale}</h3>${items.join('')}</div>`;
 }
+// A verified Owner wait. The fix comes from the rollup, which decides the kind. A container wait shows
+// the exact command and the existing copy hook. A native wait shows instruction words only. A wait with
+// no fix, for example an unsupported step or an unknown login reading, shows no command at all.
+function waitAgeText(wait) {
+  const age = ageText(wait?.ageSeconds);
+  return age ? `waiting ${age}` : 'waiting time unknown';
+}
+function waitFixHtml(wait) {
+  const fix = typeof wait?.fix === 'string' && wait.fix.trim() ? wait.fix.trim() : null;
+  if (!fix) return '';
+  if (wait.fixKind === 'command') {
+    return `<code class="cmd" data-fleet-wait-fix="command">${esc(fix)}</code>`
+      + `<button class="copy" type="button" data-fleet-pending-fix-copy data-copy="${esc(fix)}">Copy</button>`
+      + '<span class="fleet-secondary">Run this command in the Owner terminal.</span>';
+  }
+  return `<span data-fleet-wait-fix="instruction">${esc(fix)}</span>`;
+}
 function pendingHtml(row) {
   const waits = Array.isArray(row.pending) ? row.pending : [];
   if (!waits.length) return '';
-  return waits.map((wait) => `<p class="wait-owner" data-fleet-pending data-fleet-pending-step="${esc(wait.step ?? UNKNOWN)}"><span><b>Waiting for you:</b> ${esc(wait.step ?? UNKNOWN)}${wait.since ? ` since <time datetime="${esc(wait.since)}">${esc(wait.since)}</time>` : ''}.</span></p>`).join('');
+  return waits.map((wait) => `<p class="wait-owner" data-fleet-pending data-fleet-pending-step="${esc(wait.step ?? UNKNOWN)}"><span><b>Waiting for you:</b> ${esc(wait.step ?? UNKNOWN)} · ${esc(waitAgeText(wait))}. ${waitFixHtml(wait)}</span></p>`).join('');
 }
 function bossInfo(row) {
   const boss = row.summary?.boss;
@@ -405,7 +422,7 @@ function fleetPanels(settings, message, shares) {
   if (!settings && !shares) return '';
   const sharesHtml = shares ? fleetSharesView(shares, settings) : '';
   const settingsHtml = settings ? settingsFieldsHtml(settings, message) : '';
-  return `<details class="panel fleet-panels" data-key="fleet-panels" data-keep-attrs="open"><summary>Fleet settings and factory shares</summary><div class="fleet-panels-body">${sharesHtml}${settingsHtml}</div></details>`;
+  return `<details class="panel fleet-panels" data-key="fleet-panels" data-keep-attrs="open"><summary>Fleet settings and factory shares</summary><div class="fleet-panels-body">${sharesHtml}<div class="fleet-settings" data-fleet-settings>${settingsHtml}</div></div></details>`;
 }
 
 // ---- The page ------------------------------------------------------------------------------
@@ -418,7 +435,8 @@ function fallbackRow(row) {
     workers: num(row.summary?.workers?.running) ? row.summary.workers.running : null,
     quota: null,
     spend: { value: null, day: null, label: null, reason: 'the rollup is unavailable' },
-    pending: Array.isArray(row.summary?.pending) ? row.summary.pending : [],
+    // Without the rollup there is no verified wait fix, so no command reaches the page.
+    pending: (Array.isArray(row.summary?.pending) ? row.summary.pending : []).map((wait) => ({ step: wait?.step ?? null, since: null, ageSeconds: null, harness: null, fix: null, fixKind: null })),
     projects: Array.isArray(row.summary?.projects) ? row.summary.projects : [],
     ownerItems: num(row.summary?.ownerItems?.needsOwner) ? row.summary.ownerItems.needsOwner : null,
     alerts: [] };
@@ -443,7 +461,9 @@ export function fleetView(data, settings, message = '', shares) {
   const rows = rollup && Array.isArray(rollup.factories) ? rollup.factories : viewFactories.map(fallbackRow);
   const reference = findReference(rows, viewFactories, data.role);
   const alerts = collectAlerts(rows);
-  const head = `<header class="page-head fleet-head"><div><h1>Fleet</h1><p class="muted">${rows.length} factories · poll every ${esc(String(data.pollSeconds || 30))} seconds · <a href="/fleet/add-host">Add a host</a>${roleView(data.role, viewFactories.concat(rows))}</p></div></header>`;
+  // The head keeps its fact line and its Add a host control side by side, so the phone header
+  // costs one row instead of two, and the action is a 44 by 44 target at every width.
+  const head = `<header class="page-head fleet-head"><h1>Fleet</h1><div class="fleet-head-row"><p class="muted">${rows.length} factories · poll every ${esc(String(data.pollSeconds || 30))} seconds${roleView(data.role, viewFactories.concat(rows))}</p><a class="fleet-add-host" data-fleet-add-host href="/fleet/add-host">Add a host</a></div></header>`;
   const registryError = data.registryError ? `<p role="alert" class="fleet-registry-error">Fleet data unavailable: ${esc(data.registryError)}. Check the fleet registry.</p>` : '';
   const rollupError = !rollup && data.rollupError ? `<p role="alert" class="fleet-registry-error">${esc(data.rollupError)}</p>` : '';
   return `<div class="fleet-page">${head}${registryError}${rollupError}`

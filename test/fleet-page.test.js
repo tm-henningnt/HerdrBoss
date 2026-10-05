@@ -221,6 +221,84 @@ test('an unknown alert severity falls back to warning', async () => {
   assert.doesNotMatch(html, /sev crit/);
 });
 
+test('the Fleet header gives Add a host a 44 by 44 control beside the title', async () => {
+  const { html } = await render();
+  const root = createDocument().html(html);
+  const link = find(root, (node) => node.getAttribute('data-fleet-add-host') !== null);
+  assert.ok(link, 'the header carries the Add a host control');
+  assert.equal(link.getAttribute('href'), '/fleet/add-host');
+  assert.match(html, />Add a host</);
+  // The control sits next to the header text. It does not add a header line of its own.
+  assert.match(html, /<header class="page-head fleet-head">[\s\S]*data-fleet-add-host[\s\S]*<\/header>/);
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  assert.match(css, /\.fleet-add-host \{[^}]*min-height: 44px/);
+  assert.match(css, /\.fleet-add-host \{[^}]*min-width: 44px/);
+});
+
+test('the combined Fleet settings panel carries the settings form wrapper', async () => {
+  const { html } = await render();
+  const root = createDocument().html(html);
+  const form = find(root, (node) => node.getAttribute('data-fleet-settings-form') !== null);
+  let node = form.parentNode;
+  let wrapped = false;
+  while (node) {
+    const cls = node.getAttribute?.('class') || '';
+    if (cls.split(/\s+/).includes('fleet-settings')) wrapped = true;
+    node = node.parentNode;
+  }
+  assert.equal(wrapped, true, 'the settings form has a .fleet-settings ancestor, so the form grid applies');
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  assert.match(css, /\.fleet-settings label \{ display: grid/);
+  assert.match(css, /\.fleet-settings input \{[^}]*width: 100%/);
+  assert.match(css, /\.fleet-settings button \{[^}]*min-height: 44px/);
+});
+
+// WCAG 2.1 relative luminance and contrast ratio, computed from the shipped token values.
+function tokenPair(theme) {
+  const style = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const selector = theme === 'dark' ? ':root[data-theme="dark"] {' : ':root {';
+  const block = style.slice(style.indexOf(selector), style.indexOf('}', style.indexOf(selector)));
+  const tokens = Object.fromEntries([...block.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-f]{6})/g)].map((match) => [match[1], match[2]]));
+  const fleet = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  const rule = /\.fleet-page \.pill \{([^}]*)\}/.exec(fleet);
+  assert.ok(rule, 'the Fleet badge rule is scoped to the Fleet page');
+  const resolve = (value) => {
+    const name = /var\((--[a-z0-9-]+)\)/.exec(value);
+    assert.ok(name, `the badge uses a palette token: ${value}`);
+    return tokens[name[1]];
+  };
+  const declarations = Object.fromEntries(rule[1].split(';').map((part) => part.split(':').map((piece) => piece.trim())).filter((pair) => pair.length === 2));
+  const luminance = (hex) => {
+    const channel = (offset) => {
+      const part = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+      return part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+  };
+  const foreground = resolve(declarations.color);
+  const background = resolve(declarations.background);
+  const ratio = (Math.max(luminance(foreground), luminance(background)) + 0.05) / (Math.min(luminance(foreground), luminance(background)) + 0.05);
+  return { theme, foreground, background, ratio };
+}
+
+test('the Fleet badges use a readable token pair in both themes', () => {
+  for (const theme of ['light', 'dark']) {
+    const measured = tokenPair(theme);
+    assert.ok(measured.ratio >= 4.5, `${theme} badge contrast ${measured.ratio.toFixed(3)}:1 for ${measured.foreground} on ${measured.background}`);
+  }
+});
+
+test('the phone stylesheet removes the surplus header spacing', () => {
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
+  assert.match(phone, /\.fleet-head h1 \{ margin: 0/);
+  assert.match(phone, /\.fleet-head .muted \{[^}]*margin: 0/);
+  // The header keeps its fact line and its Add a host control.
+  assert.match(css, /\.fleet-head-row \{[^}]*display: flex/);
+  assert.match(phone, /\.fleet-head-row \{[^}]*gap: 10px/);
+  assert.match(phone, /\.fleet-page input, \.fleet-page textarea, \.fleet-page select \{ font-size: 16px; \}/);
+});
+
 test('the phone stylesheet keeps the C1 density and the 44 px controls', () => {
   const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
   const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
@@ -233,4 +311,88 @@ test('the phone stylesheet keeps the C1 density and the 44 px controls', () => {
   assert.match(css, /button\.lane-more \{[^}]*min-height: 44px/);
   assert.match(css, /button\.copy \{[^}]*min-height: 44px/);
   assert.match(css, /\.actions button, \.actions a, \.actions \.unavailable \{[^}]*min-height: 44px/);
+});
+
+// Every wait line on the page, in document order.
+function waits(html) {
+  const root = createDocument().html(html);
+  const found = [];
+  const walk = (node) => {
+    for (const child of node.childNodes || []) {
+      if (child.nodeType !== 1) continue;
+      if (child.getAttribute('data-fleet-pending') !== null) found.push(child);
+      walk(child);
+    }
+  };
+  walk(root);
+  return found;
+}
+
+test('a container wait shows the login command with a Copy control and a readable age', async () => {
+  const { html } = await render();
+  const [wait] = waits(html);
+  assert.match(html, /data-fleet-pending-step="login-claude"/);
+  assert.match(wait.textContent, /Waiting for you/);
+  assert.match(wait.textContent, /login-claude/);
+  assert.match(wait.textContent, /waiting 28 h/);
+  // The wait keeps the exact command and the existing copy hook. It adds no action hook and runs nothing.
+  assert.match(html, /<code class="cmd" data-fleet-wait-fix="command">herdr-boss factory login win1 claude<\/code>/);
+  assert.match(html, /data-fleet-pending-fix-copy data-copy="herdr-boss factory login win1 claude"/);
+  assert.doesNotMatch(html, /data-action="[^"]*"[^>]*factory login/);
+  // The wait lives in the factory card section, below the comparison. It adds no global alert.
+  const root = createDocument().html(html);
+  const card = find(root, (node) => node.getAttribute('data-fleet-factory') === 'win1' && node.tagName === 'ARTICLE');
+  assert.ok(find(card, (node) => node.getAttribute('data-fleet-pending') !== null), 'the wait sits in the factory card');
+  assert.ok(wait.textContent.includes('Waiting for you'));
+});
+
+test('a native wait shows instruction words and no command', async () => {
+  const factories = inventedFactories();
+  factories[0].summary.harnesses = [{ harness: 'claude', login: 'expired' }];
+  factories[0].summary.pending = [{ step: 'login-claude', since: '2026-10-04T08:00:00Z' }];
+  const { html } = await render(factories);
+  const [wait] = waits(html);
+  assert.match(wait.textContent, /Sign in claude in a terminal on this Mac\./);
+  assert.match(wait.textContent, /waiting 28 h/);
+  assert.match(html, /data-fleet-wait-fix="instruction"/);
+  assert.doesNotMatch(html, /factory login factory-zero/);
+});
+
+test('a wait with no fix shows the step and an unknown age without a command', async () => {
+  const factories = inventedFactories();
+  factories[1].summary.pending = [];
+  factories[0].summary.harnesses = [{ harness: 'claude', login: 'unknown' }];
+  factories[0].summary.pending = [{ step: 'connect-wizard' }, { step: 'login-claude', since: 'yesterday' }];
+  const { html } = await render(factories);
+  const found = waits(html);
+  assert.equal(found.length, 2);
+  assert.match(found[0].textContent, /connect-wizard/);
+  assert.match(found[0].textContent, /waiting time unknown/);
+  assert.match(found[1].textContent, /waiting time unknown/);
+  assert.doesNotMatch(html, /data-fleet-wait-fix="command"/);
+});
+
+test('a hostile wait step, harness, and since stay escaped and carry no command', async () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const factories = inventedFactories();
+  factories[0].summary.harnesses = [{ harness: hostile, login: 'expired' }];
+  factories[0].summary.pending = [{ step: `login-${hostile}`, since: hostile }];
+  factories[1].summary.pending = [];
+  const { html } = await render(factories);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html, /<img/);
+  // The hostile step yields no wait fix at all. Only its escaped text reaches the page.
+  assert.equal(waits(html).length, 1);
+  assert.doesNotMatch(waits(html)[0].textContent, /factory login/);
+  assert.doesNotMatch(html, /data-fleet-wait-fix/);
+});
+
+test('a healthy poll and an absent Boss add no wait', async () => {
+  const factories = inventedFactories();
+  factories[1].summary.pending = [];
+  factories[1].summary.boss = { running: false, harness: null };
+  const { html } = await render(factories);
+  assert.equal(waits(html).length, 0);
+  assert.doesNotMatch(html, /Waiting for you/);
+  assert.doesNotMatch(html, /Boss .*not running.*Waiting/);
 });
