@@ -1174,14 +1174,37 @@ function reviewText(value) {
   return text === '' || text.endsWith('\n') ? text : `${text}\n`;
 }
 
+// A review copy never reads a secret or config path. The .worker and .orchestration bookkeeping paths stay
+// with the review scope, so they do not refuse the copy.
+function reviewDeniedReason(relative) {
+  const item = String(relative).replaceAll('\\', '/');
+  if (item === '.worker' || item.startsWith('.worker/')) return null;
+  if (item === '.orchestration' || item.startsWith('.orchestration/')) return null;
+  return commitDeniedReason(item);
+}
+
+// Every changed path of a review target, with both sides of a rename.
+function reviewChangedPaths(root, args) {
+  return git(root, ['diff', '--no-renames', '--name-only', '-z', ...args]).split('\0').filter(Boolean);
+}
+
+function reviewSecretRefusal(source, denied) {
+  const list = denied.map(([item, reason]) => `${item} (${reason})`).join(', ');
+  return `Refuse to copy review inputs from ${source}: the target changes a secret or config path: ${list}. Remove the path, or copy safe files with --copy.`;
+}
+
 // Build the review inputs for a review worker. A read-only worker with an explicit --base BRANCH copies the
 // diff of that branch against the project base branch and the changed file list. --review-worktree PATH
-// copies git diff and git status of that worktree for an uncommitted target. The files go to .worker/inputs/.
+// copies the tracked uncommitted changes and the status of that worktree. The files go to .worker/inputs/.
 function reviewInputFiles(config, options, { workerDir } = {}) {
   const reviewWorktree = options.reviewWorktree == null ? '' : String(options.reviewWorktree);
-  const reviewBranch = options.readOnly === true && options.base != null && options.base !== '' ? String(options.base) : '';
+  const baseGiven = options.base != null && options.base !== '';
+  if (reviewWorktree && baseGiven) throw new Error('Give --base BRANCH or --review-worktree PATH, not both.');
+  if (reviewWorktree && options.readOnly !== true) {
+    throw new Error('--review-worktree needs --read-only. Add --read-only, or copy single files with --copy.');
+  }
+  const reviewBranch = options.readOnly === true && baseGiven ? String(options.base) : '';
   const fromBranch = reviewBranch !== '' && reviewBranch !== config.baseBranch;
-  if (reviewWorktree && fromBranch) throw new Error('Give --base BRANCH or --review-worktree PATH, not both.');
   if (!reviewWorktree && !fromBranch) return { files: [], section: '' };
   const prefix = path.posix.join(workerDir, 'inputs');
   if (reviewWorktree) {
@@ -1194,10 +1217,19 @@ function reviewInputFiles(config, options, { workerDir } = {}) {
     try { inside = git(target, ['rev-parse', '--is-inside-work-tree']).trim(); }
     catch { inside = ''; }
     if (inside !== 'true') throw new Error(`--review-worktree ${reviewWorktree} is not a Git worktree.`);
+    let changed;
+    try {
+      // HEAD as the baseline covers staged-only, unstaged, and combined tracked edits.
+      changed = reviewChangedPaths(target, ['HEAD']);
+    } catch (error) {
+      throw new Error(`Could not read the review worktree ${reviewWorktree}: ${error.message}`);
+    }
+    const denied = changed.map((item) => [item, reviewDeniedReason(item)]).filter(([, reason]) => reason);
+    if (denied.length) throw new Error(reviewSecretRefusal(`--review-worktree ${reviewWorktree}`, denied));
     let diff;
     let status;
     try {
-      diff = reviewText(git(target, ['diff']));
+      diff = reviewText(git(target, ['diff', 'HEAD']));
       status = reviewText(git(target, ['status']));
     } catch (error) {
       throw new Error(`Could not read the review worktree ${reviewWorktree}: ${error.message}`);
@@ -1210,16 +1242,24 @@ function reviewInputFiles(config, options, { workerDir } = {}) {
       section: [
         '## Review inputs',
         '',
-        `This task reviews the uncommitted changes of \`${target}\`. Read the copied review inputs \`${prefix}/${REVIEW_DIFF_NAME}\` and \`${prefix}/${REVIEW_STATUS_NAME}\`. Do not read another worktree. Ask the orchestrator when an input is missing.`,
+        `This task reviews the tracked uncommitted changes of \`${target}\`. Read the copied review inputs \`${prefix}/${REVIEW_DIFF_NAME}\` and \`${prefix}/${REVIEW_STATUS_NAME}\`. Do not read another worktree. Ask the orchestrator when an input is missing.`,
       ].join('\n'),
     };
   }
   const mainRef = config.baseBranch ?? 'main';
+  let changed;
+  try {
+    changed = reviewChangedPaths(config.root, [`${mainRef}...${reviewBranch}`]);
+  } catch (error) {
+    throw new Error(`Could not read the diff of ${mainRef}...${reviewBranch}: ${error.message}`);
+  }
+  const denied = changed.map((item) => [item, reviewDeniedReason(item)]).filter(([, reason]) => reason);
+  if (denied.length) throw new Error(reviewSecretRefusal(`--base ${reviewBranch}`, denied));
   let diff;
   let list;
   try {
     diff = reviewText(git(config.root, ['diff', `${mainRef}...${reviewBranch}`]));
-    list = reviewText(git(config.root, ['diff', '--name-only', `${mainRef}...${reviewBranch}`]));
+    list = reviewText(git(config.root, ['diff', '--no-renames', '--name-only', `${mainRef}...${reviewBranch}`]));
   } catch (error) {
     throw new Error(`Could not read the diff of ${mainRef}...${reviewBranch}: ${error.message}`);
   }

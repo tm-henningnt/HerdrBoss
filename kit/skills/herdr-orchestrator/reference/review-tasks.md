@@ -18,8 +18,10 @@ Read this file before you dispatch a reviewer or a review subagent.
 
 - Give the review target to `worker start`, so the inputs land in the reviewer worktree.
 - Use `--base BRANCH` for a committed branch. `worker start` copies the diff of `BRANCH` against the project base branch, and the changed file list, into `.worker/inputs/`.
-- Use `--review-worktree PATH` for an uncommitted target. `worker start` copies `git diff` and `git status` of that worktree.
+- Use `--review-worktree PATH` with `--read-only` for an uncommitted target. `worker start` copies the tracked uncommitted changes from `HEAD` and `git status` of that worktree.
 - Give `--base` or `--review-worktree`, not both.
+- `worker start` refuses the whole review when a tracked changed path is a dotenv, credential, key, token, secret, or OpenCode config file, and names the path. The paths `.worker/` and `.orchestration/` stay in the review scope and do not refuse the copy. Remove the path, or copy safe files with `--copy`.
+- The copied status can list an untracked file name. The copy never includes the content of an untracked file.
 - Put this rule in a review task brief: read the copied review inputs under `.worker/inputs/`. Do not read another worktree.
 
 ## Docs check
