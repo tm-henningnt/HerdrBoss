@@ -25,7 +25,7 @@ The summary age is `ageSeconds` on the poller row. The cutoff is **90 s**, the s
 - **never-seen**: no summary.
 - **unknown reading**: a field is `null`, or a spend row has `usd === null`.
 
-Each total uses fresh values only. A cached or never-seen factory is named in the coverage label and contributes no value. A total with no fresh value reads `unknown`. A total that includes a cached input reads `last good <age>`, never a bare number. A never-seen factory reads `unknown`, never `last good`. Every total shows `as of <oldest contributing age> · N of M factories`.
+Each total uses fresh values only. A cached or never-seen factory is named in the coverage label and contributes no value. A total with no fresh value reads `unknown`. A never-seen factory reads `unknown`, never `last good`. Every total shows `as of <oldest contributing age> · N of M factories`.
 
 | Total | Input | Rule |
 |---|---|---|
