@@ -241,3 +241,7 @@ Summary: `review publish` refuses a pack with no judge pass and writes nothing; 
 ## 2cf88b28ae0a
 Impact: useful
 Summary: Copy the review inputs into the reviewer worktree. A read-only `worker start --base BRANCH` copies the diff of the branch against the project base branch, and the changed file list, into `.worker/inputs/`. `--review-worktree PATH` needs `--read-only` and copies every tracked uncommitted change from `HEAD` plus `git status` of that worktree. Give `--base` or `--review-worktree`, not both. The copy refuses the whole review when a tracked changed path, including both sides of a rename, is a dotenv, credential, key, token, secret, or OpenCode config file. The paths `.worker/` and `.orchestration/` stay in the review scope and do not refuse the copy. The copied status can list an untracked file name, but the copy never includes its content. The brief tells the reviewer to read the copies and not another worktree. The review task rules name the options.
+
+## a69a2e9bee2e
+Impact: useful
+Summary: `harness check` reports a missing `stop-own` rule in `~/.codex/rules/herdr.rules`, names the file, and prints the line to add; only an active exact `decision="allow"` rule counts, and an exact forbidden rule or an allow rule with a forbidden rule gives a `bad` conflict; `harness sync` adds the rule with a `herdr.rules.bak-<UTC timestamp>` backup and writes nothing over a conflict; the Codex setup docs, the CLI help, and the orchestrator skill name the rule.
