@@ -1,6 +1,7 @@
 const FRESH_SECONDS = 90;
 const STATUS_STALE_SECONDS = 2 * 60 * 60;
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const LOGIN_WAIT_STEP = /^login-([a-z][a-z0-9-]{0,31})$/;
 
 const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 const isReading = (value) => isNumber(value) && value >= 0;
@@ -98,6 +99,31 @@ function total(known, rows, metric, value, dateLabels = []) {
   };
 }
 
+// A verified login wait gets the same kind-specific fix as the login alert. An unverified step,
+// an unsupported step, or an unknown factory kind gets no fix. The rollup never invents a command.
+function waitFix(kind, name, step, harnesses) {
+  const match = typeof step === 'string' ? LOGIN_WAIT_STEP.exec(step) : null;
+  if (!match) return { harness: null, fix: null, fixKind: null };
+  const harness = match[1];
+  const expired = (Array.isArray(harnesses) ? harnesses : []).some((login) => login?.harness === harness && login.login === 'expired');
+  if (!expired) return { harness, fix: null, fixKind: null };
+  if (kind === 'container') return { harness, fix: `herdr-boss factory login ${name} ${harness}`, fixKind: 'command' };
+  if (kind === 'native') return { harness, fix: `Sign in ${harness} in a terminal on this Mac.`, fixKind: 'instruction' };
+  return { harness, fix: null, fixKind: null };
+}
+
+// The wait age comes from the injected now. A missing, invalid, or future since has no age.
+function waitSince(since, now) {
+  const stamp = typeof since === 'string' ? Date.parse(since) : Number.NaN;
+  const valid = Number.isFinite(stamp);
+  return { since: valid ? since : null, ageSeconds: valid && now >= stamp ? Math.floor((now - stamp) / 1000) : null };
+}
+
+function factoryWaits(row, kind, summary, now) {
+  const waits = Array.isArray(summary?.pending) ? summary.pending : [];
+  return waits.map((wait) => ({ step: wait?.step ?? null, ...waitSince(wait?.since, now), ...waitFix(kind, row.name, wait?.step, summary?.harnesses) }));
+}
+
 function factoryRole(row, role) {
   if (!role || typeof role.headOfficeFactoryId !== 'string') return null;
   const factoryId = row.summary?.factoryId ?? row.factoryId;
@@ -110,9 +136,10 @@ function factoryRow(row, role, now) {
   const spend = factorySpend(summary, now);
   const quota = factoryQuota(summary);
   const needsOwner = summary?.ownerItems?.needsOwner;
+  const kind = row.kind ?? summary?.kind ?? null;
   return {
     ...row,
-    kind: row.kind ?? summary?.kind ?? null,
+    kind,
     role: factoryRole(row, role),
     health: typeof row.status === 'string' ? row.status : summary?.health?.status ?? 'unknown',
     summaryHealth: summary?.health?.status ?? 'unknown',
@@ -121,7 +148,7 @@ function factoryRow(row, role, now) {
     workers: isReading(summary?.workers?.running) ? summary.workers.running : null,
     quota,
     spend,
-    pending: Array.isArray(summary?.pending) ? summary.pending.map((wait) => ({ step: wait.step, since: wait.since })) : [],
+    pending: factoryWaits(row, kind, summary, now),
     projects: Array.isArray(summary?.projects) ? summary.projects.map((project) => ({ ...project, ...(project.board ? { board: { ...project.board } } : {}) })) : [],
     ownerItems: Number.isSafeInteger(needsOwner) && needsOwner >= 0 ? needsOwner : null,
     hasQuota: quota !== null,

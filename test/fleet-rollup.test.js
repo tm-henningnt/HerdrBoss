@@ -427,7 +427,8 @@ test('factory rows retain waits, projects, health, last seen, role, and only the
   assert.equal(local.health, 'healthy');
   assert.equal(local.lastSeenAt, '2026-10-05T00:59:00Z');
   assert.equal(local.freshness, 'fresh');
-  assert.deepEqual(local.pending, [{ step: 'login-claude', since: '2026-10-04T08:00:00Z' }]);
+  // The wait is unverified here: no harness row is expired, so the rollup gives no fix.
+  assert.deepEqual(local.pending, [{ step: 'login-claude', since: '2026-10-04T08:00:00Z', ageSeconds: 61200, harness: 'claude', fix: null, fixKind: null }]);
   assert.equal(local.projects[0].phase, 'build');
   assert.deepEqual(local.projects[0].board, { doing: 2, review: 1, blocked: 0, done7d: 3 });
   assert.equal(local.ownerItems, 2);
@@ -437,4 +438,95 @@ test('factory rows retain waits, projects, health, last seen, role, and only the
   assert.equal(unseen.lastSeenAt, null);
   assert.equal(unseen.ownerItems, null);
   assert.equal(unseen.workers, null);
+});
+
+test('a verified login wait carries a kind-specific fix, a harness, and a readable age', () => {
+  const rows = [
+    factory('factory-zero', { summary: summary('factory-zero', {
+      kind: 'native',
+      harnesses: [{ harness: 'claude', login: 'expired' }, { harness: 'codex', login: 'expired' }],
+      pending: [{ step: 'login-claude', since: '2026-10-04T01:00:00Z' }, { step: 'login-codex', since: '2026-10-05T00:30:00Z' }],
+    }) }),
+    factory('win1', { summary: summary('win1', {
+      kind: 'container',
+      harnesses: [{ harness: 'claude', login: 'expired' }],
+      pending: [{ step: 'login-claude', since: '2026-10-04T01:00:00Z' }],
+    }) }),
+  ];
+
+  const result = rollup(rows);
+  const local = result.factories.find((row) => row.name === 'factory-zero');
+  const remote = result.factories.find((row) => row.name === 'win1');
+  // Two independent waits stay two waits. Each carries its own age and its own fix.
+  assert.equal(local.pending.length, 2);
+  assert.deepEqual(local.pending[0], { step: 'login-claude', since: '2026-10-04T01:00:00Z', ageSeconds: 86400, harness: 'claude',
+    fix: 'Sign in claude in a terminal on this Mac.', fixKind: 'instruction' });
+  assert.deepEqual(local.pending[1], { step: 'login-codex', since: '2026-10-05T00:30:00Z', ageSeconds: 1800, harness: 'codex',
+    fix: 'Sign in codex in a terminal on this Mac.', fixKind: 'instruction' });
+  assert.deepEqual(remote.pending, [{ step: 'login-claude', since: '2026-10-04T01:00:00Z', ageSeconds: 86400, harness: 'claude',
+    fix: 'herdr-boss factory login win1 claude', fixKind: 'command' }]);
+});
+
+test('an unverified, unsupported, or hostile wait step gets no invented fix', () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const rows = [
+    factory('win1', { summary: summary('win1', {
+      harnesses: [{ harness: 'claude', login: 'ok' }],
+      pending: [{ step: 'login-claude', since: '2026-10-05T00:59:00Z' }],
+    }) }),
+    factory('win2', { summary: summary('win2', {
+      harnesses: [{ harness: 'claude', login: 'unknown' }, { harness: hostile, login: 'expired' }],
+      pending: [{ step: 'login-claude', since: '2026-10-05T00:59:00Z' }, { step: `login-${hostile}`, since: '2026-10-05T00:59:00Z' },
+        { step: 'connect-wizard', since: '2026-10-05T00:59:00Z' }],
+    }) }),
+    factory('win3', { summary: summary('win3', {
+      kind: 'remote-kind',
+      harnesses: [{ harness: 'claude', login: 'expired' }],
+      pending: [{ step: 'login-claude', since: '2026-10-05T00:59:00Z' }],
+    }) }),
+  ];
+
+  const result = rollup(rows);
+  const [ok, unknown, hostile3] = ['win1', 'win2', 'win3'].map((name) => result.factories.find((row) => row.name === name));
+  // A passing or unknown login reading keeps the wait but gives no command.
+  assert.equal(ok.pending[0].fix, null);
+  assert.equal(ok.pending[0].fixKind, null);
+  assert.equal(ok.pending[0].harness, 'claude');
+  assert.equal(ok.pending[0].ageSeconds, 60, 'the wait keeps its own age');
+  // An unknown reading never clears a wait.
+  assert.equal(unknown.pending.length, 3);
+  assert.ok(unknown.pending.every((wait) => wait.step), 'each step is kept');
+  for (const wait of unknown.pending.slice(1)) {
+    assert.equal(wait.fix, null, `no invented fix for ${wait.step}`);
+    assert.equal(wait.fixKind, null);
+  }
+  assert.equal(unknown.pending[1].harness, null, 'a hostile harness name is no harness');
+  // An unknown factory kind gets no command and no instruction.
+  assert.equal(hostile3.pending[0].fix, null);
+  assert.equal(hostile3.pending[0].fixKind, null);
+});
+
+test('a missing or invalid since reads as no age and no since', () => {
+  const rows = [factory('win1', { summary: summary('win1', {
+    harnesses: [{ harness: 'claude', login: 'expired' }, { harness: 'codex', login: 'expired' }],
+    pending: [{ step: 'login-claude' }, { step: 'login-codex', since: 'yesterday' }, { step: 'login-claude', since: 7 }],
+  }) })];
+  const pending = rollup(rows).factories[0].pending;
+  assert.equal(pending.length, 3);
+  for (const wait of pending) {
+    assert.equal(wait.since, null, `no since for ${wait.step}`);
+    assert.equal(wait.ageSeconds, null);
+    assert.equal(wait.fix, 'herdr-boss factory login win1 ' + wait.harness, 'the fix does not depend on the age');
+  }
+});
+
+test('an absent Boss and a healthy poll never create a wait', () => {
+  const rows = [
+    factory('factory-zero', { summary: summary('factory-zero', { kind: 'native', boss: { running: false, harness: null }, harnesses: [{ harness: 'claude', login: 'ok' }] }) }),
+    factory('win1', { summary: summary('win1', { boss: { running: false, harness: null }, harnesses: [{ harness: 'claude', login: 'ok' }] }) }),
+  ];
+  for (const row of rollup(rows).factories) {
+    assert.deepEqual(row.pending, [], `${row.name} has no wait`);
+    assert.ok(!row.alerts.some((alert) => alert.code === 'boss' || alert.label.includes('Waiting')), 'no Boss wait alert');
+  }
 });

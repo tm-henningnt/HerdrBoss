@@ -295,10 +295,27 @@ function projectsHtml(row) {
   });
   return `<div class="projects"><h3>Projects${stale}</h3>${items.join('')}</div>`;
 }
+// A verified Owner wait. The fix comes from the rollup, which decides the kind. A container wait shows
+// the exact command and the existing copy hook. A native wait shows instruction words only. A wait with
+// no fix, for example an unsupported step or an unknown login reading, shows no command at all.
+function waitAgeText(wait) {
+  const age = ageText(wait?.ageSeconds);
+  return age ? `waiting ${age}` : 'waiting time unknown';
+}
+function waitFixHtml(wait) {
+  const fix = typeof wait?.fix === 'string' && wait.fix.trim() ? wait.fix.trim() : null;
+  if (!fix) return '';
+  if (wait.fixKind === 'command') {
+    return `<code class="cmd" data-fleet-wait-fix="command">${esc(fix)}</code>`
+      + `<button class="copy" type="button" data-fleet-pending-fix-copy data-copy="${esc(fix)}">Copy</button>`
+      + '<span class="fleet-secondary">Run this command in the Owner terminal.</span>';
+  }
+  return `<span data-fleet-wait-fix="instruction">${esc(fix)}</span>`;
+}
 function pendingHtml(row) {
   const waits = Array.isArray(row.pending) ? row.pending : [];
   if (!waits.length) return '';
-  return waits.map((wait) => `<p class="wait-owner" data-fleet-pending data-fleet-pending-step="${esc(wait.step ?? UNKNOWN)}"><span><b>Waiting for you:</b> ${esc(wait.step ?? UNKNOWN)}${wait.since ? ` since <time datetime="${esc(wait.since)}">${esc(wait.since)}</time>` : ''}.</span></p>`).join('');
+  return waits.map((wait) => `<p class="wait-owner" data-fleet-pending data-fleet-pending-step="${esc(wait.step ?? UNKNOWN)}"><span><b>Waiting for you:</b> ${esc(wait.step ?? UNKNOWN)} · ${esc(waitAgeText(wait))}. ${waitFixHtml(wait)}</span></p>`).join('');
 }
 function bossInfo(row) {
   const boss = row.summary?.boss;
@@ -418,7 +435,8 @@ function fallbackRow(row) {
     workers: num(row.summary?.workers?.running) ? row.summary.workers.running : null,
     quota: null,
     spend: { value: null, day: null, label: null, reason: 'the rollup is unavailable' },
-    pending: Array.isArray(row.summary?.pending) ? row.summary.pending : [],
+    // Without the rollup there is no verified wait fix, so no command reaches the page.
+    pending: (Array.isArray(row.summary?.pending) ? row.summary.pending : []).map((wait) => ({ step: wait?.step ?? null, since: null, ageSeconds: null, harness: null, fix: null, fixKind: null })),
     projects: Array.isArray(row.summary?.projects) ? row.summary.projects : [],
     ownerItems: num(row.summary?.ownerItems?.needsOwner) ? row.summary.ownerItems.needsOwner : null,
     alerts: [] };
