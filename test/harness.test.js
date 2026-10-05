@@ -264,6 +264,61 @@ test('harness sync without a Codex rules file prints the stop-own line and write
   assert.equal(fs.existsSync(path.join(f.home, '.codex', 'rules', 'herdr.rules')), false);
 });
 
+// K19 rework: only an active exact allow rule counts. A deny, a comment, a malformed line,
+// a prompt line, a broader pattern, and an allow-plus-deny pair must not pass the check.
+test('harness check counts only an active exact allow rule for stop-own', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const rulesFile = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const allow = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")';
+  const cases = [
+    { name: 'forbidden only', body: 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="forbidden")\n', status: 'bad' },
+    { name: 'commented allow', body: `# ${allow}\n`, status: 'missing' },
+    { name: 'malformed without a decision', body: 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"])\n', status: 'missing' },
+    { name: 'prompt decision', body: 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="prompt")\n', status: 'missing' },
+    { name: 'broader pattern', body: 'prefix_rule(pattern=["herdr-boss", "worker"], decision="allow")\n', status: 'missing' },
+    { name: 'allow and forbidden', body: `${allow}\nprefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="forbidden")\n`, status: 'bad' },
+  ];
+  for (const { name, body, status } of cases) {
+    fs.writeFileSync(rulesFile, body);
+    const out = run(f, ['harness', 'check']).stdout;
+    const line = out.split('\n').find((entry) => entry.includes('codex rules') && entry.includes('stop-own'));
+    assert.ok(line, `${name}: no stop-own finding in:\n${out}`);
+    assert.ok(line.startsWith(status), `${name}: expected ${status}, got: ${line}`);
+    assert.ok(line.includes(rulesFile), `${name}: ${line}`);
+    assert.equal(fs.readFileSync(rulesFile, 'utf8'), body, `${name}: the check writes nothing`);
+  }
+  // A valid allow rule with spaces between the tokens passes.
+  const spaced = 'prefix_rule( pattern = [ "herdr-boss" , "worker" , "stop-own" ] , decision = "allow" )';
+  fs.writeFileSync(rulesFile, `${spaced}\n`);
+  const out = run(f, ['harness', 'check']).stdout;
+  assert.match(out, /^ok +codex rules: stop-own is allowed in .*herdr\.rules$/m, out);
+});
+
+// K19 rework: sync must not weaken an explicit deny. It reports the conflict and writes nothing.
+test('harness sync writes no stop-own rule over an explicit deny or a conflict', (t) => {
+  const f = fixture(t);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt')]));
+  const rulesFile = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const allow = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")';
+  const cases = [
+    { name: 'forbidden only', body: 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="forbidden")\n' },
+    { name: 'allow and forbidden', body: `${allow}\nprefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="forbidden")\n` },
+  ];
+  for (const { name, body } of cases) {
+    writeFile(rulesFile, body);
+    const result = run(f, ['harness', 'sync', '--codex-only']);
+    assert.equal(result.status, 1, `${name}: ${result.stderr}`);
+    assert.match(result.stdout, /Conflict/, `${name}: ${result.stdout}`);
+    assert.equal(fs.readFileSync(rulesFile, 'utf8'), body, `${name}: the file is unchanged`);
+    assert.deepEqual(fs.readdirSync(path.dirname(rulesFile)).filter((entry) => entry.startsWith('herdr.rules.bak-')), [], name);
+    const check = run(f, ['harness', 'check']);
+    assert.equal(check.status, 1, name);
+    assert.doesNotMatch(check.stdout, /^ok +codex rules: stop-own/m, `${name}: the check must not claim permission: ${check.stdout}`);
+  }
+});
+
 test('harness check reports each fixed entry', (t) => {
   const f = fixture(t);
   registry(f, []);

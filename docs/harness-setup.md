@@ -2,7 +2,7 @@
 
 Herdr Boss orchestration needs settings in each agent harness on the machine. This page gives each setting, the reason for it, its file, who applies it, and its risk. The templates are in [`claude-automode.json`](../kit/templates/harness/claude-automode.json), [`codex-herdr.rules`](../kit/templates/harness/codex-herdr.rules), [`codex-sandbox.toml`](../kit/templates/harness/codex-sandbox.toml), [`opencode-worker-agent.json`](../kit/templates/harness/opencode-worker-agent.json), and [`pi-herdr-guard.ts`](../kit/templates/harness/pi-herdr-guard.ts).
 
-`herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds missing Codex writable roots, adds the missing `stop-own` rule, and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
+`herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds missing Codex writable roots, adds the missing `stop-own` rule when the rules file holds no exact forbidden rule for it, and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
 
 ## Placeholders
 
@@ -93,7 +93,7 @@ WARNING: Keep `~/.config/herdr-boss` out of `writable_roots`. It holds the priva
 
 `herdr.rules` lets `ps`, the restart of the Herdr Boss service, `herdr-boss browser`, and `playwright-cli` run outside the sandbox. It also lets `herdr-boss worker stop-own` run, so a Codex worker stops its own process by PID. It forbids `ps e`, `ps -E`, `ps eww`, `ps auxe`, and `ps auxeww`, because they print the environment of other processes. Template: `codex-herdr.rules`. Replace `{{UID}}` with the output of `id -u`.
 
-`harness check` reports the `stop-own` rule when the rules file has no such rule. The report names the rules file and prints the line to add. `harness sync` adds the rule with a backup. When the rules file is missing, `harness sync` prints the line to add and writes nothing.
+`harness check` reports the `stop-own` rule when the rules file holds no active exact allow rule for it. The report names the rules file and prints the line to add. An exact forbidden rule for the same command, or an allow rule next to a forbidden rule, is a conflict: the check reports `bad`, names the file, and claims no permission. `harness sync` adds the missing rule with a backup. When the rules file is missing, `harness sync` prints the line to add and writes nothing. When the rules file forbids the command, or allows and forbids it at the same time, `harness sync` reports the conflict, writes nothing to the rules file, and exits 1.
 
 `-s workspace-write` sets the sandbox mode for a worker, so the mode does not depend on the trust defaults.
 
@@ -181,7 +181,7 @@ To apply the guard:
 - Codex: `writable_roots` holds `<repo>/.git` for each registered project, `{{HOME}}/.herdr-boss`, and `{{HOME}}/Projects/.herdr-wt`.
 - Codex: no root makes `~/.config/herdr-boss` writable.
 - Codex: `herdr.rules` forbids each of the five `ps` forms.
-- Codex: `herdr.rules` has the `stop-own` allow rule for `herdr-boss worker stop-own`. The report names the rules file and prints the line to add.
+- Codex: `herdr.rules` has an active exact `stop-own` allow rule for `herdr-boss worker stop-own`. The report names the rules file and prints the line to add. A commented, malformed, prompt, or broader line does not count. An exact forbidden rule, or an allow rule with a forbidden rule, gives a `bad` report.
 - Claude: the `**Herdr Boss projects**` line in `autoMode.environment` names each registered project, or names a parent folder of the project. See "Parent folder line".
 - OpenCode: `agent.worker` exists.
 - Pi: `herdr-guard.ts` exists.
@@ -192,14 +192,14 @@ To apply the guard:
 
 1. It copies `~/.codex/config.toml` to `config.toml.bak-<UTC timestamp>`.
 2. It rewrites the `writable_roots` array in `[sandbox_workspace_write]`. It keeps each entry and adds each missing root at the end. It changes no other line.
-3. It backs up `~/.codex/rules/herdr.rules` to `herdr.rules.bak-<UTC timestamp>` and adds the missing `stop-own` rule before the first forbidden rule. It changes no other line.
+3. It backs up `~/.codex/rules/herdr.rules` to `herdr.rules.bak-<UTC timestamp>` and adds the missing `stop-own` rule before the first forbidden rule. It changes no other line. When the file already forbids the exact rule, or allows and forbids it, the step writes nothing and reports the conflict.
 4. It reads only the `autoMode` key in `~/.claude/settings.json`. It compares its `environment` and `allow` lines with the filled template.
 5. It prints each missing line and each changed labeled environment line. It shows the old line after `now:`. The recommended `**Herdr Boss projects**` line names parent folders. See "Parent folder line".
 6. It counts Owner lines that the template does not define. It does not show their text.
 7. If the file or the `autoMode` key is missing, it prints the full template and says why.
 8. It does not edit `~/.claude/settings.json`.
 
-When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no `config.toml` backup. When the rules file has the `stop-own` rule, it makes no `herdr.rules` backup. `--dry-run` prints the roots and the rule to add and writes nothing. `--codex-only` does not print the Claude lines.
+When the section or the array is missing, or holds a comment or a value that is not a plain string, `harness sync` changes nothing. It prints the lines to add and exits 1. When no root is missing, it makes no `config.toml` backup. When the rules file holds the `stop-own` allow rule and no forbidden rule for it, `harness sync` makes no `herdr.rules` backup. A stop-own conflict also exits 1. `--dry-run` prints the roots and the rule to add, and it reports a conflict without writing. `--codex-only` does not print the Claude lines.
 
 `harness check` checks the project line in Claude settings. It ignores other Owner lines.
 

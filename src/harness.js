@@ -13,7 +13,9 @@ const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
 const MODELS_FILE = path.join(ROOT, 'kit', 'models.json');
 const SECTION = '[sandbox_workspace_write]';
 const STOP_OWN_RULE = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")';
-const STOP_OWN_PATTERN = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"herdr-boss"\s*,\s*"worker"\s*,\s*"stop-own"\s*\]/;
+// Only an exact three-component prefix_rule with decision allow or forbidden counts. A commented,
+// malformed, broader, or prompt line does not count.
+const STOP_OWN_RULE_PATTERN = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"herdr-boss"\s*,\s*"worker"\s*,\s*"stop-own"\s*\]\s*,\s*decision\s*=\s*"(allow|forbidden)"\s*\)/;
 const STOP_OWN_COMMENT = '# A worker stops its own process through the helper, never with a raw signal.';
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
 const PROJECTS_LABEL = 'Herdr Boss projects';
@@ -38,7 +40,21 @@ function homeDir() { return os.homedir(); }
 function registryFile(dataDir = DATA_DIR) { return path.join(dataDir, 'project-repos.json'); }
 function codexConfigFile(home) { return path.join(home, '.codex', 'config.toml'); }
 function codexRulesFile(home) { return path.join(home, '.codex', 'rules', 'herdr.rules'); }
-function hasStopOwnRule(text) { return String(text).split('\n').some((line) => STOP_OWN_PATTERN.test(line)); }
+// The state of the exact stop-own rule in a rules file: 'allow', 'forbidden', 'conflict', or null.
+// 'forbidden' means only an exact forbidden rule exists. 'conflict' means an exact allow rule and an
+// exact forbidden rule exist at the same time. Both check and sync use this helper.
+function stopOwnRuleState(text) {
+  let allow = false;
+  let forbidden = false;
+  for (const line of String(text).split('\n')) {
+    const decision = STOP_OWN_RULE_PATTERN.exec(line)?.[1];
+    if (decision === 'allow') allow = true;
+    else if (decision === 'forbidden') forbidden = true;
+  }
+  if (allow && forbidden) return 'conflict';
+  if (forbidden) return 'forbidden';
+  return allow ? 'allow' : null;
+}
 
 // Remove the user information of an http(s) URL and the password of any other URL.
 // An scp-style remote such as git@host:owner/repo holds no credential.
@@ -201,14 +217,23 @@ export function syncCodex({ home = homeDir(), dataDir = DATA_DIR, dryRun = false
 
 // Add the stop-own allow rule to ~/.codex/rules/herdr.rules. Keep every other line.
 // The rule goes before the first forbidden rule, as in the template. A missing rules file is not a
-// failure: the Owner copies the template, and harness check reports the missing file.
+// failure: the Owner copies the template, and harness check reports the missing file. An exact
+// forbidden rule or an allow-plus-forbidden pair is a conflict: sync writes nothing, because an
+// allow rule does not establish effective permission over an explicit deny.
 export function syncCodexRules({ home = homeDir(), dryRun = false, now = new Date() } = {}) {
   const file = codexRulesFile(home);
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch {
     return { ok: true, changed: false, lines: [`No Codex rules at ${file}. Nothing was changed. Add this line to it:`, STOP_OWN_RULE] };
   }
-  if (hasStopOwnRule(text)) return { ok: true, changed: false, lines: [`Codex rules in ${file}: nothing to add.`] };
+  const state = stopOwnRuleState(text);
+  if (state === 'allow') return { ok: true, changed: false, lines: [`Codex rules in ${file}: nothing to add.`] };
+  if (state === 'forbidden') {
+    return { ok: false, changed: false, lines: [`Codex rules in ${file} forbid the stop-own rule. Conflict: harness sync writes nothing, because an allow rule does not override an explicit forbidden rule. Remove the forbidden rule yourself.`] };
+  }
+  if (state === 'conflict') {
+    return { ok: false, changed: false, lines: [`Codex rules in ${file} allow and forbid the stop-own rule at the same time. Conflict: harness sync writes nothing. Remove one of the two rules yourself.`] };
+  }
   if (dryRun) return { ok: true, changed: false, lines: [`Dry run. harness sync would add this line to ${file}:`, `+ ${STOP_OWN_RULE}`] };
   let body = text.replace(/\n+$/, '').split('\n');
   if (body.length === 1 && body[0] === '') body = [];
@@ -393,10 +418,10 @@ export function claudeLines(options = {}) {
 export function syncHarness({ codexOnly = false, ...options } = {}) {
   const codex = syncCodex(options);
   const rules = syncCodexRules(options);
-  // The roots decide the exit code. A rules file that is missing stays a report line, not a failure.
+  // The roots decide, and a stop-own conflict also fails. A missing rules file stays a report line.
   const lines = [...codex.lines, ...rules.lines];
   if (!codexOnly) lines.push('', ...claudeLines(options));
-  return { ...codex, changed: codex.changed || rules.changed, lines };
+  return { ...codex, ok: codex.ok && rules.ok, changed: codex.changed || rules.changed, lines };
 }
 
 function readJson(file) {
@@ -486,8 +511,12 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
       const has = rules.split('\n').some((line) => new RegExp(`^\\s*prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${command}"\\s*\\]\\s*,\\s*decision\\s*=\\s*"forbidden"\\s*\\)`).test(line));
       add(has ? 'ok' : 'missing', 'codex rules', `Forbidden ${command} rule`, has ? `${command} is forbidden` : `${command} is not forbidden in ${rulesFile}`);
     }
-    // A Codex worker stops its own process with stop-own only when the rules file allows the command.
-    if (hasStopOwnRule(rules)) add('ok', 'codex rules', 'Stop-own rule', `stop-own is allowed in ${rulesFile}`);
+    // A Codex worker stops its own process with stop-own only when the rules file holds an active
+    // exact allow rule. An explicit deny or a deny-plus-allow pair is a conflict, not permission.
+    const stopOwn = stopOwnRuleState(rules);
+    if (stopOwn === 'allow') add('ok', 'codex rules', 'Stop-own rule', `stop-own is allowed in ${rulesFile}`);
+    else if (stopOwn === 'forbidden') add('bad', 'codex rules', 'Stop-own rule', `${rulesFile} forbids the stop-own rule; harness sync writes no allow rule over an explicit forbidden rule; remove the forbidden rule yourself`);
+    else if (stopOwn === 'conflict') add('bad', 'codex rules', 'Stop-own rule', `${rulesFile} allows and forbids the stop-own rule at the same time; the rules conflict; remove one of the two rules`);
     else add('missing', 'codex rules', 'Stop-own rule', `${rulesFile} has no stop-own rule; run herdr-boss harness sync or add: ${STOP_OWN_RULE}`);
     for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
   }
