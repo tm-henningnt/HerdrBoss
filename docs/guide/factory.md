@@ -136,9 +136,7 @@ What you do:
 2. Run `herdr-boss factory connect --check <name>`.
 3. Open the Fleet page. Turn on **Poll registered factories** in **Fleet settings**.
 
-What you should see: the check prints the name of the factory, its state, and the age of its summary. The Fleet page lists the factory. The page shows the fix of each alert behind a **Fix** control. A fix can be a command or an instruction in words. Copy a command and run it in the Owner terminal. Follow an instruction in words. A host action opens a confirm sheet with **Confirm copy** and **Cancel**, and it runs no command.
-
-A factory with an expired login shows `Waiting for you: login-HARNESS` in its factory card. The line shows how long the factory waits. Copy the `factory login` command of a container factory and run it in an Owner terminal. For the native factory, sign in the agent app in a terminal on this Mac. The page runs no command for a wait.
+What you should see: the check prints the factory name, state, and summary age. The Fleet page lists the factory. Select **Fix** to show an alert fix. Copy a command and run it in the Owner terminal. Follow an instruction in words. An expired login shows `Waiting for you: login-HARNESS` and its wait age in the factory card. For a container, copy its `factory login` command. For a native factory, sign in the agent app in a terminal on this Mac. A host action opens a confirm sheet with **Confirm copy** and **Cancel**. The page runs no command.
 
 If you do not see it:
 
