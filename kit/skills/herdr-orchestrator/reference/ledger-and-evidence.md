@@ -32,6 +32,8 @@ Do this review before each `herdr-boss publish`:
 
 Herdr Boss keeps the hash and the first time of the `phase` text and of the `summary` text for each project. When a text keeps the same value for `staleTextMinutes` (default 360 minutes), Herdr Boss sends you one stale text notice that names the fields that did not change. Rewrite those fields at the next publish. A field that changes starts a new period.
 
+Herdr Boss holds the idle-orchestrator notice back while the project has open work. Open work is an open review pack, a task in status `review`, a `spec` task in `doing` with no live worker, or a stale `phase` or `summary` text. A task in a held group and an epic card do not hold it back. Do not wait for that notice.
+
 ## Evidence tiers
 
 - Use the evidence tiers configured by the project. Set them in `evidenceTiers` in `.herdr-boss.json`; the kit rejects every other tier.

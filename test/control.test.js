@@ -1786,9 +1786,9 @@ test('loading treats an incompatible legacy route as unmetered, keeps the raw va
 const NUDGE_NOW = Date.parse('2026-09-27T12:00:00Z');
 const NUDGE_CFG = { quota: { warnPercent: 90, criticalPercent: 98 }, machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 }, providerKinds: {}, browsers: { staleOwnedMinutes: 30 }, workers: { staleIdleMinutes: 120 }, sharedBrowsers: [] };
 
-function nudgeFixture({ tasks = [], mode = 'auto', effectiveMode = mode, orchStatus = 'idle', workers = [], workspace = 'w1', workspaceLabel = 'HerdrBoss', slug = 'herdrboss' } = {}) {
+function nudgeFixture({ tasks = [], mode = 'auto', effectiveMode = mode, orchStatus = 'idle', workers = [], workspace = 'w1', workspaceLabel = 'HerdrBoss', slug = 'herdrboss', groups = [], reviewPacks = [], staleText = null, taskWorkers = {} } = {}) {
   return {
-    projects: [{ slug, workspace, project: 'HerdrBoss', tasks }],
+    projects: [{ slug, workspace, project: 'HerdrBoss', tasks, groups }],
     control: { projects: { [slug]: { slug, workspace, label: 'HerdrBoss', mode, effectiveMode, orch: { pane: `${workspace}:p1`, status: orchStatus } } } },
     herdr: {
       workspaces: [{ id: workspace, label: workspaceLabel }],
@@ -1799,6 +1799,9 @@ function nudgeFixture({ tasks = [], mode = 'auto', effectiveMode = mode, orchSta
     },
     quotas: [],
     browsers: [],
+    reviewPacks,
+    taskWorkers,
+    ...(staleText ? { staleText } : {}),
   };
 }
 
@@ -1909,6 +1912,100 @@ test('the nudge skips an epic card and a task that waits on the Owner', () => {
   const normal = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), since);
   assert.equal(normal.length, 1, 'a normal ready task still notifies');
   assert.match(normal[0].key, /:74$/);
+});
+
+test('the nudge skips a project with an open review pack and says so instead', () => {
+  const tasks = [{ id: '112', title: 'Draft release', status: 'review' }];
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const snap = nudgeFixture({ tasks, reviewPacks: [{ slug: 'herdrboss', pack: 'suite-1-2', version: 3, state: 'open' }] });
+  const ready = nudgeAlerts(snap, since).filter((a) => a.key.startsWith('nudge:idle:'));
+  assert.deepEqual(ready, [], 'the ready-work notice does not fire');
+  const open = nudgeAlerts(snap, since).filter((a) => a.key.startsWith('nudge:idle-open:'));
+  assert.equal(open.length, 1, 'the idle-with-open-packs notice fires instead');
+  assert.match(open[0].title, /idle with open packs/i);
+  assert.match(open[0].text, /suite-1-2/);
+  assert.equal(open[0].taskId, null, 'the open-packs notice names no task');
+  assert.equal(open[0].prompt, false, 'the open-packs notice is bulletin only, so it does not prompt the waiting orchestrator');
+  const closed = nudgeFixture({ tasks: [{ id: '113', title: 'Later work', status: 'todo' }], reviewPacks: [{ slug: 'herdrboss', pack: 'suite-1-2', version: 3, state: 'submitted' }] });
+  assert.equal(nudgeAlerts(closed, since).filter((a) => a.key.startsWith('nudge:idle:')).length, 1, 'a submitted pack does not hold the notice back');
+});
+
+test('the nudge skips a project with a pending status review', () => {
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const review = nudgeFixture({ tasks: [{ id: '112', title: 'Draft release', status: 'review' }, { id: '113', title: 'Later work', status: 'todo' }] });
+  assert.deepEqual(nudgeAlerts(review, since).filter((a) => a.key.startsWith('nudge:idle:')), [], 'a task in review holds the ready-work notice back');
+  assert.match(nudgeAlerts(review, since).find((a) => a.key.startsWith('nudge:idle-open:')).text, /task 112 "Draft release" is in review/);
+
+  const stale = nudgeFixture({ tasks: [{ id: '112', title: 'Draft release', status: 'todo' }], staleText: { herdrboss: { phase: { hash: 'abc', since: NUDGE_NOW - 7 * 3600000 } } } });
+  assert.deepEqual(nudgeAlerts(stale, since).filter((a) => a.key.startsWith('nudge:idle:')), [], 'a stale phase text holds the ready-work notice back');
+  const growing = nudgeFixture({ tasks: [{ id: '112', title: 'Draft release', status: 'todo' }], staleText: { herdrboss: { phase: { hash: 'abc', since: NUDGE_NOW - 5 * 3600000 } } } });
+  assert.equal(nudgeAlerts(growing, since).filter((a) => a.key.startsWith('nudge:idle:')).length, 1, 'a text under the stale limit does not hold it back');
+
+  const spec = nudgeFixture({ tasks: [{ id: '25', title: 'Release 5.0', status: 'doing', kind: 'spec' }] });
+  assert.deepEqual(nudgeAlerts(spec, since).filter((a) => a.key.startsWith('nudge:idle:')), [], 'a spec in doing with no live worker holds the ready-work notice back');
+  const specWorker = nudgeFixture({ tasks: [{ id: '25', title: 'Release 5.0', status: 'doing', kind: 'spec' }], taskWorkers: { herdrboss: [{ name: 'w25', taskId: '25', phase: 'live', kind: 'spec' }] } });
+  assert.equal(nudgeAlerts(specWorker, since).filter((a) => a.key.startsWith('nudge:idle:')).length, 1, 'a spec in doing with a live worker does not hold the notice back');
+});
+
+test('a review task in a held group or an epic does not hold the notice back', () => {
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const held = nudgeFixture({
+    tasks: [{ id: '112', title: 'Draft release', status: 'review', group: 'g1' }, { id: '113', title: 'Later work', status: 'todo' }],
+    groups: [{ id: 'g1', title: 'Held work', held: true }],
+  });
+  const [heldAlert] = nudgeAlerts(held, since).filter((a) => a.key.startsWith('nudge:idle:'));
+  assert.ok(heldAlert, 'a held review task does not hold the notice back');
+  assert.match(heldAlert.text, /task 113 "Later work"/, 'the notice names the ready task outside the held group');
+
+  const epic = nudgeFixture({
+    tasks: [{ id: '80', title: 'Release 1.0', status: 'review', kind: 'epic' }, { id: '113', title: 'Later work', status: 'todo' }],
+  });
+  const [epicAlert] = nudgeAlerts(epic, since).filter((a) => a.key.startsWith('nudge:idle:'));
+  assert.ok(epicAlert, 'a review epic does not hold the notice back');
+  assert.match(epicAlert.text, /task 113 "Later work"/, 'the notice names the ready task beside the epic');
+});
+
+test('an unknown review pack state holds the ready-work notice back', () => {
+  const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
+  const snap = nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] });
+  snap.reviewPacks = null;
+  assert.deepEqual(nudgeAlerts(snap, since).filter((a) => a.key.startsWith('nudge:idle:')), [], 'the ready-work notice does not fire when the pack reader failed');
+  assert.deepEqual(nudgeAlerts(snap, since).filter((a) => a.key.startsWith('nudge:idle-open:')), [], 'the open-packs notice does not fire either');
+  const absent = nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] });
+  delete absent.reviewPacks;
+  assert.equal(nudgeAlerts(absent, since).filter((a) => a.key.startsWith('nudge:idle:')).length, 1, 'a caller without pack data keeps the ready-work notice');
+});
+
+test('a failed review pack read is unknown and logs the reason', (t) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-packheads-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const data = path.join(temp, 'data');
+  fs.mkdirSync(data, { recursive: true });
+  const engineUrl = new URL('../src/engine.js', import.meta.url).href;
+  const configUrl = new URL('../src/config.js', import.meta.url).href;
+  const script = `
+import { Engine } from ${JSON.stringify(engineUrl)};
+import { loadConfig } from ${JSON.stringify(configUrl)};
+const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
+  collectHerdr: async () => ({ panes: [], workspaces: [] }),
+  collectMachine: async () => null,
+  collectProcesses: async () => new Map(),
+  collectQuotas: async () => [],
+  collectWorktreeCounts: async () => ({}),
+  collectCwdProcesses: async () => [],
+  collectMissingWorktreeProcesses: async () => [],
+  packHeads: () => { throw new Error('store unavailable'); },
+} });
+const state = await engine.tick();
+process.stdout.write(JSON.stringify({ reviewPacks: state.reviewPacks, log: state.events.filter((e) => e.type === 'review-packs') }));
+`;
+  const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: temp, HERDR_BOSS_DIR: data, HERDR_BOSS_LIVE_DIR: path.join(temp, 'live'), NODE_TEST_CONTEXT: '1' },
+    encoding: 'utf8',
+  }));
+  assert.equal(result.reviewPacks, null, 'the pack state is unknown, not an empty list');
+  assert.equal(result.log.length, 1, 'the engine logs one reason for the unknown state');
+  assert.match(result.log[0].text, /unknown/i);
 });
 
 test('the nudge skips paused and idle projects and the Boss workspace', () => {

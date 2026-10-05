@@ -230,6 +230,6 @@ Summary: The kit update line for a useful-only change is optional to act on now 
 Impact: useful
 Summary: Add the status review step: rewrite the published phase and summary at each publish and remove an Owner wait when no Mailbox item is open; Herdr Boss sends one stale text notice when a field keeps the same text for staleTextMinutes (default 360).
 
-## 527ed9a6f196
+## 4c9047f5ba52
 Impact: useful
-Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss suite` command runs and ends and that pane is idle or done; add `--no-notify`; a `--reuse` or `--skip-docs` run sends no notice; the kit text says to start a suite with the harness background option or rely on the notice, and never to end a turn while a detached suite runs.
+Summary: Send `suite finished: exit N` to the calling pane when a `herdr-boss suite` command runs and ends and that pane is idle or done; add `--no-notify`; a `--reuse` or `--skip-docs` run sends no notice; the kit text says to start a suite with the harness background option or rely on the notice, and never to end a turn while a detached suite runs. The idle-orchestrator notice holds back while a project has an open review pack, a task in status `review`, a `spec` task in `doing` with no live worker, or a stale `phase` or `summary` text; a held group and an epic card do not hold it back; a failed pack read holds it back and is logged; the notice then names the open work instead of ready work.

@@ -57,7 +57,7 @@ Only `project` is required. Omit the fields that you do not use.
 | `phases` | string[] | All phases in order. |
 | `tasks[].id` | string | A short ID, for example an issue number. |
 | `tasks[].title` | string | Required for each task. |
-| `tasks[].status` | string | One of `todo`, `doing`, `review`, `blocked`, `done`. The default is `todo`. |
+| `tasks[].status` | string | One of `todo`, `doing`, `review`, `blocked`, `done`. The default is `todo`. A task in status `review` holds the idle-orchestrator nudge back, unless it is in a held group or is an epic. |
 | `tasks[].worker` | string | The Herdr agent name of the worker. The page shows the live status of that agent. |
 | `tasks[].note` | string | One line of detail. |
 | `tasks[].waitingOn` | string | Optional. One of `owner`, `boss`, `task`, `external`. It names the party that holds the task. The project page shows a wait label and, for the Owner, a decision group. |
@@ -98,7 +98,7 @@ Publish every tracked issue as a task, including closed issues with `"status": "
 | `doneIds` | string[] | Written by `herdr-boss publish`. The IDs of the done tasks that `doneCount` counts. At most 5000 IDs. |
 | `doneCountBase` | integer | Written by `herdr-boss publish`. The part of `doneCount` that has no ID. The value is from 0 to 1000000. |
 | `tasks[].parent` | string | The ID of the parent task. The specs section counts the work under each spec by this field. |
-| `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. A task with `epic` only groups other tasks, and the idle-orchestrator nudge skips it. |
+| `tasks[].kind` | string | A task class, for example `spec`, `impl`, `bug`, or `gate`. Tasks with `spec` show in the specs section. A task with `epic` only groups other tasks, and the idle-orchestrator nudge skips it. A `spec` task in status `doing` with no live worker also holds the nudge back, unless it is in a held group. |
 | `tasks[].group` | string | The `id` of a group in `groups[]`. |
 | `tasks[].frontier` | string | `current` or `next`. Set it when the project defines its frontier itself. When no task has this field, the Boss derives it: current work is open and has no open blocker; next work waits only on current work. |
 | `tasks[].url` | string | An `http` or `https` link to the issue. |
@@ -122,7 +122,9 @@ Task IDs must be unique. A `blockedBy` ID that is not in `tasks[]` counts as ext
 
 The published `phase` and `summary` are free text for the Owner. Rewrite them at every publish, so they describe the current work. Remove an Owner wait from them as soon as the wait ends. A wait is real only when a task has `waitingOn: owner` or a `mailboxId` and is not done, or when an open Mailbox item exists for the project. Herdr Boss never reads the words of `phase` or `summary` as an Owner wait.
 
-Herdr Boss keeps the hash and the first time of the `phase` text and of the `summary` text for each project in its notice memory. When one text keeps the same value for `staleTextMinutes` (default 360 minutes), it sends one notice to the project lead of that project. The notice names the unchanged fields. The project lead changes the text at its next publish. A field that changes starts a new period.
+Herdr Boss keeps the hash and the first time of the `phase` text and of the `summary` text for each project in its notice memory. When one text keeps the same value for `staleTextMinutes` (default 360 minutes), it sends one notice to the project lead of that project. The notice names the unchanged fields. The project lead changes the text at its next publish. A field that changes starts a new period. A text that stays stale also holds the idle-orchestrator nudge back.
+
+An open review pack also holds the idle-orchestrator nudge back. The notice then says `Orchestrator idle with open packs` and names the open packs. That notice is in the bulletin only. See [Rules and notices](reference/settings.md#rules-and-notices).
 
 Use `waitingOn` to separate a wait for a person from a wait for other tasks. Set `waitingOn: owner` only when the task needs an Owner decision. Set `ask` to the short question. Post a Mailbox item for the Owner, and set `mailboxId` to its ID. Use `blockedBy` for a wait on other tasks. A `done` task must not have `waitingOn`. Clear `waitingOn` and `ask`, or finish the task, when the Owner has answered in any place. Then publish the status. Removing the task does not close the item. The publish closes the Mailbox item of `mailboxId` with the note `resolved by the project`. Only a publish for the same project closes its items.
 

@@ -32,7 +32,7 @@ import { claudeContextUsage, trackBoundary, normalizeModelId } from './context-h
 import { FINISH_TIMEOUT_MS, autoReadyHandoff, markSuccessorWorking, listHandoffs, saveHandoffs, supersedeHandoffs, expireHandoff, expireMissingHandoffs, handoffNotices } from './handoff.js';
 import { closeReviewItems, deliverQueued, mailboxCounts, readMessages, RETENTION_MS, SEND_LIMIT_PER_MINUTE } from './messages.js';
 import { initializeAgentResponseIndex, readAgentMetadata, recordAgentMessage, recordWorkerReport, sweepAgentMessages, updateAgentResponses, workerRunId } from './agent-messages.js';
-import { sweep as sweepReviewPacks } from './review-store.js';
+import { sweep as sweepReviewPacks, packHeads } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice, KIT_ADOPT_STEPS } from './kit-notice.js';
@@ -679,6 +679,7 @@ export class Engine extends EventEmitter {
       codeSignCloneDir,
       sweepCodeSignClones,
       sweepReviewPacks,
+      packHeads,
       sweepAttachments,
       runDenialScan,
       // A test engine never reads the real harness logs unless a test injects a collector.
@@ -1206,6 +1207,10 @@ export class Engine extends EventEmitter {
         snap.lockStats = lockLedgerSummary({ dataDir: this.lockDataDir, now });
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = this.communicationProjects;
+      // The idle-orchestrator notice reads the open review packs. The reader returns [] when the store does not exist.
+      // A reader failure marks the pack state unknown, so the notice holds back and the engine logs the reason.
+      try { snap.reviewPacks = this.collectors.packHeads({ dir: DATA_DIR }).filter((pack) => pack.state === 'open'); }
+      catch (error) { snap.reviewPacks = null; this.log('review-packs', `The open review pack state is unknown (${error.code || 'error'}). The idle notice holds back until the store answers.`); }
       snap.kit = kitSnapshot();
       const policy = migrateWorkspacePolicy(loadPolicy(), snap, { file: POLICY_FILE });
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
