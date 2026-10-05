@@ -15,6 +15,16 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 // margin above the deadline still ends the wait quickly on a loaded machine.
 const fixtureDeadlineMs = 15000;
 const cleanupWaitMs = fixtureDeadlineMs + 15000;
+// A fixture child has a lifetime of its own, so a fixture run that ends by itself is not a fixture bug. The doctor
+// fixture command also stops at its own 2000 ms command timeout, and the quota fixture probe stops at its own 1000 ms
+// probe timeout. A loaded machine can spend that time before this test reads the pids of the run. The test therefore
+// retries the whole run in a fresh folder when it could not catch the pids in time.
+const maxAttempts = 3;
+// Debug hook. Set HERDR_BOSS_FIXTURE_READ_DELAY_MS to stall the pid read of the first attempt by that many
+// milliseconds. The stall shows the race on an idle machine. Only the first attempt stalls, so a retry still catches
+// the fixture processes and the run ends with the real result.
+const firstAttemptDelayMs = Number(process.env.HERDR_BOSS_FIXTURE_READ_DELAY_MS || 0);
+const delay = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
 
 function isAlive(pid) {
   try {
@@ -34,11 +44,23 @@ function kill(pid) {
   }
 }
 
-// Reads the parent of a process. The command prints one number and nothing else.
-function parentOf(pid) {
-  const value = Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim());
-  if (!Number.isInteger(value) || value <= 1) throw new Error(`no parent found for pid ${pid}`);
-  return value;
+// Reads the whole process table in one call. The call is one snapshot, so a pid that leaves the table cannot make two
+// reads of the same pid disagree. The table maps each pid to the pid of its parent.
+function readProcessTable() {
+  let output;
+  try {
+    output = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
+  } catch (error) {
+    // ps exits with 1 when the command runs but the selection is empty. That cannot happen for the whole table.
+    if (error.status === 1) return new Map();
+    throw error;
+  }
+  const table = new Map();
+  for (const line of output.split('\n')) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (match) table.set(Number(match[1]), Number(match[2]));
+  }
+  return table;
 }
 
 async function waitFor(condition, maxMs) {
@@ -94,49 +116,98 @@ function startFixtureRun(t, testFile, tmp) {
   return runner;
 }
 
-test('an interrupted doctor command run leaves no fixture helper behind', { timeout: 120000 }, async (t) => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-fixture-cleanup-doctor-'));
-  const owned = [];
+// Runs one fixture attempt and reads its pids from one process table snapshot. The attempt owns only pids that it read
+// from its own fixture files and that the snapshot holds. Its cleanup hook stops exactly those pids and removes its
+// own folder, so a failed attempt leaves no child and no pipe behind.
+async function fixtureAttempt(t, spec, attemptNumber) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), spec.prefix));
+  const owned = new Set();
   t.after(() => {
     for (const pid of owned) kill(pid);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
-  const runner = startFixtureRun(t, 'test/doctor-process.test.js', tmp);
-  owned.push(runner.pid);
-  const readyFile = await waitFor(() => findFile(tmp, 'ready.json'), 30000);
-  assert.ok(readyFile, 'the fixture command reported its helper before the interrupt');
-  const { parent: commandPid, helper: helperPid } = JSON.parse(fs.readFileSync(readyFile, 'utf8'));
-  assert.equal(isAlive(commandPid), true, 'the fixture command is alive at the interrupt');
-  assert.equal(isAlive(helperPid), true, 'the fixture helper is alive at the interrupt');
-  const driverPid = parentOf(commandPid);
-  const filePid = parentOf(driverPid);
-  assert.notEqual(filePid, process.pid, 'the interrupted fixture run must not be this test process');
-  owned.push(commandPid, helperPid, driverPid, filePid);
-  // The interrupt kills the test file process, so its cleanup hook cannot run, and the driver, so no group kill
-  // reaches the fixture helper. Only the deadline inside the fixture can still stop it.
-  kill(filePid);
-  kill(driverPid);
-  assert.equal(await gone(helperPid), true, 'the fixture helper stops on its own deadline after the interrupt');
-  assert.equal(await gone(commandPid), true, 'the fixture command stops on its own deadline after the interrupt');
+  const runner = startFixtureRun(t, spec.testFile, tmp);
+  owned.add(runner.pid);
+  const readyFile = await waitFor(() => findFile(tmp, spec.readyName), 30000);
+  if (!readyFile) return { reason: `the fixture run never wrote ${spec.readyName}` };
+  let pids;
+  try {
+    pids = spec.roots(fs.readFileSync(readyFile, 'utf8'));
+  } catch (error) {
+    return { reason: `the fixture run removed ${spec.readyName} before the interrupt: ${error.message}` };
+  }
+  if (attemptNumber === 1) await delay(firstAttemptDelayMs);
+  // One read of the process table. Every pid that the test uses comes from this snapshot, so a slow machine cannot
+  // make the test read a parent of a pid that already left the table.
+  const table = readProcessTable();
+  for (const [name, parentName] of spec.links) {
+    const parent = table.get(pids[parentName]);
+    if (!Number.isInteger(parent) || parent <= 1) return { reason: `the ${parentName} process left the table before the interrupt` };
+    pids[name] = parent;
+  }
+  if (Object.values(pids).some((pid) => pid === process.pid)) return { reason: 'the fixture run reported this test process as a fixture pid' };
+  if (Object.values(pids).some((pid) => !table.has(pid))) return { reason: 'a fixture pid left the process table before the interrupt' };
+  // Only a pid that the snapshot holds is a pid that this attempt read from its own fixture run. This test process never
+  // enters the owned set, so the cleanup hook cannot kill it.
+  for (const pid of Object.values(pids)) owned.add(pid);
+  return { pids, owned };
+}
+
+// Runs a fixture run until one attempt catches its processes alive, and then hands the pids to the interrupt check.
+// A retry starts a fresh run in a fresh folder. The run fails only when no attempt catches the processes.
+async function withFixtureRun(t, spec, interrupt) {
+  const reasons = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await fixtureAttempt(t, spec, attempt);
+    if (result.reason) {
+      reasons.push(`attempt ${attempt}: ${result.reason}`);
+      continue;
+    }
+    await interrupt(result.pids);
+    return;
+  }
+  assert.fail(`no attempt of ${maxAttempts} caught the ${spec.testFile} processes alive. ${reasons.join(' ')}`);
+}
+
+const doctorRun = {
+  prefix: 'herdr-fixture-cleanup-doctor-',
+  testFile: 'test/doctor-process.test.js',
+  readyName: 'ready.json',
+  // The fixture shim names itself and its helper. Each following entry reads the parent of the entry before it.
+  roots: (text) => {
+    const { parent: command, helper } = JSON.parse(text);
+    return { command, helper };
+  },
+  links: [['driver', 'command'], ['file', 'driver']],
+};
+
+const quotaRun = {
+  prefix: 'herdr-fixture-cleanup-quota-',
+  testFile: 'test/quota-timeout.test.js',
+  readyName: 'probe.pid',
+  // The quota probe writes its own pid. The test file process of the child runner is its parent.
+  roots: (text) => ({ probe: Number(text) }),
+  links: [['file', 'probe']],
+};
+
+test('an interrupted doctor command run leaves no fixture helper behind', { timeout: 300000 }, async (t) => {
+  await withFixtureRun(t, doctorRun, async ({ command, helper, driver, file }) => {
+    assert.equal(isAlive(command), true, 'the fixture command is alive at the interrupt');
+    assert.equal(isAlive(helper), true, 'the fixture helper is alive at the interrupt');
+    // The interrupt kills the test file process, so its cleanup hook cannot run, and the driver, so no group kill
+    // reaches the fixture helper. Only the deadline inside the fixture can still stop it.
+    kill(file);
+    kill(driver);
+    assert.equal(await gone(helper), true, 'the fixture helper stops on its own deadline after the interrupt');
+    assert.equal(await gone(command), true, 'the fixture command stops on its own deadline after the interrupt');
+  });
 });
 
-test('an interrupted quota timeout run leaves no fixture probe behind', { timeout: 120000 }, async (t) => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-fixture-cleanup-quota-'));
-  const owned = [];
-  t.after(() => {
-    for (const pid of owned) kill(pid);
-    fs.rmSync(tmp, { recursive: true, force: true });
+test('an interrupted quota timeout run leaves no fixture probe behind', { timeout: 300000 }, async (t) => {
+  await withFixtureRun(t, quotaRun, async ({ probe, file }) => {
+    assert.equal(Number.isInteger(probe) && probe > 1, true, 'the quota fixture probe wrote a valid pid');
+    assert.equal(isAlive(probe), true, 'the quota fixture probe is alive at the interrupt');
+    kill(file);
+    assert.equal(await gone(probe), true, 'the quota fixture probe stops on its own deadline after the interrupt');
   });
-  const runner = startFixtureRun(t, 'test/quota-timeout.test.js', tmp);
-  owned.push(runner.pid);
-  const pidFile = await waitFor(() => findFile(tmp, 'probe.pid'), 30000);
-  assert.ok(pidFile, 'the quota fixture probe wrote its pid before the interrupt');
-  const probePid = Number(fs.readFileSync(pidFile, 'utf8'));
-  assert.equal(Number.isInteger(probePid) && probePid > 1, true, 'the quota fixture probe wrote a valid pid');
-  const filePid = parentOf(probePid);
-  assert.notEqual(filePid, process.pid, 'the interrupted fixture run must not be this test process');
-  owned.push(probePid, filePid);
-  assert.equal(isAlive(probePid), true, 'the quota fixture probe is alive at the interrupt');
-  kill(filePid);
-  assert.equal(await gone(probePid), true, 'the quota fixture probe stops on its own deadline after the interrupt');
 });
