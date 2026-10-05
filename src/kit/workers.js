@@ -48,7 +48,7 @@ const STALLED_PROMPT_WAIT_MS = 20_000;
 const BRIEF_SLOTS = new Set([
   'name', 'kind', 'model', 'effort', 'project', 'repo', 'worktree', 'branch', 'base', 'issue', 'task',
   'allowedPaths', 'reportPath', 'reportJsonPath', 'orchPane', 'orchAgent', 'bulletinPath', 'herdrEnvPrefix', 'herdrBin', 'date', 'evidenceTiers', 'threadLimit', 'imageBudget', 'copyPaths', 'leases',
-  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule', 'loadRule',
+  'kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'reviewInputsSection', 'stopRule', 'kindCommitRule', 'loadRule',
 ]);
 const MAX_COPIED_INPUT_BYTES = 200 * 1024 * 1024;
 const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
@@ -276,7 +276,7 @@ export function renderBrief(template, slots) {
   for (const name of names) if (!BRIEF_SLOTS.has(name)) throw new Error(`Unknown brief template slot: {{${name}}}.`);
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, name) => {
     const value = slots[name];
-    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'stopRule', 'kindCommitRule', 'loadRule'].includes(name) && (value === undefined || value === null || value === '')) return '';
+    if (['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'readOnlySection', 'reviewInputsSection', 'stopRule', 'kindCommitRule', 'loadRule'].includes(name) && (value === undefined || value === null || value === '')) return '';
     if (value === undefined || value === null || value === '') return '(none)';
     if (name === 'allowedPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
     if (name === 'copyPaths' && Array.isArray(value)) return value.length ? value.map((item) => `- ${item}`).join('\n') : '(none)';
@@ -1164,6 +1164,118 @@ function workerInputFiles(root, name) {
   return files;
 }
 
+const REVIEW_DIFF_NAME = 'review.diff';
+const REVIEW_FILES_NAME = 'review-files.txt';
+const REVIEW_STATUS_NAME = 'review-status.txt';
+
+// Keep the Git text stable as a file: one trailing newline, and an empty file for an empty result.
+function reviewText(value) {
+  const text = String(value ?? '');
+  return text === '' || text.endsWith('\n') ? text : `${text}\n`;
+}
+
+// A review copy never reads a secret or config path. The .worker and .orchestration bookkeeping paths stay
+// with the review scope, so they do not refuse the copy.
+function reviewDeniedReason(relative) {
+  const item = String(relative).replaceAll('\\', '/');
+  if (item === '.worker' || item.startsWith('.worker/')) return null;
+  if (item === '.orchestration' || item.startsWith('.orchestration/')) return null;
+  return commitDeniedReason(item);
+}
+
+// Every changed path of a review target, with both sides of a rename.
+function reviewChangedPaths(root, args) {
+  return git(root, ['diff', '--no-renames', '--name-only', '-z', ...args]).split('\0').filter(Boolean);
+}
+
+function reviewSecretRefusal(source, denied) {
+  const list = denied.map(([item, reason]) => `${item} (${reason})`).join(', ');
+  return `Refuse to copy review inputs from ${source}: the target changes a secret or config path: ${list}. Remove the path, or copy safe files with --copy.`;
+}
+
+// Build the review inputs for a review worker. A read-only worker with an explicit --base BRANCH copies the
+// diff of that branch against the project base branch and the changed file list. --review-worktree PATH
+// copies the tracked uncommitted changes and the status of that worktree. The files go to .worker/inputs/.
+function reviewInputFiles(config, options, { workerDir } = {}) {
+  const reviewWorktree = options.reviewWorktree == null ? '' : String(options.reviewWorktree);
+  const baseGiven = options.base != null && options.base !== '';
+  if (reviewWorktree && baseGiven) throw new Error('Give --base BRANCH or --review-worktree PATH, not both.');
+  if (reviewWorktree && options.readOnly !== true) {
+    throw new Error('--review-worktree needs --read-only. Add --read-only, or copy single files with --copy.');
+  }
+  const reviewBranch = options.readOnly === true && baseGiven ? String(options.base) : '';
+  const fromBranch = reviewBranch !== '' && reviewBranch !== config.baseBranch;
+  if (!reviewWorktree && !fromBranch) return { files: [], section: '' };
+  const prefix = path.posix.join(workerDir, 'inputs');
+  if (reviewWorktree) {
+    const target = path.resolve(reviewWorktree);
+    let stats;
+    try { stats = fs.statSync(target); }
+    catch { throw new Error(`--review-worktree ${reviewWorktree} does not exist.`); }
+    if (!stats.isDirectory()) throw new Error(`--review-worktree ${reviewWorktree} is not a directory.`);
+    let inside;
+    try { inside = git(target, ['rev-parse', '--is-inside-work-tree']).trim(); }
+    catch { inside = ''; }
+    if (inside !== 'true') throw new Error(`--review-worktree ${reviewWorktree} is not a Git worktree.`);
+    let changed;
+    try {
+      // HEAD as the baseline covers staged-only, unstaged, and combined tracked edits.
+      changed = reviewChangedPaths(target, ['HEAD']);
+    } catch (error) {
+      throw new Error(`Could not read the review worktree ${reviewWorktree}: ${error.message}`);
+    }
+    const denied = changed.map((item) => [item, reviewDeniedReason(item)]).filter(([, reason]) => reason);
+    if (denied.length) throw new Error(reviewSecretRefusal(`--review-worktree ${reviewWorktree}`, denied));
+    let diff;
+    let status;
+    try {
+      diff = reviewText(git(target, ['diff', 'HEAD']));
+      status = reviewText(git(target, ['status']));
+    } catch (error) {
+      throw new Error(`Could not read the review worktree ${reviewWorktree}: ${error.message}`);
+    }
+    return {
+      files: [
+        { relative: REVIEW_DIFF_NAME, content: diff, size: Buffer.byteLength(diff) },
+        { relative: REVIEW_STATUS_NAME, content: status, size: Buffer.byteLength(status) },
+      ],
+      section: [
+        '## Review inputs',
+        '',
+        `This task reviews the tracked uncommitted changes of \`${target}\`. Read the copied review inputs \`${prefix}/${REVIEW_DIFF_NAME}\` and \`${prefix}/${REVIEW_STATUS_NAME}\`. Do not read another worktree. Ask the orchestrator when an input is missing.`,
+      ].join('\n'),
+    };
+  }
+  const mainRef = config.baseBranch ?? 'main';
+  let changed;
+  try {
+    changed = reviewChangedPaths(config.root, [`${mainRef}...${reviewBranch}`]);
+  } catch (error) {
+    throw new Error(`Could not read the diff of ${mainRef}...${reviewBranch}: ${error.message}`);
+  }
+  const denied = changed.map((item) => [item, reviewDeniedReason(item)]).filter(([, reason]) => reason);
+  if (denied.length) throw new Error(reviewSecretRefusal(`--base ${reviewBranch}`, denied));
+  let diff;
+  let list;
+  try {
+    diff = reviewText(git(config.root, ['diff', `${mainRef}...${reviewBranch}`]));
+    list = reviewText(git(config.root, ['diff', '--no-renames', '--name-only', `${mainRef}...${reviewBranch}`]));
+  } catch (error) {
+    throw new Error(`Could not read the diff of ${mainRef}...${reviewBranch}: ${error.message}`);
+  }
+  return {
+    files: [
+      { relative: REVIEW_DIFF_NAME, content: diff, size: Buffer.byteLength(diff) },
+      { relative: REVIEW_FILES_NAME, content: list, size: Buffer.byteLength(list) },
+    ],
+    section: [
+      '## Review inputs',
+      '',
+      `This task reviews the branch \`${reviewBranch}\` against \`${mainRef}\`. Read the copied review inputs \`${prefix}/${REVIEW_DIFF_NAME}\` and \`${prefix}/${REVIEW_FILES_NAME}\`. Do not read another worktree. Ask the orchestrator when an input is missing.`,
+    ].join('\n'),
+  };
+}
+
 function mainCheckout(root) {
   const worktrees = git(root, ['worktree', 'list', '--porcelain'])
     .split(/\r?\n/)
@@ -1389,16 +1501,18 @@ function startWorkerOnce(name, options, {
   const browserWarning = codexBrowserWarning(options.kind, task);
   if (browserWarning) output(browserWarning);
   if (!task?.trim()) throw new Error('Task text must not be empty.');
+  const base = options.base ?? config.baseBranch;
+  const review = reviewInputFiles(config, options, { workerDir });
   const copyFiles = [
     ...(options.copy ?? []).map((input) => checkedCopyFile(config.root, path.resolve(config.root, input), input)),
     ...workerInputFiles(config.root, name),
+    ...review.files,
   ];
   const destinations = copyFiles.map(({ relative }) => relative);
   if (new Set(destinations).size !== destinations.length) throw new Error('Copy paths have a destination collision.');
   if (copyFiles.reduce((total, file) => total + file.size, 0) > MAX_COPIED_INPUT_BYTES) {
     throw new Error('Copied inputs exceed the 200 MB total limit.');
   }
-  const base = options.base ?? config.baseBranch;
   const baseCommit = git(config.root, ['rev-parse', base]).trim();
   const branch = options.noWorktree ? git(config.root, ['branch', '--show-current']).trim() : name;
   if (!branch) throw new Error('--no-worktree requires the current worktree to have a named branch.');
@@ -1509,6 +1623,7 @@ function startWorkerOnce(name, options, {
     evidenceTiers: (config.evidenceTiers || []).join(', '),
     imageBudget: config.imageBudget ?? 10,
     copyPaths: copyFiles.map(({ relative }) => path.posix.join(plan.workerDir, 'inputs', relative)),
+    reviewInputsSection: review.section,
     leases: leases.length ? `${leases.map((lease) => `\`${lease.env}=${lease.item}\` (pool \`${lease.pool}\`)`).join(', ')}. Use only these.` : null,
     kindHeaderNote: [
       options.kind === 'codex' ? 'In a Codex shell, run `setopt NO_BG_NICE` before a background command.' : '',
@@ -1541,7 +1656,7 @@ function startWorkerOnce(name, options, {
   if (briefSlots.copyPaths.length && !/{{\s*copyPaths\s*}}/.test(template)) {
     missingBriefDetails.push(`Copied inputs:\n${briefSlots.copyPaths.map((item) => `- ${item}`).join('\n')}`);
   }
-  for (const slot of ['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'stopRule', 'kindCommitRule']) {
+  for (const slot of ['kindHeaderNote', 'kindWaitNote', 'portInstruction', 'stopRule', 'kindCommitRule', 'reviewInputsSection']) {
     if (briefSlots[slot] && !new RegExp(`{{\\s*${slot}\\s*}}`).test(template)) missingBriefDetails.push(briefSlots[slot]);
   }
   const brief = `${renderBrief(template, briefSlots)}${missingBriefDetails.length ? `\n\n## Worker start details\n\n${missingBriefDetails.join('\n\n')}` : ''}`;
@@ -1587,7 +1702,8 @@ function startWorkerOnce(name, options, {
       const destination = path.join(worktree, plan.workerDir, 'inputs', ...file.relative.split('/'));
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       if (fs.existsSync(destination)) throw new Error(`Copy destination already exists: ${destination}.`);
-      fs.copyFileSync(file.source, destination, fs.constants.COPYFILE_EXCL);
+      if (file.content != null) fs.writeFileSync(destination, file.content, { flag: 'wx' });
+      else fs.copyFileSync(file.source, destination, fs.constants.COPYFILE_EXCL);
     }
     fs.writeFileSync(path.join(worktree, plan.workerDir, 'brief.md'), brief);
     if (plan.setup) {
