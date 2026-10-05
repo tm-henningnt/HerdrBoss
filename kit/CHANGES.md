@@ -245,3 +245,7 @@ Summary: Copy the review inputs into the reviewer worktree. A read-only `worker 
 ## a69a2e9bee2e
 Impact: useful
 Summary: `harness check` reports a missing `stop-own` rule in `~/.codex/rules/herdr.rules`, names the file, and prints the line to add; only an active exact `decision="allow"` rule counts, and an exact forbidden rule or an allow rule with a forbidden rule gives a `bad` conflict; `harness sync` adds the rule with a `herdr.rules.bak-<UTC timestamp>` backup and writes nothing over a conflict; the Codex setup docs, the CLI help, and the orchestrator skill name the rule.
+
+## 105496445d71
+Impact: useful
+Summary: Integrate copied read-only review inputs and exact stop-own harness checks. Preserve explicit forbidden rules. The release steps record verified checkpoints in project memory.
