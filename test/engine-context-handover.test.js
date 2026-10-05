@@ -36,6 +36,7 @@ globalThis.Date = class extends RealDate {
 };
 const calls = [];
 const herdrCalls = [];
+const gitCalls = [];
 const snapshots = [];
 const cfg = loadConfig();
 cfg.push = false;
@@ -76,8 +77,25 @@ const engine = new Engine(cfg, {
   },
   handoffRunner: async (command, args) => {
     calls.push({ step: calls.step, args });
-    if (args[2] === 'prepare') return JSON.stringify({ id: 'fake-handoff', newPane: 'fake-successor' });
+    if (args[2] === 'prepare') {
+      const newPane = input.createPreparedRecord ? 'w-alpha:p9' : 'fake-successor';
+      if (input.createPreparedRecord) {
+        const records = JSON.parse(fs.readFileSync(path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json'), 'utf8'));
+        records.push({ id: 'fake-handoff', project: 'alpha', workspace: 'w-alpha', label: 'orch', sourcePane: args[3], newPane,
+          displayLabel: 'Alpha', fromKind: 'claude', toKind: 'claude', model: 'claude-sonnet-5-5', status: 'prepared', automatic: true,
+          readyAt: new Date().toISOString(), preparedAt: new Date().toISOString() });
+        fs.writeFileSync(path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json'), JSON.stringify(records));
+      }
+      return JSON.stringify({ id: 'fake-handoff', newPane });
+    }
     return JSON.stringify({ ok: true });
+  },
+  gitRunner: async (args) => {
+    gitCalls.push({ step: calls.step, args });
+    if (args.includes('rev-parse')) return 'a'.repeat(40);
+    if (args.includes('docs/orchestration/memory.md')) return input.steps[calls.step].memoryCommit || '';
+    if (args.includes('--format=%cI')) return '2026-09-29T12:00:00.000Z';
+    return '';
   },
 });
 const logs = [];
@@ -105,7 +123,7 @@ for (const [index, step] of input.steps.entries()) {
   await engine.tick();
   snapshots.push({ handoffs: JSON.parse(fs.readFileSync(path.join(process.env.HERDR_BOSS_DIR, 'handoffs.json'), 'utf8')), alerts: engine.state?.alerts || [], memory: structuredClone(engine.memory) });
 }
-console.log(JSON.stringify({ calls, herdrCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits, snapshots, messages: engine.messageStore.all(), logs, mailboxAttempts }));
+console.log(JSON.stringify({ calls, herdrCalls, gitCalls, events: engine.events, memory: engine.memory, handoverWaits: engine.state?.handoverWaits, snapshots, messages: engine.messageStore.all(), logs, mailboxAttempts }));
 `;
 
 function transcript(home, cwd, sessionId, lines) {
@@ -120,6 +138,7 @@ function run(t, scenario) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-e1-context-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo: '/work/alpha' }]));
   const policy = structuredClone(POLICY_DEFAULTS);
   policy.autoHandover = scenario.autoHandover ?? true;
   Object.assign(policy, scenario.policy || {});
@@ -141,7 +160,7 @@ function run(t, scenario) {
     encoding: 'utf8',
     env: {
       ...process.env, HOME: dir, HERDR_BOSS_DIR: dir, HERDR_BOSS_LIVE_DIR: dir, HERDR_BOSS_ALLOW_ACTIONS: '1',
-      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose, mailboxFailures: scenario.mailboxFailures, successorScreen, quotas: scenario.quotas }),
+      NODE_TEST_CONTEXT: '', E1_SCENARIO: JSON.stringify({ steps: scenario.steps, mutateOnClose: scenario.mutateOnClose, mailboxFailures: scenario.mailboxFailures, successorScreen, quotas: scenario.quotas, createPreparedRecord: scenario.createPreparedRecord }),
     },
   });
   assert.equal(result.status, 0, result.stderr);
@@ -258,6 +277,49 @@ test('the context threshold is a policy value', { timeout: 30000 }, (t) => {
   assert.equal(prepares(above).length, 1);
 });
 
+test('the forced context threshold defaults to 400000 and stays above the normal threshold', () => {
+  assert.equal(POLICY_DEFAULTS.autoHandoverForceContextTokens, 400000);
+  assert.ok(validatePolicy({ ...structuredClone(POLICY_DEFAULTS), autoHandoverForceContextTokens: 400000 }, loadModels()).length === 0);
+  assert.ok(validatePolicy({ ...structuredClone(POLICY_DEFAULTS), autoHandoverForceContextTokens: 300000 }, loadModels())
+    .some((error) => /autoHandoverForceContextTokens must be greater than autoHandoverContextTokens/.test(error)));
+});
+
+test('a forced context handover waits for the memory commit before preparation and activates only when idle', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 425000,
+    createPreparedRecord: true,
+    steps: [
+      { at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+      { at: at(1), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+      { at: at(2), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) }, memoryCommit: 'b'.repeat(40) },
+      { at: at(3), herdr: herdrOf(pane('working'), worker, successor), published: { alpha: status(1) } },
+      { at: at(4), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } },
+    ],
+  });
+  const memoryPrompts = out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-alpha:p1');
+  assert.equal(memoryPrompts.length, 1);
+  assert.equal(memoryPrompts[0].args[3], 'Write docs/orchestration/memory.md with every release since the last entry, commit it, and push; then reply done.');
+  assert.equal(memoryPrompts[0].step, 0);
+  assert.deepEqual(prepares(out).map(({ step }) => step), [2], 'prepare only after a commit touches memory.md');
+  assert.equal(activates(out)[0]?.step, 4, 'the prepared successor waits until the source pane is idle');
+  assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateCommit, 'b'.repeat(40));
+});
+
+test('a forced context handover prepares after 20 minutes and records a missing memory update', { timeout: 30000 }, (t) => {
+  const out = run(t, {
+    tokens: 425000,
+    createPreparedRecord: true,
+    steps: [
+      { at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+      { at: at(19), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+      { at: at(20), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0) } },
+    ],
+  });
+  assert.equal(out.herdrCalls.filter(({ args }) => args[0] === 'agent' && args[1] === 'prompt' && args[2] === 'w-alpha:p1').length, 1);
+  assert.deepEqual(prepares(out).map(({ step }) => step), [2]);
+  assert.equal(out.records.find(({ id }) => id === 'fake-handoff')?.memoryUpdateStatus, 'not-updated');
+});
+
 test('the context threshold counts tokens, not a share of a model window', { timeout: 30000 }, (t) => {
   // 280K tokens is 28% of a 1M window and 140% of a 200K window. The policy value of 300K tokens decides in both cases.
   for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5[1m]']) {
@@ -314,7 +376,20 @@ test('one boundary prepares one successor', { timeout: 30000 }, (t) => {
 });
 
 test('context handover is off when automatic handover is off', { timeout: 30000 }, (t) => {
-  assert.deepEqual(prepares(run(t, { tokens: 400000, autoHandover: false, steps: boundary() })), []);
+  const out = run(t, { tokens: 425000, autoHandover: false, steps: boundary() });
+  assert.deepEqual(prepares(out), []);
+  assert.equal(out.herdrCalls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt'), false);
+});
+
+test('a forced context handover keeps the held, inactive, and Boss guards', { timeout: 30000 }, (t) => {
+  const paused = run(t, { tokens: 425000, steps: [{ at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0, { status: 'paused' }) } }] });
+  const stoodDown = run(t, { tokens: 425000, steps: [{ at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0, { status: 'stood down' }) } }] });
+  const inactive = run(t, { tokens: 425000, steps: [{ at: at(0), herdr: herdrOf(pane('idle')), published: { alpha: status(0) } }] });
+  const boss = run(t, { tokens: 425000, steps: [{ at: at(0), herdr: herdrOf(pane('working', { label: 'boss' }), worker), published: { alpha: status(0) } }] });
+  for (const out of [paused, stoodDown, inactive, boss]) {
+    assert.deepEqual(prepares(out), []);
+    assert.equal(out.herdrCalls.some(({ args }) => args[0] === 'agent' && args[1] === 'prompt'), false);
+  }
 });
 
 test('context handover skips held, inactive, and Boss orchestrators', { timeout: 30000 }, (t) => {

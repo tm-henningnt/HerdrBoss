@@ -520,6 +520,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value hands over sooner and keeps the context short.',
     apply: 'policy',
   }),
+  S('capacity', 'autoHandoverForceContextTokens', 'Force handover at context tokens', {
+    what: 'The context size above which Herdr Boss asks a Claude project lead to update and commit project memory before it prepares a fresh successor. It prepares the successor after the commit or after 20 minutes. The successor uses the same model. Herdr Boss activates it when the project lead pane is idle or done. This value must be higher than Hand over at context tokens.',
+    default: '400000', unit: 'Tokens', range: '50000 to 2000000',
+    raise: 'A higher value gives the source more time before a forced handover.',
+    lower: 'A lower value asks for a memory update sooner.',
+    apply: 'policy',
+  }),
   S('capacity', 'goals.autoCommand', 'Automatic Claude goal command', {
     what: 'Lets Herdr Boss send /goal automatically when it gives an Owner goal to a Claude agent. When this is off, Herdr Boss sends the goal as plain text. Manual herdr-boss goal set still sends /goal.',
     default: 'Off', unit: 'Switch', range: 'On or off',

@@ -256,6 +256,15 @@ test('the schema holds the succession, workspace, and share explanations', () =>
   for (const id of ['succession.ladder', 'workspace.exclusion', 'project.shares']) assert.match(app, new RegExp(`helpButton\\('${id.replace('.', '\\.')}'\\)`));
 });
 
+test('forced context handover has an editable policy setting and clear help', () => {
+  const item = SETTING_HELP.autoHandoverForceContextTokens;
+  assert.equal(item?.label, 'Force handover at context tokens');
+  assert.equal(item?.default, '400000');
+  assert.equal(item?.range, '50000 to 2000000');
+  assert.match(item?.what || '', /before it prepares a fresh successor/);
+  assert.match(app, /settingRow\('autoHandoverForceContextTokens'/);
+});
+
 test('automatic Claude goal delivery has a policy control and help text', () => {
   assert.equal(POLICY_DEFAULTS.goals.autoCommand, false);
   assert.equal(SETTING_HELP['goals.autoCommand']?.group, 'capacity');
