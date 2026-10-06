@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=2fdd21406a4b -->
+<!-- herdr-boss kit v=0b9e96f689e8 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -24,6 +24,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Give tasks that launch their own Chromium (Playwright, performance replays, galleries) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
 - A `codex` worker can use the `herdr-boss browser` commands (`tab new`, `navigate`, `screenshot`, `click`, `key`, `text`) on its project browser. Herdr Boss runs that browser outside the sandbox. Use these commands for a visual check of a served page.
 - Keep `herdr-boss browser` a thin helper for visual checks. Do not use it as a Playwright or agent-browser replacement, or for general page automation or scripting.
+- Store a host in a local config or a bookmark without a scheme. A worker gets names and indexes only from `herdr-boss browser bookmarks list`. Never paste a tenant host into a report or a transcript.
 - Pass each worker `toolSuggestion` to the Boss in one line. The Boss decides the change.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
