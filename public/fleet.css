@@ -76,6 +76,7 @@ button.copy { min-height: 44px; min-width: 44px; padding: 0 12px; border: 1px so
 .lanes h3 { margin: 6px 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 button.lane-more { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer; }
 .lane { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); }
+.lane.estimate { grid-template-columns: minmax(0, 1fr); }
 .lane:first-of-type { border-top: 0; }
 .lanes:not(.open) .lane.more { display: none; }
 .lanes.open button.lane-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }

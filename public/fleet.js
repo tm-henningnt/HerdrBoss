@@ -285,7 +285,7 @@ function estimatesHtml(row) {
   if (!rows.length) return '';
   const lines = rows.map((lane) => {
     const reset = typeof lane.resetAt === 'string' && lane.resetAt ? ` · resets <time datetime="${esc(lane.resetAt)}">${esc(lane.resetAt)}</time> (set by hand)` : '';
-    return `<div class="lane" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''}</span>`
+    return `<div class="lane estimate" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''}</span>`
       + `<span class="mono small">${esc(ESTIMATE_LABEL)}: ${esc(usageEstimateText(lane.estimate))}${reset}</span></div>`;
   });
   return `<div class="lanes" data-key="fleet-estimates:${esc(String(row.name))}"><h3>Local estimate${row.freshness === 'cached' ? ' · last good data' : ''}</h3>${lines.join('')}</div>`;

@@ -70,3 +70,14 @@ test('the Fleet card estimate row is not a hidden "more" lane', async () => {
   assert.ok(tag, 'the estimate row renders');
   assert.ok(!tag[1].split(/\s+/).includes('more'), `estimate row class is "${tag[1]}"`);
 });
+
+test('the Fleet card estimate row stacks its label and its text in one column', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const rows = [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary: { ...fixture, kind: 'container', factoryId: 'win1', name: 'win1' } }];
+  const html = fleetView({ factories: rows, pollSeconds: 30, rollup: buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') }) });
+  const tag = html.match(/<div class="([^"]*)" data-fleet-estimate="opencode"/);
+  assert.ok(tag && tag[1].split(/\s+/).includes('estimate'), 'the estimate row has its own class');
+  const css = fs.readFileSync(new URL('../public/fleet.css', import.meta.url), 'utf8');
+  assert.match(css, /\.lane\.estimate\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/);
+});
