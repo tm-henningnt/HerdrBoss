@@ -275,3 +275,21 @@ test('an accepted newer 1.x fleet summary keeps working and drops an unsupported
   // The strict producer allow-list still refuses the same unknown field.
   assert.throws(() => assertFleetSummary(newer), /supported contract/);
 });
+
+test('the fleet summary quota row takes an optional local estimate and refuses a percent in it', async () => {
+  const { validateFile } = await import('./schema-check.js');
+  const valid = readJson(`${exampleDir}/fleet-summary.valid.opencode-estimate.json`);
+  assert.deepEqual(validateFile(valid, fleetSummarySchemaFile), []);
+  assert.equal(valid.quotas[2].usedPercent, null);
+  assert.equal(valid.quotas[2].status, 'unknown');
+  assert.equal(valid.quotas[0].estimate, undefined);
+  assert.ok(validateFile(readJson(`${exampleDir}/fleet-summary.invalid.estimate-percent.json`), fleetSummarySchemaFile).length > 0);
+  for (const [field, value] of [['days', 0], ['tokens', -1], ['costUsd', -0.5], ['omittedModels', 1.5], ['tokens', 'many']]) {
+    const body = structuredClone(valid);
+    body.quotas[2].estimate[field] = value;
+    assert.ok(validateFile(body, fleetSummarySchemaFile).length > 0, `refuses ${field} ${value}`);
+  }
+  const bare = structuredClone(valid);
+  delete bare.quotas[2].estimate;
+  assert.deepEqual(validateFile(bare, fleetSummarySchemaFile), []);
+});

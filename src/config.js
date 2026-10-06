@@ -139,7 +139,9 @@ const DEFAULTS = {
   push: true,
   // Minimum seconds before the same alert is pushed again.
   alertCooldownSeconds: 6 * 3600,
-  quota: { warnPercent: 90, criticalPercent: 98 },
+  // opencodeGoResetAt is the reset time of the OpenCode Go subscription, set by hand, because OpenCode Go has no usage source.
+  // opencodeStatsDays is the number of days of the local estimate that `opencode stats` gives.
+  quota: { warnPercent: 90, criticalPercent: 98, opencodeGoResetAt: '', opencodeStatsDays: 7 },
   quotaPlan: { burstPace: 1, applyThreshold: 95, margin: 0, horizon: 'last-expiry', tolerance: 5, holdMargin: 1, slowFactor: 0.5, planMode: 'paced' },
   machine: { memFreeWarnPercent: 15, loadWarnFactor: 2 },
   // Optional legacy shared browsers. Only alert about explicitly configured entries.
@@ -156,6 +158,8 @@ const DEFAULTS = {
   browser: { idleCloseMinutes: 20 },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
   analytics: { actionsMinutes: true },
+  // Install the Claude usage helper in the factory image home. The factory reads this key at each container start.
+  factories: { claudeUsageHelper: true },
   watch: {
     quietHours: false,
     maxWorkers: null,
@@ -180,6 +184,8 @@ const SERVICE_SETTINGS = [
   ['Machine', 'machine.memFreeWarnPercent'],
   ['Quota', 'quota.warnPercent'],
   ['Quota', 'quota.criticalPercent'],
+  ['Quota', 'quota.opencodeGoResetAt'],
+  ['Quota', 'quota.opencodeStatsDays'],
   ['Quota plan', 'quotaPlan.burstPace'],
   ['Quota plan', 'quotaPlan.applyThreshold'],
   ['Quota plan', 'quotaPlan.margin'],
@@ -214,6 +220,7 @@ const SERVICE_SETTINGS = [
   ['Service', 'allowedHosts'],
   ['Service', 'log.maxMegabytes'],
   ['Service', 'log.keepFiles'],
+  ['Service', 'factories.claudeUsageHelper'],
   ['Analytics', 'analytics.actionsMinutes'],
 ];
 
@@ -423,6 +430,7 @@ const SERVICE_SETTING_RANGES = new Map([
   ['machine.memFreeWarnPercent', [1, 50]],
   ['quota.warnPercent', [50, 99]],
   ['quota.criticalPercent', [51, 100]],
+  ['quota.opencodeStatsDays', [1, 90]],
   ['quotaPlan.applyThreshold', [50, 100]],
   ['staleStatusMinutes', [5, 1440]],
   ['staleTextMinutes', [5, 10080]],
@@ -447,13 +455,15 @@ const SERVICE_SETTING_DECIMALS = new Map([
   ['quotaPlan.holdMargin', [0, 50]],
   ['quotaPlan.slowFactor', [0.1, 1]],
 ]);
-const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode']);
+const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode', 'quota.opencodeGoResetAt']);
+const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/;
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
   'browsers.sweepCodeSignClones',
   'watch.quietHours',
   'push',
   'analytics.actionsMinutes',
+  'factories.claudeUsageHelper',
 ]);
 const MAX_ALLOWED_HOSTS = 50;
 // One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.
@@ -548,8 +558,12 @@ function validateServiceSettingValues(changes) {
     } else if (SERVICE_SETTING_TEXT.has(setting)) {
       if (setting === 'quotaPlan.planMode' && !['paced', 'burst'].includes(value)) throw new Error('quotaPlan.planMode must be paced or burst.');
       if (setting === 'quotaPlan.horizon' && value !== 'last-expiry'
-        && (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value)))) {
+        && (typeof value !== 'string' || !ISO_TIME.test(value) || !Number.isFinite(Date.parse(value)))) {
         throw new Error('quotaPlan.horizon must be last-expiry or an ISO time.');
+      }
+      if (setting === 'quota.opencodeGoResetAt' && value !== ''
+        && (typeof value !== 'string' || !ISO_TIME.test(value) || !Number.isFinite(Date.parse(value)))) {
+        throw new Error('quota.opencodeGoResetAt must be blank or an ISO time.');
       }
       normalizedChanges[setting] = value;
     } else if (SERVICE_SETTING_BOOLEANS.has(setting)) {

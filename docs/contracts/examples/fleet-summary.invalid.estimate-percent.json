@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "contractVersion": "1.0.0",
+  "factoryId": "factory-zero",
+  "name": "factory-zero",
+  "kind": "native",
+  "version": "0.1.0",
+  "kitRevision": "abcdef012345",
+  "generatedAt": "2026-10-02T10:00:00Z",
+  "dashboardUrl": "https://factory-zero.example",
+  "health": {
+    "status": "degraded",
+    "tickAgeSeconds": 4,
+    "herdrReachable": true,
+    "clockOffsetSeconds": -42
+  },
+  "machine": {
+    "load1": 0.4,
+    "load5": 0.5,
+    "load15": 0.6,
+    "cpus": 4,
+    "memoryTotalMb": 8192,
+    "memoryFreePercent": 60,
+    "swapUsedMb": 0,
+    "diskFreePercent": 34,
+    "diskFreeMb": 51200,
+    "utcOffsetMinutes": 120
+  },
+  "workers": {
+    "running": 5,
+    "max": 12
+  },
+  "harnesses": [
+    {
+      "harness": "claude",
+      "login": "expired",
+      "checkedAt": "2026-10-02T09:59:30Z"
+    },
+    {
+      "harness": "codex",
+      "login": "ok",
+      "checkedAt": "2026-10-02T09:59:31Z"
+    }
+  ],
+  "boss": {
+    "running": true,
+    "harness": "claude"
+  },
+  "pending": [
+    {
+      "step": "login-claude",
+      "since": "2026-10-02T08:00:00Z"
+    }
+  ],
+  "backup": {
+    "lastAt": "2026-10-02T06:00:00Z"
+  },
+  "projects": [
+    {
+      "slug": "sample-project",
+      "phase": "build",
+      "status": "doing",
+      "statusAgeSeconds": 25,
+      "kitRevision": "abcdef012345",
+      "board": {
+        "doing": 1,
+        "review": 0,
+        "blocked": 0,
+        "done7d": 2
+      }
+    }
+  ],
+  "quotas": [
+    {
+      "harness": "codex",
+      "accountKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lane": "primary",
+      "usedPercent": 37,
+      "resetAt": "2026-10-09T10:00:00Z",
+      "status": "ok"
+    },
+    {
+      "harness": "codex",
+      "accountKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lane": "secondary",
+      "usedPercent": 12,
+      "resetAt": "2026-10-13T10:00:00Z",
+      "status": "ok"
+    },
+    {
+      "harness": "opencode",
+      "accountKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "lane": "unknown",
+      "usedPercent": null,
+      "resetAt": "2026-10-09T10:00:00Z",
+      "status": "unknown",
+      "estimate": {
+        "days": 7,
+        "tokens": 270018600,
+        "costUsd": 2.37,
+        "omittedModels": 2,
+        "usedPercent": 40
+      }
+    }
+  ],
+  "spend": [
+    {
+      "day": "2026-10-02",
+      "role": "worker",
+      "harness": "codex",
+      "usd": 0.15
+    }
+  ],
+  "alerts": [
+    {
+      "code": "login-expired",
+      "severity": "warning"
+    },
+    {
+      "code": "status-stale",
+      "severity": "warning",
+      "projectSlug": "sample-project"
+    }
+  ],
+  "shareItemTitles": true,
+  "ownerItems": {
+    "total": 2,
+    "needsOwner": 1,
+    "rows": [
+      {
+        "id": "item-a",
+        "projectSlug": "sample-project",
+        "kind": "decide",
+        "title": "Choose the sample colour"
+      },
+      {
+        "id": "item-b",
+        "kind": "answer",
+        "title": "Confirm the sample owner"
+      }
+    ]
+  },
+  "reviewPacks": [
+    {
+      "id": "pack-a",
+      "waitingItems": 1
+    }
+  ]
+}

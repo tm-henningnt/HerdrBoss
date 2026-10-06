@@ -109,7 +109,7 @@ try {
   assert.deepEqual(keys, [
     'worktreeRoot', 'projectRoot',
     'machine.memFreeWarnPercent',
-    'quota.warnPercent', 'quota.criticalPercent',
+    'quota.warnPercent', 'quota.criticalPercent', 'quota.opencodeGoResetAt', 'quota.opencodeStatsDays',
     'quotaPlan.burstPace', 'quotaPlan.applyThreshold', 'quotaPlan.margin', 'quotaPlan.horizon', 'quotaPlan.tolerance', 'quotaPlan.holdMargin', 'quotaPlan.slowFactor', 'quotaPlan.planMode',
     'staleStatusMinutes',
     'staleTextMinutes',
@@ -119,14 +119,14 @@ try {
     'workers.leaseGraceMinutes',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'chromePath',
-    'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'analytics.actionsMinutes',
+    'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'factories.claudeUsageHelper', 'analytics.actionsMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
-    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
+    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
     'config', 'default', 'config', 'default', 'default', 'default', 'config', 'config', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
-    'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default',
+    'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',

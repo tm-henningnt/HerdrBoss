@@ -11,6 +11,7 @@ export const APPLY = {
   restart: 'Change it in config.json. Restart the service.',
   now: 'The change takes effect at once.',
   'saved-restart': 'Select Save in the group. Restart the service for the change to take effect.',
+  'saved-factory-start': 'Select Save in the group. Each factory container applies the change at its next start.',
 };
 
 // The order of a group is the order on the page. `advanced` groups sit in the collapsed Advanced section.
@@ -217,6 +218,20 @@ export const SETTING_HELP = Object.fromEntries([
     default: '98', unit: 'Percent used', range: '51 to 100, above the warning level',
     raise: 'A higher value gives the critical alert later.',
     lower: 'A lower value gives the critical alert earlier. Keep it above the warning level.',
+    apply: 'service',
+  }),
+  S('quotas', 'quota.opencodeGoResetAt', 'OpenCode Go reset time', {
+    what: 'The time at which the OpenCode Go subscription period resets. OpenCode Go has no usage source that Herdr Boss can read, so you set the time by hand. The Fleet page and the usage limit card show it next to the unknown reading. It gives a reset time and no percent.',
+    default: 'Blank', unit: 'Time', range: 'Blank, or an ISO time such as 2026-10-09T10:00:00Z',
+    raise: 'A later time shows a later reset.',
+    lower: 'A blank value shows no reset time. The OpenCode Go reading stays unknown.',
+    apply: 'service',
+  }),
+  S('quotas', 'quota.opencodeStatsDays', 'OpenCode Go estimate days', {
+    what: 'The number of days that the local estimate of OpenCode Go use covers. The estimate comes from opencode stats, which counts the sessions in this factory only. It shows tokens and cost, labeled used in this factory (local estimate). It is never a percent and never a quota.',
+    default: '7', unit: 'Days', range: 'A whole number of 1 to 90',
+    raise: 'A higher value counts more days of local use.',
+    lower: 'A lower value counts fewer days of local use.',
     apply: 'service',
   }),
 
@@ -752,6 +767,13 @@ export const SETTING_HELP = Object.fromEntries([
     raise: 'Turning it on frees disk space.',
     lower: 'Turning it off leaves the clones on disk.',
     apply: 'service',
+  }),
+  S('service', 'factories.claudeUsageHelper', 'Claude usage helper in factories', {
+    what: 'Lets a factory container show the Claude usage limit. The helper is the command herdr-boss claude-statusline. It is the status line of the factory user in Claude Code. It writes the two usage windows and the time to a private file in the factory data folder. It writes no other field of the status line input. The setting never changes the Claude settings on this Mac.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on shows the Claude usage limit of a factory while a Claude session runs there.',
+    lower: 'Turning it off removes the status line entry of the factory user. The Claude usage limit of a factory then shows as unknown.',
+    apply: 'saved-factory-start',
   }),
   S('service', 'tickSeconds', 'Tick seconds', {
     what: 'The time between two collection passes of the engine.',

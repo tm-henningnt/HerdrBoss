@@ -17,6 +17,7 @@ const GREEN = {
   'opencode-settings': '{"agent":{"worker":{"mode":"subagent"}}}',
   disk: { bavail: 20 * 1024 ** 3, bsize: 1 }, memory: 16 * 1024 ** 3,
   'usage-reading': '[{"provider":"claude","usage":{"primary":{"usedPercent":10}}}]',
+  'codex-usage': 'Logged in using ChatGPT', 'codex-version': 'codex-cli 0.160.1', 'claude-version': '2.1.287 (Claude Code)', 'claude-usage-file': 60_000,
   'service-answers': { status: 200, body: { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef123456', herdrReachable: true } },
   docker: '[{"Name":"default","Endpoints":{"docker":{"Host":"unix:///var/run/docker.sock"}}}]', 'docker-contexts': '{"Name":"default"}',
 };
@@ -200,7 +201,7 @@ test('Linux install fixes use the Pi command and vendor instructions without Mac
   assert.equal(item('herdr').fix, 'Follow the Herdr vendor instructions. Put herdr on PATH.');
   assert.equal(item('codex-installed').fix, 'Follow the Codex vendor instructions. Put codex on PATH.');
   assert.equal(item('pi-installed').fix, 'Run npm install -g @earendil-works/pi-coding-agent. Put pi on PATH.');
-  assert.equal(item('codexbar').fix, 'CodexBar does not exist on Linux. Use the Linux usage reader when it is available.');
+  assert.equal(item('codexbar').fix, 'CodexBar does not exist on Linux and is not needed. The Codex usage and Claude usage checks replace it.');
   for (const row of report.items.filter((row) => row.fix)) {
     assert.ok(!row.fix.includes('brew install'));
     if (row.id !== 'pi-installed') assert.ok(!row.fix.includes('npm install'));
@@ -221,4 +222,51 @@ test('factory host checks inspect saved Docker metadata without a daemon request
   assert.equal(report.items.find((item) => item.id === 'docker').status, 'green');
   assert.deepEqual(calls, [['context', 'inspect'], ['context', 'ls', '--format', '{{json .}}']]);
   assert.ok(!JSON.stringify(report).includes('invented.example.test'));
+});
+
+const LINUX_READER_IDS = ['codex-usage', 'codex-version', 'claude-usage-file', 'claude-version'];
+
+test('Linux doctor checks the usage readers of a factory and skips the CodexBar reading', async () => {
+  const report = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake({ os: 'linux' }) });
+  assert.deepEqual(report.items.map((item) => item.id), LINUX_READER_IDS);
+  assert.ok(report.items.every((item) => item.status === 'green' && item.stepId === 'pacing'));
+  const mac = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake() });
+  assert.deepEqual(mac.items.map((item) => item.id), ['usage-reading']);
+});
+
+test('Linux doctor gives a plain fix when Codex is missing or logged out', async () => {
+  const report = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake({ os: 'linux', 'codex-usage': new Error('ENOENT'), 'codex-version': '' }) });
+  const item = (id) => report.items.find((row) => row.id === id);
+  assert.equal(item('codex-usage').status, 'red');
+  assert.equal(item('codex-usage').fix, 'Install Codex in the factory image and log in as the factory user. Run doctor again.');
+  assert.equal(item('codex-version').fix, 'Install Codex in the factory image. The usage reader runs codex app-server.');
+  const out = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake({ os: 'linux', 'codex-usage': 'Not logged in' }) });
+  assert.equal(out.items.find((row) => row.id === 'codex-usage').status, 'red');
+});
+
+test('Linux doctor gives the Claude hint when the helper file is missing or older than 3 hours', async () => {
+  for (const age of [null, 3 * 3600_000 + 1]) {
+    const report = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake({ os: 'linux', 'claude-usage-file': age }) });
+    const item = report.items.find((row) => row.id === 'claude-usage-file');
+    assert.equal(item.status, 'red');
+    assert.equal(item.fix, 'Start a Claude session in the factory. Check that Claude usage helper in factories is on in Settings. Run doctor again.');
+  }
+  const bad = await runDoctor({ home: HOME, stepId: 'pacing', runner: fake({ os: 'linux', 'claude-version': '' }) });
+  assert.equal(bad.items.find((row) => row.id === 'claude-version').fix, 'Install Claude Code in the factory image. The status line helper runs inside it.');
+});
+
+test('the doctor probe for the Claude helper file returns the age and reads no content', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createDoctorRunner } = await import('../src/doctor.js');
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-claude-'));
+  const runner = createDoctorRunner({ home: HOME, env: { HERDR_BOSS_DIR: data }, platform: 'linux' });
+  const ask = () => runner({ kind: 'claude-usage-age', id: 'claude-usage-file' }, { signal: new AbortController().signal, timeout: 1000 });
+  assert.equal(await ask(), null);
+  const dir = path.join(data, 'claude-rate-limits');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'a.json'), 'not read');
+  const age = await ask();
+  assert.ok(age >= 0 && age < 60_000);
 });

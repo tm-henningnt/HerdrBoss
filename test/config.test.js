@@ -119,6 +119,16 @@ test('quota plan settings have defaults, documented ranges, and a bounded horizo
   ]) assertRejectedSetting(t, key, value);
 });
 
+test('OpenCode Go settings: a manual reset time and the days of the local estimate', (t) => {
+  const defaults = serviceSettingsView({});
+  assert.deepEqual(defaults.find((item) => item.setting === 'quota.opencodeGoResetAt'), { group: 'Quota', setting: 'quota.opencodeGoResetAt', value: '', source: 'default' });
+  assert.deepEqual(defaults.find((item) => item.setting === 'quota.opencodeStatsDays'), { group: 'Quota', setting: 'quota.opencodeStatsDays', value: 7, source: 'default' });
+  for (const value of ['', '2032-04-01T00:00:00.000Z', '2032-04-01T10:00:00+02:00']) assertSetting(t, 'quota.opencodeGoResetAt', value);
+  for (const value of ['tomorrow', '2032-04-01', 5, null, '2032-13-45T00:00:00Z']) assertRejectedSetting(t, 'quota.opencodeGoResetAt', value);
+  for (const value of [1, 7, 90]) assertSetting(t, 'quota.opencodeStatsDays', value);
+  for (const value of [0, 91, 7.5, '7', null]) assertRejectedSetting(t, 'quota.opencodeStatsDays', value);
+});
+
 test('service settings require quota warning below critical and refuse non-allow-listed keys', (t) => {
   assertRejectedSetting(t, 'quota.warnPercent', 98, { quota: { warnPercent: 90, criticalPercent: 98 } });
   assertRejectedSetting(t, 'quota.criticalPercent', 90, { quota: { warnPercent: 90, criticalPercent: 98 } });

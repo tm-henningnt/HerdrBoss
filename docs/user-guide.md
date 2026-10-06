@@ -10,6 +10,7 @@ Choose the chapter for your task.
 - [I want to add a project](guide/project.md)
 - [I want to add a factory](guide/factory.md)
 - [I want to move the head office](guide/factory.md#move-the-head-office)
+- [I want to see the usage limits of a factory](guide/factory.md#sign-in-the-agent-apps-and-start-the-factory-boss)
 - [Something went wrong](guide/trouble.md)
 
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

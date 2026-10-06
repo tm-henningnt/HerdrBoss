@@ -104,9 +104,9 @@ You use Linux and the dashboard shows no usage limit for an agent app.
 What you do:
 
 1. Know that CodexBar does not exist on Linux. Herdr Boss reads usage limits with it on a Mac.
-2. Run `herdr-boss doctor`. Read the line for CodexBar. It is optional.
+2. Run `herdr-boss doctor`. On Linux, read the lines for the Codex login, the Codex version, the Claude helper file, and the Claude version. The line for CodexBar is optional.
 3. Work without the reading, or use the agent app limits that the app itself shows.
 
-What you should see: the usage limit shows as unknown, with the reason `no usage reader in this factory`. Herdr Boss does not treat this as a failure. It sends no Boss warning and takes no back-off. Everything else works.
+What you should see: the usage limit of OpenCode Go shows as unknown, with the reason `no usage reader in this factory`, the reset time that you set by hand, and the local estimate `used in this factory (local estimate)`. The Codex usage limit shows a reading, or an unknown reading with a Codex reason. The Claude usage limit shows a reading while a Claude session runs in the factory. Otherwise it shows `no Claude session has reported usage yet`. Herdr Boss does not treat this as a failure. It sends no Boss warning and takes no back-off. Everything else works.
 
 If it does not work: the Linux usage reader is open work. [linux-usage-reader.md](../ideas/linux-usage-reader.md) lists the options.
