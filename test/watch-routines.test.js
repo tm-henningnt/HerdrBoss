@@ -9,9 +9,18 @@ import { fileURLToPath } from 'node:url';
 import { buildWatchRecord, writeNight, readNightRecord } from '../src/night.js';
 import { nightNoticeText } from '../src/engine.js';
 import { kitRevision } from '../src/kit/agents-check.js';
-import {
+import * as watchRoutines from '../src/watch-routines.js';
+
+const {
   armRoutines, cleanAdhoc, effectiveRoutines, loadKitRoutines, parseRoutineText, rememberChoice, resetRoutine, routinePromptText, saveRoutine,
-} from '../src/watch-routines.js';
+} = watchRoutines;
+
+// Read the snapshot helper from the module namespace, so this file loads on a base without the export. Each snapshot
+// test asserts the export first, then calls it, so a missing export is a named assertion, not a module-load error.
+function snapshotFn() {
+  assert.equal(typeof watchRoutines.watchSnapshotText, 'function', 'watchSnapshotText is exported');
+  return watchRoutines.watchSnapshotText;
+}
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const KIT_WATCH = path.join(repo, 'kit', 'watch');
@@ -157,6 +166,94 @@ test('the start notice carries the ad-hoc text in one line', () => {
   assert.ok(!nightNoticeText('end', record).includes('Instructions'));
 });
 
+test('the Hourly check routine lists the locks and the orchestrator idle ages before a nudge', () => {
+  const routine = loadKitRoutines(repo).find((r) => r.id === 'hourly-check');
+  assert.match(routine.prompt, /herdr-boss lock list/);
+  assert.match(routine.prompt, /idle age/i);
+  assert.match(routine.prompt, /Leave paused projects alone/);
+  assert.match(routine.prompt, /Do not message a working orchestrator/);
+  assert.equal((routine.prompt.match(/stale lock or an idle lease/gi) || []).length, 1, 'the lock instruction appears once');
+});
+
+test('the watch snapshot lists each idle orchestrator age and never invents a missing one', () => {
+  const watchSnapshotText = snapshotFn();
+  const now = Date.parse('2026-10-05T08:15:00Z');
+  const panes = [
+    { id: 'w1:p1', workspace: 'w1', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'alpha-orch' },
+    { id: 'w2:p1', workspace: 'w2', label: 'orch', orch: true, agent: 'claude', status: 'working', name: 'beta-orch' },
+    { id: 'w3:p1', workspace: 'w3', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'gamma-orch' },
+    { id: 'w4:p1', workspace: 'w4', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'delta-orch' },
+    { id: 'w9:p1', workspace: 'w9', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'omega-orch' },
+    { id: 'wB:p1', workspace: 'wB', label: 'boss', orch: true, agent: 'claude', status: 'idle', name: 'boss' },
+    { id: 'w1:p2', workspace: 'w1', label: 'w1', orch: false, agent: 'claude', status: 'idle', name: 'alpha-worker' },
+  ];
+  const paneSince = {
+    'w1:p1': { status: 'idle', since: now - 42 * MIN },
+    'w2:p1': { status: 'working', since: now - 5 * MIN },
+    'w4:p1': { status: 'idle', since: now - 9 * MIN },
+  };
+  const workspaces = new Set(['w1', 'w2', 'w3', 'w4']);
+  const text = watchSnapshotText({ panes, paneSince, pausedPanes: new Set(['w4:p1']), workspaces, now });
+  assert.match(text, /alpha-orch \(w1:p1\): idle, idle age 42 minutes\./);
+  assert.match(text, /beta-orch \(w2:p1\): working, idle age unavailable\./);
+  assert.match(text, /gamma-orch \(w3:p1\): idle, idle age unknown\./);
+  assert.match(text, /delta-orch \(w4:p1\): paused, idle age unavailable\./);
+  assert.ok(!text.includes('boss'), 'the Boss pane is not a project orchestrator');
+  assert.ok(!text.includes('alpha-worker'), 'a worker pane is not listed');
+  assert.ok(!text.includes('omega-orch'), 'a pane outside the managed workspaces is not listed');
+  assert.ok(!/beta-orch \(w2:p1\)[^\n]*\b5 minutes/.test(text), 'a working pane gets no numeric idle age');
+});
+
+test('the watch snapshot accepts an ISO now and gives an unknown time and age for an invalid now', () => {
+  const watchSnapshotText = snapshotFn();
+  const panes = [{ id: 'w1:p1', workspace: 'w1', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'alpha-orch' }];
+  const paneSince = { 'w1:p1': { status: 'idle', since: '2026-10-05T07:33:00Z' } };
+  const workspaces = new Set(['w1']);
+  const good = watchSnapshotText({ panes, paneSince, workspaces, now: '2026-10-05T08:15:00Z' });
+  assert.match(good, /at 2026-10-05T08:15:00\.000Z:/);
+  assert.match(good, /idle age 42 minutes\./);
+  for (const bad of ['not a time', Number.NaN]) {
+    const text = watchSnapshotText({ panes, paneSince, workspaces, now: bad });
+    assert.match(text, /at an unknown time:/);
+    assert.match(text, /idle age unknown\./);
+    assert.ok(!/NaN/.test(text), 'an invalid now never gives NaN');
+  }
+});
+
+test('the watch snapshot lists no pane when the managed workspace set is empty', () => {
+  const watchSnapshotText = snapshotFn();
+  const panes = [{ id: 'w1:p1', workspace: 'w1', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'alpha-orch' }];
+  const paneSince = { 'w1:p1': { status: 'idle', since: Date.parse('2026-10-05T07:33:00Z') } };
+  const text = watchSnapshotText({ panes, paneSince, workspaces: new Set(), now: Date.parse('2026-10-05T08:15:00Z') });
+  assert.match(text, /No project orchestrator pane is listed\./);
+  assert.ok(!text.includes('alpha-orch'));
+});
+
+test('the watch snapshot gives an unknown time and age for an out-of-range clock', () => {
+  const watchSnapshotText = snapshotFn();
+  const panes = [{ id: 'w1:p1', workspace: 'w1', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'alpha-orch' }];
+  const paneSince = { 'w1:p1': { status: 'idle', since: 0 } };
+  const workspaces = new Set(['w1']);
+  for (const bad of [8.64e15 + 1, Number.MAX_VALUE, -(8.64e15 + 1)]) {
+    const text = watchSnapshotText({ panes, paneSince, workspaces, now: bad });
+    assert.match(text, /at an unknown time:/);
+    assert.match(text, /idle age unknown\./);
+    assert.ok(!/NaN/.test(text), 'an out-of-range clock never gives NaN');
+  }
+});
+
+test('the watch snapshot gives an unknown age for a future or out-of-range state time', () => {
+  const watchSnapshotText = snapshotFn();
+  const panes = [{ id: 'w1:p1', workspace: 'w1', label: 'orch', orch: true, agent: 'claude', status: 'idle', name: 'alpha-orch' }];
+  const workspaces = new Set(['w1']);
+  const now = Date.parse('2026-10-05T08:15:00Z');
+  const future = watchSnapshotText({ panes, paneSince: { 'w1:p1': { status: 'idle', since: now + 10 * MIN } }, workspaces, now });
+  assert.match(future, /idle age unknown\./);
+  assert.ok(!/idle age 0 minutes/.test(future), 'a future state time is not clamped to a zero-minute age');
+  const huge = watchSnapshotText({ panes, paneSince: { 'w1:p1': { status: 'idle', since: 1e300 } }, workspaces, now });
+  assert.match(huge, /idle age unknown\./);
+});
+
 test('a new file in kit/watch changes the kit revision', (t) => {
   const root = tempDir(t);
   for (const file of ['kit/templates/project-kit.md', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/models.json']) {
@@ -194,6 +291,8 @@ for (const [i, round] of input.rounds.entries()) {
   current = i;
   fail = round.fail === true;
   if (round.restart) engine = make();
+  engine.memory.paneSince = round.paneSince || {};
+  engine.communicationControl = round.communicationControl || null;
   await engine.deliverWatchRoutines({ panes: round.panes }, round.at);
   const record = readNightRecord();
   rounds.push(Object.fromEntries((record?.routines || []).map((r) => [r.id, { nextAt: r.nextAt, lastAt: r.lastAt, missedAt: r.missedAt ?? null }])));
@@ -219,6 +318,17 @@ const T0 = Date.parse('2026-09-30T22:00:00Z');
 const iso = (ms) => new Date(ms).toISOString();
 const boss = (status = 'idle') => ({ id: 'wB:p1', workspace: 'wB', label: 'boss', agent: 'claude', status });
 const orch = { id: 'w1:p1', workspace: 'w1', orch: true, label: 'orch', agent: 'claude', status: 'idle' };
+const workingOrch = { id: 'w2:p1', workspace: 'w2', orch: true, label: 'orch', agent: 'claude', status: 'working' };
+const pausedOrch = { id: 'w3:p1', workspace: 'w3', orch: true, label: 'orch', agent: 'claude', status: 'idle' };
+const unmanagedOrch = { id: 'w9:p1', workspace: 'w9', orch: true, label: 'orch', agent: 'claude', status: 'idle' };
+const managedControl = (extra = {}) => ({
+  projects: {
+    alpha: { workspace: 'w1', effectiveMode: 'auto', orch: { pane: 'w1:p1' } },
+    beta: { workspace: 'w2', effectiveMode: 'auto', orch: { pane: 'w2:p1' } },
+    gamma: { workspace: 'w3', effectiveMode: 'paused', orch: { pane: 'w3:p1' } },
+    ...extra,
+  },
+});
 const armed = (patch = {}) => ({
   active: true, since: iso(T0), until: iso(T0 + 8 * 60 * MIN), by: 'owner', quietHours: false, adhoc: 'Tonight only.',
   routines: [{ id: 'hourly-check', title: 'Hourly check', model: 'cheap', every: 60, nextAt: iso(T0 + 60 * MIN), lastAt: null }],
@@ -256,6 +366,38 @@ test('a restart does not repeat a routine that already fired', (t) => {
     ],
   });
   assert.equal(out.prompts.length, 1);
+});
+
+test('the Hourly check prompt carries the service snapshot of orchestrator idle ages', (t) => {
+  const at = T0 + 61 * MIN;
+  const out = runRoutines(t, {
+    record: armed(),
+    rounds: [{
+      at,
+      panes: [boss(), orch, workingOrch, pausedOrch, unmanagedOrch],
+      paneSince: {
+        'w1:p1': { status: 'idle', since: at - 42 * MIN },
+        'w2:p1': { status: 'working', since: at - 5 * MIN },
+        'w3:p1': { status: 'idle', since: at - 9 * MIN },
+        'w9:p1': { status: 'idle', since: at - 3 * MIN },
+      },
+      communicationControl: managedControl(),
+    }],
+  });
+  assert.equal(out.prompts.length, 1);
+  assert.match(out.prompts[0].text, /Watch snapshot from the service at /);
+  assert.match(out.prompts[0].text, /w1:p1\): idle, idle age 42 minutes\./);
+  assert.match(out.prompts[0].text, /w2:p1\): working, idle age unavailable\./);
+  assert.match(out.prompts[0].text, /w3:p1\): paused, idle age unavailable\./);
+  assert.ok(!out.prompts[0].text.includes('w9:p1'), 'an unmanaged workspace is not listed');
+  assert.match(out.prompts[0].text, /herdr-boss lock list/);
+});
+
+test('the Hourly check prompt lists no orchestrator when the service has no managed workspace', (t) => {
+  const out = runRoutines(t, { record: armed(), rounds: [{ at: T0 + 61 * MIN, panes: [boss(), orch] }] });
+  assert.equal(out.prompts.length, 1);
+  assert.match(out.prompts[0].text, /No project orchestrator pane is listed\./);
+  assert.ok(!out.prompts[0].text.includes('w1:p1'), 'an unknown workspace is not listed');
 });
 
 test('a busy Boss gets the prompt at the next tick where it is idle, inside the same slot', (t) => {

@@ -309,12 +309,66 @@ export function slotAfter(routine, record, now) {
   return Number.isFinite(until) && next >= until ? null : new Date(next).toISOString();
 }
 
-// The prompt that goes to the Boss pane: the routine text, then the ad-hoc text of the watch.
-export function routinePromptText(routine, adhoc = '') {
+// The id of the routine that carries the service snapshot of the watch.
+export const WATCH_SNAPSHOT_ID = 'hourly-check';
+
+// The largest millisecond value that a Date can hold. A number outside the range is unknown, not a clock.
+const MAX_DATE_MS = 8.64e15;
+
+// The time of the snapshot: a finite number of milliseconds inside the Date range, or an ISO string. Any other
+// value is unknown, so the snapshot never prints NaN, never throws, and never invents a clock.
+function snapshotTime(value) {
+  if (Number.isFinite(value) && Math.abs(value) <= MAX_DATE_MS) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) && Math.abs(parsed) <= MAX_DATE_MS ? parsed : null;
+  }
+  return null;
+}
+
+function toSet(value) {
+  return value instanceof Set ? value : new Set(value || []);
+}
+
+// The service snapshot for the Hourly check: each project orchestrator pane with its status and its idle age.
+// The snapshot lists only the panes of the managed project workspaces that the engine passes. An empty managed
+// set lists none, so an unknown workspace never leaks into the prompt. It gives an age only when the pane is idle
+// or done and the clock and the pane state time are usable and in order. It prints `unknown` otherwise, and
+// `unavailable` for a pane that is not idle or done, so the routine never invents an age. The Boss pane is not a
+// project orchestrator and is left out.
+export function watchSnapshotText({ panes = [], paneSince = {}, pausedPanes = new Set(), workspaces = null, now = Date.now() } = {}) {
+  const paused = toSet(pausedPanes);
+  const managed = workspaces === null || workspaces === undefined ? null : toSet(workspaces);
+  const at = snapshotTime(now);
+  const orchestrators = (panes || [])
+    .filter((pane) => pane && pane.agent && pane.label !== 'boss' && (pane.orch === true || pane.label === 'orch'))
+    .filter((pane) => managed === null || managed.has(pane.workspace))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const lines = [`Watch snapshot from the service at ${at === null ? 'an unknown time' : new Date(at).toISOString()}:`];
+  if (!orchestrators.length) {
+    lines.push('- No project orchestrator pane is listed.');
+    return lines.join('\n');
+  }
+  for (const pane of orchestrators) {
+    const name = pane.name || pane.label || pane.id;
+    const status = paused.has(pane.id) ? 'paused' : pane.status || 'unknown';
+    const since = snapshotTime(paneSince?.[pane.id]?.since);
+    const idle = status === 'idle' || status === 'done';
+    const age = idle && at !== null && since !== null && at >= since ? `${Math.floor((at - since) / MIN)} minutes` : idle ? 'unknown' : 'unavailable';
+    lines.push(`- ${name} (${pane.id}): ${status}, idle age ${age}.`);
+  }
+  lines.push('Nudge only an idle or done pane with ready work and a known idle age. Never nudge a working or paused pane. Never infer an age.');
+  return lines.join('\n');
+}
+
+// The prompt that goes to the Boss pane: the routine text, the service snapshot, then the ad-hoc text of the watch.
+export function routinePromptText(routine, adhoc = '', snapshot = '') {
   const lines = [
     `[herdr-boss] Watch routine: ${routine.title} (model hint: ${routine.model || 'default'}). The service sends this prompt once for this slot. You do not need to reply to the service.`,
     routine.prompt,
   ];
+  const snap = String(snapshot || '').trim();
+  if (snap) lines.push(snap);
   const extra = String(adhoc || '').trim();
   if (extra) lines.push(`Instructions for this watch: ${extra}`);
   return lines.join('\n\n');
