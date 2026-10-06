@@ -3,6 +3,8 @@
 // and shows them as an estimate of the use in this factory. It is never a percent and never a quota.
 // It runs no login command, scrapes no web console, and stores no cookie.
 import { execFile } from 'node:child_process';
+import { ISO_TIME } from './config.js';
+import { readerChildEnv } from './child-env.js';
 
 export const ESTIMATE_LABEL = 'used in this factory (local estimate)';
 export const DEFAULT_STATS_DAYS = 7;
@@ -18,6 +20,7 @@ const round = (value, places) => Math.round(value * 10 ** places) / 10 ** places
 // Read the model table of `opencode stats --models`. Returns null when the output has no table.
 export function parseOpenCodeStats(output, days) {
   const lines = String(output || '').replace(ANSI, '').split(/\r?\n/).map((line) => line.trim());
+  if (lines.some((line) => /^no sessions found\b/i.test(line))) return { days, tokens: 0, costUsd: 0, omittedModels: 0, models: [] };
   const start = lines.findIndex((line) => /^model\s+tokens\s+steps\s+cost$/i.test(line));
   if (start < 0) return null;
   const models = [];
@@ -46,7 +49,7 @@ export function parseOpenCodeStats(output, days) {
 
 function runCommand(command, args, { timeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { timeout: timeoutMs, maxBuffer: MAX_OUTPUT_BYTES, env: { ...process.env, NO_COLOR: '1' } },
+    execFile(command, args, { timeout: timeoutMs, maxBuffer: MAX_OUTPUT_BYTES, env: readerChildEnv({ NO_COLOR: '1' }) },
       (error, stdout) => error ? reject(error) : resolve(String(stdout)));
   });
 }
@@ -58,7 +61,7 @@ export async function readOpenCodeEstimate({ days = DEFAULT_STATS_DAYS, run = ru
 }
 
 const isoTime = (value) => {
-  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(value)) return null;
+  if (typeof value !== 'string' || !ISO_TIME.test(value)) return null;
   const time = Date.parse(value);
   return Number.isFinite(time) ? new Date(time).toISOString() : null;
 };

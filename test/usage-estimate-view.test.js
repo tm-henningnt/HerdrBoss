@@ -42,3 +42,20 @@ test('the usage limit card of OpenCode Go uses the estimate helper', async () =>
   assert.equal(unknownQuotaDetailHtml({ provider: 'codex', unavailable: true }, String, String), '');
   assert.match(app, /unknownQuotaDetailHtml\(q/);
 });
+
+test('compactTokens never prints 1000.0k and the no local use line shows', async () => {
+  const { compactTokens, usageEstimateText } = await import('../public/usage-estimate.js');
+  assert.equal(compactTokens(999_999), '1.0m');
+  assert.equal(compactTokens(999_950), '1.0m');
+  assert.equal(compactTokens(999_949), '999.9k');
+  assert.equal(compactTokens(999_999_999), '1.0b');
+  assert.equal(usageEstimateText({ days: 7, tokens: 0, costUsd: 0, omittedModels: 0, models: [] }), 'no local use found in the last 7 days');
+});
+
+test('the Fleet card names the reason for the unknown OpenCode Go limit', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const rows = [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary: { ...fixture, kind: 'container', factoryId: 'win1', name: 'win1' } }];
+  const html = fleetView({ factories: rows, pollSeconds: 30, rollup: buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') }) });
+  assert.match(html, /OpenCode Go · usage limit unknown \(no usage reader in this factory\)/);
+});

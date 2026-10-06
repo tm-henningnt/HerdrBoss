@@ -205,3 +205,17 @@ test('herdr-boss claude-statusline writes the file in HERDR_BOSS_DIR and prints 
   assert.equal(fs.readFileSync(file, 'utf8').includes('SECRET'), false);
   assert.deepEqual(fs.readdirSync(data), ['claude-rate-limits']);
 });
+
+test('a report older than 3 hours with an open window gives a failed row, so the last good reading stays as stale', async () => {
+  const { keepStaleRows } = await import('../src/collect.js');
+  const dir = tmp();
+  recordClaudeStatusline({ input: input(), dir, now: NOW });
+  const row = await readClaudeQuota({ dir, now: () => NOW + 4 * HOUR });
+  assert.equal(row.unavailable, undefined);
+  assert.equal(row.windows, undefined);
+  assert.equal(row.error, 'the last Claude usage report is older than 3 hours');
+  const good = { provider: 'claude', plan: null, windows: [{ key: 'secondary', usedPercent: 41, resetsAt: new Date(NOW + 7 * 24 * HOUR).toISOString(), windowMinutes: 10080 }], observedAt: new Date(NOW + HOUR).toISOString() };
+  const [kept] = keepStaleRows([row], [good], good.observedAt ? Date.parse(good.observedAt) : NOW, NOW + 2 * HOUR);
+  assert.equal(kept.stale, true);
+  assert.equal(kept.windows[0].usedPercent, 41);
+});

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectQuotas } from '../src/collect.js';
-import { buildWindow, readCodexQuota, readQuota, LINUX_READERS } from '../src/quota-readers.js';
+import { spawnJsonRpc as realSpawnJsonRpc, buildWindow, readCodexQuota, readQuota, LINUX_READERS } from '../src/quota-readers.js';
 import { fleetQuotas } from '../src/fleet-quotas.js';
 
 const missingReader = Object.assign(new Error('spawn codexbar ENOENT'), { code: 'ENOENT', syscall: 'spawn codexbar', path: 'codexbar' });
@@ -214,4 +214,30 @@ test('collectQuotas returns the Codex reader row in a factory with no codexbar',
   const readers = { codex: (options) => readCodexQuota({ ...options, spawnJsonRpc }) };
   const quotas = await collectQuotas({ runner: async () => { throw missingReader; }, factory: true, readers, historyFile: historyFile(), providers: ['codex'] });
   assert.deepEqual(quotas[0].windows.map((w) => w.key), ['primary', 'secondary']);
+});
+
+// The child environment: the real spawn helper gets an allow-listed environment only.
+test('the real spawn helper gives the child no secret from the parent environment', async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-bin-'));
+  const stub = path.join(bin, 'reader-env-stub');
+  fs.writeFileSync(stub, '#!/bin/sh\nprintf \'{"keys":"%s"}\\n\' "$(env | cut -d= -f1 | tr \'\\n\' \' \')"\n', { mode: 0o755 });
+  const saved = { PATH: process.env.PATH, HERDR_BOSS_TOKEN: process.env.HERDR_BOSS_TOKEN, CODEX_HOME: process.env.CODEX_HOME, OPENAI_API_KEY: process.env.OPENAI_API_KEY };
+  process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
+  process.env.HERDR_BOSS_TOKEN = 'not-a-real-secret';
+  process.env.OPENAI_API_KEY = 'not-a-real-key';
+  process.env.CODEX_HOME = '/tmp/codex-home-for-test';
+  try {
+    const keys = await new Promise((resolve, reject) => {
+      const child = realSpawnJsonRpc({ command: 'reader-env-stub' });
+      child.onLine((line) => resolve(JSON.parse(line).keys.split(/\s+/)));
+      child.onError(reject);
+      setTimeout(() => reject(new Error('no output from the stub')), 5000).unref();
+    });
+    assert.ok(!keys.includes('HERDR_BOSS_TOKEN'));
+    assert.ok(!keys.includes('OPENAI_API_KEY'));
+    assert.ok(keys.includes('PATH'));
+    assert.ok(keys.includes('CODEX_HOME'));
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });

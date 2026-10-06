@@ -5,14 +5,15 @@ export const ESTIMATE_LABEL = 'used in this factory (local estimate)';
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 
 export function compactTokens(value) {
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}b`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}m`;
+  if (value >= 999_950_000) return `${(value / 1e9).toFixed(1)}b`;
+  if (value >= 999_950) return `${(value / 1e6).toFixed(1)}m`;
   if (value >= 1e3) return `${(value / 1e3).toFixed(1)}k`;
   return String(value);
 }
 
 export function usageEstimateText(estimate) {
   if (!estimate || !isCount(estimate.tokens) || !isCount(estimate.days) || !Number.isFinite(estimate.costUsd)) return null;
+  if (estimate.tokens === 0 && estimate.costUsd === 0) return `no local use found in the last ${estimate.days} day${estimate.days === 1 ? '' : 's'}`;
   const more = isCount(estimate.omittedModels) && estimate.omittedModels > 0 ? ` (${estimate.omittedModels} more model${estimate.omittedModels === 1 ? '' : 's'} not counted)` : '';
   return `${compactTokens(estimate.tokens)} tokens, $${estimate.costUsd.toFixed(2)} in the last ${estimate.days} day${estimate.days === 1 ? '' : 's'}${more}`;
 }
