@@ -111,7 +111,7 @@ export const SETTING_GROUPS = [
     id: 'readiness', title: 'Agent app readiness', advanced: true,
     controls: 'A read-only table that shows if each agent app entry that orchestration needs is present.',
     affects: 'Nothing. The table only reports.',
-    safe: 'Nothing to change. Run herdr-boss agent app sync to see what to fix.',
+    safe: 'Nothing to change. Run herdr-boss harness sync to see what to fix.',
     restart: 'No restart.',
   },
 ];
@@ -675,7 +675,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('service', 'worktreeRoot', 'Worktree root', {
     what: 'The parent folder for new worker worktrees. A project worktreeRoot in .herdr-boss.json takes precedence. Existing worktrees stay in place.',
     default: '~/Projects/.herdr-wt', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',
-    raise: 'Set another folder for new worker worktrees. Run herdr-boss agent app sync to check agent app access.',
+    raise: 'Set another folder for new worker worktrees. Run herdr-boss harness sync to check agent app access.',
     lower: 'The value does not move or delete existing worktrees.', apply: 'service',
   }),
   S('service', 'projectRoot', 'Project root', {

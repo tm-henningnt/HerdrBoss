@@ -126,7 +126,7 @@ The items are: the operating system, Node, Git and the Git name, Herdr, each age
 
 ### The Getting started prompt
 
-The file `docs/getting-started-prompt.md` holds the prompt. The command `herdr-boss setup --agent-prompt` prints the same text. The first version is for Claude Code. The Codex path uses the same text.
+Planned for ONB1d: the file `docs/getting-started-prompt.md` will hold the prompt. The command `herdr-boss setup --agent-prompt` will print the same text. Neither the file nor the flag exists today. The first version is for Claude Code. The Codex path uses the same text.
 
 The prompt makes the agent do these things in order:
 

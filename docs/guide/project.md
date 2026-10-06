@@ -19,7 +19,7 @@ What you do:
 7. Keep **Start the orchestrator** on. This starts the project lead now.
 8. Check the list of steps. Select **Create project**.
 
-In a terminal, run `herdr-boss project new <name> --start` instead.
+In a terminal, run `herdr-boss project new <name> --group <folder> --start` instead. The folder is the parent directory: the command makes `<folder>/<name>`.
 
 What you should see: one line for each step, then the path of the project. A new project appears in the Overview.
 
@@ -35,12 +35,12 @@ You want the agent that leads the work of the project. The word *orchestrator* i
 
 What you do:
 
-1. Keep **Start the orchestrator** on in the wizard. Or run `herdr-boss project new <name> --start`.
+1. Keep **Start the orchestrator** on in the wizard. Or run `herdr-boss project new <name> --group <folder> --start`.
 2. Open the Agents page.
 
 What you should see: the project lead in its own pane, in the workspace of the project. It reads the project files and starts to work. Starting it uses your usage limit.
 
-If you do not see it: run `herdr-boss project new <name> --start --resume`. If the pane exists but the agent is not signed in, sign in to the agent app in that pane. Only you sign in.
+If you do not see it: run `herdr-boss project new <name> --group <folder> --start --resume`. If the pane exists but the agent is not signed in, sign in to the agent app in that pane. Only you sign in.
 
 ## Give the project lead a goal
 
