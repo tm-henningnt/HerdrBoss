@@ -270,7 +270,7 @@ test('configure records checked steps, resumes a failed service and waits once f
     failService = false;
     f.output.length = 0;
     assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);
-    assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo\n'));
+    assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo. Run `herdr-boss factory login demo opencode` at an Owner terminal.\n'));
     flow = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.deepEqual(flow.steps.slice(0, 4).map((step) => step.name), ['container', 'volumes', 'herdr', 'service']);
     assert.ok(flow.steps.slice(0, 4).every((step) => step.status === 'done'));
@@ -280,6 +280,8 @@ test('configure records checked steps, resumes a failed service and waits once f
     assert.match(instruction, /Owner terminal/);
     assert.match(instruction, /herdr-boss factory login demo claude/);
     assert.match(instruction, /herdr-boss factory login demo codex/);
+    assert.match(instruction, /herdr-boss factory login demo opencode/);
+    assert.doesNotMatch(instruction, /docker exec -it[^\n]*opencode auth login/);
     assert.match(instruction, /check login with a harmless command/);
     assert.doesNotMatch(instruction, /example-context|token=/);
     assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);

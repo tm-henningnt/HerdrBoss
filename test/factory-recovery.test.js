@@ -177,6 +177,32 @@ test('shell, logs, stop now and freeze use Docker only with a dead service and a
   } finally { f.cleanup(); }
 });
 
+test('factory shell refuses every interactive login command before any transport call', async () => {
+  const f = fixture();
+  try {
+    for (const command of [['opencode', 'auth', 'login'], ['claude', '/login'], ['codex', 'login'], ['pi', '/login']]) {
+      f.calls.length = 0;
+      f.output.length = 0;
+      let failure;
+      try { await factoryCommand(['shell', 'demo', '--', ...command], f.io); } catch (error) { failure = error; }
+      assert.ok(failure, `${command.join(' ')} is refused`);
+      assert.equal(failure.message, 'No terminal here. Use "herdr-boss factory shell demo" for an interactive command.');
+      assert.equal(failure.exitCode, 2);
+      assert.equal(f.calls.length, 0, `${command.join(' ')} reaches no transport`);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('factory shell still runs a command without an interactive login', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['shell', 'demo', '--', 'echo', 'hello'], f.io), 0);
+    const shell = f.calls.find(({ args }) => args[0] === 'exec' && args.includes('echo'));
+    assert.ok(shell, 'the command reaches the transport');
+    assert.equal(shell.args.includes('--interactive'), false);
+  } finally { f.cleanup(); }
+});
+
 test('backup metadata accepts a stable 44-character identity and carries no host connection fields', async () => {
   const f = fixture(true);
   try {

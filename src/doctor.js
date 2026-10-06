@@ -92,7 +92,7 @@ function checks({ home, env, factoryHost }) {
     command('codex-installed', 'tools', 'Codex installed', 'codex', ['--version'], null),
     command('codex-signed-in', 'signin', 'Codex signed in', 'codex', ['login', 'status'], 'Only you: run codex login in your terminal. Sign in on the browser page.', (value) => /^Logged in\b/i.test(text(value))),
     command('opencode-installed', 'tools', 'OpenCode installed', 'opencode', ['--version'], null),
-    command('opencode-signed-in', 'signin', 'OpenCode signed in', 'opencode', ['auth', 'list'], 'Only you: run opencode auth login in your terminal. Complete the sign-in there.', (value) => /\b[1-9]\d* credentials?\b/i.test(text(value))),
+    command('opencode-signed-in', 'signin', 'OpenCode signed in', 'opencode', ['auth', 'list'], 'Only you: run herdr-boss factory login NAME opencode at an Owner terminal. Complete the sign-in there.', (value) => /\b[1-9]\d* credentials?\b/i.test(text(value))),
     command('pi-installed', 'tools', 'Pi installed', 'pi', ['--version'], null),
     command('pi-signed-in', 'signin', 'Pi signed in', 'pi', ['--list-models'], 'Only you: open pi in your terminal. Run /login and sign in to your provider.', (value) => {
       const lines = text(value).split(/\r?\n/);

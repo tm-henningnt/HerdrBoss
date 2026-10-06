@@ -11,6 +11,10 @@ import { redactSecrets } from './redact.js';
 
 const OWNER_LABEL = 'herdr-factory-spike';
 const DAY = 24 * 3600_000;
+// A login command needs a terminal. `factory shell` has no terminal, so it refuses an interactive login command.
+export function isInteractiveLoginCommand(command = []) {
+  return /(?:^|\s)auth\s+login(?:\s|$)/.test(command.join(' ')) || command.some((token) => token === 'login' || token === '/login');
+}
 const wholeSeconds = (value) => new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z');
 function parse(args, options = [], switches = []) {
   const positional = [], flags = {};
@@ -280,6 +284,12 @@ async function repair(action, args, io) {
   if (positional.length !== 1) throw new Error('Give exactly one factory name.');
   const name = positional[0]; assertName(name);
   if (action === 'shell' && !command && !io.stdin?.isTTY) throw new Error('Use an Owner terminal for the factory shell.');
+  if (action === 'shell' && command && isInteractiveLoginCommand(command)) {
+    // Refuse before any transport call. The Owner runs the login through `factory login`, which keeps the terminal attached.
+    const error = new Error(`No terminal here. Use "herdr-boss factory shell ${name}" for an interactive command.`);
+    error.exitCode = 2;
+    throw error;
+  }
   if (action === 'logs' && flags['--tail'] && !/^(?:[1-9][0-9]{0,3}|10000)$/.test(flags['--tail'])) throw new Error('Use a log tail from 1 to 10000.');
   const { record, host, docker, container } = await resources(name, io);
   if (action === 'freeze') {

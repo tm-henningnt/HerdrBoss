@@ -71,7 +71,7 @@ const FIXES = {
   'codex-installed': 'Run brew install --cask codex. Put codex on PATH.',
   'codex-signed-in': 'Only you: run codex login in your terminal. Sign in on the browser page.',
   'opencode-installed': 'Run npm install -g opencode-ai. Put opencode on PATH.',
-  'opencode-signed-in': 'Only you: run opencode auth login in your terminal. Complete the sign-in there.',
+  'opencode-signed-in': 'Only you: run herdr-boss factory login NAME opencode at an Owner terminal. Complete the sign-in there.',
   'pi-installed': 'Run npm install -g @earendil-works/pi-coding-agent. Put pi on PATH.',
   'pi-signed-in': 'Only you: open pi in your terminal. Run /login and sign in to your provider.',
   gh: 'Run brew install gh. Put gh on PATH.',

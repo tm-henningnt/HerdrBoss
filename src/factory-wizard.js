@@ -28,7 +28,7 @@ export async function openCodeCredentialCount(docker, name) {
   return match ? Number(match[1]) : 0;
 }
 
-export const openCodeMissingLine = (name) => `OpenCode: not logged in in factory ${name}`;
+export const openCodeMissingLine = (name) => `OpenCode: not logged in in factory ${name}. Run \`herdr-boss factory login ${name} opencode\` at an Owner terminal.`;
 
 function safetyError(container, name, codexSandbox) {
   if (!container?.State?.Running) return 'The factory container is stopped.';
@@ -84,7 +84,7 @@ async function serviceStep(docker, name, fleet, record) {
 
 function ownerText(name, remote) {
   const docker = remote ? 'docker --context <context from the private connection store>' : 'docker';
-  return `# Factory ${name}: Owner logins\n\nUse an Owner terminal. Run these commands on the host tool machine. Keep codes and tokens out of agent panes, reports, and the Mailbox.\n\n1. Run \`herdr-boss factory login ${name} claude\`.\n2. Run \`herdr-boss factory login ${name} codex\`.\n3. Run \`${docker} exec -it --user factory hf-${name} opencode auth login\`.\n4. Run \`${docker} exec -it --user factory hf-${name} gh auth login\`.\n\nThe Claude and Codex login commands attach the harness to this terminal and check login with a harmless command. The wizard checks the container, volumes, Herdr server, and service only. OpenCode, GitHub, and project setup remain pending. The Boss can post this file as one Mailbox item. Do not send a credential in an answer.\n`;
+  return `# Factory ${name}: Owner logins\n\nUse an Owner terminal. Run these commands on the host tool machine. Keep codes and tokens out of agent panes, reports, and the Mailbox.\n\n1. Run \`herdr-boss factory login ${name} claude\`.\n2. Run \`herdr-boss factory login ${name} codex\`.\n3. Run \`herdr-boss factory login ${name} opencode\` to sign in OpenCode.\n4. Run \`${docker} exec -it --user factory hf-${name} gh auth login\`.\n\nThe Claude, Codex, and OpenCode login commands attach the harness to this terminal and check login with a harmless command. The wizard checks the container, volumes, Herdr server, and service only. OpenCode, GitHub, and project setup remain pending. The Boss can post this file as one Mailbox item. Do not send a credential in an answer.\n`;
 }
 
 export async function configureFactory(args, io) {
