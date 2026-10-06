@@ -15,6 +15,7 @@ import { createDockerTransport } from '../src/factory-transport.js';
 function fixture({
   interactiveCode = 0,
   verifierCode = 0,
+  authList = { code: 0, stdout: '', stderr: '' },
   workspaceRows = [],
   paneRows = [],
   factoryLabel = 'demo',
@@ -94,6 +95,7 @@ function fixture({
         git[rest.at(-2)] = rest.at(-1);
         return { code: 0, stdout: '', stderr: '' };
       }
+      if (args.slice(-3).join(' ') === 'opencode auth list') return authList;
       if (args.includes('auth') && args.at(-1) === 'login') return { code: interactiveCode, stdout: 'private login output', stderr: '' };
       if ((args.includes('auth') || args.includes('login')) && args.at(-1) === 'status') return { code: verifierCode, stdout: 'private verifier output', stderr: '' };
       if (args.includes('project') && args.includes('paths')) {
@@ -816,5 +818,69 @@ test('factory boss prompt sends the Boss notes to ~/work/boss-notes and not to t
     const prompt = call.args.find((word) => word.startsWith('[herdr-boss] You are the Boss of this factory.'));
     assert.match(prompt, /~\/work\/boss-notes\/memory\.md/);
     assert.match(prompt, /not to docs\/orchestration\/memory\.md/);
+  } finally { f.cleanup(); }
+});
+
+const FAKE_SECRET = 'sk-fake-0123456789abcdefSECRETVALUE';
+const OPENCODE_LISTED = { code: 0, stdout: `┌  Credentials ~/.local/share/opencode/auth.json\n│\n●  Anthropic api ${FAKE_SECRET}\n│\n●  OpenAI oauth\n│\n└  2 credentials\n`, stderr: `warn ${FAKE_SECRET}\n` };
+const OPENCODE_EMPTY = { code: 0, stdout: `┌  Credentials ~/.local/share/opencode/auth.json\n│\n└  0 credentials\n`, stderr: '' };
+
+function captureStreams(f) {
+  const err = [];
+  f.io.stderr = { write: (text) => { err.push(text); return true; } };
+  return err;
+}
+
+test('factory login opencode exits 3 with the sign-in command when no credential is listed', async () => {
+  const f = fixture({ authList: OPENCODE_EMPTY });
+  try {
+    const err = captureStreams(f);
+    assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 3);
+    const out = f.output.join('');
+    assert.ok(out.includes('OpenCode: not logged in in factory demo\n'));
+    assert.ok(out.includes('docker exec -it --user factory hf-demo opencode auth login'));
+    assert.equal(f.dockerCalls.some(({ args }) => args.at(-1) === 'login'), false, 'the command never starts a login');
+    assert.deepEqual(f.dockerCalls.find(({ args }) => args.at(-1) === 'list').args, ['exec', '--user', 'factory', 'hf-demo', 'opencode', 'auth', 'list']);
+    assert.equal(err.join(''), '');
+  } finally { f.cleanup(); }
+});
+
+test('factory login opencode exits 3 when the credential list command fails', async () => {
+  const f = fixture({ authList: { code: 1, stdout: '', stderr: 'boom' } });
+  try {
+    assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 3);
+    assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo\n'));
+  } finally { f.cleanup(); }
+});
+
+test('factory login opencode exits 0 and prints only the credential count', async () => {
+  const f = fixture({ authList: OPENCODE_LISTED });
+  try {
+    const err = captureStreams(f);
+    assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 0);
+    assert.equal(f.output.join(''), 'OpenCode: logged in in factory demo (2 credentials)\n');
+    assert.equal(err.join(''), '');
+  } finally { f.cleanup(); }
+});
+
+test('factory login opencode never prints a value from the auth list', async () => {
+  for (const authList of [OPENCODE_LISTED, { code: 0, stdout: `${FAKE_SECRET}\n`, stderr: FAKE_SECRET }]) {
+    const f = fixture({ authList });
+    try {
+      const err = captureStreams(f);
+      await factoryCommand(['login', 'demo', 'opencode'], f.io);
+      const all = f.output.join('') + err.join('');
+      assert.equal(all.includes(FAKE_SECRET), false);
+      assert.equal(all.includes('SECRETVALUE'), false);
+      assert.equal(all.includes('auth.json'), false);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('factory login refuses an unknown harness', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(factoryCommand(['login', 'demo', 'gemini'], f.io), /Choose the Claude, Codex, or OpenCode harness\./);
+    assert.equal(f.dockerCalls.length, 0);
   } finally { f.cleanup(); }
 });

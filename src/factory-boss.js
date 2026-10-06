@@ -5,7 +5,7 @@ import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
 import { ensureFactoryGitIdentity, FACTORY_PROJECT_GROUP } from './factory-role.js';
-import { verifyHarnessLogin } from './factory-wizard.js';
+import { verifyHarnessLogin, openCodeCredentialCount, openCodeMissingLine } from './factory-wizard.js';
 import { waitForAgentReady } from './kit/workers.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
@@ -443,11 +443,29 @@ function dryRunText(name, harness, resume) {
   return `${lines.join('\n')}\n`;
 }
 
+async function openCodeLogin(name, io) {
+  try {
+    const { record, host, docker } = await inspectFactory(name, io);
+    const count = await openCodeCredentialCount(docker, name);
+    if (count > 0) {
+      io.stdout.write(`OpenCode: logged in in factory ${name} (${count} ${count === 1 ? 'credential' : 'credentials'})\n`);
+      return 0;
+    }
+    const prefix = host.transport === 'local' ? 'docker' : 'docker --context <context from the private connection store>';
+    io.stdout.write(`${openCodeMissingLine(name)}\nRun this command at an Owner terminal:\n${prefix} exec -it --user factory ${record.containerName} opencode auth login\n`);
+    return 3;
+  } catch {
+    io.stdout.write('failed\n');
+    return 1;
+  }
+}
+
 export async function factoryLoginCommand(args, io) {
   const { positional } = parseArgs(args);
   const [name, harness] = positional;
   assertName(name);
-  if (!['claude', 'codex'].includes(harness)) throw new Error('Choose the Claude or Codex harness.');
+  if (!['claude', 'codex', 'opencode'].includes(harness)) throw new Error('Choose the Claude, Codex, or OpenCode harness.');
+  if (harness === 'opencode') return openCodeLogin(name, io);
   try {
     const { record, docker } = await inspectFactory(name, io);
     const command = harness === 'claude' ? ['claude', 'auth', 'login'] : ['codex', 'login', '--device-auth'];

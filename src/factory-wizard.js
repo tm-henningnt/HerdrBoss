@@ -19,6 +19,16 @@ export async function verifyHarnessLogin(docker, name, harness) {
   return result.code === 0;
 }
 
+// Count credentials from the list command. The output itself is never returned or printed.
+export async function openCodeCredentialCount(docker, name) {
+  const result = await docker.run(['exec', '--user', 'factory', `hf-${name}`, 'opencode', 'auth', 'list']);
+  if (result.code !== 0) return 0;
+  const match = /\b(\d{1,4}) credentials?\b/i.exec(result.stdout);
+  return match ? Number(match[1]) : 0;
+}
+
+export const openCodeMissingLine = (name) => `OpenCode: not logged in in factory ${name}`;
+
 function safetyError(container, name, codexSandbox) {
   if (!container?.State?.Running) return 'The factory container is stopped.';
   return configSafetyError(container, name, codexSandbox);
@@ -158,6 +168,7 @@ export async function configureFactory(args, io) {
   flow.state = 'waiting';
   flow.ownerInstruction = 'owner-instructions.md';
   writePrivate(file, flow);
+  if (await openCodeCredentialCount(docker, name) === 0) io.stdout.write(`${openCodeMissingLine(name)}\n`);
   io.stdout.write(`Factory ${name}: the service checks passed. Owner logins are pending.\n`);
   return 3;
 }

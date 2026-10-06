@@ -1775,7 +1775,7 @@ herdr-boss factory freeze NAME [--off]
 herdr-boss factory status NAME [--json]
 herdr-boss factory list [--json]
 herdr-boss factory configure NAME [--resume] [--step STEP]
-herdr-boss factory login NAME claude|codex
+herdr-boss factory login NAME claude|codex|opencode
 herdr-boss factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]
 herdr-boss factory connect NAME
 herdr-boss factory connect --check NAME
@@ -1841,6 +1841,8 @@ The Fleet page shows `Attach: attached` or `Attach: not attached` under each rem
 A verified Owner wait shows `Waiting for you: login-HARNESS` in the factory card of the waiting factory. The factory adds the step only after its own login check reads `expired`. The line shows the wait age. A container factory shows `herdr-boss factory login NAME HARNESS` with a copy button. A native factory shows `Sign in HARNESS in a terminal on this Mac.`. The page runs no wait command. An absent Boss never creates a wait. A healthy poll never clears a wait. A wait with no known fix shows the step without a fix. When the wait age is not available, the line shows `waiting time unknown`.
 
 The `configure` wizard checks the container, volumes, Herdr server, and service. It exits 3 and writes one Owner instruction file when those checks pass. Run `herdr-boss factory login NAME claude` or `herdr-boss factory login NAME codex` in an Owner terminal to sign in. The command runs the harness login in the labeled factory container with the terminal attached. It then checks login with a harmless command. It prepares the first-run state for that harness. It trusts the Boss folder, the work folder, and the registered project folders. It prints only `ok` or `failed` after these checks. It never captures a token.
+
+Run `herdr-boss factory login NAME opencode` to check the OpenCode login. The command runs `opencode auth list` in the factory container. It does not start a login. With one or more credentials it prints `OpenCode: logged in in factory NAME (N credentials)` and exits 0. Without a credential it prints `OpenCode: not logged in in factory NAME` and the Owner command `docker exec -it --user factory hf-NAME opencode auth login`, and exits 3. It prints only the credential count. It never prints a provider name, a token, or any other value from the list. The `configure` wizard prints the same `not logged in` line before its exit 3 when the factory has no OpenCode credential. `factory status` prints no harness login lines.
 
 For Claude, the command sets `hasCompletedOnboarding` and `hasTrustDialogAccepted` for the Boss folder, the work folder, and each registered project folder in `~/.claude.json`. It adds the `dark` theme only when no theme is set. For Codex, it sets each folder's `trust_level` to `trusted` in `~/.codex/config.toml`. It also sets `notice.hide_full_access_warning` to `true`. The command merges these values into the existing files as the factory user. It keeps other keys and writes with mode `0600`. It does not read or change credential files. A state file that cannot be merged makes the command fail. Use TOML tables for the Codex project and notice settings; inline tables are not supported.
 
