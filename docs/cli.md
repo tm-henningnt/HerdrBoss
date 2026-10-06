@@ -18,8 +18,8 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
 | `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
-| `herdr-boss install` | Install and start the macOS launchd agent `no.tallmaker.herdr-boss`. Run it again after you move the repository. |
-| `herdr-boss uninstall` | Stop and remove the launchd agent. |
+| `herdr-boss install` | Install and start the service of the platform. On macOS it writes the launchd agent `no.tallmaker.herdr-boss`. On Linux it writes the systemd user service `herdr-boss.service`. Run it again after you move the repository. |
+| `herdr-boss uninstall` | Stop and remove the service of the platform. |
 | `herdr-boss serve` | Run the collector and the dashboard in the foreground. |
 | `herdr-boss serve --read-only-preview [--host <address>]` | Run a dashboard preview. It binds `127.0.0.1` and accepts local requests only. `--host` sets another bind address, an IP address or a host name, and works only with `--read-only-preview`. The start line prints the bind address. It allows API reads and blocks API changes, prompts, notifications, process reaping, Chrome clone sweeps, handovers, and browser launches. It never reads, creates, or changes access files. It needs a `HERDR_BOSS_DIR` that the service does not use. |
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
@@ -27,6 +27,40 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
 
 On Linux, `serve` checks for `lsof` and the procps `ps` command at start. A missing tool gives an installation warning in standard error and in the dashboard event log. The service continues. The check runs beside the first tick and does not delay it. The read-only preview skips the check. Install the named package to enable its process checks.
+
+### Linux service install
+
+Run `herdr-boss install` as your normal user. Do not use `sudo`. The command writes one unit file in `~/.config/systemd/user/herdr-boss.service`. The command then runs these commands, in this order:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable herdr-boss.service
+systemctl --user restart herdr-boss.service
+```
+
+The restart applies a new repository folder or data directory to a service that already runs. A failed command stops the install and prints the error. The unit file stays for a repair run.
+
+The unit file starts `node`, the `src/cli.js` of the repository, and `serve`. It sets `WorkingDirectory` to the repository folder. It sets `PATH`, `StandardOutput`, and `StandardError`. Both log lines write to `server.log` in the data directory. It restarts the service after the process exits. A manual `systemctl stop` keeps the service stopped. The unit file holds no secret.
+
+The unit sets `HERDR_BOSS_DIR` when the configured data directory is not `~/.herdr-boss`. The unit sets `HERDR_BOSS_LIVE_DIR` to the same folder. The service keeps the configured data directory. The service never uses the data directory of another factory.
+
+The unit file is systemd text, not shell text. The installer encodes each directive by its own rule. It quotes the values of `ExecStart` and `Environment`. A double quote and a backslash get a backslash. In `ExecStart`, a dollar sign becomes two dollar signs, because systemd expands a dollar sign. It writes the path of `WorkingDirectory` and of the `append:` log lines without quotes. In every directive, a percent sign becomes two percent signs, because systemd expands a percent sign. A path with a newline or another control character cannot be written safely. The installer refuses it and names the value. Move the repository or the data directory to a clean path, and run the command again.
+
+A systemd user service starts with your session. The service runs only while you are signed in. The installer does not use a system service, `sudo`, `loginctl enable-linger`, or a package manager. The installer does not check that the service runs. Run `herdr-boss doctor` after the install.
+
+Run `herdr-boss uninstall` to stop the service. The command runs this command first:
+
+```sh
+systemctl --user disable --now herdr-boss.service
+```
+
+If this command fails, the uninstall stops with the error and keeps the unit file. If no unit file exists, the uninstall ignores the failure. Otherwise the command removes the unit file it wrote and runs `systemctl --user daemon-reload`.
+
+The uninstall removes only `herdr-boss.service`. It leaves every other unit file.
+
+An operating system that is not macOS and not Linux fails with a clear message. The command writes no file, creates no data directory, and runs no command on such a system. Windows users run the Linux path inside Ubuntu under WSL2.
+
+This install path is verified with tests and a fake `systemctl`. The tests do not run a real Linux service. Verify the result on a Linux machine with `herdr-boss doctor` and `systemctl --user status herdr-boss.service`.
 
 ### First-hour setup
 
@@ -82,7 +116,8 @@ Exit code 1 means a usage error, a refusal, or a failed action.
 Exit code 3 means that a step waits for you.
 The last lines name that step and give the next action.
 On Linux, follow the printed tool and service instructions yourself.
-The native Linux install flow is a separate onboarding task.
+The wizard does not run the service install on Linux.
+Run `herdr-boss install` yourself. It writes a systemd user service.
 
 ### Service checks
 
