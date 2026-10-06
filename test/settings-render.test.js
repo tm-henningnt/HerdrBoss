@@ -235,6 +235,23 @@ test('Allocation shows the default-off automatic Claude goal command switch', as
   assert.equal(s.policy.goals.autoCommand, true, 'the switch updates the nested policy draft');
 });
 
+test('the Boss rules row keeps its input inside the card at a phone width', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  for (const [id, label] of [['sf-defaultOrchestratorGoal', 'Default project lead goal'], ['sf-bossRules', 'Boss rules']]) {
+    const at = html.indexOf(`<input id="${id}"`);
+    assert.ok(at > 0, `${label} renders its text input`);
+    const start = html.lastIndexOf('<label', at);
+    const row = html.slice(start, html.indexOf('</label>', at));
+    assert.ok(row.includes(`>${label}<button`), `${label} renders a setting row`);
+    assert.match(row, /\bgoal-setting\b/, `${label} carries the class that shrinks the input`);
+  }
+});
+
 // The old page gave repeated settings a per-row key.
 test('the check fails when the page gives every help button a per-row key', async (t) => {
   const oldKey = 'const key = instance ? `${id}#${instance}` : id;';
