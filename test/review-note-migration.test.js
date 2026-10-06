@@ -1,3 +1,4 @@
+import './helpers/test-env.js';
 // RV4: the migration of the old per-pack note into review_notes, one note for each pack version.
 // Each case uses a temporary database with the review tables of schema version 4, before review_notes existed.
 import test from 'node:test';
