@@ -172,6 +172,12 @@ test('the Linux install rejects a path with a newline or a control character', (
   assert.equal(fs.existsSync(path.join(home, '.config')), false, 'a rejected install writes no unit folder');
 });
 
+test('the Linux install rejects a repository path that ends in a backslash', (t) => {
+  const { options, home } = fixture(t);
+  assert.throws(() => installService({ ...options, root: '/tmp/repo\\' }), /backslash/);
+  assert.equal(fs.existsSync(path.join(home, '.config')), false, 'a rejected install writes no unit folder');
+});
+
 test('the Linux uninstall stops the unit, removes the owned unit, and reloads the daemon', (t) => {
   const { options, home, calls } = fixture(t);
   installService(options);

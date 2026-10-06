@@ -59,6 +59,8 @@ export function launchdPlist({ node, entry, root, log }) {
 function assertUnitValue(value, name) {
   if (typeof value !== 'string' || !value) throw new Error(`The systemd unit cannot hold an empty ${name}.`);
   if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error(`The systemd unit cannot hold a ${name} with a control character or a newline. Move the repository, the entry, or the data directory to a path without control characters.`);
+  // systemd reads a trailing backslash in a path scalar as a line continuation, so the next unit line would join it.
+  if (value.endsWith('\\')) throw new Error(`The systemd unit cannot hold a ${name} that ends in a backslash. Move the repository, the entry, or the data directory to a path that does not end in a backslash.`);
   return value;
 }
 
