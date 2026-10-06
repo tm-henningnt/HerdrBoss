@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { factoryCommand } from '../src/factory-host.js';
-import { writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
+import { readFleet, writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
 
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft15' };
 const image = { Config: { Labels: {
@@ -73,7 +73,8 @@ function updateFixture() {
   const oldCommit = 'a'.repeat(40), newCommit = 'b'.repeat(40);
   let currentCommit = oldCommit, schema = 1, failUpdated = false, migrateOnUpdate = false, failNewImageCreate = false, failNewImageStart = false, failSchemaReadAfterStart = false, schemaUnreadableAfterStart = false;
   const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
-  let remoteUrl = expectedOrigin, failFetch = false, failMerge = false;
+  let remoteUrl = expectedOrigin, failFetch = false, failMerge = false, failGitReset = false, failServiceStart = false, failPause = false, failBackupRun = false, failHelperRemove = false, failHealth = false;
+  let transportFault = () => false;
   const dirty = new Set();
   const git = {};
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
@@ -81,6 +82,7 @@ function updateFixture() {
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
   const docker = { async run(args, options = {}) {
     f.calls.push({ args, options });
+    if (transportFault(args)) throw Object.assign(new Error('The factory host is unreachable.'), { code: 'FACTORY_HOST_UNREACHABLE' });
     if (args[0] === 'container' && args[1] === 'inspect') {
       const found = args[2] === 'hf-demo' ? container : helpers.get(args[2]);
       return found ? ok([found]) : missing();
@@ -100,7 +102,12 @@ function updateFixture() {
       if (failNextSnapshots > 0) { failNextSnapshots -= 1; return { code: 1, stdout: '', stderr: 'simulated snapshot read failure' }; }
       return ok({ updatedAt: f.state?.updatedAt ?? new Date(tickAt).toISOString(), workers: f.state?.workers ?? 0, locks: f.state?.locks ?? [], handoffs: f.state?.handoffs ?? [], errors: f.state?.errors ?? [], orchestrators: f.state?.orchestrators ?? [], bossPane: f.state?.bossPane ?? false });
     }
-    if (args[0] === 'exec' && args.includes('/command/s6-svc')) { serviceUp = args.includes('-u'); if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; } return ok(); }
+    if (args[0] === 'exec' && args.includes('/command/s6-svc')) {
+      if (args.includes('-u') && failServiceStart) return { code: 1, stdout: '', stderr: 'simulated service start failure' };
+      serviceUp = args.includes('-u');
+      if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; }
+      return ok();
+    }
     if (args[0] === 'exec' && args.includes('/command/s6-svstat')) return ok(serviceUp ? 'true' : 'false');
     if (args[0] === 'exec' && args.includes('git')) {
       if (args.includes('config') && args.includes('--global')) {
@@ -118,14 +125,16 @@ function updateFixture() {
       if (args.includes('merge') && dirty.size) return { code: 128, stdout: '', stderr: `error: Your local changes would be overwritten by merge: ${[...dirty].join(' ')}` };
       if (args.includes('merge') && failMerge) return { code: 128, stdout: '', stderr: 'fatal' };
       if (args.includes('merge')) { currentCommit = newCommit; if (migrateOnUpdate) schema = 2; if (failSnapshotAfterMerge > 0) failNextSnapshots = failSnapshotAfterMerge; return ok(); }
-      if (args.includes('reset')) { currentCommit = oldCommit; return ok(); }
+      if (args.includes('reset')) { if (failGitReset) return { code: 128, stdout: '', stderr: 'fatal: could not reset' }; currentCommit = oldCommit; return ok(); }
       return ok();
     }
     if (args[0] === 'exec' && args.includes('curl')) {
       const failed = failUpdated && (currentCommit === newCommit || container.Config.Image !== 'example-factory:test');
       if (String(args.at(-1)).endsWith('/api/state')) return ok(failed ? '503' : '200');
+      if (failHealth) return { code: 22, stdout: '', stderr: 'simulated health failure' };
       return ok({ schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', herdrReachable: true, tickAgeSeconds: 1 });
     }
+    if (args[0] === 'run' && failBackupRun && args.includes('backup')) return { code: 1, stdout: '', stderr: 'simulated backup failure' };
     if (args[0] === 'run') {
       const helperName = args[args.indexOf('--name') + 1];
       helpers.set(helperName, { Config: { Labels: { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft15' } } });
@@ -143,6 +152,8 @@ function updateFixture() {
         return { code: result.status, stdout: options.outputFile ? '' : result.stdout, stderr: result.stderr?.toString() || '' };
       } finally { if (typeof outputFd === 'number') fs.closeSync(outputFd); if (typeof inputFd === 'number') fs.closeSync(inputFd); }
     }
+    if (args[0] === 'pause' && failPause) return { code: 1, stdout: '', stderr: 'simulated pause failure' };
+    if (args[0] === 'container' && args[1] === 'rm' && args.includes('--force') && failHelperRemove) return { code: 1, stdout: '', stderr: 'simulated helper removal failure' };
     if (args[0] === 'pause' || args[0] === 'unpause') { container.State.Paused = args[0] === 'pause'; return ok(); }
     if (args[0] === 'stop') { container.State.Running = false; container.State.Status = 'exited'; return ok(); }
     if (args[0] === 'start') {
@@ -162,7 +173,8 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
+    set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
@@ -603,4 +615,204 @@ test('service update names the merge step when the merge fails', async () => {
     f.failMerge = true;
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge/i);
   } finally { f.cleanup(); }
+});
+
+const START = '/command/s6-svc -u /run/service/herdr-boss-serve';
+const RECOVERY = `docker --context orbstack exec hf-demo ${START}`;
+const re = (text) => new RegExp(text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'));
+
+// Register the factory on the host `winbox`, so that the host label differs from the factory name.
+function useRemoteHost(f) {
+  const fleet = readFleet(f.env);
+  fleet.hosts = [{ hostId: 'box', runtime: 'docker-engine-wsl2', personalOnly: false, codexSandbox: 'unavailable', transport: 'ssh', connectionRef: 'winbox' }];
+  fleet.factories[0].hostId = 'box';
+  writeFleet(f.env, fleet);
+  const file = path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'factory.json');
+  writePrivate(file, { ...JSON.parse(fs.readFileSync(file, 'utf8')), hostId: 'box' });
+  writePrivate(path.join(f.env.HERDR_FACTORIES_DIR, 'registry.json'), { version: 1, hosts: { winbox: { dockerContext: 'ctx-winbox', runtime: 'docker-engine-wsl2', personalOnly: false, codexSandbox: 'unavailable' } } });
+}
+
+const update = (f, tier = 'service') => factoryCommand(['update', 'demo', '--tier', tier], f.io);
+
+test('service update prints a plain docker command for a local factory when the service cannot start', async () => {
+  const f = updateFixture();
+  try {
+    f.failServiceStart = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, re(RECOVERY));
+      assert.match(error.message, /herdr-boss factory status demo/);
+      assert.doesNotMatch(error.message, /factory docker demo/);
+      assert.equal(error.message.split(START).length - 1, 1, 'the hint appears once');
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('service update prints the registered host name, not the factory name, for a factory on a remote host', async () => {
+  const f = updateFixture();
+  try {
+    useRemoteHost(f);
+    f.failServiceStart = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, re(`herdr-boss factory docker winbox -- exec hf-demo ${START}`));
+      assert.match(error.message, /herdr-boss factory status demo/);
+      assert.doesNotMatch(error.message, /factory docker demo/);
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('service update starts the service again when the rollback fails after the stop and prints no hint when the service answers', async () => {
+  const f = updateFixture();
+  try {
+    f.transportFault = (args) => args.includes('merge');
+    f.failGitReset = true;
+    await assert.rejects(update(f), (error) => {
+      assert.doesNotMatch(error.message, /factory status|s6-svc/);
+      return true;
+    });
+    assert.equal(f.serviceUp, true, 'the factory service must be up after a failed update');
+    const mergeAt = f.calls.findIndex(({ args }) => args.includes('merge'));
+    const healthAfter = f.calls.slice(mergeAt).some(({ args }) => args[0] === 'exec' && args.includes('curl') && String(args.at(-1)).endsWith('/api/health'));
+    assert.equal(healthAfter, true, 'the restarted service must answer /api/health');
+  } finally { f.cleanup(); }
+});
+
+test('service update prints no hint after a rollback that restores a healthy service', async () => {
+  const f = updateFixture();
+  try {
+    f.failUpdated = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, /rolled back/i);
+      assert.doesNotMatch(error.message, /factory status|s6-svc/);
+      return true;
+    });
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update starts the service again when the pause fails after the stop', async () => {
+  const f = updateFixture();
+  try {
+    f.failPause = true;
+    await assert.rejects(update(f), /Docker operation failed/);
+    assert.equal(f.serviceUp, true, 'the factory service must be up again');
+    assert.equal(f.calls.some(({ args }) => args[0] === 'exec' && args.includes('curl') && String(args.at(-1)).endsWith('/api/health')), true);
+  } finally { f.cleanup(); }
+});
+
+test('image update starts the service again when the pause fails after the stop', async () => {
+  const f = updateFixture();
+  try {
+    f.failPause = true;
+    await assert.rejects(update(f, 'image'), /Docker operation failed/);
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update names the recovery command when a backup error and a resume error follow the stop', async () => {
+  const f = updateFixture();
+  try {
+    f.failBackupRun = true;
+    f.failServiceStart = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, re(RECOVERY));
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('service update restarts the service after a backup error', async () => {
+  const f = updateFixture();
+  try {
+    f.failBackupRun = true;
+    await assert.rejects(update(f));
+    assert.equal(f.serviceUp, true);
+    assert.notEqual(f.container.State.Paused, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update keeps the container paused and names the unpause and start commands after a helper cleanup failure', async () => {
+  const f = updateFixture();
+  try {
+    f.failHelperRemove = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, /helper cleanup failed/i);
+      assert.match(error.message, re('docker --context orbstack unpause hf-demo'));
+      assert.match(error.message, re(RECOVERY));
+      return true;
+    });
+    assert.equal(f.container.State.Paused, true, 'the container stays paused by design');
+    assert.equal(f.calls.some(({ args }) => args[0] === 'unpause'), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update verifies /api/health after the pre-merge resume', async () => {
+  const f = updateFixture();
+  try {
+    f.mutateSnapshotNumber = 2;
+    f.snapshotMutation = { workers: 1 };
+    f.failHealth = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, /did not answer \/api\/health/);
+      assert.match(error.message, re(RECOVERY));
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('service update prints no hint after a pre-merge resume when the service answers', async () => {
+  const f = updateFixture();
+  try {
+    f.mutateSnapshotNumber = 2;
+    f.snapshotMutation = { workers: 1 };
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, /factory configure demo --resume/);
+      assert.doesNotMatch(error.message, /s6-svc/);
+      return true;
+    });
+    assert.equal(f.calls.some(({ args }) => args[0] === 'exec' && args.includes('curl') && String(args.at(-1)).endsWith('/api/health')), true);
+  } finally { f.cleanup(); }
+});
+
+test('service update verifies /api/health after the data-loss-pending resume', async () => {
+  const f = updateFixture();
+  try {
+    f.failUpdated = true;
+    f.migrateOnUpdate = true;
+    f.failHealth = true;
+    await assert.rejects(update(f), (error) => {
+      assert.match(error.message, /--accept-data-loss/);
+      assert.match(error.message, /did not answer \/api\/health/);
+      assert.match(error.message, re(RECOVERY));
+      return true;
+    });
+  } finally { f.cleanup(); }
+});
+
+test('image update starts the stopped service and prints no hint when a rollback needs the Owner and the service answers', async () => {
+  const f = updateFixture();
+  try {
+    f.failUpdated = true;
+    f.migrateOnUpdate = true;
+    await assert.rejects(update(f, 'image'), (error) => {
+      assert.match(error.message, /--accept-data-loss/);
+      assert.doesNotMatch(error.message, /s6-svc|factory status/);
+      return true;
+    });
+    assert.equal(f.serviceUp, true);
+    assert.notEqual(f.container.State.Paused, true);
+  } finally { f.cleanup(); }
+});
+
+test('a stop time from an earlier update does not relax the stale state check of the next update', async () => {
+  const realNow = Date.now;
+  const first = updateFixture();
+  try { assert.equal(await update(first), 0); } finally { first.cleanup(); }
+  Date.now = () => realNow() + 5_000;
+  const f = updateFixture();
+  try {
+    f.state = { ...f.state, updatedAt: new Date(Date.now() - 61_000).toISOString() };
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service', '--dry-run'], f.io), /cannot prove.*idle/i);
+  } finally { Date.now = realNow; f.cleanup(); }
 });

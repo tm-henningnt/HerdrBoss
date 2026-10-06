@@ -1879,6 +1879,14 @@ After the backup, the tool takes a fresh work snapshot before it merges code or 
 
 The tool checks that `/api/state` returns 200 and that one clean service tick passes within 30 seconds. It rolls back a failed update when the schema has not increased.
 
+The update stops the factory service before it backs up the factory. After a failure at any later step, including a failed stop, pause, or backup, the tool starts the service again. It then waits until the service answers `/api/health`, within the same update timeout. This check also runs after a resume or a rollback. A service that stays down is a failure.
+
+If the service still does not answer, the error message prints the commands that start it and check it, once. The start command depends on the host of the factory. For the local host it is a plain Docker command: `docker --context orbstack exec hf-NAME /command/s6-svc -u /run/service/herdr-boss-serve`. For a registered host it is `herdr-boss factory docker HOST -- exec hf-NAME /command/s6-svc -u /run/service/herdr-boss-serve`. `HOST` is the registered host name, not the factory name. `NAME` is the factory name. The check command is `herdr-boss factory status NAME`. Retry the update only after the service writes a new state file. An old state file stops the next update with `The factory cannot prove that work is idle.` The error message prints no commands when the service answers.
+
+If the backup helper cannot be removed, the tool keeps the container paused. The error message then prints the `docker unpause hf-NAME` command and the start command, each in the form of the host.
+
+The service tier rolls back to the previous commit when a step after the merge fails. The rollback starts the previous service. The image tier has no rollback for a step that fails before the container changes. The tool starts the stopped service in both tiers.
+
 If the schema increased or cannot be read after the new container starts, the tool keeps a private pending record. Review the failure, then repeat the same command with `--accept-data-loss` to restore the backup and the previous code or image. This rollback can discard data written after the backup. If the new container never starts, the tool rolls back without restoring data or asking for this flag.
 
 ### Backup and recovery
@@ -1968,6 +1976,8 @@ A stopped factory is already frozen.
 Use `--off` to resume a paused container.
 These commands bypass the service version gate.
 They still check container ownership and safety.
+A failed factory update prints the command that starts the service.
+Run that command when the service does not answer.
 Docker must be reachable.
 Do not print a login file or token from a shell.
 

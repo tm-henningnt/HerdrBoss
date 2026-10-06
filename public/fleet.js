@@ -344,7 +344,7 @@ function actionsHtml(row, kind) {
       + `<span class="note" data-fleet-native-note>Update: run the release steps in AGENTS.md (fast-forward main, restart the service). Boss start: not available from this page for a native factory (G8).</span></div>`;
   }
   return `<div class="actions" data-fleet-actions>`
-    + `<button type="button" class="primary" data-action="update" data-name="${esc(name)}" data-command="herdr-boss factory update ${esc(name)} --tier service" data-effect="Restarts the service and fast-forwards the code.">Factory update</button>`
+    + `<button type="button" class="primary" data-action="update" data-name="${esc(name)}" data-command="herdr-boss factory update ${esc(name)} --tier service" data-effect="Restarts the service and fast-forwards the code. A failed restart prints the command that starts the service.">Factory update</button>`
     + `<button type="button" data-action="boss" data-name="${esc(name)}" data-command="herdr-boss factory boss start ${esc(name)} --resume" data-effect="Starts the Boss pane in the factory.">Boss start</button>`
     + `<button type="button" data-action="copy" data-copy="herdr-boss factory attach ${esc(name)}" data-copy-text="herdr-boss factory attach ${esc(name)}">Copy attach command</button>`
     + dashboardLink(row) + `</div>`;
