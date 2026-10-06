@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UP1 wireframe: Updates card, phone 393</title>
+<style>
+  /* A self-contained wireframe. The colors are the design tokens of public/style.css.
+     The layout does not load a font, an image, or a script. */
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7;
+    --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90; --accent: #b4501a;
+    --ok: #2a7d45; --warn: #946012; --crit: #c2362b; --info: #3a6ea5; --track: #ebe7df;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+      --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+      --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --track: #2a2825;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  .wrap { width: 393px; max-width: 100%; margin: 0 auto; padding: 14px 14px 30px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .head { display: flex; align-items: center; gap: 8px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0; }
+  .spacer { flex: 1; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .btn { display: inline-block; border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; background: var(--panel-2); font-weight: 600; font-size: 12.5px; }
+  .btn.primary { border-color: var(--accent); color: var(--accent); }
+  .card { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 4px; }
+  .card.canary { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .title { display: flex; align-items: center; justify-content: space-between; font-weight: 650; }
+  .line { display: flex; justify-content: space-between; gap: 8px; }
+  .line span:first-child { color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .risk { font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); font-weight: 400; }
+  .risk.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+  .actions { margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .section-label { display: inline-block; border: 1px dashed var(--accent); color: var(--accent); font: 600 11px var(--mono); padding: 1px 6px; border-radius: 6px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="note">UP1 wireframe: Updates card at 393 px. Dark theme shown. All values are examples.</p>
+  <span class="section-label">Fleet Updates card, phone</span>
+  <div class="head"><h2>Updates</h2><span class="spacer"></span><span class="btn">Check now</span></div>
+  <div class="muted" style="margin-top:4px">checked 2026-10-06 08:00</div>
+
+  <div class="card">
+    <div class="title"><span>claude</span><span class="risk ok">ok</span></div>
+    <div class="line"><span>Installed</span><span class="mono">2.1.291 · win1 2.1.288</span></div>
+    <div class="line"><span>Pinned</span><span class="mono">2.1.288</span></div>
+    <div class="line"><span>Latest</span><span class="mono">2.1.292 (4 d)</span></div>
+    <div class="actions"><span class="btn primary">Bump</span></div>
+  </div>
+  <div class="card">
+    <div class="title"><span>pi</span><span class="risk ok">ok</span></div>
+    <div class="line"><span>Installed</span><span class="mono">1.0.0</span></div>
+    <div class="line"><span>Pinned</span><span class="mono">none</span></div>
+    <div class="line"><span>Latest</span><span class="mono">1.0.4 (12 d)</span></div>
+    <div class="actions"><span class="btn">Upgrade</span></div>
+  </div>
+  <div class="card canary">
+    <div class="title"><span>Canary win1</span></div>
+    <div class="line"><span>Set</span><span class="mono">2026-10-06-a</span></div>
+    <div class="line"><span>Smoke</span><span>passed</span></div>
+    <div class="actions"><span class="btn primary">Promote to win2</span><span class="btn">Roll back</span></div>
+  </div>
+</div>
+</body>
+</html>

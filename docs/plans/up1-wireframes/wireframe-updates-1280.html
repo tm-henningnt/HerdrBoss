@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UP1 wireframe: Updates card, desktop 1280</title>
+<style>
+  /* A self-contained wireframe. The colors are the design tokens of public/style.css.
+     The layout does not load a font, an image, or a script. */
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7;
+    --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90; --accent: #b4501a;
+    --ok: #2a7d45; --warn: #946012; --crit: #c2362b; --info: #3a6ea5; --track: #ebe7df;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+      --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+      --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --track: #2a2825;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0; }
+  .spacer { flex: 1; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .btn { border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; background: var(--panel-2); font-weight: 600; font-size: 12.5px; }
+  .btn.primary { border-color: var(--accent); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.tool { font-weight: 650; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .sub { display: block; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .risk { font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); }
+  .risk.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+  .risk.late { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+  .risk.security { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 50%, var(--line)); }
+  .risk.unknown { color: var(--faint); }
+  .canary { margin-top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 12px; padding: 10px 12px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .section-label { display: inline-block; border: 1px dashed var(--accent); color: var(--accent); font: 600 11px var(--mono); padding: 1px 6px; border-radius: 6px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="note">UP1 wireframe: Updates card at 1280 px. Dark theme shown. All values are examples, not current versions.</p>
+  <span class="section-label">Fleet Updates card, desktop</span>
+  <section class="panel">
+    <div class="head">
+      <h2>Updates</h2>
+      <span class="muted">checked 2026-10-06 08:00</span>
+      <span class="spacer"></span>
+      <span class="btn">Check now</span>
+    </div>
+    <table>
+      <thead><tr><th>Tool</th><th>Installed</th><th>Pinned</th><th>Latest</th><th>Age</th><th>Risk</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td class="tool">claude</td><td class="mono">2.1.291<span class="sub">win1 2.1.288</span></td><td class="mono">2.1.288</td><td class="mono">2.1.292</td><td>4 d</td><td><span class="risk ok">ok</span></td><td><span class="btn primary">Bump</span></td></tr>
+        <tr><td class="tool">codex</td><td class="mono">0.160.1<span class="sub">win1 0.160.0</span></td><td class="mono">0.160.0</td><td class="mono">0.160.1</td><td>2 d</td><td><span class="risk ok">ok</span></td><td><span class="btn primary">Bump</span></td></tr>
+        <tr><td class="tool">opencode</td><td class="mono">2.0.20<span class="sub">win1 1.18.34</span></td><td class="mono">1.18.34</td><td class="mono">1.18.35</td><td>0 d</td><td><span class="risk ok">ok</span></td><td><span class="btn primary">Bump</span></td></tr>
+        <tr><td class="tool">pi</td><td class="mono">1.0.0</td><td class="mono">none</td><td class="mono">1.0.4</td><td>12 d</td><td><span class="risk ok">ok</span></td><td><span class="btn">Upgrade</span></td></tr>
+        <tr><td class="tool">herdr</td><td class="mono">0.9.3<span class="sub">win1 0.9.3</span></td><td class="mono">0.9.3</td><td class="mono">0.9.3</td><td>-</td><td><span class="risk ok">ok</span></td><td></td></tr>
+        <tr><td class="tool">node</td><td class="mono">26.10.0<span class="sub">win1 26.10.0</span></td><td class="mono">26.10.0</td><td class="mono">26.10.0</td><td>-</td><td><span class="risk ok">ok</span></td><td></td></tr>
+      </tbody>
+    </table>
+    <div class="canary">
+      <strong>Canary win1</strong>
+      <span class="muted">bump set 2026-10-06-a · smoke passed</span>
+      <span class="spacer"></span>
+      <span class="btn primary">Promote to win2</span>
+      <span class="btn">Roll back</span>
+    </div>
+  </section>
+</div>
+</body>
+</html>

@@ -29,14 +29,14 @@ All values below were read on 2026-10-06. No secret was read.
 - The factory image installs the harness CLIs with `npm install -g` at an exact version. Source: `factory/Dockerfile`.
 - The image sets `DISABLE_AUTOUPDATER=1` and `OPENCODE_DISABLE_AUTOUPDATE=true`. A harness in a factory changes only with an image rebuild. Source: `factory/Dockerfile`.
 - `docs/specs/factories.md` lists a canary factory and automatic promotion as out of scope for the factory plan. UP1 adds them.
-- `pi` is not in `pins.json` and not in the image. `codexbar` is not in `pins.json` yet. The Owner task says it will be.
+- `pi` is not in `pins.json` and not in the image.
 
 Four facts are not verified. Step 2, slice 1 verifies them before it writes code.
 
-- How each Mac tool was installed (brew, npm, or its own installer) and whether it updates itself. Only `herdr`, `gh`, `node`, and `opencode` are known to have a brew formula.
-- Whether the Mac `claude` and `codex` read a setting that turns their update check off.
-- Which of the two `opencode` lines is current. The Mac runs v2.0.20 from brew. The npm package `opencode-ai` and the image pin are on 1.x. The check must not compare the two lines.
-- The exact name of the checksum file of each upstream release, for the tools that publish one. Section 4 gives the fallback.
+1. How each Mac tool was installed (brew, npm, or its own installer) and whether it updates itself. Only `herdr`, `gh`, `node`, and `opencode` are known to have a brew formula.
+2. Whether the Mac `claude` and `codex` read a setting that turns their update check off.
+3. Which of the two `opencode` lines is current. The Mac runs v2.0.20 from brew. The npm package `opencode-ai` and the image pin are on 1.x. The check must not compare the two lines.
+4. The exact name of the checksum file of each upstream release, for the tools that publish one. Section 4 gives the fallback.
 
 ## 1. Inventory
 
@@ -49,7 +49,7 @@ Four facts are not verified. Step 2, slice 1 verifies them before it writes code
 | opencode | yes | yes (npm) | login only |
 | pi | yes | no | no |
 | herdr | yes | yes (binary) | no |
-| codexbar | yes | planned (Linux CLI) | no |
+| codexbar | yes | yes (binary) | no |
 | gh | yes | yes (binary) | login only |
 | node | yes | yes (tarball) | no |
 | s6-overlay | no | yes (tarball) | no |
@@ -68,7 +68,7 @@ The Installed column is the Mac value. The Pinned column is the value in `factor
 | opencode | 2.0.20 (brew) | 1.18.34 | 1.18.35 on npm and GitHub | `gh api repos/sst/opencode/releases/latest` and `npm view opencode-ai version` | MIT |
 | pi | 1.0.0 | not pinned | 1.0.4 | `npm view @earendil-works/pi-coding-agent version` | MIT |
 | herdr | 0.9.3 | 0.9.3 | 0.9.3 | `gh api repos/ogulcancelik/herdr/releases/latest` | Apache-2.0 |
-| codexbar | 0.72.0 | not pinned | 0.72.0 | `gh api repos/steipete/CodexBar/releases/latest` | MIT |
+| codexbar | 0.72.0 | 0.72.0 | 0.72.0 | `gh api repos/steipete/CodexBar/releases/latest` | MIT |
 | gh | 2.102.0 | 2.102.0 | 2.102.0 | `gh api repos/cli/cli/releases/latest` | MIT |
 | node | 26.10.0 | 26.10.0 | 26.10.0 | `gh api repos/nodejs/node/releases/latest` | MIT |
 | s6-overlay | n/a | 3.2.3.2 | 3.2.3.2 | `gh api repos/just-containers/s6-overlay/releases/latest` | ISC |
@@ -120,7 +120,7 @@ Reason for A: a harness changes its flags and its login format often. A stale ha
 
 Reason for A: a change in `herdr`, `s6-overlay`, or `node` changes the base of every worker. A person must read the release notes before the bump.
 
-- Accept item: "P2: Pin the infrastructure tools. Verify each download by hash. Bump by a reviewed branch."
+- Accept item: "P2: Pin the infrastructure tools with a hash. Bump by a reviewed branch."
 - Deny item: "P2: Bump the infrastructure tools like the harnesses."
 
 ### P3: security releases
@@ -180,8 +180,9 @@ One table with one row for each tool. Columns:
 | Latest | Version at the upstream source |
 | Age | Days since the release date of the first newer version. Empty when the tool is current |
 | Risk | `ok`, `late` (more than 14 days), `security`, or `unknown` |
+| Action | The button of the row: Bump, Promote, or Upgrade. Empty when the tool is current |
 
-A row shows an action. For a factory tool the action is "Bump" (P2) or "Promote" (P4). For a Mac tool the action is "Upgrade" with a confirm step (P5).
+The Action column holds the button of the row. For a factory tool the action is "Bump" (P2) or "Promote" (P4). For a Mac tool the action is "Upgrade" with a confirm step (P5).
 
 The rows in the wireframes are examples. They are not the current values.
 
@@ -256,13 +257,12 @@ The Owner or the orchestrator reviews and merges the branch. A merge to `main` d
 
 ### Hash rule
 
-Today `pins.json` holds a SHA-256 hash only for the artifacts that the image downloads directly: `s6-overlay`, `node`, `gh`, and `herdr` (the `sha256` map, lines 21 to 31). The Dockerfile checks each of them. The npm harnesses, `codexbar`, `chromium`, the base image, and `buildkit` have no hash today. `chromium` pins the apt version string. The base image pins a digest.
+Today `pins.json` holds a SHA-256 hash only for the artifacts that the image downloads directly: `s6-overlay`, `node`, `gh`, `herdr`, and `codexbar` (the `sha256` map, lines 21 to 33). The Dockerfile checks each of them. The npm harnesses, `chromium`, the base image, and `buildkit` have no hash today. `chromium` pins the apt version string. The base image pins a digest.
 
 Step 2 adds the following. None of it exists now.
 
 - A schema bump of `pins.json` (`schema` 2) that holds the hash and the mark of each pinned artifact.
 - A hash for the npm harnesses. The value is `dist.integrity` from the registry metadata.
-- A hash for the `codexbar` Linux CLI archive, when it enters `pins.json`.
 - The rule: a download whose hash differs from the pin is refused and the build stops.
 - The marks. A hash that `tools bump` computed after a download is marked `computed`. A hash from a release checksum file is marked `published`. The review shows the mark.
 
@@ -296,7 +296,7 @@ A change set is promoted only after the canary passes the smoke project and the 
 #### Health check and rollback
 
 - A backup runs before the update.
-- After the restart, one clean tick must pass and `/api/health` must answer within 30 seconds (`src/factory-update.js:371-377,409`). If not, the update rolls back.
+- After the restart, one clean tick must pass and `/api/health` must answer within 30 seconds (`src/factory-update.js:403-409`). If not, the update rolls back.
 - Step 2 requirement: the host keeps the previous image until the next successful update. The current code does not guarantee this. Step 2 checks it and adds it when it is missing.
 
 ### Mac tools
@@ -325,6 +325,6 @@ The Owner answers each item with Accept or Deny. A denied item names the option 
 | P1 | Track the latest stable harness release. Bump the canary first. | Pin the harnesses. Bump only on request. |
 | P2 | Pin the infrastructure tools with a hash. Bump by a reviewed branch. | Update the infrastructure tools like the harnesses. |
 | P3 | Flag security releases first. Skip the waiting time. | Treat a security release like any other release. |
-| P4 | Weekly check. Canary first. One-click promote. Drain before an update. Keep the previous version. | Roll a bump out to all factories together. |
+| P4 | Weekly check. Canary first. One-click promote. Drain before an update. Keep the previous image. | Roll a bump out to all factories together. |
 | P5 | Show outdated Mac tools. Upgrade only after a click, one tool at a time. | Show outdated Mac tools. Never run an upgrade command. |
 | P6 | One weekly Mailbox item, only when a tool is more than 14 days late or a security release exists. | No Mailbox item for tool updates. |
