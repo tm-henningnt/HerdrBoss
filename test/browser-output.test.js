@@ -148,7 +148,7 @@ test('browser CLI leaves list and tabs available for another project', (t) => {
   assert.doesNotMatch(tabs.stderr, /no Herdr pane/);
   const bookmarks = fixture.run(['bookmarks', 'beta', 'list']);
   assert.equal(bookmarks.status, 0, bookmarks.stderr);
-  assert.deepEqual(JSON.parse(bookmarks.stdout), { bookmarks: [], startPage: null });
+  assert.deepEqual(JSON.parse(bookmarks.stdout), { bookmarks: [] });
 });
 
 test('browser request checks the caller before reserving another project browser', (t) => {

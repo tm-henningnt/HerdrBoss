@@ -182,7 +182,7 @@ function bookmarksCli(t) {
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home, HERDR_BOSS_DIR: dataDir };
   for (const key of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_WORKTREE']) delete env[key];
-  const run = (args) => spawnSync(process.execPath, [CLI, 'browser', ...args], { cwd: base, env, encoding: 'utf8' });
+  const run = (args, extra = {}) => spawnSync(process.execPath, [CLI, 'browser', ...args], { cwd: base, env: { ...env, ...extra }, encoding: 'utf8' });
   return { run, dataDir };
 }
 
@@ -357,4 +357,32 @@ test('bookmark open navigation result uses the shared URL masker', async () => {
   });
   const output = JSON.parse(formatBrowserJson(result));
   assert.equal(output.url, 'https://<tenant>.example.com/host');
+});
+
+test('bookmarks add refuses a URL whose host holds a scheme and prints no URL', (t) => {
+  const { run, dataDir } = bookmarksCli(t);
+  for (const url of ['https://https://tenant1.example.test/x', 'http:https://tenant1.example.test/x']) {
+    const result = run(['bookmarks', 'alpha', 'add', 'Bad', url]);
+    assert.notEqual(result.status, 0);
+    assert.ok(!`${result.stdout}${result.stderr}`.includes('tenant1'));
+    assert.match(result.stderr, /scheme/i);
+  }
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'browser-sessions.json'), 'utf8')).alpha.bookmarks;
+  assert.ok(!stored.some((b) => b.name === 'Bad'));
+});
+
+test('bookmarks list prints only names and indexes to a worker', (t) => {
+  const { run } = bookmarksCli(t);
+  const result = run(['bookmarks', 'alpha', 'list'], { HERDR_ENV: '1', HERDR_PANE_ID: 'p1', HERDR_WORKSPACE_ID: 'w1' });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(output.bookmarks[0]).sort(), ['index', 'name']);
+  assert.equal(output.bookmarks[0].index, 0);
+  assert.ok(!result.stdout.includes('docs.example.org'));
+  assert.ok(!('startPage' in output));
+});
+
+test('bookmarks list keeps the full list for the Owner', (t) => {
+  const { run } = bookmarksCli(t);
+  assert.equal(JSON.parse(run(['bookmarks', 'alpha', 'list']).stdout).bookmarks[3].url, 'https://<tenant>.example.org/');
 });

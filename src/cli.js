@@ -81,6 +81,11 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   throw new Error(`The ${slug} browser belongs to project ${slug}. This pane is in workspace ${where}, ${owner ? `which belongs to project ${owner}` : 'which belongs to no project'}. Only a pane in the ${slug} workspace or the Boss can change it.`);
 }
 
+// A shell with a Herdr pane variable is an agent. Only a shell with none is the Owner (as in verifyNightCaller).
+function isHerdrPane(env) {
+  return env.HERDR_ENV === '1' || Boolean(env.HERDR_PANE_ID) || Boolean(env.HERDR_WORKSPACE_ID);
+}
+
 // Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop the
 // watch. An orchestrator or a worker gets a refusal with the reason. The pane check is the same
 // as the other Boss-only commands, for example mail close.
@@ -164,8 +169,8 @@ const USAGE = `herdr-boss <command>
   browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
-  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page.
-  browser bookmarks SLUG add NAME URL  Add one bookmark.
+  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page. A worker sees names and indexes only.
+  browser bookmarks SLUG add NAME URL  Add one bookmark. The URL host must not hold a scheme.
   browser bookmarks SLUG rm INDEX  Remove one bookmark.
   browser bookmarks SLUG open INDEX [--new-tab] [--full]  Open a bookmark in the current tab or a new tab.
   browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
@@ -781,7 +786,17 @@ async function main() {
         if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
-      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full })));
+      // A host stored in a bookmark or start page is masked as plain text too, also when it is not part of a URL.
+      const storedHosts = () => {
+        const hosts = new Set();
+        for (const record of Object.values(listBrowserSessions())) {
+          for (const value of [...(Array.isArray(record?.bookmarks) ? record.bookmarks.map((b) => b?.url) : []), record?.startPage]) {
+            try { const host = new URL(value).hostname; if (host) hosts.add(host); } catch {}
+          }
+        }
+        return [...hosts];
+      };
+      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full, knownHosts: storedHosts() })));
       const printBrowserJson = (value) => printBrowser(value, formatBrowserJson);
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
         const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
@@ -913,7 +928,12 @@ async function main() {
         await browserKey(args[1], tab, args[2]);
         printBrowser('Key sent.');
       }
-      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) printBrowserJson(listBookmarks(args[1]));
+      else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) {
+        const list = listBookmarks(args[1]);
+        // A worker (any Herdr pane) gets names and indexes only. The Owner at a plain terminal keeps the full list.
+        if (isHerdrPane(process.env)) printBrowserJson({ bookmarks: list.bookmarks.map((bookmark, index) => ({ index, name: bookmark.name })) });
+        else printBrowserJson(list);
+      }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
         await verifyBrowserCaller(args[1]);
         printBrowserJson(addBookmark(args[1], { name: args[3], url: args[4] }));

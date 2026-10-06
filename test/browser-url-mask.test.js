@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { maskDeep, maskUrl } from '../src/browser-url-mask.js';
+import { maskBrowserText, maskDeep, maskUrl } from '../src/browser-url-mask.js';
 
 test('browser masking is safe to repeat on API and engine output', () => {
   const input = { title: 'tenant1.example.test', bookmark: { name: 'Open tenant1.example.test', url: 'https://tenant1.example.test/callback?code=AAAAfakecode' } };
@@ -73,4 +73,41 @@ test('maskDeep masks nested URLs, returns new values, and leaves input unchanged
   assert.notStrictEqual(result.tabs[0], input.tabs[0]);
   assert.deepEqual(input, before);
   assert.equal(maskDeep(input, { full: true }).tabs[0].url, 'https://acme.example.com:8443/a');
+});
+
+test('maskUrl masks the host of a URL with a repeated or malformed scheme', () => {
+  for (const input of [
+    'https://https://tenant1.example.test/a/b',
+    'https:/tenant1.example.test/a/b',
+    'tenant1.example.test/a/b',
+    'http:https://tenant1.example.test/a/b',
+    'tenant1.example.test:8443/a/b',
+  ]) {
+    const output = maskUrl(input);
+    assert.ok(!output.includes('tenant1'), `${input} leaked: ${output}`);
+    assert.ok(output.includes('<tenant>'), `${input} not masked: ${output}`);
+  }
+});
+
+test('maskBrowserText masks the host of a malformed URL inside free text', () => {
+  for (const input of [
+    'bad https://https://tenant1.example.test/x end',
+    'bad https:/tenant1.example.test/x end',
+    'bad http:https://tenant1.example.test/x end',
+  ]) {
+    const output = maskBrowserText(input);
+    assert.ok(!output.includes('tenant1'), `${input} leaked: ${output}`);
+  }
+});
+
+test('maskBrowserText masks a stored host and keeps the credential filter', () => {
+  const output = maskBrowserText('see tenant1.example.test code=abc123', { knownHosts: ['tenant1.example.test'] });
+  assert.ok(!output.includes('tenant1'));
+  assert.ok(!output.includes('abc123'));
+  assert.equal(maskBrowserText('plain words here', { knownHosts: ['tenant1.example.test'] }), 'plain words here');
+});
+
+test('maskDeep masks a stored host in a URL field of a bookmark', () => {
+  const masked = maskDeep({ url: 'https://https://tenant1.example.test/a' });
+  assert.ok(!JSON.stringify(masked).includes('tenant1'));
 });

@@ -309,6 +309,8 @@ export function listBrowserTabViewports(project, openTabIds) {
 // A bookmark URL must be http or https and must not hold a user name or a password.
 export function bookmarkUrl(value) {
   let parsed;
+  // A scheme inside the host part, such as https://https://host, is a typing error. Refuse it without an echo.
+  if (/^[a-z][a-z\d+.-]*:\/*[a-z][a-z\d+.-]*:\/\//i.test(String(value ?? '').trim())) throw new Error('A bookmark URL host must not hold a scheme. Write one scheme, then the host.');
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('A bookmark URL must use http or https.'); }
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('A bookmark URL must use http or https.');
   if (parsed.username || parsed.password) throw new Error('Bookmarks must not hold credentials.');

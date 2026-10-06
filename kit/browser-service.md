@@ -4,6 +4,8 @@ Each project has its own persistent Chrome profile and debugging port. Ask the o
 
 Herdr Boss masks outside hosts in URLs, tab titles, and bookmark names. It keeps loopback hosts in full. It removes query strings and fragments from all output URLs, including URLs inside titles. The final text and JSON filter replaces values after `code=`, `state=`, `session_state=`, `access_token=`, `id_token=`, `refresh_token=`, `token=`, `key=`, and `Bearer ` with `<redacted>`. It also replaces JWT strings. The filter applies to errors. The dashboard, browser API, and new event log records use the same rules.
 
+The filter also masks a URL with a repeated or missing scheme, for example `https://https://host`, `https:/host`, and `host/path`. It masks any text that equals a host stored in a bookmark or start page. Store a host without a scheme in a local config. `herdr-boss browser bookmarks <slug> list` prints only the index and the name of each bookmark when a worker runs it. `bookmarks add` refuses a URL that has a scheme in its host part and prints no URL.
+
 Use `--full` only when the Owner needs hosts in full. This flag still removes query strings and fragments. It still removes credentials. Do not paste real URLs into reports.
 
 Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a project's workspace can change that project's browser, also an unlabeled pane and a worker. The Boss pane and every pane in the Boss workspace can change any project browser. This rule covers browser requests, size changes, close, release, restart, tab changes, page navigation and input, and bookmark changes. A refusal names the pane's workspace and the browser's project. A plain terminal outside Herdr skips the check with a warning.
