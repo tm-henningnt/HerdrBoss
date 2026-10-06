@@ -568,3 +568,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Decisions: the two pi workers rl1a and msg1b failed on upstream 500 errors from the free longcat model; their WIP is committed on their branches and the work continued on Claude Sonnet workers rl1c and msg1c. The Settings row for `releases.repos` is RL1 slice B. A worker commit refuses secret-named paths: plain `git commit` in the worktree is used for them, with the staged diff read first.
 - Not yet verified: docs gate and full suite on this tree, main fast-forward, service, push. MSG1 pack (msg1c, second judge msg1judge2 running) and the UP1 pack are not published.
 - Update: the first suite on this tree passed 5053 of 5054. The one failure was test/handoff-bootstrap.test.js: a fixed date 2026-10-05 fell out of the 48 hour decision window on 2026-10-07. The test now uses today's date. msg1c b4e192a (MSG1 note repaired after two judge passes, docs only) joined this tree. The suite runs again on the final tree.
+
+## Release checkpoint 2026-10-07 — integrate-r12 (RL1 slice B)
+
+- Released before this checkpoint: main 9df5dd8 (FT30, FQ4, FS1 store and commands, RL1 slice A, UP1 note; suite 5054/5054 on both trees; service restarted after the code release at 5dbb9f0, 200). MSG1 pack (m-muxah0ij-86a8c8b7) and UP1 pack (m-muxbi4qx-8ded462c) are with the Owner. The UP1 pack text says two judge passes; there was one judge pass plus root checks of the rework.
+- Planned: branch rl1d (RL1 slice B: releases.repos Settings row, kit rule in the worker brief and orchestrator skill, kit/CHANGES.md entry, harness check for the missing release permission rules). Independent review found one major (repeated inline help text) and three minor findings; all repaired and rechecked at root (127 focused tests). Kit-Impact required: the Boss relays the kit notice.
+- Not yet verified: full suite on this tree, main fast-forward, service restart, push, kit revision on main.
