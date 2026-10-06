@@ -309,6 +309,27 @@ test('releases.repos validation accepts a good entry and names each bad one', as
   assert.deepEqual(bad.repos, [config.releases.repos[0]]);
 });
 
+test('releases.repos validation keeps only the policy fields', async () => {
+  const { validateReleasesRepos } = await import('../src/config.js');
+  const result = validateReleasesRepos([{ name: REPO, project: 'example', kind: 'app', token: 'fixture-only' }]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.repos, [{ name: REPO, project: 'example', kind: 'app' }]);
+});
+
+test('releases.repos is a visible service setting that accepts and validates repository rows', async () => {
+  const { loadConfig, serviceSettingsView, validateServiceSettings, writeServiceSettings } = await import('../src/config.js');
+  writeServiceSettings({ 'releases.repos': config.releases.repos }, { dataDir: process.env.HERDR_BOSS_DIR });
+  const view = serviceSettingsView(loadConfig());
+  assert.deepEqual(view.find(({ setting }) => setting === 'releases.repos'), {
+    group: 'Releases', setting: 'releases.repos', value: config.releases.repos, source: 'config',
+  });
+  assert.deepEqual(serviceSettingsView({}).find(({ setting }) => setting === 'releases.repos'), {
+    group: 'Releases', setting: 'releases.repos', value: [], source: 'default',
+  });
+  assert.deepEqual(validateServiceSettings({ 'releases.repos': config.releases.repos }), { 'releases.repos': config.releases.repos });
+  assert.throws(() => validateServiceSettings({ 'releases.repos': [{ name: 'bad', project: 'Bad Slug', kind: '' }] }), /releases\.repos\[0\]/);
+});
+
 test('an Owner answer through the real close path leaves the request answered, not closed', async () => {
   const { closeMailboxItem } = await import('../src/messages.js');
   const dir = newDir();

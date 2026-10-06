@@ -70,6 +70,7 @@ Read each file in the skill folder when its step comes:
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - Decide and run your own pushes, deployments, and releases under the project release rules. Neither the Boss nor the Owner approves them.
+- Publish a GitHub release only with `herdr-boss release publish REPO TAG --approval ID` after the Owner accepts that release item in the Mailbox.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. The lane guard holds a queued short-lane job while 5-minute load exceeds 231% of the cores. Set it in Settings, Locks (`locks.guard`).

@@ -1194,6 +1194,17 @@ function quotaSourceText(q) {
   return `${source} · reading ${age}${q.stale ? ' · stale' : ''}`;
 }
 
+function releaseRepoRowHtml(repo = {}, index = 0) {
+  const field = (key, label, placeholder) => `<label><span>${label}</span><input type="text" value="${esc(repo[key] || '')}" placeholder="${placeholder}" data-release-repo-index="${index}" data-release-repo-field="${key}" data-service-group="Releases" aria-label="${label}"></label>`;
+  return `<div class="release-repo-row" data-release-repo-row="${index}">${field('name', 'GitHub repository', 'OWNER/REPO')}${field('project', 'Project slug', 'project-name')}${field('kind', 'Release kind', 'app')}<button type="button" class="quiet" data-release-repo-remove aria-label="Remove release repository row ${index + 1}">Remove</button></div>`;
+}
+
+function releaseRepoEditorHtml(value) {
+  const repos = Array.isArray(value) ? value : [];
+  const rows = repos.map((repo, index) => releaseRepoRowHtml(repo, index)).join('');
+  return `<div class="release-repos-editor" data-release-repos-editor><input type="hidden" data-service-setting="releases.repos" data-service-group="Releases"><div class="release-repo-rows" data-release-repo-rows>${rows}</div><p class="setting-help" data-release-repo-empty${rows ? ' hidden' : ''}>No repositories are allowed.</p><button type="button" class="quiet" data-release-repo-add>Add repository</button></div>`;
+}
+
 function settingsView(s) {
   ensureDraft(s);
   if (!policyDraft) return '';
@@ -1237,9 +1248,10 @@ function settingsView(s) {
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}${lockInput('agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', Object.hasOwn(d.agentMessages || {}, 'promptTimeoutSeconds') ? d.agentMessages.promptTimeoutSeconds : 25, 1, 120, 'data-policy-agent-message="promptTimeoutSeconds"')}</section>`;
-  const settingsGroups = ['Paths', 'Machine', 'Quota', 'Quota plan', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Analytics'];
+  const settingsGroups = ['Paths', 'Machine', 'Quota', 'Quota plan', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Releases', 'Analytics'];
   const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot', 'chromePath']);
   const serviceSettingLists = new Set(['allowedHosts']);
+  const serviceSettingRepos = new Set(['releases.repos']);
   const serviceSettingText = new Set(['quotaPlan.horizon', 'quota.opencodeGoResetAt']);
   const serviceSettingChoices = { 'quotaPlan.planMode': [['paced', 'Paced: hold when ahead of the curve'], ['burst', 'Burst: the curve is advice only']] };
   const serviceSettingSteps = { 'quotaPlan.burstPace': 0.1, 'quotaPlan.margin': 0.1, 'quotaPlan.tolerance': 0.1, 'quotaPlan.holdMargin': 0.1, 'quotaPlan.slowFactor': 0.1 };
@@ -1279,6 +1291,8 @@ function settingsView(s) {
       const range = serviceSettingRanges[item.setting];
       const input = item.setting === 'watch.maxWorkersByLane'
         ? `<div class="lane-limits">${[['unmetered', 'Unmetered'], ['codex', 'Codex'], ['claude', 'Claude'], ['opencodego', 'OpenCode Go']].map(([lane, label]) => `<label><span>${label}</span><input type="number" min="1" max="40" step="1" value="${esc(item.value?.[lane] ?? '')}" placeholder="Day value" data-service-setting="${esc(item.setting)}" data-service-lane="${lane}" data-service-group="${esc(group)}" aria-label="Watch ${label} worker cap"></label>`).join('')}</div>`
+        : serviceSettingRepos.has(item.setting)
+        ? releaseRepoEditorHtml(item.value)
         : serviceSettingBooleans.has(item.setting)
         ? `<input type="checkbox" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}" ${item.value ? 'checked' : ''}>`
         : serviceSettingLists.has(item.setting)
@@ -1294,7 +1308,7 @@ function settingsView(s) {
           : `<code>${esc(value)}</code>`;
       return `<tr><th scope="row"><code>${esc(item.setting)}</code>${helpButton(item.setting)}</th><td>${input}</td><td>${item.source === 'config' ? 'from config.json' : 'default'}${SETTING_HELP[item.setting]?.apply === 'saved-restart' ? ' · restart required' : ''}</td></tr>`;
     }).join('');
-    const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting) || serviceSettingPaths.has(item.setting) || serviceSettingLists.has(item.setting) || serviceSettingText.has(item.setting) || serviceSettingChoices[item.setting]));
+    const canSave = (s.serviceSettings || []).some((item) => item.group === group && (serviceSettingRanges[item.setting] || serviceSettingBooleans.has(item.setting) || serviceSettingPaths.has(item.setting) || serviceSettingLists.has(item.setting) || serviceSettingRepos.has(item.setting) || serviceSettingText.has(item.setting) || serviceSettingChoices[item.setting]));
     const controls = canSave ? `<span class="service-settings-group-actions"><span role="status" aria-live="polite" data-service-settings-status="${esc(group)}">${esc(serviceSettingsMessages[group] || '')}</span><button type="button" data-save-service-settings="${esc(group)}">Save</button></span>` : '';
     return `<tr class="service-settings-group"><th colspan="3" scope="colgroup"><span>${settingsGroupLabels[group] || group}</span>${controls}</th></tr>${groupRows}`;
   }).join('');
@@ -4347,8 +4361,9 @@ function chatActionCard(record) {
 function chatBubble(record, startOfRun = false) {
   const owner = record.from === 'owner';
   const sender = MESSAGE_SENDER[record.from] || record.from;
-  // A mail report is not a chat message. The bubble holds one short line and a link to the Mailbox.
-  if (record.channel === 'mail') {
+  // Most mail reports link to the Mailbox. A release request also needs its Approve and Reject actions in Chat.
+  const releaseApproval = record.kind === 'report' && record.release && record.action === 'approve';
+  if (record.channel === 'mail' && !releaseApproval) {
     return `<li class="chat-report" data-key="msg:${esc(record.id)}" data-chat-bubble="${esc(record.id)}" aria-label="${esc(chatBubbleLabel(sender, { ...record, text: `Report: ${record.title || 'Report'}` }, 'Open in Mailbox'))}"><span class="chat-report-text">Report: ${esc(record.title || 'Report')}</span><a class="chat-action-link" href="/mailbox?folder=updates">Open in Mailbox</a></li>`;
   }
   // A closed item shows the answer that closed it, for example Approved 22:05.
@@ -6706,6 +6721,7 @@ const HELP = {
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the usage limit warning below the critical value. After a save, each field shows the stored value. When the stored value differs from the typed value, the status line names both values. Rows without inputs are read-only: port, host, provider kinds, and project lead label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
+    <p>In <b>Releases</b>, list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish.</p>
     <h3>Usage limit plan</h3><p>Set the Codex burst pace, the plan mode, the credit threshold, the reserve margin, the planning horizon, the guidance tolerance, the hold margin, and the slow scenario factor. The planned curve starts at a fixed anchor with its used percent. A new reading does not move the anchor. The anchor moves when the burst pace changes, when the window reset time moves by more than 10 minutes, when use drops by more than 1 point below the anchor, and when no anchor exists. With usage limit history or an available reset credit, the Codex lane compares use with the curve. In <b>paced</b> mode the lane says <b>hold</b> when use is ahead of the curve by more than the tolerance plus the hold margin, <b>on pace</b> above the curve by up to the tolerance, and <b>Use now</b> at or below the curve. A saved <b>hold</b> stays until the lead falls below the tolerance minus the hold margin. In <b>burst</b> mode the curve is advice only and the lane stays <b>Use now</b>. Every mode shows how many points use is ahead of or behind the plan. Near-exhaustion, exhausted, and trickle states keep priority. With no usage limit history and no available reset credit, the lane keeps linear guidance. The plan changes guidance only. Herdr Boss never applies a reset credit or changes worker admission from this plan. The service posts one Mailbox approval item when a credit is due or expires within 48 hours. The item gives the time at which the recent burn reaches the credit threshold and its distance from the planned time. The service sends one warning in the 24 hours before an available credit expires. Apply credits in the Codex app.</p>
     <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
     <h3>Factory hosts</h3>
@@ -8446,7 +8462,16 @@ async function saveServiceSettings(group, button) {
   const changes = {};
   for (const input of inputs) {
     const setting = input.dataset.serviceSetting;
-    if (input.dataset.serviceLane) {
+    if (setting === 'releases.repos') {
+      const fields = [...document.querySelectorAll(`[data-service-group="${CSS.escape(group)}"][data-release-repo-field]`)];
+      const rows = new Map();
+      for (const field of fields) {
+        const index = Number(field.dataset.releaseRepoIndex);
+        if (!Number.isSafeInteger(index) || index < 0) continue;
+        rows.set(index, { ...(rows.get(index) || {}), [field.dataset.releaseRepoField]: field.value.trim() });
+      }
+      changes[setting] = [...rows.entries()].sort(([left], [right]) => left - right).map(([, repo]) => repo).filter((repo) => Object.values(repo).some(Boolean));
+    } else if (input.dataset.serviceLane) {
       changes[setting] ||= {};
       changes[setting][input.dataset.serviceLane] = input.value === '' ? null : Number(input.value);
     } else if (input.type === 'checkbox') changes[setting] = input.checked;
@@ -8484,6 +8509,29 @@ async function saveServiceSettings(group, button) {
     button.disabled = false;
   }
 }
+
+document.addEventListener('click', (e) => {
+  const add = e.target.closest?.('[data-release-repo-add]');
+  if (add) {
+    const editor = add.closest('[data-release-repos-editor]');
+    const rows = editor?.querySelector('[data-release-repo-rows]');
+    if (!rows) return;
+    const indices = [...rows.querySelectorAll('[data-release-repo-row]')].map((row) => Number(row.dataset.releaseRepoRow)).filter(Number.isSafeInteger);
+    const index = Math.max(-1, ...indices) + 1;
+    rows.insertAdjacentHTML('beforeend', releaseRepoRowHtml({}, index));
+    const empty = editor.querySelector('[data-release-repo-empty]');
+    if (empty) empty.hidden = true;
+    rows.querySelector(`[data-release-repo-row="${index}"] input`)?.focus();
+    return;
+  }
+  const remove = e.target.closest?.('[data-release-repo-remove]');
+  if (!remove) return;
+  const editor = remove.closest('[data-release-repos-editor]');
+  remove.closest('[data-release-repo-row]')?.remove();
+  const rows = editor?.querySelector('[data-release-repo-rows]');
+  const empty = editor?.querySelector('[data-release-repo-empty]');
+  if (empty) empty.hidden = !!rows?.querySelector('[data-release-repo-row]');
+});
 
 // A new model joins only this harness. It starts enabled and unmetered.
 function addExtraModel(kind, model) {

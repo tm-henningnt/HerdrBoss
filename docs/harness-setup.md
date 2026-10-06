@@ -2,7 +2,7 @@
 
 Herdr Boss orchestration needs settings in each agent harness on the machine. This page gives each setting, the reason for it, its file, who applies it, and its risk. The templates are in [`claude-automode.json`](../kit/templates/harness/claude-automode.json), [`codex-herdr.rules`](../kit/templates/harness/codex-herdr.rules), [`codex-sandbox.toml`](../kit/templates/harness/codex-sandbox.toml), [`opencode-worker-agent.json`](../kit/templates/harness/opencode-worker-agent.json), and [`pi-herdr-guard.ts`](../kit/templates/harness/pi-herdr-guard.ts).
 
-`herdr-boss harness check` reads the live settings and reports each missing entry. `herdr-boss harness sync` adds missing Codex writable roots, adds the missing `stop-own` rule when the rules file holds no exact forbidden rule for it, and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
+`herdr-boss harness check` reads the live settings and reports each missing entry. It checks the release request and publish permissions in the Claude and Codex settings. `herdr-boss harness sync` adds missing Codex writable roots, adds the missing `stop-own` rule when the rules file holds no exact forbidden rule for it, and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
 
 ## Placeholders
 
@@ -94,6 +94,17 @@ WARNING: Keep `~/.config/herdr-boss` out of `writable_roots`. It holds the priva
 `herdr.rules` lets `ps`, the restart of the Herdr Boss service, `herdr-boss browser`, and `playwright-cli` run outside the sandbox. It also lets `herdr-boss worker stop-own` run, so a Codex worker stops its own process by PID. It forbids `ps e`, `ps -E`, `ps eww`, `ps auxe`, and `ps auxeww`, because they print the environment of other processes. Template: `codex-herdr.rules`. Replace `{{UID}}` with the output of `id -u`.
 
 `harness check` reports the `stop-own` rule when the rules file holds no active exact allow rule for it. The report names the rules file and prints the line to add. An exact forbidden rule for the same command, or an allow rule next to a forbidden rule, is a conflict: the check reports `bad`, names the file, and claims no permission. `harness sync` adds the missing rule with a backup. When the rules file is missing, `harness sync` prints the line to add and writes nothing. When the rules file forbids the command, or allows and forbids it at the same time, `harness sync` reports the conflict, writes nothing to the rules file, and exits 1.
+
+`harness check` also checks these release permissions. It reads the exact Codex command prefix and the two Claude `autoMode.allow` lines. It prints a missing line or a conflict. It does not change either permission file. Add each line only when the Owner approves that access:
+
+```text
+prefix_rule(pattern=["herdr-boss", "release", "request"], decision="allow")
+prefix_rule(pattern=["herdr-boss", "release", "publish"], decision="allow")
+Run only `herdr-boss release request`.
+Run only `herdr-boss release publish`.
+```
+
+The `release publish` permission is for a release request that the Owner accepted in the Mailbox.
 
 `-s workspace-write` sets the sandbox mode for a worker, so the mode does not depend on the trust defaults.
 

@@ -44,6 +44,13 @@ test('an approval bar has Approve, Reject, a note button, and Dismiss in one row
   assert.match(html, /<p class="mail-status" role="status"><\/p>/);
 });
 
+test('a release report uses the Mailbox approval controls', () => {
+  const item = { id: 'release-1', kind: 'report', channel: 'mail', action: 'approve', release: { repo: 'example-org/example-app', tag: 'v1.0.0' } };
+  const html = mailActionBarHtml(item, helpers());
+  assert.match(html, /data-mail-verdict="Approved\."[^>]*>Approve<\/button>/);
+  assert.match(html, /data-mail-verdict="Rejected\."[^>]*>Reject<\/button>/);
+});
+
 test('the note field opens on request and stays open while it holds text', () => {
   for (const extra of [{ noteOpen: true }, { draft: 'Keep the old flag.' }]) {
     const html = mailActionBarHtml({ id: 'a1', action: 'approve' }, helpers(extra));

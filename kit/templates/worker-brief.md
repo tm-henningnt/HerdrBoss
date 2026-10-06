@@ -65,6 +65,7 @@ Do not edit issues, project instructions, roadmaps, or architecture decisions un
 Do not start or direct another agent.
 
 Do not commit, merge, rebase, push, deploy, or publish unless this brief grants that action.
+Publish a GitHub release only with `herdr-boss release publish` after the Owner accepts its release approval item in the Mailbox.
 
 Do not run cherry-pick, rebase, or merge. The orchestrator does them. Commit only when the brief asks.
 

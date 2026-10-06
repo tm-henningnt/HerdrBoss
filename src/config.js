@@ -175,7 +175,8 @@ const DEFAULTS = {
   providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
-  // Repositories that herdr-boss release can request and publish. Each entry is { name, project, kind }.
+  // Only these repositories can use release request or release publish. The Owner must approve each request in the Mailbox.
+  // Each entry has a GitHub name (OWNER/REPO), a project slug, and a release kind.
   releases: { repos: [] },
 };
 
@@ -211,6 +212,7 @@ const SERVICE_SETTINGS = [
   ['Browsers', 'browsers.sweepCodeSignClones'],
   ['Browsers', 'browser.idleCloseMinutes'],
   ['Browsers', 'chromePath'],
+  ['Releases', 'releases.repos'],
   ['Service', 'tickSeconds'],
   ['Service', 'quotaSeconds'],
   ['Service', 'push'],
@@ -521,7 +523,7 @@ export function validateReleasesRepos(value) {
     if (typeof repo.kind !== 'string' || !repo.kind.length || repo.kind.length > 50) {
       errors.push(`${label}.kind must be a string of 1 to 50 characters.`);
     }
-    if (errors.length === before) repos.push(repo);
+    if (errors.length === before) repos.push({ name: repo.name, project: repo.project, kind: repo.kind });
   });
   return { repos, errors };
 }
@@ -557,6 +559,12 @@ function validateServiceSettingValues(changes) {
     }
     if (setting === 'allowedHosts') {
       normalizedChanges[setting] = validateAllowedHosts(value);
+      continue;
+    }
+    if (setting === 'releases.repos') {
+      const result = validateReleasesRepos(value);
+      if (result.errors.length) throw new Error(result.errors.join(' '));
+      normalizedChanges[setting] = result.repos;
       continue;
     }
     if (setting === 'watch.maxWorkersByLane') {

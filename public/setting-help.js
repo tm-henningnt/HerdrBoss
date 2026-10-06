@@ -88,8 +88,8 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'service', title: 'Service settings', advanced: true,
-    controls: 'The values that the service uses: collection intervals, worker clean-up, browser clean-up, and the network address. Each row shows its source.',
-    affects: 'Workers, notices, browsers, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.',
+    controls: 'The values that the service uses: collection intervals, worker clean-up, browser clean-up, release repositories, and the network address. Each row shows its source.',
+    affects: 'Workers, notices, browsers, release approval, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.',
     safe: 'A row with an input is safe to change. A row without an input is read-only. Change it in config.json.',
     restart: 'The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.',
   },
@@ -856,6 +856,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: '2', unit: 'Files', range: '1 to 2',
     raise: 'More history stays on disk.',
     lower: 'Herdr Boss deletes the older file at the next rotation.',
+    apply: 'service',
+  }),
+  S('service', 'releases.repos', 'Allowed release repositories', {
+    what: 'Limits release request and release publish to the repositories in this list. Each row gives the GitHub repository name, project slug, and release kind. The Owner must approve each request in the Mailbox before publish.',
+    default: 'Empty list', unit: 'List of repositories', range: 'Unique GitHub repository names with a project slug and release kind',
+    raise: 'Add a repository when a project lead needs to request a release.',
+    lower: 'Remove a repository to refuse its release requests and publications.',
     apply: 'service',
   }),
 

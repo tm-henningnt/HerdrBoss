@@ -63,10 +63,10 @@ function codexConfig(roots, { extraBefore = '', extraAfter = '' } = {}) {
 function healthy(f, repos) {
   const roots = [path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt'), ...repos.map((repo) => path.join(repo, '.git'))];
   writeFile(path.join(f.home, '.codex', 'config.toml'), codexConfig(roots));
-  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${[...FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`), 'prefix_rule(pattern=["pkill"], decision="forbidden")', 'prefix_rule(pattern=["killall"], decision="forbidden")'].join('\n')}\n# A worker stops its own process through the helper, never with a raw signal.\nprefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")\n`);
+  writeFile(path.join(f.home, '.codex', 'rules', 'herdr.rules'), `${[...FORBIDDEN_PS.map((arg) => `prefix_rule(pattern=["ps", "${arg}"], decision="forbidden")`), 'prefix_rule(pattern=["pkill"], decision="forbidden")', 'prefix_rule(pattern=["killall"], decision="forbidden")'].join('\n')}\n# A worker stops its own process through the helper, never with a raw signal.\nprefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")\nprefix_rule(pattern=["herdr-boss", "release", "request"], decision="allow")\nprefix_rule(pattern=["herdr-boss", "release", "publish"], decision="allow")\n`);
   writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({
     apiKeyHelper: 'SECRET-HELPER-VALUE',
-    autoMode: { environment: [`**Herdr Boss projects**: ${repos.map((repo) => `${repo} (o/${path.basename(repo)})`).join(', ')}.`], allow: ['$defaults'] },
+    autoMode: { environment: [`**Herdr Boss projects**: ${repos.map((repo) => `${repo} (o/${path.basename(repo)})`).join(', ')}.`], allow: ['$defaults', 'Run only `herdr-boss release request`.', 'Run only `herdr-boss release publish`.'] },
   }));
   writeFile(path.join(f.home, '.config', 'opencode', 'opencode.json'), JSON.stringify({
     provider: { secret: { options: { apiKey: 'SECRET-OPENCODE-KEY' } } },
@@ -166,7 +166,7 @@ test('harness check passes on a complete setup and prints no setting value that 
   healthy(f, [alpha]);
   writeClaudeAutoMode(f, {
     environment: [`**Herdr Boss projects**: ${alpha} (o/alpha)`, '**Owner note**: KEEP-ENV-PRIVATE'],
-    allow: ['$defaults', 'KEEP-ALLOW-PRIVATE'],
+    allow: ['$defaults', 'KEEP-ALLOW-PRIVATE', 'Run only `herdr-boss release request`.', 'Run only `herdr-boss release publish`.'],
   }, { apiKeyHelper: 'SECRET-HELPER-VALUE' });
   const result = run(f, ['harness', 'check']);
   // Codex has no -s workspace-write in kit/models.json yet; every other entry is present.
@@ -215,6 +215,51 @@ test('harness check reports a missing stop-own rule with the rules file and the 
   assert.ok(line.includes('prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")'), line);
   // The check reads only. It adds nothing.
   assert.equal(fs.readFileSync(rulesFile, 'utf8'), original);
+});
+
+// K19: release checks report the two required command permissions and leave both files unchanged.
+test('harness check reports missing release request and publish rules for Claude and Codex', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const rulesFile = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const rules = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")\n';
+  fs.writeFileSync(rulesFile, rules);
+  const settingsFile = path.join(f.home, '.claude', 'settings.json');
+  const claude = { autoMode: { environment: [], allow: ['$defaults'] } };
+  fs.writeFileSync(settingsFile, JSON.stringify(claude));
+  const result = run(f, ['harness', 'check']);
+  assert.equal(result.status, 1);
+  for (const command of ['request', 'publish']) {
+    const codex = result.stdout.split('\n').find((line) => line.startsWith('missing') && line.includes(`release ${command}`) && line.includes('codex rules'));
+    assert.ok(codex, `no missing Codex release ${command} finding in:\n${result.stdout}`);
+    assert.ok(codex.includes(rulesFile), codex);
+    assert.ok(codex.includes(`prefix_rule(pattern=["herdr-boss", "release", "${command}"], decision="allow")`), codex);
+    const claudeLine = result.stdout.split('\n').find((line) => line.startsWith('missing') && line.includes(`release ${command}`) && line.includes('claude autoMode'));
+    assert.ok(claudeLine, `no missing Claude release ${command} finding in:\n${result.stdout}`);
+    assert.ok(claudeLine.includes(settingsFile), claudeLine);
+    assert.ok(claudeLine.includes(`Run only \`herdr-boss release ${command}\`.`), claudeLine);
+  }
+  assert.equal(fs.readFileSync(rulesFile, 'utf8'), rules);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), claude);
+});
+
+test('harness check treats missing Claude autoMode as an empty release allow list', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const settingsFile = path.join(f.home, '.claude', 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ unrelated: 'not printed' }));
+  const result = run(f, ['harness', 'check']);
+  assert.equal(result.status, 1);
+  for (const command of ['request', 'publish']) {
+    const line = result.stdout.split('\n').find((entry) => entry.startsWith('missing') && entry.includes(`release ${command}`) && entry.includes('claude autoMode'));
+    assert.ok(line, `no missing Claude release ${command} finding in:\n${result.stdout}`);
+    assert.ok(line.includes(settingsFile), line);
+  }
+
+  fs.writeFileSync(settingsFile, '{');
+  const readError = run(f, ['harness', 'check']);
+  assert.equal(readError.status, 1);
+  assert.doesNotMatch(readError.stdout, /claude autoMode: Release (?:request|publish) permission/);
 });
 
 // K19: harness sync adds the rule to the Codex rules file, keeps every other line, and makes a backup.
