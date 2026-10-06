@@ -262,6 +262,6 @@ Summary: Add `opencode-go/longcat-2.5-preview-free` to the Pi allow-list. `worke
 Impact: useful
 Summary: The Hourly check routine lists the locks and each managed project orchestrator pane's idle age before it decides to nudge; the service snapshot lists only managed workspaces, gives a numeric age only when the clock and the pane state time are usable and in order, prints unknown or unavailable otherwise, and the routine never nudges a working or paused pane or infers an age.
 
-## PENDING
+## 0b9e96f689e8
 Impact: useful
 Summary: Browser output masks URLs with a repeated or missing scheme and stored hosts; bookmarks add refuses a scheme in the host; bookmarks list, add, rm, start, and open give a worker names and indexes only.

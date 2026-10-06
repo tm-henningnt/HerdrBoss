@@ -532,3 +532,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Planned branches: FL4 fix, FQ1 slices 1 to 8 through fq1d (repair of review fq1rev, wording fix "usage limit"), onb1r 2fcedce (ONB1g Linux installer, closure review onb1rev passes, six findings closed), k15b c93bf34, doc1fix 9b177c7. Local memory commits of main merged in. Conflict in kit/CHANGES.md resolved by keeping both entries.
 - Added in the tree: the installer refuses a systemd path that ends in a backslash (failing-first test in test/install.test.js). The earlier suite run r4b was cut off at the handover (2074 tests, 166 cancelled) and is not evidence.
 - Not yet verified: full suite on this tree, FQ1 render evidence (fq1ui running), main fast-forward, service, push. fs1close (3 medium, 8 low findings on the FS1 note) and fpt5rev stay with the Owner.
+
+## Release checkpoint 2026-10-06 — integrate-r6 (BM2)
+
+- Released before this checkpoint: main 2c97128 pushed and live (FL4, FQ1 slices 1 to 8, ONB1g Linux installer, K15, DOC1fix). Suite 4881/4881 on integrate-r4, then `suite --reuse` on main, service restarted, /api/state 200, diff scan clean, push 4e2a3ea..2c97128. Design pass fq1ui2 passed on 2c97128. Boss decision: the factory owns factories.claudeUsageHelper; the Mac never pushes it. FQ2 (fq2) builds install and repair in factory configure and factory update --tier service, plus a Fleet card line.
+- BM2 planned: branch bm2 e243313 (first review bm2rev: 8 findings; closure bm2close: F1 to F6 closed, R1 and R5 repaired in the second rework, root reran the R1 inputs: refused; R2, R3, R4 accepted as known limits: TMPDIR is set in every macOS shell, four or more percent layers, zero-width character in a scheme, bare newline runs). Kit rule added to kit/templates/project-kit.md so the revision changes: 0b9e96f689e8, Impact useful.
+- Not yet verified: full suite on this tree, main fast-forward, service, push, kit notice.
