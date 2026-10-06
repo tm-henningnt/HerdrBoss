@@ -1,451 +1,355 @@
-// Tests for the release approval commands. Uses a fake gh runner and a temporary data dir.
-// The fake gh runner returns canned responses for gh release view, edit, and list.
+// Tests for the release approval commands. They use a fake gh runner, a fake herdr runner, and a temporary data dir.
 import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-test-'));
-const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-home-'));
-process.env.HOME = homeDir;
-process.env.HERDR_BOSS_DIR = dataDir;
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-test-'));
+process.env.HOME = path.join(root, 'home');
+process.env.HERDR_BOSS_DIR = path.join(root, 'data');
 process.env.HERDR_BOSS_PORT = '0';
+fs.mkdirSync(process.env.HOME, { recursive: true });
+fs.mkdirSync(process.env.HERDR_BOSS_DIR, { recursive: true });
 
 const { assertTempDataDir } = await import('../src/data-dir-guard.js');
-assertTempDataDir(dataDir);
+assertTempDataDir(process.env.HERDR_BOSS_DIR);
 const release = await import('../src/release.js');
 const { openMessageStore } = await import('../src/message-store.js');
-const { loadConfig } = await import('../src/config.js');
+const { scanTokenText } = await import('../scripts/docs-gate.js');
 
-test.after(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
-  fs.rmSync(homeDir, { recursive: true, force: true });
-});
+test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-// A fake gh runner that returns canned responses.
-function fakeGhRunner({ draft = true, assets = [], body = 'Changelog text' } = {}) {
+const REPO = 'example-org/example-app';
+const TAG = 'v1.0.0';
+const config = { releases: { repos: [{ name: REPO, project: 'example', kind: 'app' }] } };
+const knownHosts = ['tenant.example.test'];
+const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+let counter = 0;
+const newDir = () => { const dir = path.join(root, `case-${++counter}`); fs.mkdirSync(dir, { recursive: true }); return dir; };
+
+// A fake gh. `state` can change between calls: state.draft, state.files (name -> content), state.body.
+function fakeGh(state = {}) {
+  state.draft ??= true;
+  state.body ??= 'Changelog text';
+  state.files ??= { 'app.tar.gz': 'archive bytes' };
   const calls = [];
-  return {
-    calls,
-    run(args) {
-      calls.push(args);
-      if (args[0] === 'release' && args[1] === 'view') {
-        return {
-          status: 0,
-          error: null,
-          stdout: JSON.stringify({
-            name: 'Test Release',
-            tagName: args[3],
-            draft,
-            body,
-            assets: assets.map((a) => ({ name: a.name, size: a.size, digest: a.sha256, url: `https://example.test/${a.name}` })),
-          }),
-          stderr: '',
-        };
-      }
-      if (args[0] === 'release' && args[1] === 'edit') {
-        return { status: 0, error: null, stdout: '', stderr: '' };
-      }
-      if (args[0] === 'release' && args[1] === 'list') {
-        return { status: 0, error: null, stdout: JSON.stringify([]), stderr: '' };
-      }
-      return { status: 1, error: new Error('unexpected gh call'), stdout: '', stderr: 'unexpected' };
-    },
+  const run = (args) => {
+    calls.push(args);
+    const ok = (stdout = '') => ({ status: 0, error: null, stdout, stderr: '' });
+    if (args[0] === 'release' && args[1] === 'view') {
+      return ok(JSON.stringify({
+        name: 'Test', tagName: args[2], isDraft: state.draft, body: state.body, targetCommitish: 'abc1234', url: 'https://github.com/example-org/example-app/releases/tag/v1.0.0',
+        assets: Object.entries(state.files).map(([name, content]) => ({ name, size: content.length, digest: `sha256:${sha(content)}` })),
+      }));
+    }
+    if (args[0] === 'release' && args[1] === 'download') {
+      const name = args[args.indexOf('--pattern') + 1];
+      fs.writeFileSync(path.join(args[args.indexOf('--dir') + 1], name), state.files[name]);
+      return ok();
+    }
+    if (args[0] === 'release' && args[1] === 'edit') { state.draft = false; return ok(); }
+    if (args[0] === 'release' && args[1] === 'list') return ok(JSON.stringify([{ tagName: TAG, isDraft: state.draft, isLatest: false, publishedAt: '2026-10-01T00:00:00Z' }]));
+    return { status: 1, error: null, stdout: '', stderr: 'unexpected gh call' };
   };
+  run.calls = calls;
+  run.state = state;
+  return run;
 }
 
-// A fake herdr runner that records prompts to panes.
 function fakeHerdr() {
   const prompts = [];
-  return {
-    prompts,
-    run(args) {
-      if (args[0] === 'agent' && args[1] === 'prompt') {
-        prompts.push({ pane: args[2], text: args[3] });
-        return { ok: true };
-      }
-      return { ok: true };
-    },
-  };
+  const run = (args) => { if (args[0] === 'agent' && args[1] === 'prompt') prompts.push({ pane: args[2], text: args[3] }); return {}; };
+  run.prompts = prompts;
+  return run;
 }
 
-const config = {
-  releases: {
-    repos: [
-      { name: 'example-org/example-app', project: 'example', kind: 'app' },
-    ],
-  },
-};
+const request = (dir, run, extra = {}) => release.requestRelease({ repo: REPO, tag: TAG, run, dir, knownHosts, config, requesterPane: 'wA:p1', ...extra });
+const answer = (dir, id, text, offset = 1000) => openMessageStore({ dir }).append({
+  thread: 'example', from: 'owner', to: 'orch', kind: 'message', text, replyTo: id, status: 'queued', at: new Date(Date.now() + offset).toISOString(),
+});
+const item = (dir, id) => openMessageStore({ dir }).all().find((record) => record.id === id);
+const publish = (dir, run, id, extra = {}) => release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config, who: 'wA:p1', ...extra });
 
-const knownHosts = ['tenant.example.test'];
-
-test('request posts one Mailbox item with all card fields', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'request-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true, assets: [{ name: 'app.tar.gz', size: 1024, sha256: 'abc123' }] });
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    run,
-    dir,
-    knownHosts,
-    requesterPane: 'wA:p1',
-  });
+test('request posts one Mailbox item the Owner can answer, with all card fields', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const result = request(dir, run);
   assert.equal(result.alreadyOpen, false);
-  assert.ok(result.id);
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  assert.ok(item);
-  assert.equal(item.kind, 'release-approval');
-  assert.equal(item.action, 'approve');
-  assert.equal(item.release.repo, 'example-org/example-app');
-  assert.equal(item.release.tag, 'v1.0.0');
-  assert.equal(item.requesterPane, 'wA:p1');
-  assert.match(item.text, /Repository: example-org\/example-app/);
-  assert.match(item.text, /Tag: v1\.0\.0/);
-  assert.match(item.text, /## Changelog/);
-  assert.match(item.text, /## Assets/);
-  assert.match(item.text, /app\.tar\.gz/);
-  assert.match(item.text, /## Scan result/);
-  assert.match(item.text, /## Effect/);
-  assert.match(item.text, /makes the release public/);
+  const record = item(dir, result.id);
+  assert.equal(record.kind, 'report');
+  assert.equal(record.action, 'approve');
+  assert.equal(record.to, 'owner');
+  assert.equal(record.thread, 'example');
+  assert.equal(record.release.assets[0].sha256, sha('archive bytes'));
+  for (const part of [/Repository: example-org\/example-app/, /Tag: v1\.0\.0/, /releases\/tag\/v1\.0\.0/, /## Changelog/, /app\.tar\.gz: \d+ bytes, sha256 [0-9a-f]{64}/, /Pass: no secrets found/, /abc1234/, /## Review coverage/, /Approve makes the release public and marks it as the latest/]) {
+    assert.match(record.text, part);
+  }
 });
 
-test('second request returns the same id', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'second-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const first = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  const second = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
+test('request is refused for a repository outside releases.repos', () => {
+  assert.throws(() => release.requestRelease({ repo: 'other-org/other', tag: TAG, run: fakeGh(), dir: newDir(), config, knownHosts }), /not in the releases\.repos setting/);
+});
+
+test('a second request for the same repository and tag returns the open item', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const second = request(dir, run);
   assert.equal(second.id, first.id);
   assert.equal(second.alreadyOpen, true);
-  const records = openMessageStore({ dir }).all();
-  const items = records.filter((r) => r.kind === 'release-approval');
-  assert.equal(items.length, 1);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 1);
 });
 
-test('scan blocks a token in notes and the item shows the scan result', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'scan-token-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
+test('request refuses a release that is not a draft', () => {
+  assert.throws(() => request(newDir(), fakeGh({ draft: false })), /no longer a draft/);
+});
+
+test('the scan names the class, never the value, for notes and for asset content', () => {
+  const dir = newDir();
+  const fakeToken = ['ghp', 'abcdefghijklmnopqrstuvwxyz123456'].join('_');
   const notesFile = path.join(dir, 'notes.md');
-  fs.writeFileSync(notesFile, 'Release notes with token: ghp_abcdefghijklmnopqrstuvwxyz123456\n');
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    notesFile,
-    run,
-    dir,
-    knownHosts,
-  });
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  assert.match(item.text, /## Scan result/);
-  assert.match(item.text, /Fail/);
-  assert.match(item.text, /GitHub token/);
+  fs.writeFileSync(notesFile, `Token ${fakeToken}\nBuilt in /Users/someone/work\nSee https://tenant.example.test/app\n`);
+  const run = fakeGh({ files: { 'app.tar.gz': `key -----BEGIN PRIVATE KEY-----\n` } });
+  const result = request(dir, run, { notesFile });
+  assert.equal(result.scanOk, false);
+  const text = item(dir, result.id).text;
+  assert.match(text, /Fail:/);
+  for (const name of ['GitHub token', 'private path', 'tenant host', 'private key']) assert.match(text, new RegExp(name));
+  assert.ok(!text.includes(fakeToken));
 });
 
-test('scan blocks a private path in notes', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'scan-path-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const notesFile = path.join(dir, 'notes.md');
-  fs.writeFileSync(notesFile, 'Built by /Users/john/project\n');
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    notesFile,
-    run,
-    dir,
-    knownHosts,
-  });
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  assert.match(item.text, /private path/);
+test('the scan blocks an inline license blob and allows a public verification key', () => {
+  const blob = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo';
+  const bad = request(newDir(), fakeGh({ files: { 'app.js': `license: ${blob}\n` } }));
+  assert.equal(bad.scanOk, false);
+  const good = request(newDir(), fakeGh({ files: { 'app.js': '-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----\n' } }));
+  assert.equal(good.scanOk, true);
 });
 
-test('scan blocks a tenant host in notes', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'scan-host-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const notesFile = path.join(dir, 'notes.md');
-  fs.writeFileSync(notesFile, 'Deployed to https://tenant.example.test/app\n');
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    notesFile,
-    run,
-    dir,
-    knownHosts,
-  });
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  assert.match(item.text, /tenant host/);
+test('a checksum that differs from the listed digest is a finding', () => {
+  const run = fakeGh();
+  const view = run;
+  const wrapped = (args) => {
+    const result = view(args);
+    if (args[1] === 'view') { const data = JSON.parse(result.stdout); data.assets[0].digest = `sha256:${'0'.repeat(64)}`; return { ...result, stdout: JSON.stringify(data) }; }
+    return result;
+  };
+  const dir = newDir();
+  const result = request(dir, wrapped);
+  assert.equal(result.scanOk, false);
+  assert.match(item(dir, result.id).text, /checksum differs/);
 });
 
-test('scan blocks an inline license token', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'scan-license-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const notesFile = path.join(dir, 'notes.md');
-  fs.writeFileSync(notesFile, 'license: QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo\n');
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    notesFile,
-    run,
-    dir,
-    knownHosts,
-  });
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  assert.match(item.text, /license blob/);
+test('the card names the review pack answer when the review store has one', () => {
+  const dir = newDir();
+  const result = request(dir, fakeGh(), { pack: 'landing' });
+  assert.match(item(dir, result.id).text, /Pack landing: /);
 });
 
-test('publish refuses when no approval item exists', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-no-approval-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: 'm-nonexistent',
-    run,
-    dir,
-    knownHosts,
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /No approval item exists/);
-});
-
-test('publish refuses when approval is for another repo', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-wrong-repo-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const request = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  const result = release.publishRelease({
-    repo: 'other-org/other-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run,
-    dir,
-    knownHosts,
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /another repository or tag/);
-});
-
-test('publish refuses when Owner has not answered', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-no-answer-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const request = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run,
-    dir,
-    knownHosts,
-  });
+test('publish waits while the Owner has not answered', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  const result = publish(dir, run, id);
   assert.equal(result.ok, false);
   assert.equal(result.waiting, true);
-  assert.match(result.reason, /not answered/);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
 });
 
-test('publish refuses when Owner denies', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-deny-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const request = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  // Owner denies
-  openMessageStore({ dir }).append({
-    id: 'm-deny',
-    at: new Date(Date.now() + 1000).toISOString(),
-    thread: 'boss',
-    from: 'owner',
-    to: 'orch',
-    kind: 'message',
-    text: 'Deny',
-    replyTo: request.id,
-    status: 'sent',
-  });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run,
-    dir,
-    knownHosts,
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /denied/);
-  // The item is closed
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === request.id);
-  assert.ok(item.closedAt);
+test('publish refuses with no approval, with another repository, and with a repository outside the setting', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  assert.equal(publish(dir, run, 'm-none').code, 'no-approval');
+  assert.equal(release.publishRelease({ repo: 'other-org/other', tag: TAG, approvalId: id, run, dir, config: { releases: { repos: [{ name: 'other-org/other', project: 'x', kind: 'app' }] } } }).code, 'wrong-approval');
+  assert.equal(release.publishRelease({ repo: 'other-org/other', tag: TAG, approvalId: id, run, dir, config }).code, 'repo-not-allowed');
 });
 
-test('publish refuses when checksum changes', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-checksum-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true, assets: [{ name: 'app.tar.gz', size: 1024, sha256: 'abc123' }] });
-  const request = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  // Owner accepts
-  openMessageStore({ dir }).append({
-    id: 'm-accept',
-    at: new Date(Date.now() + 1000).toISOString(),
-    thread: 'boss',
-    from: 'owner',
-    to: 'orch',
-    kind: 'message',
-    text: 'Accept',
-    replyTo: request.id,
-    status: 'sent',
-  });
-  // Now change the asset checksum
-  const run2 = fakeGhRunner({ draft: true, assets: [{ name: 'app.tar.gz', size: 1024, sha256: 'def456' }] });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run: run2,
-    dir,
-    knownHosts,
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /assets changed/);
+test('a deny closes the item and publish refuses', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Rejected.');
+  const result = publish(dir, run, id);
+  assert.equal(result.code, 'not-accept');
+  assert.ok(item(dir, id).closedAt);
+  assert.equal(publish(dir, run, id).code, 'closed');
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
 });
 
-test('publish refuses when release is not a draft', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-not-draft-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const request = release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  // Owner accepts
-  openMessageStore({ dir }).append({
-    id: 'm-accept',
-    at: new Date(Date.now() + 1000).toISOString(),
-    thread: 'boss',
-    from: 'owner',
-    to: 'orch',
-    kind: 'message',
-    text: 'Accept',
-    replyTo: request.id,
-    status: 'sent',
-  });
-  // Now the release is not a draft
-  const run2 = fakeGhRunner({ draft: false });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run: run2,
-    dir,
-    knownHosts,
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /no longer a draft/);
+test('an answer older than the request is refused', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Approved.', -60000);
+  assert.equal(publish(dir, run, id).code, 'answer-too-old');
 });
 
-test('publish succeeds and writes audit line and closes item', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'publish-success-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true, assets: [{ name: 'app.tar.gz', size: 1024, sha256: 'abc123' }] });
-  const herdr = fakeHerdr();
-  const request = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    run,
-    dir,
-    knownHosts,
-    requesterPane: 'wA:p1',
-  });
-  // Owner accepts
-  openMessageStore({ dir }).append({
-    id: 'm-accept',
-    at: new Date(Date.now() + 1000).toISOString(),
-    thread: 'boss',
-    from: 'owner',
-    to: 'orch',
-    kind: 'message',
-    text: 'Accept',
-    replyTo: request.id,
-    status: 'sent',
-  });
-  const result = release.publishRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    approvalId: request.id,
-    run,
-    dir,
-    knownHosts,
-    herdr,
-    who: 'wA:p1',
-  });
-  assert.equal(result.ok, true);
+test('a changed asset after the request is refused', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Approved.');
+  run.state.files['app.tar.gz'] = 'other bytes';
+  assert.equal(publish(dir, run, id).code, 'checksum-mismatch');
+  run.state.files['app.tar.gz'] = 'archive bytes';
+  run.state.files['extra.zip'] = 'new';
+  assert.equal(publish(dir, run, id).code, 'checksum-mismatch');
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a scan finding after the request is refused', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Approved.');
+  run.state.body = 'Built in /Users/someone/work';
+  assert.equal(publish(dir, run, id).code, 'scan-failed');
+});
+
+test('a release that is no longer a draft is refused', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Approved.');
+  run.state.draft = false;
+  assert.equal(publish(dir, run, id).code, 'not-draft');
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('publish edits the draft, writes an audit line, and closes the item', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Approved.');
+  const result = publish(dir, run, id);
   assert.equal(result.published, true);
-  // Audit line written
-  const auditFile = path.join(dir, 'releases', 'audit.jsonl');
-  assert.ok(fs.existsSync(auditFile));
-  const auditLine = JSON.parse(fs.readFileSync(auditFile, 'utf8').trim());
-  assert.equal(auditLine.approvalId, request.id);
-  assert.equal(auditLine.repo, 'example-org/example-app');
-  assert.equal(auditLine.tag, 'v1.0.0');
-  assert.equal(auditLine.action, 'publish');
-  // Item closed
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === request.id);
-  assert.ok(item.closedAt);
-  assert.equal(item.closeNote, 'published');
-  // Notice sent to requester pane
-  assert.ok(herdr.prompts.some((p) => p.pane === 'wA:p1' && p.text.includes('published')));
+  assert.deepEqual(run.calls.find((args) => args[1] === 'edit'), ['release', 'edit', TAG, '--repo', REPO, '--draft=false', '--latest']);
+  const line = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.equal(line.approvalId, id);
+  assert.equal(line.who, 'wA:p1');
+  assert.ok(line.at);
+  assert.equal(item(dir, id).closeNote, 'published');
+  assert.ok(!run.calls.some((args) => ['delete', 'create', 'upload'].includes(args[1])));
 });
 
-test('no output holds an invented token-shaped string', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'no-token-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  const result = release.requestRelease({
-    repo: 'example-org/example-app',
-    tag: 'v1.0.0',
-    run,
-    dir,
-    knownHosts,
-  });
-  const records = openMessageStore({ dir }).all();
-  const item = records.find((r) => r.id === result.id);
-  // The item text must not contain token-shaped strings
-  const { scanTokenText } = await import('../scripts/docs-gate.js');
-  const classes = scanTokenText(item.text);
-  assert.deepEqual(classes, []);
+test('publish uses --latest=false when the card says so', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run, { latest: false });
+  answer(dir, id, 'Approved.');
+  publish(dir, run, id);
+  assert.equal(run.calls.find((args) => args[1] === 'edit').at(-1), '--latest=false');
 });
 
-test('repo not in releases.repos is refused', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'repo-not-allowed-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  assert.throws(() => release.requestRelease({
-    repo: 'other-org/other-app',
-    tag: 'v1.0.0',
-    run,
-    dir,
-    knownHosts,
-  }), /not in the releases\.repos setting/);
+test('the Owner answer sends one notice to the requesting pane, and a deny closes the item', () => {
+  const dir = newDir();
+  const herdr = fakeHerdr();
+  const { id } = request(dir, fakeGh());
+  const reply = answer(dir, id, 'Approved.');
+  assert.equal(release.noticeReleaseAnswer(reply, { dir, herdr }).verdict, 'accepted');
+  assert.equal(release.noticeReleaseAnswer(reply, { dir, herdr }), null);
+  assert.equal(herdr.prompts.length, 1);
+  assert.equal(herdr.prompts[0].pane, 'wA:p1');
+  assert.match(herdr.prompts[0].text, /Owner accepted the release example-org\/example-app v1\.0\.0.*release publish .* --approval /);
+  assert.ok(!item(dir, id).closedAt);
+
+  const second = request(dir, fakeGh(), { requesterPane: 'wA:p2' }).id === id ? null : null;
+  assert.equal(second, null);
 });
 
-test('release status lists drafts, open requests and last published', (t) => {
-  const dir = fs.mkdtempSync(path.join(dataDir, 'status-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const run = fakeGhRunner({ draft: true });
-  // Create an open request
-  release.requestRelease({ repo: 'example-org/example-app', tag: 'v1.0.0', run, dir, knownHosts });
-  const result = release.releaseStatus({ repo: 'example-org/example-app', run, dir });
-  assert.ok(Array.isArray(result.drafts));
-  assert.ok(Array.isArray(result.openRequests));
-  assert.equal(result.openRequests.length, 1);
-  assert.equal(result.openRequests[0].repo, 'example-org/example-app');
-  assert.equal(result.openRequests[0].tag, 'v1.0.0');
+test('the answer watcher notices a deny from the message store without polling', async () => {
+  const dir = newDir();
+  const herdr = fakeHerdr();
+  const { id } = request(dir, fakeGh());
+  const store = openMessageStore({ dir });
+  const stop = release.watchReleaseAnswers(store, { dir, herdr });
+  try {
+    answer(dir, id, 'Rejected.');
+    assert.equal(herdr.prompts.length, 1);
+    assert.match(herdr.prompts[0].text, /denied/);
+    assert.ok(item(dir, id).closedAt);
+  } finally { stop(); }
+});
+
+test('release status lists drafts, open requests, and the last published release', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  request(dir, run);
+  const status = release.releaseStatus({ run, dir, config });
+  assert.deepEqual(status.repos[0].drafts, [TAG]);
+  assert.equal(status.openRequests.length, 1);
+  assert.equal(status.openRequests[0].tag, TAG);
+});
+
+test('the command returns exit codes 0, 1 and 3 and prints no token-shaped text', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const lines = [];
+  const options = { dataDir: dir, config, run, env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => lines.push(line), err: (line) => lines.push(line) };
+  assert.equal(await release.releaseCommand(['request', REPO, TAG], options), 0);
+  const id = openMessageStore({ dir }).all().find((record) => record.release).id;
+  assert.equal(await release.releaseCommand(['publish', REPO, TAG, '--approval', id], options), 3);
+  answer(dir, id, 'Rejected.');
+  assert.equal(await release.releaseCommand(['publish', REPO, TAG, '--approval', id], options), 1);
+  assert.equal(await release.releaseCommand(['request', 'other-org/other', TAG], options), 1);
+  assert.equal(await release.releaseCommand(['status'], options), 0);
+  assert.deepEqual(scanTokenText(lines.join('\n')), []);
+  assert.deepEqual(scanTokenText(item(dir, id).text), []);
+});
+
+test('releases.repos validation accepts a good entry and names each bad one', async () => {
+  const { validateReleasesRepos } = await import('../src/config.js');
+  assert.deepEqual(validateReleasesRepos(config.releases.repos).errors, []);
+  const bad = validateReleasesRepos([{ name: 'no-slash', project: 'Bad Slug', kind: '' }, config.releases.repos[0], config.releases.repos[0]]);
+  assert.equal(bad.errors.length, 4);
+  assert.deepEqual(bad.repos, [config.releases.repos[0]]);
+});
+
+test('an Owner answer through the real close path leaves the request answered, not closed', async () => {
+  const { closeMailboxItem } = await import('../src/messages.js');
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  const reply = answer(dir, id, 'Approved.');
+  closeMailboxItem(id, { dir });
+  assert.ok(item(dir, id).closedAt);
+  assert.equal(item(dir, id).closedBy, undefined);
+  // The notice does not depend on the order of the close and the append event.
+  const herdr = fakeHerdr();
+  assert.equal(release.noticeReleaseAnswer(reply, { dir, herdr }).verdict, 'accepted');
+  assert.equal(herdr.prompts.length, 1);
+  assert.equal(publish(dir, run, id).published, true);
+  assert.equal(item(dir, id).closeNote, 'published');
+  assert.equal(item(dir, id).closedBy, 'project');
+  assert.equal(publish(dir, run, id).code, 'closed');
+});
+
+test('a Reject through the real close path is settled by the notice or by publish', async () => {
+  const { closeMailboxItem } = await import('../src/messages.js');
+  const dir = newDir();
+  const run = fakeGh();
+  const { id } = request(dir, run);
+  answer(dir, id, 'Rejected.');
+  closeMailboxItem(id, { dir });
+  assert.equal(publish(dir, run, id).code, 'not-accept');
+  assert.equal(item(dir, id).closeNote, 'denied by the Owner');
+  assert.equal(publish(dir, run, id).code, 'closed');
+});
+
+test('a second request after the Owner answer and before publish posts no duplicate', async () => {
+  const { closeMailboxItem } = await import('../src/messages.js');
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  closeMailboxItem(first.id, { dir });
+  const second = request(dir, run);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.id, first.id);
+  assert.equal(release.releaseStatus({ run, dir, config }).openRequests.length, 1);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 1);
 });

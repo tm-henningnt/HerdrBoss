@@ -506,6 +506,7 @@ export function validateReleasesRepos(value) {
   const names = new Set();
   value.forEach((repo, index) => {
     const label = `releases.repos[${index}]`;
+    const before = errors.length;
     if (!repo || typeof repo !== 'object' || Array.isArray(repo)) { errors.push(`${label} must be an object.`); return; }
     if (typeof repo.name !== 'string' || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(repo.name)) {
       errors.push(`${label}.name must be a GitHub repository in OWNER/REPO form.`);
@@ -520,7 +521,7 @@ export function validateReleasesRepos(value) {
     if (typeof repo.kind !== 'string' || !repo.kind.length || repo.kind.length > 50) {
       errors.push(`${label}.kind must be a string of 1 to 50 characters.`);
     }
-    if (!errors.length || errors[errors.length - 1]?.startsWith(label)) repos.push(repo);
+    if (errors.length === before) repos.push(repo);
   });
   return { repos, errors };
 }

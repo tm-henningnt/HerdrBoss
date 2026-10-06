@@ -1,553 +1,342 @@
-// The release approval commands. An orchestrator requests a release, the Owner approves it in the Mailbox,
-// and the orchestrator publishes it. The module never runs gh directly: it takes a runner function.
-// The runner returns { status, error, stdout, stderr } for one gh command.
+// The release approval commands. An orchestrator requests a release, the Owner answers the Mailbox item,
+// and the orchestrator publishes it. The module never runs gh directly: it takes a runner function
+// run(args) that returns { status, error, stdout, stderr } for one gh command.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR } from './config.js';
-import { openMessageStore, newId } from './message-store.js';
+import { openMessageStore } from './message-store.js';
 import { scanText } from './secret-scan.js';
 import { scanTokenText } from '../scripts/docs-gate.js';
 import { redactSecrets } from './redact.js';
+import { listBrowserSessions } from './browser-pool.js';
+import { getResultRecord } from './review-store.js';
 
-const RELEASE_DIR = 'releases';
-const AUDIT_FILE = 'audit.jsonl';
-const RELEASE_KIND = 'release-approval';
-const RELEASE_ACTION = 'approve';
+const AUDIT_FILE = path.join('releases', 'audit.jsonl');
+const MAX_SCAN_BYTES = 20 * 1024 * 1024;
+const APPROVED = /^\s*(approved|approve|accepted|accept|yes)\b/i;
+const REJECTED = /^\s*(rejected|reject|denied|deny|no)\b/i;
 
-// The fixed reason texts for a refusal. Each maps to one check in the publish path.
-const REFUSAL_REASONS = {
+// The fixed texts of a refusal. Each maps to one check in the publish path.
+export const REFUSALS = {
+  'repo-not-allowed': 'This repository is not in the releases.repos setting.',
   'no-approval': 'No approval item exists for this repository and tag.',
   'wrong-approval': 'The approval item is for another repository or tag.',
+  'closed': 'The approval item is closed. Request a new approval.',
   'no-answer': 'The Owner has not answered this approval item yet.',
   'not-accept': 'The Owner denied this approval item. Request a new approval.',
   'answer-too-old': 'The Owner answer is older than the request. Request a new approval.',
   'checksum-mismatch': 'The draft assets changed after the request. Request a new approval.',
   'scan-failed': 'The secret scan found a problem after the request. Request a new approval.',
   'not-draft': 'The release is no longer a draft.',
-  'repo-not-allowed': 'This repository is not in the releases.repos setting.',
 };
 
-// The registry of known hosts for the secret scan. In production this comes from the browser sessions
-// and the factory registry. For tests, it is injected.
-function defaultKnownHosts() {
-  try {
-    const { listBrowserSessions } = require('./browser-pool.js');
-    const sessions = listBrowserSessions();
-    const hosts = new Set();
-    for (const record of Object.values(sessions)) {
-      for (const value of [...(Array.isArray(record?.bookmarks) ? record.bookmarks.map((b) => b?.url) : []), record?.startPage]) {
-        if (typeof value !== 'string') continue;
-        try { const host = new URL(value).hostname; if (host) hosts.add(host); } catch {}
-      }
+const refuse = (code, extra = {}) => ({ ok: false, code, reason: REFUSALS[code], published: false, ...extra });
+const failureDetail = (result) => (result.error ? redactSecrets(result.error.message) : redactSecrets(`${result.stderr}${result.stdout}`).trim().split('\n').slice(0, 3).join(' ')) || 'no message';
+
+// The hosts that the browser sessions of this machine know. A known host in a release is a tenant host.
+export function knownHostsFromSessions(sessions = listBrowserSessions()) {
+  const hosts = new Set();
+  for (const record of Object.values(sessions || {})) {
+    const urls = [...(Array.isArray(record?.bookmarks) ? record.bookmarks.map((entry) => entry?.url) : []), record?.startPage];
+    for (const value of urls) {
+      if (typeof value !== 'string') continue;
+      try { const host = new URL(value).hostname; if (host) hosts.add(host); } catch {}
     }
-    return [...hosts];
-  } catch {
-    return [];
   }
+  return [...hosts];
 }
 
-// Check if a host matches the registry of known hosts. A known host is a tenant host that must not
-// appear in release notes or assets.
-function isKnownHost(hostname, knownHosts) {
+function hostKnown(hostname, knownHosts) {
   const host = String(hostname || '').toLowerCase();
-  if (!host) return false;
-  return knownHosts.some((known) => {
+  return !!host && knownHosts.some((known) => {
     const pattern = String(known).toLowerCase();
-    return pattern.startsWith('*.') ? host.length > pattern.length - 1 && host.endsWith(pattern.slice(1)) : host === pattern;
+    return pattern.startsWith('*.') ? host.endsWith(pattern.slice(1)) : host === pattern;
   });
 }
 
-// Scan text for secrets. Returns { ok, findings } where findings is a list of { file, classes }.
-// The scan checks for tokens, private keys, tenant hosts, private paths, and inline license tokens.
-function scanForSecrets(text, { knownHosts = [], file = 'text' } = {}) {
-  const findings = [];
-  const classes = scanText(file, text);
-  if (classes.length) findings.push({ file, classes });
-
-  // Check for token-shaped strings (JWT, PEM private key, license blob)
-  const tokenClasses = scanTokenText(text);
-  if (tokenClasses.length) {
-    const existing = findings.find((f) => f.file === file);
-    if (existing) existing.classes.push(...tokenClasses.filter((c) => !existing.classes.includes(c)));
-    else findings.push({ file, classes: tokenClasses });
+// The classes of secret in one text. A class name never holds the value.
+export function scanRelease(text, { knownHosts = [], file = 'text' } = {}) {
+  const classes = new Set([...scanText(file, text), ...scanTokenText(text)]);
+  if (/\/(?:Users|home)\/[A-Za-z0-9._-]+\//.test(text)) classes.add('private path');
+  for (const match of text.match(/https?:\/\/[A-Za-z0-9.-]+/g) ?? []) {
+    try { if (hostKnown(new URL(match).hostname, knownHosts)) classes.add('tenant host'); } catch {}
   }
-
-  // Check for private paths like /Users/<name>/...
-  const privatePathMatches = text.match(/\/Users\/[A-Za-z0-9_-]+\//g);
-  if (privatePathMatches) {
-    const existing = findings.find((f) => f.file === file);
-    const privatePathClass = 'private path';
-    if (existing) { if (!existing.classes.includes(privatePathClass)) existing.classes.push(privatePathClass); }
-    else findings.push({ file, classes: [privatePathClass] });
-  }
-
-  // Check for tenant hosts
-  const hostMatches = text.match(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/gi);
-  if (hostMatches) {
-    for (const match of hostMatches) {
-      try {
-        const host = new URL(match).hostname;
-        if (isKnownHost(host, knownHosts)) {
-          const existing = findings.find((f) => f.file === file);
-          const tenantHostClass = 'tenant host';
-          if (existing) { if (!existing.classes.includes(tenantHostClass)) existing.classes.push(tenantHostClass); }
-          else findings.push({ file, classes: [tenantHostClass] });
-        }
-      } catch {}
-    }
-  }
-
-  return { ok: findings.length === 0, findings };
+  return [...classes];
 }
 
-// Read the draft release through the gh runner. Returns { name, tag, draft, assets, body }.
-// Each asset has { name, size, sha256, downloadUrl }.
-function readDraftRelease(run, repo, tag) {
-  const result = run(['release', 'view', tag, '--repo', repo, '--json', 'name,tagName,draft,assets,body']);
-  if (result.error || result.status !== 0) {
-    const detail = result.error ? redactSecrets(result.error.message) : redactSecrets(`${result.stderr}${result.stdout}`).trim().split('\n').slice(0, 3).join(' ');
-    throw new Error(`gh release view failed: ${detail}`);
-  }
-  let release;
-  try { release = JSON.parse(result.stdout); } catch { throw new Error('gh release view returned text that is not JSON.'); }
-  if (!release || typeof release !== 'object') throw new Error('gh release view returned no release.');
+export function repoConfig(repo, config) {
+  return (config?.releases?.repos ?? []).find((entry) => entry.name === repo) ?? null;
+}
+
+// Read a release through gh. Each asset has { name, size, digest }.
+function readRelease(run, repo, tag) {
+  const result = run(['release', 'view', tag, '--repo', repo, '--json', 'name,tagName,isDraft,body,assets,targetCommitish,url']);
+  if (result.error || result.status !== 0) throw new Error(`gh release view failed: ${failureDetail(result)}`);
+  let data;
+  try { data = JSON.parse(result.stdout); } catch { throw new Error('gh release view returned text that is not JSON.'); }
+  if (!data || typeof data !== 'object') throw new Error('gh release view returned no release.');
   return {
-    name: release.name ?? null,
-    tag: release.tagName ?? tag,
-    draft: release.draft !== false,
-    body: release.body ?? '',
-    assets: (release.assets ?? []).map((asset) => ({
-      name: asset.name,
-      size: asset.size ?? 0,
-      sha256: asset.digest ?? null,
-      downloadUrl: asset.url ?? null,
-    })),
+    name: data.name ?? null, tag: data.tagName ?? tag, draft: data.isDraft !== false, body: data.body ?? '',
+    commit: data.targetCommitish ?? null, url: data.url ?? null,
+    assets: (data.assets ?? []).map((asset) => ({ name: asset.name, size: asset.size ?? 0, digest: String(asset.digest ?? '').replace(/^sha256:/, '') || null })),
   };
 }
 
-// Download an asset and compute its SHA-256. Returns the hash as a hex string.
-function downloadAssetHash(run, repo, asset) {
-  // Use gh api to download the asset content
-  const result = run(['api', `repos/${repo}/releases/assets/${asset.name}`, '--method', 'GET']);
-  if (result.error || result.status !== 0) {
-    // Fallback: try to get the digest from the release view
-    return asset.sha256;
+// Download each asset into a temporary folder, hash it, and scan its text.
+// Returns [{ name, size, sha256, listedSha256, classes }]. A scan class never holds a value.
+function inspectAssets(run, repo, tag, release, knownHosts) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-'));
+  try {
+    const files = new Map();
+    for (const asset of release.assets) {
+      const result = run(['release', 'download', tag, '--repo', repo, '--pattern', asset.name, '--dir', tmp, '--clobber']);
+      const file = path.join(tmp, asset.name);
+      if (result.error || result.status !== 0 || !fs.existsSync(file)) throw new Error(`gh release download ${asset.name} failed: ${failureDetail(result)}`);
+      files.set(asset.name, file);
+    }
+    return release.assets.map((asset) => {
+      const file = files.get(asset.name);
+      const content = fs.readFileSync(file);
+      const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+      const classes = [];
+      if (content.length > MAX_SCAN_BYTES) classes.push('too large to scan');
+      else classes.push(...scanRelease(content.toString('latin1'), { knownHosts, file: asset.name }));
+      const sidecar = files.get(`${asset.name}.sha256`);
+      const listed = asset.digest ?? (sidecar ? fs.readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0].toLowerCase() : null);
+      if (listed && listed !== sha256) classes.push('checksum differs from the listed checksum');
+      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes };
+    });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  // The api returns binary data; we need to hash it
-  // For the fake gh runner in tests, we return a deterministic hash based on the asset name
-  return crypto.createHash('sha256').update(asset.name).digest('hex');
 }
 
-// Compute the SHA-256 of a file.
-function fileHash(filePath) {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
+const scanFindings = (notes, assets) => [
+  ...(notes.length ? [{ file: 'notes', classes: notes }] : []),
+  ...assets.filter((asset) => asset.classes.length).map((asset) => ({ file: asset.name, classes: asset.classes })),
+];
+
+const records = (dir) => openMessageStore({ dir }).all();
+// A request is settled when the project published or denied it. An Owner answer through the dashboard
+// sets closedAt only, so that close still counts as an answered, open request.
+const settled = (record) => record.closedBy === 'project' || record.closeNote === 'published' || record.closeNote === 'denied by the Owner';
+const isRelease = (record) => record.kind === 'report' && record.release && record.action === 'approve';
+const sameTarget = (record, repo, tag) => record.release.repo === repo && record.release.tag === tag;
+
+// The Owner answers an approve item with a message that has replyTo set. The newest answer counts.
+function ownerAnswer(all, approval) {
+  const answers = all.filter((record) => record.from === 'owner' && record.kind === 'message' && record.replyTo === approval.id);
+  const latest = answers[answers.length - 1];
+  if (!latest) return null;
+  const verdict = APPROVED.test(latest.text) ? 'accept' : REJECTED.test(latest.text) ? 'deny' : 'other';
+  return { verdict, at: latest.at };
 }
 
-// Find an open release approval item for a repo and tag.
-function findOpenApproval(records, repo, tag) {
-  return records.find((record) =>
-    record.kind === RELEASE_KIND &&
-    record.action === RELEASE_ACTION &&
-    !record.closedAt &&
-    record.release?.repo === repo &&
-    record.release?.tag === tag
-  );
+function packCoverage({ dir, slug, pack }) {
+  if (!pack) return 'No review pack named. Use --pack to name one.';
+  try {
+    const result = getResultRecord({ dir, slug, pack });
+    if (!result) return `Pack ${pack}: no Owner answer yet.`;
+    return `Pack ${pack} version ${result.version}: ${result.verdict ?? 'answered'}${result.submittedAt ? ` at ${result.submittedAt}` : ''}.`;
+  } catch {
+    return `Pack ${pack}: the review store has no record.`;
+  }
 }
 
-// Find the approval item by ID.
-function findApprovalById(records, id) {
-  return records.find((record) => record.kind === RELEASE_KIND && record.id === id);
+function cardText({ repo, tag, release, notes, assets, findings, latest, coverage }) {
+  const lines = [
+    '# Release approval request', '',
+    `Repository: ${repo}`, `Tag: ${tag}`, `Draft: ${release.url ?? release.name ?? tag}`, '',
+    '## Changelog', redactSecrets(notes || release.body || '(no changelog)'), '',
+    '## Assets',
+  ];
+  if (assets.length) for (const asset of assets) lines.push(`- ${asset.name}: ${asset.size} bytes, sha256 ${asset.sha256}`);
+  else lines.push('(no assets)');
+  lines.push('', '## Scan result');
+  if (findings.length) { lines.push('Fail:'); for (const finding of findings) lines.push(`- ${finding.file}: ${finding.classes.join(', ')}`); }
+  else lines.push('Pass: no secrets found.');
+  lines.push('', '## Build commit', release.commit ?? '(not available)', '', '## Review coverage', coverage, '', '## Effect',
+    `Approve makes the release public${latest ? ' and marks it as the latest release' : ' and does not mark it as the latest release'}.`);
+  return lines.join('\n');
 }
 
-// Get the Owner's answer to an approval item. Returns { answer, at } or null.
-function getOwnerAnswer(records, approvalId) {
-  const answer = records.find((record) =>
-    record.from === 'owner' &&
-    record.kind === 'message' &&
-    record.replyTo === approvalId
-  );
-  if (!answer) return null;
-  return { answer: answer.text, at: answer.at };
+// Request a release approval. Posts one Mailbox item of action approve.
+// Returns { id, repo, tag, alreadyOpen, scanOk }.
+export function requestRelease({ repo, tag, notesFile = null, pack = null, latest = true, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, requesterPane = null, config = null }) {
+  if (!repo || !tag) throw new Error('Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]');
+  if (typeof run !== 'function') throw new Error('A gh runner is required.');
+  const entry = config ? repoConfig(repo, config) : { project: 'boss' };
+  if (!entry) throw new Error(REFUSALS['repo-not-allowed']);
+
+  const open = records(dir).find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
+  if (open) return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
+
+  const hosts = knownHosts ?? knownHostsFromSessions();
+  const release = readRelease(run, repo, tag);
+  if (!release.draft) throw new Error(REFUSALS['not-draft']);
+  let notes = '';
+  if (notesFile) {
+    try { notes = fs.readFileSync(notesFile, 'utf8'); } catch { throw new Error(`Cannot read notes file: ${notesFile}`); }
+  }
+  const assets = inspectAssets(run, repo, tag, release, hosts);
+  const findings = scanFindings(scanRelease(`${notes}\n${release.body}`, { knownHosts: hosts, file: 'notes' }), assets);
+  const text = cardText({ repo, tag, release, notes, assets, findings, latest, coverage: packCoverage({ dir, slug: entry.project, pack }) });
+
+  const record = openMessageStore({ dir }).append({
+    thread: entry.project, from: 'orch', to: 'owner', kind: 'report', title: `Release approval: ${repo} ${tag}`, text, action: 'approve',
+    status: 'new', requesterPane,
+    release: { repo, tag, latest, commit: release.commit, assets: assets.map(({ name, size, sha256 }) => ({ name, size, sha256 })) },
+  }, { now });
+  return { id: record.id, repo, tag, alreadyOpen: false, scanOk: findings.length === 0 };
 }
 
-// Write an audit line to the data dir. The line holds time, approval id, who ran it, repo, and tag.
-function writeAuditLine({ dir = DATA_DIR, approvalId, who, repo, tag, action }) {
-  const auditDir = path.join(dir, RELEASE_DIR);
-  fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
-  const auditFile = path.join(auditDir, AUDIT_FILE);
-  const line = {
-    at: new Date().toISOString(),
-    approvalId,
-    who,
-    repo,
-    tag,
-    action,
-  };
-  fs.appendFileSync(auditFile, `${JSON.stringify(line)}\n`, { mode: 0o600 });
-  fs.chmodSync(auditFile, 0o600);
+function writeAudit({ dir, approvalId, who, repo, tag, now }) {
+  const file = path.join(dir, AUDIT_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), approvalId, who, repo, tag, action: 'publish' })}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
 }
 
-// Close an approval item with a note.
-function closeApprovalItem(id, note, { dir = DATA_DIR, now = Date.now() } = {}) {
-  return openMessageStore({ dir }).mutate((records) => {
-    const item = records.find((record) => record.id === id && record.kind === RELEASE_KIND);
-    if (!item) return { records, result: null };
-    const at = new Date(now).toISOString();
-    item.closedAt = at;
-    item.readAt ||= at;
-    item.closedBy = 'project';
-    item.closeNote = note;
-    return { records, result: item };
+function closeItem(id, note, { dir, now }) {
+  const at = new Date(now).toISOString();
+  return openMessageStore({ dir }).mutate((all) => {
+    const item = all.find((record) => record.id === id);
+    if (item && !settled(item)) Object.assign(item, { closedAt: item.closedAt || at, closedBy: 'project', closeNote: note, readAt: item.readAt || at });
+    return { records: all, result: item ?? null };
   }, { now });
 }
 
-// Post a notice to the requesting pane. The notice is a short message that the Owner answered.
-function postNoticeToPane(paneId, text, { herdr, dir = DATA_DIR, now = Date.now() } = {}) {
-  if (!paneId || !herdr) return;
-  try {
-    herdr(['agent', 'prompt', paneId, text], { timeout: 30000 });
-  } catch {
-    // A failed notice never fails the command
-  }
-}
-
-// Request a release approval. Posts one Mailbox item of type approve.
-// Returns { id, repo, tag, alreadyOpen } where alreadyOpen is true when an open request already existed.
-export function requestRelease({ repo, tag, notesFile = null, run, dir = DATA_DIR, now = Date.now(), herdr = null, knownHosts = null, requesterPane = null }) {
-  if (!repo || !tag) throw new Error('Usage: release request REPO TAG [--notes FILE]');
-  if (!run) throw new Error('A gh runner is required.');
-
-  const hosts = knownHosts ?? defaultKnownHosts();
-  const records = openMessageStore({ dir }).all();
-
-  // Check if an open request already exists
-  const existing = findOpenApproval(records, repo, tag);
-  if (existing) {
-    return { id: existing.id, repo, tag, alreadyOpen: true };
-  }
-
-  // Read the draft release
-  const release = readDraftRelease(run, repo, tag);
-  if (!release.draft) {
-    throw new Error('The release is not a draft.');
-  }
-
-  // Read notes
-  let notes = '';
-  if (notesFile) {
-    if (!fs.existsSync(notesFile)) throw new Error(`Cannot read notes file: ${notesFile}`);
-    notes = fs.readFileSync(notesFile, 'utf8');
-  }
-
-  // Scan notes and assets for secrets
-  const notesScan = scanForSecrets(notes, { knownHosts: hosts, file: 'notes' });
-  const assetScans = release.assets.map((asset) => {
-    const assetText = `${asset.name}\n${asset.sha256 ?? ''}`;
-    return scanForSecrets(assetText, { knownHosts: hosts, file: asset.name });
-  });
-  const allFindings = [...notesScan.findings, ...assetScans.flatMap((s) => s.findings)];
-  const scanOk = allFindings.length === 0;
-
-  // Build the card text
-  const lines = [
-    `# Release approval request`,
-    '',
-    `Repository: ${repo}`,
-    `Tag: ${tag}`,
-    `Draft: ${release.name ?? tag}`,
-    '',
-    `## Changelog`,
-    release.body || '(no changelog)',
-    '',
-    `## Assets`,
-  ];
-  if (release.assets.length) {
-    for (const asset of release.assets) {
-      lines.push(`- ${asset.name} (${asset.size} bytes, sha256: ${asset.sha256 ?? 'unknown'})`);
-    }
-  } else {
-    lines.push('(no assets)');
-  }
-  lines.push('');
-  lines.push(`## Scan result`);
-  if (scanOk) {
-    lines.push('Pass: no secrets found.');
-  } else {
-    lines.push('Fail:');
-    for (const finding of allFindings) {
-      lines.push(`- ${finding.file}: ${finding.classes.join(', ')}`);
-    }
-  }
-  lines.push('');
-  lines.push(`## Effect`);
-  lines.push('Approving this request makes the release public.');
-  lines.push('');
-  lines.push(`## Build commit`);
-  lines.push('(not available)');
-  lines.push('');
-  lines.push(`## Review coverage`);
-  lines.push('(not available)');
-
-  const text = lines.join('\n');
-
-  // Post the Mailbox item
-  const at = new Date(now).toISOString();
-  const record = {
-    id: newId(now),
-    at,
-    thread: 'boss',
-    from: 'orch',
-    to: 'owner',
-    kind: RELEASE_KIND,
-    text,
-    action: RELEASE_ACTION,
-    replyTo: null,
-    status: 'new',
-    sentAt: null,
-    error: null,
-    attempts: 0,
-    release: { repo, tag, assets: release.assets.map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })) },
-    requesterPane,
-  };
-
-  openMessageStore({ dir }).append(record, { now });
-
-  return { id: record.id, repo, tag, alreadyOpen: false };
-}
-
-// Publish a release after approval. Checks all conditions, then runs gh release edit.
-// Returns { ok, reason, published } where published is true when the release was published.
-export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now = Date.now(), herdr = null, knownHosts = null, who = null }) {
+// Publish a release. Every check must pass before gh release edit runs.
+// Returns { ok, code, reason, published, waiting }.
+export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, who = null, config = null }) {
   if (!repo || !tag || !approvalId) throw new Error('Usage: release publish REPO TAG --approval ID');
-  if (!run) throw new Error('A gh runner is required.');
+  if (typeof run !== 'function') throw new Error('A gh runner is required.');
+  if (config && !repoConfig(repo, config)) return refuse('repo-not-allowed');
 
-  const hosts = knownHosts ?? defaultKnownHosts();
-  const records = openMessageStore({ dir }).all();
+  const all = records(dir);
+  const approval = all.find((record) => record.id === approvalId && isRelease(record));
+  if (!approval) return refuse('no-approval');
+  if (!sameTarget(approval, repo, tag)) return refuse('wrong-approval');
+  if (settled(approval)) return refuse('closed');
+  const answer = ownerAnswer(all, approval);
+  if (!answer || answer.verdict === 'other') return refuse('no-answer', { waiting: true });
+  if (answer.verdict === 'deny') { closeItem(approvalId, 'denied by the Owner', { dir, now }); return refuse('not-accept'); }
+  if (Date.parse(answer.at) <= Date.parse(approval.at)) return refuse('answer-too-old');
 
-  // (a) The approval item exists for exactly this repo and tag
-  const approval = findApprovalById(records, approvalId);
-  if (!approval) {
-    return { ok: false, reason: REFUSAL_REASONS['no-approval'], published: false };
-  }
-  if (approval.release?.repo !== repo || approval.release?.tag !== tag) {
-    return { ok: false, reason: REFUSAL_REASONS['wrong-approval'], published: false };
-  }
+  const release = readRelease(run, repo, tag);
+  if (!release.draft) return refuse('not-draft');
+  const hosts = knownHosts ?? knownHostsFromSessions();
+  const assets = inspectAssets(run, repo, tag, release, hosts);
+  const card = approval.release.assets ?? [];
+  const same = card.length === assets.length && card.every((entry) => assets.some((asset) => asset.name === entry.name && asset.sha256 === entry.sha256 && asset.size === entry.size));
+  if (!same) return refuse('checksum-mismatch');
+  if (scanFindings(scanRelease(release.body, { knownHosts: hosts, file: 'notes' }), assets).length) return refuse('scan-failed');
 
-  // (b) The Owner's answer is Accept and newer than the request
-  const ownerAnswer = getOwnerAnswer(records, approvalId);
-  if (!ownerAnswer) {
-    return { ok: false, reason: REFUSAL_REASONS['no-answer'], published: false, waiting: true };
-  }
-  const answerText = ownerAnswer.answer.trim().toLowerCase();
-  if (answerText === 'deny' || answerText === 'reject' || answerText === 'no') {
-    // A deny closes the request
-    closeApprovalItem(approvalId, 'denied by Owner', { dir, now });
-    return { ok: false, reason: REFUSAL_REASONS['not-accept'], published: false };
-  }
-  if (answerText !== 'accept' && answerText !== 'yes' && answerText !== 'approve') {
-    return { ok: false, reason: REFUSAL_REASONS['no-answer'], published: false, waiting: true };
-  }
-  const answerAt = Date.parse(ownerAnswer.at);
-  const requestAt = Date.parse(approval.at);
-  if (answerAt <= requestAt) {
-    return { ok: false, reason: REFUSAL_REASONS['answer-too-old'], published: false };
-  }
+  const edit = run(['release', 'edit', tag, '--repo', repo, '--draft=false', approval.release.latest === false ? '--latest=false' : '--latest']);
+  if (edit.error || edit.status !== 0) throw new Error(`gh release edit failed: ${failureDetail(edit)}`);
+  const after = readRelease(run, repo, tag);
+  const names = after.assets.map((asset) => asset.name).sort().join('\n');
+  if (after.draft) throw new Error('The release is still a draft after gh release edit.');
+  if (names !== card.map((entry) => entry.name).sort().join('\n')) throw new Error('The published release has other assets than the card.');
 
-  // (c) The draft's assets still have the checksums on the card
-  const release = readDraftRelease(run, repo, tag);
-  const cardAssets = approval.release?.assets ?? [];
-  for (const cardAsset of cardAssets) {
-    const currentAsset = release.assets.find((a) => a.name === cardAsset.name);
-    if (!currentAsset) {
-      return { ok: false, reason: REFUSAL_REASONS['checksum-mismatch'], published: false };
-    }
-    if (cardAsset.sha256 && currentAsset.sha256 && cardAsset.sha256 !== currentAsset.sha256) {
-      return { ok: false, reason: REFUSAL_REASONS['checksum-mismatch'], published: false };
-    }
-  }
-
-  // (d) The scan still passes
-  const notesScan = scanForSecrets(release.body ?? '', { knownHosts: hosts, file: 'changelog' });
-  if (!notesScan.ok) {
-    return { ok: false, reason: REFUSAL_REASONS['scan-failed'], published: false };
-  }
-
-  // (e) The release is still a draft
-  if (!release.draft) {
-    return { ok: false, reason: REFUSAL_REASONS['not-draft'], published: false };
-  }
-
-  // All checks passed. Publish the release.
-  const args = ['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest'];
-  const result = run(args);
-  if (result.error || result.status !== 0) {
-    const detail = result.error ? redactSecrets(result.error.message) : redactSecrets(`${result.stderr}${result.stdout}`).trim().split('\n').slice(0, 3).join(' ');
-    throw new Error(`gh release edit failed: ${detail}`);
-  }
-
-  // Verify it is published with the same assets
-  const published = readDraftRelease(run, repo, tag);
-  if (published.draft) {
-    throw new Error('The release is still a draft after gh release edit.');
-  }
-
-  // Write audit line
-  writeAuditLine({ dir, approvalId, who, repo, tag, action: 'publish' });
-
-  // Close the item with a note
-  closeApprovalItem(approvalId, 'published', { dir, now });
-
-  // Post notice to requesting pane
-  if (approval.requesterPane) {
-    postNoticeToPane(approval.requesterPane, `[herdr-boss] Release ${repo} ${tag} was published.`, { herdr, dir, now });
-  }
-
-  return { ok: true, reason: null, published: true };
+  writeAudit({ dir, approvalId, who, repo, tag, now });
+  closeItem(approvalId, 'published', { dir, now });
+  return { ok: true, code: null, reason: null, published: true };
 }
 
-// Get the release status for a repo or all repos.
-export function releaseStatus({ repo = null, run, dir = DATA_DIR, now = Date.now() }) {
-  if (!run) throw new Error('A gh runner is required.');
-
-  const records = openMessageStore({ dir }).all();
-  const approvals = records.filter((r) => r.kind === RELEASE_KIND);
-
-  // List drafts
-  const draftsResult = run(['release', 'list', '--repo', repo ?? '', '--json', 'name,tagName,draft,isLatest']);
-  let drafts = [];
-  if (!draftsResult.error && draftsResult.status === 0) {
-    try { drafts = JSON.parse(draftsResult.stdout) ?? []; } catch { drafts = []; }
+// The drafts and the last published release of the allowed repositories, and the open requests.
+export function releaseStatus({ repo = null, run, dir = DATA_DIR, config = null }) {
+  if (typeof run !== 'function') throw new Error('A gh runner is required.');
+  const names = repo ? [repo] : (config?.releases?.repos ?? []).map((entry) => entry.name);
+  const rows = [];
+  for (const name of names) {
+    const result = run(['release', 'list', '--repo', name, '--json', 'tagName,name,isDraft,isLatest,publishedAt', '--limit', '30']);
+    let list = [];
+    if (!result.error && result.status === 0) { try { list = JSON.parse(result.stdout) ?? []; } catch {} }
+    const published = list.filter((entry) => !entry.isDraft).sort((a, b) => String(b.publishedAt ?? '').localeCompare(String(a.publishedAt ?? '')))[0] ?? null;
+    rows.push({ repo: name, drafts: list.filter((entry) => entry.isDraft).map((entry) => entry.tagName), lastPublished: published ? { tag: published.tagName, publishedAt: published.publishedAt ?? null } : null, readable: !result.error && result.status === 0 });
   }
-
-  // List open requests
-  const openRequests = approvals.filter((r) => !r.closedAt).map((r) => ({
-    id: r.id,
-    repo: r.release?.repo,
-    tag: r.release?.tag,
-    at: r.at,
-  }));
-
-  // Last published release
-  const published = drafts.filter((d) => d.draft === false).sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))[0] ?? null;
-
-  return { drafts, openRequests, published };
+  const openRequests = records(dir).filter((record) => isRelease(record) && !settled(record) && (!repo || record.release.repo === repo))
+    .map((record) => ({ id: record.id, repo: record.release.repo, tag: record.release.tag, at: record.at }));
+  return { repos: rows, openRequests };
 }
 
-// Validate that a repo is in the releases.repos setting.
-export function isRepoAllowed(repo, config) {
-  const repos = config?.releases?.repos ?? [];
-  return repos.some((r) => r.name === repo);
+// When the Owner answers a release approval, tell the requesting pane once. A deny closes the item.
+// `record` is the new Owner message. Nothing polls: the message store calls this on each append.
+export function noticeReleaseAnswer(record, { dir = DATA_DIR, herdr, now = Date.now() } = {}) {
+  if (record?.from !== 'owner' || record.kind !== 'message' || !record.replyTo) return null;
+  const store = openMessageStore({ dir });
+  const approval = store.all().find((item) => item.id === record.replyTo && isRelease(item));
+  if (!approval || settled(approval) || approval.answerNoticeAt) return null;
+  const verdict = APPROVED.test(record.text) ? 'accepted' : REJECTED.test(record.text) ? 'denied' : null;
+  if (!verdict) return null;
+  store.update(approval.id, { answerNoticeAt: new Date(now).toISOString() }, { now });
+  if (verdict === 'denied') closeItem(approval.id, 'denied by the Owner', { dir, now });
+  const { repo, tag } = approval.release;
+  if (approval.requesterPane && typeof herdr === 'function') {
+    const next = verdict === 'accepted' ? `Run: herdr-boss release publish ${repo} ${tag} --approval ${approval.id}` : 'Request a new approval after you change the draft.';
+    try { herdr(['agent', 'prompt', approval.requesterPane, `[herdr-boss] The Owner ${verdict} the release ${repo} ${tag}. ${next}`]); } catch {}
+  }
+  return { id: approval.id, verdict };
 }
 
-// Get the repo config for a repo.
-export function getRepoConfig(repo, config) {
-  const repos = config?.releases?.repos ?? [];
-  return repos.find((r) => r.name === repo) ?? null;
+// Watch the message store for Owner answers. Returns the function that stops the watch.
+export function watchReleaseAnswers(store, options = {}) {
+  return store.onChange((event) => {
+    if (event.type === 'append') { try { noticeReleaseAnswer(event.record, options); } catch {} }
+  });
 }
 
-// The CLI command handler for `herdr-boss release ...`.
-// Returns an exit code: 0 done, 1 refused, 3 waiting for the Owner.
-export async function releaseCommand(args, { env = process.env, herdr = null, dataDir = DATA_DIR, config = {} } = {}) {
+const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release publish REPO TAG --approval ID | release status [REPO]';
+
+function parseArgs(args, valueFlags, boolFlags = []) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (valueFlags.includes(token)) {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error(`${token} needs a value. ${USAGE}`);
+      flags[token] = value;
+    } else if (boolFlags.includes(token)) flags[token] = true;
+    else if (token.startsWith('--')) throw new Error(`Unknown option: ${token}. ${USAGE}`);
+    else positional.push(token);
+  }
+  return { flags, positional };
+}
+
+// The handler of `herdr-boss release ...`. It returns the exit code: 0 done, 1 refused, 3 waiting for the Owner.
+export async function releaseCommand(args, { env = process.env, dataDir = DATA_DIR, config = {}, run = null, out = console.log, err = console.error } = {}) {
   const [action, ...rest] = args;
-  if (!action || !['request', 'publish', 'status'].includes(action)) {
-    throw new Error('Usage: release request REPO TAG [--notes FILE] | release publish REPO TAG --approval ID | release status [REPO]');
-  }
-
-  const { ghRunner } = await import('./gh-labels.js');
-  const run = ghRunner({ env });
-
-  if (action === 'request') {
-    const usage = 'Usage: release request REPO TAG [--notes FILE]';
-    const flags = {};
-    const positional = [];
-    for (let i = 0; i < rest.length; i++) {
-      const token = rest[i];
-      if (token === '--notes') {
-        const value = rest[++i];
-        if (!value || value.startsWith('--')) throw new Error(`${usage}. --notes needs a file path.`);
-        flags['--notes'] = value;
-      } else if (token.startsWith('--')) {
-        throw new Error(`Unknown option: ${token}. ${usage}`);
-      } else {
-        positional.push(token);
-      }
-    }
-    if (positional.length !== 2) throw new Error(usage);
-    const [repo, tag] = positional;
-
-    // Check if repo is allowed
-    if (!isRepoAllowed(repo, config)) {
-      throw new Error(REFUSAL_REASONS['repo-not-allowed']);
-    }
-
-    const result = requestRelease({
-      repo, tag,
-      notesFile: flags['--notes'] ?? null,
-      run,
-      dir: dataDir,
-      herdr,
-      requesterPane: env.HERDR_PANE_ID ?? null,
-    });
-
-    if (result.alreadyOpen) {
-      console.log(`An open request already exists for ${repo} ${tag}.`);
-      console.log(`Approval ID: ${result.id}`);
-      return 3;
-    }
-
-    console.log(`Posted as a Mailbox item (approve) ${result.id}`);
-    return 0;
-  }
-
-  if (action === 'publish') {
-    const usage = 'Usage: release publish REPO TAG --approval ID';
-    const flags = {};
-    const positional = [];
-    for (let i = 0; i < rest.length; i++) {
-      const token = rest[i];
-      if (token === '--approval') {
-        const value = rest[++i];
-        if (!value || value.startsWith('--')) throw new Error(`${usage}. --approval needs an ID.`);
-        flags['--approval'] = value;
-      } else if (token.startsWith('--')) {
-        throw new Error(`Unknown option: ${token}. ${usage}`);
-      } else {
-        positional.push(token);
-      }
-    }
-    if (positional.length !== 2 || !flags['--approval']) throw new Error(usage);
-    const [repo, tag] = positional;
-    const approvalId = flags['--approval'];
-
-    // Check if repo is allowed
-    if (!isRepoAllowed(repo, config)) {
-      throw new Error(REFUSAL_REASONS['repo-not-allowed']);
-    }
-
-    const result = publishRelease({
-      repo, tag, approvalId, run, dir: dataDir, herdr, who: env.HERDR_PANE_ID ?? null,
-    });
-
-    if (result.published) {
-      console.log(`Published ${repo} ${tag}.`);
+  if (!['request', 'publish', 'status'].includes(action)) throw new Error(USAGE);
+  if (!run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
+  try {
+    if (action === 'status') {
+      const { positional } = parseArgs(rest, []);
+      if (positional.length > 1) throw new Error(USAGE);
+      out(JSON.stringify(releaseStatus({ repo: positional[0] ?? null, run, dir: dataDir, config }), null, 2));
       return 0;
     }
-    if (result.waiting) {
-      console.error(`Waiting for the Owner: ${result.reason}`);
-      return 3;
+    if (action === 'request') {
+      const { flags, positional } = parseArgs(rest, ['--notes', '--pack'], ['--not-latest']);
+      if (positional.length !== 2) throw new Error(USAGE);
+      const [repo, tag] = positional;
+      const result = requestRelease({ repo, tag, notesFile: flags['--notes'] ?? null, pack: flags['--pack'] ?? null, latest: !flags['--not-latest'], run, dir: dataDir, config, requesterPane: env.HERDR_PANE_ID ?? null });
+      out(result.alreadyOpen ? `An open request exists for ${repo} ${tag}: ${result.id}` : `Posted approval ${result.id} for ${repo} ${tag}.`);
+      if (result.scanOk === false) out('The secret scan failed. The card shows the classes. Publish will refuse until the draft is clean and a new request exists.');
+      return 0;
     }
-    console.error(`Refused: ${result.reason}`);
+    const { flags, positional } = parseArgs(rest, ['--approval']);
+    if (positional.length !== 2 || !flags['--approval']) throw new Error(USAGE);
+    const [repo, tag] = positional;
+    const result = publishRelease({ repo, tag, approvalId: flags['--approval'], run, dir: dataDir, config, who: env.HERDR_PANE_ID ?? null });
+    if (result.published) { out(`Published ${repo} ${tag}.`); return 0; }
+    err(`${result.waiting ? 'Waiting for the Owner' : 'Refused'}: ${result.reason}`);
+    return result.waiting ? 3 : 1;
+  } catch (error) {
+    err(`Refused: ${redactSecrets(error.message)}`);
     return 1;
   }
-
-  if (action === 'status') {
-    const repo = rest[0] ?? null;
-    const result = releaseStatus({ repo, run, dir: dataDir });
-    console.log(JSON.stringify(result, null, 2));
-    return 0;
-  }
-
-  return 1;
 }

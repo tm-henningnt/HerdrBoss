@@ -577,6 +577,52 @@ Run `project paths` to print one line with the slug and path of each registered 
 
 Use `project paths --json` to print an array of objects. Each object has `slug` and `path` fields. The command exits 0 and prints an empty line when no other project is registered. The JSON form prints an empty array in this case.
 
+## Release approval
+
+An orchestrator publishes a GitHub release only after the Owner approves it in the Mailbox. The Owner taps Approve and types no command. The commands use the existing `gh` login of the Owner and never print a token.
+
+WARNING: Never run `gh release edit`, `gh release delete`, or `gh release create` with `--draft=false` for a release of a listed repository. Use `herdr-boss release publish`.
+
+The setting `releases.repos` in `config.json` lists the repositories that the commands accept. Each entry has `name` (`OWNER/REPO`), `project` (the project slug, which names the Mailbox thread), and `kind`. A repository that is not in the list is refused with exit code 1.
+
+| Command | Action |
+|---|---|
+| `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. Print the approval ID. |
+| `herdr-boss release publish REPO TAG --approval ID` | Check the approval, then run `gh release edit TAG --repo REPO --draft=false --latest`. |
+| `herdr-boss release status [REPO]` | Print JSON with the drafts and the last published release of each listed repository, and the open requests. |
+
+The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID.
+
+The request reads the notes from `--notes FILE` when you give it. The scan finds tokens, private keys, inline license blobs, private paths, and hosts of the browser sessions of this machine. A public verification key is allowed. A finding shows only its class. When the scan fails, the item shows the failure and `release publish` refuses.
+
+`release publish` runs `gh release edit` only when all of these checks pass:
+
+1. The item exists for exactly this repository and tag, and it is open.
+2. The latest answer of the Owner is Approve, and it is newer than the request.
+3. The assets have the same names, sizes, and SHA-256 hashes as the card.
+4. The scan of the changelog and the assets passes.
+5. The release is still a draft.
+
+After `gh release edit`, the command reads the release again. It checks that the release is published with the assets of the card. Then it writes one line to `releases/audit.jsonl` in the data directory (time, approval ID, pane, repository, tag) and closes the item with the note `published`. The command never deletes a release or a tag, and never edits the assets of a published release. `--not-latest` on the request makes the card, and the publish, use `--latest=false`.
+
+When the Owner answers the item, Herdr Boss sends one notice to the pane that ran `release request`. For Approve, the notice names the publish command. For Reject, Herdr Boss closes the item, and the notice says that a new request is needed. Nobody polls. After any change to the draft, run `release request` again.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Done. The request is posted or open, the status printed, or the release published. |
+| 1 | Refused. The message names the reason: the repository is not listed, the Owner rejected it, the draft changed, the scan failed, the release is not a draft, or a `gh` command failed. |
+| 3 | `release publish` waits for the Owner. The item has no answer yet. |
+
+Example:
+
+```sh
+herdr-boss release request example-org/example-app v1.0.0 --notes notes.md --pack landing
+herdr-boss release status example-org/example-app
+herdr-boss release publish example-org/example-app v1.0.0 --approval m-example
+```
+
 ## Owner messages
 
 The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The default store is `messages.jsonl` in the data directory. Set `store.messages` to `sqlite` in `config.json` to use `herdr-boss.db`.

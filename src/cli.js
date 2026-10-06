@@ -251,6 +251,9 @@ const USAGE = `herdr-boss <command>
   gh milestone create|list ...  Run safe GitHub milestone commands.
   models                Show allowed worker models.
   say [--reply-to ID] [--action answer|approve|decide|read] [--image FILE] TEXT  Reply to the Owner from the boss pane or an orch pane.
+  release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]  Post a release approval for the Owner.
+  release publish REPO TAG --approval ID  Publish the draft after the Owner approved it. Exit 3 waits for the Owner.
+  release status [REPO]  Print the drafts, the open requests, and the last published release.
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
@@ -629,8 +632,7 @@ async function main() {
   }
   if (cmd === 'release') {
     const { releaseCommand } = await import('./release.js');
-    const { createHerdrRunner } = await import('./kit/workers.js');
-    const code = await releaseCommand(args, { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR, config: cfg });
+    const code = await releaseCommand(args, { env: process.env, dataDir: DATA_DIR, config: cfg });
     if (code) process.exitCode = code;
     return;
   }
