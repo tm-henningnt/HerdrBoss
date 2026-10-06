@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureClaudeHelper } from './factory-claude-install.js';
 import { managedFactory, transportFor, inspect, assertOwned, dockerCall, readHealth, configSafetyError } from './factory-core.js';
 import { factoryFile, readPrivate, writePrivate, updateFleet, assertVersion, effectiveMinimum, VOLUMES } from './factory-store.js';
 import { isHostUnreachable } from './factory-transport.js';
@@ -138,6 +139,7 @@ export async function configureFactory(args, io) {
           factory.version = health.version;
           factory.kitRevision = health.kitRevision;
         });
+        await ensureClaudeHelper(docker, name, io);
       }
       step.status = 'done';
       step.detail = step.name === 'container' && host.codexSandbox !== 'user-namespaces'

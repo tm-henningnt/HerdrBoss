@@ -104,6 +104,8 @@ What you do:
 5. Run `herdr-boss factory configure <name> --resume` if the command stopped.
 6. Run `herdr-boss factory status <name>`.
 
+The configure step also installs the Claude usage helper in the container. It prints `Claude usage helper: installed.` or the reason it did not install. A failure of this step does not change the exit code.
+
 What you should see: the factory has four named volumes and runs in a container. `factory new` stops with exit code 3 and one instruction file when a step waits for you.
 
 If you do not see it: run `factory configure <name> --resume`. A host that does not answer shows `host-unreachable`. See [Something went wrong](trouble.md). Do not call a factory stopped when the host does not answer.
@@ -183,6 +185,8 @@ What you do:
 4. For new tools, run `herdr-boss factory build <name>`. Then run `herdr-boss factory update <name> --tier image`.
 
 The factory Boss writes its notes to `~/work/boss-notes/memory.md`. The update ignores this file. A local change in a tracked file of the checkout stops the update and the error names the file.
+
+The service update also installs or repairs the Claude usage helper. The Fleet card of the factory shows its state.
 
 What you should see: the service answers within 30 seconds. An image update keeps the four volumes and prints the command to start the Boss again.
 

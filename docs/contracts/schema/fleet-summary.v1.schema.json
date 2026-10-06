@@ -190,6 +190,46 @@
       ],
       "additionalProperties": false
     },
+    "claudeUsageHelper": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "const": "installed"
+            },
+            "lastReadingSeconds": {
+              "$ref": "common.v1.schema.json#/$defs/count"
+            }
+          },
+          "required": [
+            "state",
+            "lastReadingSeconds"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "not-installed"
+            },
+            "reason": {
+              "enum": [
+                "setting-off",
+                "different-statusline",
+                "settings-unreadable",
+                "no-reading"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "harnesses": {
       "type": "array",
       "items": {

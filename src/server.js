@@ -291,7 +291,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const localFleetSummary = async () => {
     const healthBody = await health(engine);
     if (healthBody.error) throw new Error('Factory health is unavailable.');
-    return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody,
+    // Only a factory container reports the helper. A native factory never reads a Claude settings file for it.
+    const claudeHelper = await (async () => {
+      try {
+        const { isInsideContainer } = await import('./factory-core.js');
+        if (!isInsideContainer()) return undefined;
+        return (await import('./factory-claude-helper.js')).claudeHelperState({ home: os.homedir() });
+      } catch { return undefined; }
+    })();
+    return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody, claudeHelper,
       ownerItems: readMessages(), logins: await readFleetLogins(), machineSample: latestMachineSample(), spend: fleetSpend(spendSummary({ days: 7 })),
       reviewPacks: (reviewStore.packHeads({ dir: DATA_DIR }).length ? reviewStore.listPacks({ dir: DATA_DIR }) : []).map((pack) => ({ id: `${pack.slug}-${pack.pack}`.slice(0, 64), waitingItems: pack.counts.open || 0 })) });
   };

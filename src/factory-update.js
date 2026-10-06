@@ -8,6 +8,7 @@ import { assertName, factoryFile, readPrivate, writePrivate, updateFleet, VOLUME
 import { restoreBackupInPlace } from './factory-recovery.js';
 import { KIT_MANAGED_PATHS } from './kit/workers.js';
 import { ensureFactoryGitIdentity } from './factory-role.js';
+import { ensureClaudeHelper } from './factory-claude-install.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const OWNER_NAME = /^(?=.{1,31}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/;
@@ -529,6 +530,7 @@ async function updateService(name, factory, docker, owner, flags, initial) {
     const health = await waitForCleanTick(docker, name, initial, timeoutMs);
     updateRecord(name, factory, health);
     fs.rmSync(pendingFile(factory.io.env, name), { force: true });
+    await ensureClaudeHelper(docker, name, factory.io);
     factory.io.stdout.write(`Updated factory ${name} service. Idle panes remain available.\n`);
     return 0;
   } catch (error) { failure = error; }

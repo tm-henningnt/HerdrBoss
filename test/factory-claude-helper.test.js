@@ -121,3 +121,149 @@ test('the image start script and the Dockerfile never touch a Mac path or a logi
   for (const text of [initScript, dockerfile]) assert.equal(/\.credentials|\.claude\.json|auth\.json/.test(text), false);
   assert.match(dockerfile, /ln -s \/home\/factory\/herdr-boss\/bin\/herdr-boss \/usr\/local\/bin\/herdr-boss/);
 });
+
+// FQ2: the state word and the state of the usage helper.
+
+import { claudeHelperWord, claudeHelperState } from '../src/factory-claude-helper.js';
+
+const withConfig = (dir, config) => {
+  fs.mkdirSync(path.join(dir, '.herdr-boss'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.herdr-boss', 'config.json'), JSON.stringify(config));
+};
+const reading = (dir, observedAt) => {
+  const folder = path.join(dir, '.herdr-boss', 'claude-rate-limits');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, 's1.json'), JSON.stringify({ observedAt, rate_limits: {} }));
+};
+
+test('the state word is installed, then unchanged on the second run', () => {
+  const dir = home();
+  assert.equal(claudeHelperWord({ home: dir }), 'installed');
+  const before = fs.readFileSync(settingsFile(dir), 'utf8');
+  assert.equal(claudeHelperWord({ home: dir }), 'unchanged');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude')), ['settings.json']);
+});
+
+test('a foreign statusLine gives the word foreign and no backup and no change', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const own = JSON.stringify({ statusLine: { type: 'command', command: 'my-own-line' } });
+  fs.writeFileSync(settingsFile(dir), own);
+  assert.equal(claudeHelperWord({ home: dir }), 'foreign');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), own);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude')), ['settings.json']);
+});
+
+test('an unreadable settings file gives the word unreadable', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(settingsFile(dir), '{broken');
+  assert.equal(claudeHelperWord({ home: dir }), 'unreadable');
+});
+
+test('the setting off installs nothing and removes nothing foreign', () => {
+  const dir = home();
+  withConfig(dir, { factories: { claudeUsageHelper: false } });
+  assert.equal(claudeHelperWord({ home: dir }), 'off');
+  assert.equal(fs.existsSync(settingsFile(dir)), false);
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const own = JSON.stringify({ statusLine: { type: 'command', command: 'my-own-line' } });
+  fs.writeFileSync(settingsFile(dir), own);
+  assert.equal(claudeHelperWord({ home: dir }), 'off');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), own);
+  fs.writeFileSync(settingsFile(dir), JSON.stringify({ statusLine: ENTRY }));
+  assert.equal(claudeHelperWord({ home: dir }), 'removed');
+});
+
+test('the state has a fixed reason for each case that is not installed', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const dir = home();
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'no-reading' });
+  withConfig(dir, { factories: { claudeUsageHelper: false } });
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'setting-off' });
+  fs.rmSync(path.join(dir, '.herdr-boss'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(settingsFile(dir), JSON.stringify({ statusLine: { type: 'command', command: 'x' } }));
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'different-statusline' });
+  fs.writeFileSync(settingsFile(dir), '{broken');
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'settings-unreadable' });
+});
+
+test('the state is installed with the age of the newest reading', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const dir = home();
+  claudeHelperWord({ home: dir });
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'no-reading' });
+  reading(dir, '2026-10-06T11:59:18Z');
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'installed', lastReadingSeconds: 42 });
+});
+
+// FQ2 rework: the container guard of the command.
+
+import { claudeHelperCommand } from '../src/factory-claude-helper.js';
+import { isInsideContainer } from '../src/factory-core.js';
+
+test('claude-helper --apply refuses outside a container, writes nothing, and exits non-zero', () => {
+  const dir = home();
+  const lines = [];
+  const code = claudeHelperCommand(['--apply'], { home: dir, isContainer: () => false, print: (line) => lines.push(line) });
+  assert.notEqual(code, 0);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /container/);
+  assert.equal(fs.existsSync(path.join(dir, '.claude')), false);
+});
+
+test('claude-helper --apply runs inside a container and prints the state word', () => {
+  const dir = home();
+  const lines = [];
+  assert.equal(claudeHelperCommand(['--apply'], { home: dir, isContainer: () => true, print: (line) => lines.push(line) }), 0);
+  assert.deepEqual(lines, ['installed']);
+  assert.deepEqual(read(dir), { statusLine: ENTRY });
+});
+
+test('claude-helper without --apply is a usage error', () => {
+  assert.throws(() => claudeHelperCommand([], { home: home(), isContainer: () => true }), /--apply/);
+});
+
+test('the real command under a temporary home writes nothing outside a container', { skip: isInsideContainer() }, () => {
+  const dir = home();
+  const cli = new URL('../src/cli.js', import.meta.url).pathname;
+  const run = spawnSync(process.execPath, [cli, 'claude-helper', '--apply'], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, HERDR_BOSS_DIR: path.join(dir, 'data') } });
+  assert.notEqual(run.status, 0);
+  assert.equal(fs.existsSync(path.join(dir, '.claude')), false);
+});
+
+// FQ2 rework: an own entry is any entry that runs herdr-boss claude-statusline.
+
+test('an own entry with an extra key counts as ours: unchanged when on, removed whole when off', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const own = { statusLine: { ...ENTRY, padding: 2 }, theme: 'dark' };
+  fs.writeFileSync(settingsFile(dir), JSON.stringify(own));
+  assert.equal(applyClaudeHelper({ home: dir, enabled: true }).state, 'unchanged');
+  assert.deepEqual(read(dir), own);
+  assert.equal(applyClaudeHelper({ home: dir, enabled: false }).state, 'removed');
+  assert.deepEqual(read(dir), { theme: 'dark' });
+});
+
+test('an older own entry with another path prefix is repaired to the current command', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(settingsFile(dir), JSON.stringify({ statusLine: { type: 'command', command: '/opt/old/bin/herdr-boss claude-statusline' }, theme: 'dark' }));
+  assert.equal(applyClaudeHelper({ home: dir, enabled: true }).state, 'installed');
+  assert.deepEqual(read(dir), { statusLine: ENTRY, theme: 'dark' });
+  assert.equal(applyClaudeHelper({ home: dir, enabled: true }).state, 'unchanged');
+});
+
+test('a foreign command that only contains the word statusline stays foreign', () => {
+  for (const command of ['my-statusline', 'herdr-boss claude-statusline-x', 'echo herdr-boss claude-statuslines', 'other-tool claude-statusline']) {
+    const dir = home();
+    fs.mkdirSync(path.join(dir, '.claude'));
+    const text = JSON.stringify({ statusLine: { type: 'command', command } });
+    fs.writeFileSync(settingsFile(dir), text);
+    assert.equal(applyClaudeHelper({ home: dir, enabled: true }).state, 'refused', command);
+    assert.equal(applyClaudeHelper({ home: dir, enabled: false }).state, 'unchanged', command);
+    assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), text);
+  }
+});
