@@ -451,16 +451,41 @@ test('the pack note uses its own rev and returns 409 with the current note', asy
   const { base } = await start(t);
   const route = '/api/reviews/s-note-pack/note-pack/note';
   const put = (body) => raw(base, 'PUT', route, { headers: JSON_HEADERS, body: json(body) });
-  const first = await put({ note: 'Fix the dark cart, then ship.', rev: 0 });
+  const first = await put({ note: 'Fix the dark cart, then ship.', rev: 0, version: 1 });
   assert.equal(first.status, 200, first.text);
   assert.deepEqual(JSON.parse(first.text), { ok: true, note: 'Fix the dark cart, then ship.', rev: 1 });
-  const stale = await put({ note: 'Other text.', rev: 0 });
+  const stale = await put({ note: 'Other text.', rev: 0, version: 1 });
   assert.equal(stale.status, 409);
   assert.deepEqual(JSON.parse(stale.text).current, { note: 'Fix the dark cart, then ship.', rev: 1 });
   assert.equal((await put({ note: 5, rev: 1 })).status, 400);
   assert.equal((await put({ note: 'x', rev: 1, extra: 1 })).status, 400);
   assert.equal((await put({ note: 'x' })).status, 400);
   assert.equal(packState('note-pack').note, 'Fix the dark cart, then ship.');
+});
+
+test('a note of an older version is refused with the current version note', async (t) => {
+  publish('version-note-pack');
+  const { base } = await start(t);
+  const route = '/api/reviews/s-version-note-pack/version-note-pack/note';
+  const put = (body) => raw(base, 'PUT', route, { headers: JSON_HEADERS, body: json(body) });
+  assert.equal((await put({ note: 'Note for v1.', rev: 0, version: 1 })).status, 200);
+  publish('version-note-pack');
+  const stale = await put({ note: 'Typed against v1 text.', rev: 0, version: 1 });
+  assert.equal(stale.status, 409, stale.text);
+  const body = JSON.parse(stale.text);
+  assert.equal(body.conflict, true);
+  assert.equal(body.staleVersion, true);
+  assert.equal(body.current.note, '', 'the current note is empty');
+  assert.equal(packState('version-note-pack').note, '', 'the v2 note is unchanged');
+  assert.equal(store.getPack({ dir: dataDir, slug: 's-version-note-pack', pack: 'version-note-pack', version: 1 }).note, 'Note for v1.', 'the v1 note stays');
+  // An old page sends no version. The server writes nothing.
+  const noVersion = await put({ note: 'No version.', rev: 0 });
+  assert.equal(noVersion.status, 409);
+  assert.equal(JSON.parse(noVersion.text).staleVersion, true);
+  assert.equal(packState('version-note-pack').note, '', 'no note was written');
+  // The current version still takes a note.
+  assert.equal((await put({ note: 'Note for v2.', rev: 0, version: 2 })).status, 200);
+  assert.equal(packState('version-note-pack').note, 'Note for v2.');
 });
 
 test('a submit stores the result once and a second submit returns 409 with the first result', async (t) => {
@@ -912,7 +937,7 @@ test('an answer, a note, and a submit push a review event with ids only', async 
   const answer = await live.next((event) => event.item === 'cart-themes');
   assert.deepEqual(answer, { slug: 's-event-pack', pack: 'event-pack', version: 1, item: 'cart-themes', rev: 1 }, 'no note text, no decision');
 
-  assert.equal((await raw(base, 'PUT', '/api/reviews/s-event-pack/event-pack/note', { headers: JSON_HEADERS, body: json({ note: 'Fix it.', rev: 0 }) })).status, 200);
+  assert.equal((await raw(base, 'PUT', '/api/reviews/s-event-pack/event-pack/note', { headers: JSON_HEADERS, body: json({ note: 'Fix it.', rev: 0, version: 1 }) })).status, 200);
   assert.deepEqual(await live.next((event) => event.note), { slug: 's-event-pack', pack: 'event-pack', version: 1, note: true, rev: 1 });
 
   // A refused write pushes nothing.

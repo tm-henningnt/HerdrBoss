@@ -418,9 +418,19 @@ test('the pack note saves with its rev; a 409 that holds my own note counts as s
   queue.retryNow();
   await drain(20);
   assert.equal(fetch.calls.at(-1).url, '/api/reviews/shop/checkout/note');
-  assert.deepEqual(fetch.calls.at(-1).body, { note: 'Ship it.', rev: 2 });
+  assert.deepEqual(fetch.calls.at(-1).body, { note: 'Ship it.', rev: 2, version: 1 });
   assert.equal(queue.noteStatus(KEY).kind, 'saved');
   assert.equal(queue.conflicts(KEY).length, 0);
+});
+
+test('the note PUT carries the page version, and a version 409 drops the note as changed', async () => {
+  const { queue, fetch } = setup({ replies: [{ status: 409, body: { conflict: true, staleVersion: true, current: { note: '', rev: 0 } } }] });
+  queue.enqueue({ ...ROUTE, kind: 'note', patch: { note: 'Typed against v1 text.' }, rev: 0 });
+  await drain(20);
+  assert.deepEqual(fetch.calls.at(-1).body, { note: 'Typed against v1 text.', rev: 0, version: 1 }, 'the note PUT carries the version that the page showed');
+  assert.equal(queue.noteStatus(KEY).kind, 'changed', 'a note of an older version is dropped with the visible reason');
+  assert.equal(queue.conflicts(KEY).length, 0, 'no Keep mine or Use theirs for a note of an older version');
+  assert.equal(queue.unsavedCount(KEY), 1);
 });
 
 // ---------- Review fixes ----------

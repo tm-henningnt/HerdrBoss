@@ -419,13 +419,14 @@ function loadPack(db, slug, pack) {
 }
 
 // The pack note of one version. A legacy note came from an unknown older version: it shows read-only and is never part
-// of a result. A version with no row has an empty note and note rev 0.
+// of a result. A version with no row has an empty note, note rev 0, and the nearest earlier note as its read-only prior.
 function readNote(db, slug, pack, version) {
   const row = db.prepare('SELECT note, note_rev, legacy FROM review_notes WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, version);
-  if (!row) return { note: '', noteRev: 0, legacy: false, prior: null };
+  const earlier = db.prepare("SELECT version, note FROM review_notes WHERE slug = ? AND pack = ? AND version < ? AND note <> '' AND legacy = 0 ORDER BY version DESC LIMIT 1").get(slug, pack, version);
+  const prior = earlier ? { version: earlier.version, text: earlier.note } : null;
+  if (!row) return { note: '', noteRev: 0, legacy: false, prior };
   if (row.legacy) return { note: '', noteRev: 0, legacy: true, prior: { version: null, text: row.note } };
-  const earlier = row.note ? null : db.prepare("SELECT version, note FROM review_notes WHERE slug = ? AND pack = ? AND version < ? AND note <> '' AND legacy = 0 ORDER BY version DESC LIMIT 1").get(slug, pack, version);
-  return { note: row.note, noteRev: row.note_rev, legacy: false, prior: earlier ? { version: earlier.version, text: earlier.note } : null };
+  return { note: row.note, noteRev: row.note_rev, legacy: false, prior: row.note ? null : prior };
 }
 
 // Write the note of one version. The caller checks the rev. It returns the new rev.
@@ -819,8 +820,9 @@ export function putAnswer({ dir, now, slug, pack, item, patch } = {}) {
   });
 }
 
-// Change the pack note. `rev` is the note rev that the client saw.
-export function putPackNote({ dir, now, slug, pack, note, rev } = {}) {
+// Change the pack note of one version. `rev` is the note rev that the client saw, and `version` is the pack version that
+// the page showed. A note belongs to one version: a request for another version writes nothing and returns a conflict.
+export function putPackNote({ dir, now, slug, pack, note, rev, version } = {}) {
   checkName(slug);
   checkName(pack, 'slug', 'The pack ID');
   if (!Number.isInteger(rev) || rev < 0) throw invalid('The change needs the rev that the client saw.');
@@ -829,6 +831,8 @@ export function putPackNote({ dir, now, slug, pack, note, rev } = {}) {
   return transaction(open(dir), (db) => {
     const row = requireOpenPack(db, slug, pack);
     const current = readNote(db, slug, pack, row.current_version);
+    // A request without a version comes from an old page. It writes nothing, like a note of an older version.
+    if (version !== row.current_version) return { ok: false, conflict: true, staleVersion: true, current: { note: current.note, rev: current.noteRev, version: row.current_version } };
     if (current.noteRev !== rev) return { ok: false, conflict: true, current: { note: current.note, rev: current.noteRev } };
     writeNote(db, slug, pack, row.current_version, note, rev + 1, at);
     db.prepare('UPDATE review_packs SET updated_at = ? WHERE slug = ? AND pack = ?').run(at, slug, pack);

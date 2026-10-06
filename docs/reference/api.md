@@ -91,12 +91,14 @@ A request with a matching `If-None-Match` gets `304` with no body. A video respo
 | Route | Body | Answer |
 |---|---|---|
 | `PUT /api/reviews/<slug>/<pack>/items/<item>` | `rev` and any of `decision`, `choice`, `rating`, `live`, `viewed`, `note`, `pins`, `checks`, `opId`, `keep` | `200` with the saved answer. |
-| `PUT /api/reviews/<slug>/<pack>/note` | `note`, `rev` | `200` with `note` and the new `rev`. |
+| `PUT /api/reviews/<slug>/<pack>/note` | `note`, `rev`, and the pack `version` that the page showed | `200` with `note` and the new `rev`. |
 | `POST /api/reviews/<slug>/<pack>/submit` | `verdict` (`accept`, `accept-with-changes`, or `deny`), optional `note` | `200` with the result and `delivery`. |
 
 A new pack version compares the content hash of each item with the hash of its answer. The hash covers the text, the evidence, and the files of the item. When the hash is different, the item state is `changed`. The answer shows no verdict, and `answer.previous` holds the earlier verdict and its time in `at`. An item with no earlier verdict stays `open`. `keep: true` restores the earlier verdict of a `changed` item. The server refuses `keep` for an item that did not change, and for an earlier verdict that does not fit the changed item. A new answer to the item replaces the mark. A section state is computed from its items and is never stored. A section with a `changed` item is `changed`.
 
 `rev` is the revision that the client last saw. Use `0` for an item with no answer. The server changes only the fields in the body. It accepts the change only when `rev` equals the stored revision. A stale `rev` gets `409` with `conflict: true` and `current`, the stored answer or the stored note. A retry with the same `opId` gets `200` and `duplicate: true`.
+
+A pack note also carries the pack `version` that the page showed. A note belongs to one version. A request for another version, or without a version, gets `409` with `conflict: true`, `staleVersion: true`, and `current`. It writes nothing.
 
 The page gives each item change a new `opId`. It sends the same `opId` again when it retries the change. The note route has no `opId`. When a retried note gets `409` and `current.note` is the sent text, the page counts the note as saved.
 
@@ -115,8 +117,8 @@ An error text never holds an absolute path.
 
 A submit stores the result with the pack, in the table `review_results`. The result has two forms. Both forms hold ids, states, and the Owner's notes. They hold no file content and no image.
 
-- **JSON.** The schema is `herdr-boss.review-result/1`. It holds the pack ID, the slug, the title, the version, the submit time, the verdict, the pack note, the state of each section, and one entry for each item. An item entry has the state, the decision, the choice, the rating, the live check, the note, the pins, `stale` for an item that changed after the answer, and `was` for an item in the state `changed`. `was` holds the earlier verdict and its time. The JSON has at most 256 KB. A longer result first shortens the notes, then leaves out items. The field `truncated` names the cut.
-- **Markdown.** The summary starts with the counts. Then it lists the denied items and the items that need a live check, with the Owner's notes quoted. The notes, the accepted items, and the open items follow. The Markdown has at most 64 KB. A longer summary ends with `Cut: the summary is longer than 64 KB.`
+- **JSON.** The schema is `herdr-boss.review-result/1`. It holds the pack ID, the slug, the title, the version, the submit time, the verdict, the pack note, the state of each section, and one entry for each item. An item entry has the state, the decision, the choice, the rating, the live check, the note, the pins, `stale` for an item that changed after the answer, `noteStale` for a note that such an item keeps from the earlier version, and `was` for an item in the state `changed`. `was` holds the earlier verdict and its time. The JSON has at most 256 KB. A longer result first shortens the notes, then leaves out items. The field `truncated` names the cut.
+- **Markdown.** The summary starts with the counts. Then it lists the denied items and the items that need a live check, with the Owner's notes quoted. A note that a changed item keeps is marked `(note from the earlier version)`. The notes, the accepted items, and the open items follow. The Markdown has at most 64 KB. A longer summary ends with `Cut: the summary is longer than 64 KB.`
 
 The verdict is `accept` (**Accept pack**), `accept-with-changes` (**Accept with changes**), or `deny` (**Deny pack**). The summary screen proposes one from the counts. The Owner chooses the verdict.
 
@@ -129,7 +131,7 @@ Needs live check: <item>: <note>
 Fetch the full result: herdr-boss review result <pack id> --version <version> --format json|md
 ```
 
-Each line except the last has at most 200 characters. A note is one line: a line break or a control character becomes a space, so a note cannot add a line to the prompt. The service removes a token or a password from a note before it queues the message. A list that does not fit ends with `… N more`.
+Each line except the last has at most 200 characters. A note is one line: a line break or a control character becomes a space, so a note cannot add a line to the prompt. A note that a changed item keeps ends with `(note from the earlier version)`. The service removes a token or a password from a note before it queues the message. A list that does not fit ends with `… N more`.
 
 The delivery state is `queued`, `sent`, or `failed`. A failed message is sent again at each tick until it has 4 attempts. `delivery` in the API has `status`, `attempts`, `error`, and `retry`. The Reviews page and the Mailbox thread show the state.
 

@@ -44,6 +44,9 @@ function multiLine(text) {
 
 const quote = (text, indent = '') => multiLine(text).split('\n').map((line) => `${indent}> ${line}`.trimEnd()).join('\n');
 
+// The note text of a result item. A note that a changed item keeps from the earlier version is marked as such.
+const noteText = (item) => `${item.note}${item.noteStale ? ' (note from the earlier version)' : ''}`;
+
 // The verdict that the summary screen proposes from the counts. The Owner can choose another one.
 export function proposeVerdict(counts = {}) {
   const { items = 0, accepted = 0, denied = 0, live = 0, noteOnly = 0, open = 0 } = counts;
@@ -76,7 +79,11 @@ export function buildResult(pack, verdict, note, at) {
       }
       if (answer.rating !== null) out.rating = answer.rating;
       if (answer.live) out.live = answer.live;
-      if (answer.note) out.note = answer.note;
+      if (answer.note) {
+        out.note = answer.note;
+        // A stale item keeps its note, but the note answers the earlier text. Mark it for the reader.
+        if (item.stale) out.noteStale = true;
+      }
       if (answer.pins.length) out.pins = answer.pins;
       if (Object.keys(answer.checks).length) out.checks = answer.checks;
     }
@@ -174,7 +181,7 @@ export function resultMarkdown(result, titles = new Map()) {
     for (const item of items) lines.push(render(item));
     lines.push('');
   };
-  const noted = (head, item, extra = '') => `- ${head}${extra}${item.note ? `\n${quote(item.note, '  ')}` : ''}`;
+  const noted = (head, item, extra = '') => `- ${head}${extra}${item.note ? `\n${quote(noteText(item), '  ')}` : ''}`;
   const items = result.items ?? [];
   group('Denied', items.filter((item) => item.state === 'denied'), (item) => noted(name(item), item, item.pins?.length ? ` (${plural(item.pins.length, 'pin')})` : ''));
   group('Needs live check', items.filter((item) => item.state === 'live'), (item) => noted(name(item), item));
@@ -204,7 +211,7 @@ export function promptText(result) {
   const one = (value, max) => singleLine(redactSecrets(String(value ?? '')), max);
   const header = cutText(`[owner] Review of ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}: ${verdictLabel(result.verdict)}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, notes: ${counts.noteOnly ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
   const footer = `Fetch the full result: herdr-boss review result ${result.pack} --version ${result.version} --format json|md`;
-  const itemLine = (label, item) => cutText(`${label}: ${one(item.id, PROMPT_ID_MAX)}${item.note ? `: ${one(item.note, PROMPT_LINE_MAX)}` : ''}`, PROMPT_LINE_MAX);
+  const itemLine = (label, item) => cutText(`${label}: ${one(item.id, PROMPT_ID_MAX)}${item.note ? `: ${one(noteText(item), PROMPT_LINE_MAX)}` : ''}`, PROMPT_LINE_MAX);
   const candidates = [
     ...(result.note ? [cutText(`Pack note: ${one(result.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)] : []),
     ...(result.items ?? []).filter((item) => item.state === 'denied').map((item) => itemLine('Denied', item)),
@@ -232,7 +239,7 @@ export function plannerPromptText(result) {
   const tag = result.session ? (result.round ? `, round ${result.round} (session ${one(result.session, 64)})` : `, session ${one(result.session, 64)}`) : '';
   const header = cutText(`[owner] Review result for ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}${tag}: ${verdictLabel(result.verdict)}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
   const items = result.items ?? [];
-  const noteOf = (item) => (item.note ? ` Note: ${one(item.note, PROMPT_LINE_MAX)}` : '');
+  const noteOf = (item) => (item.note ? ` Note: ${one(noteText(item), PROMPT_LINE_MAX)}` : '');
   const sections = [];
   if (result.note) sections.push({ title: null, lines: [cutText(`Pack note: ${one(result.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)] });
   const choices = items.filter((item) => item.choice !== undefined && item.choice !== null);
@@ -240,7 +247,7 @@ export function plannerPromptText(result) {
   const choiceIds = new Set(choices.map((item) => item.id));
   sections.push({ title: 'Denied:', lines: items.filter((item) => item.state === 'denied').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
   sections.push({ title: 'Needs live check:', lines: items.filter((item) => item.state === 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
-  sections.push({ title: 'Notes:', lines: items.filter((item) => item.note && !choiceIds.has(item.id) && !item.skipped && item.state !== 'denied' && item.state !== 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}: ${one(item.note, PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)) });
+  sections.push({ title: 'Notes:', lines: items.filter((item) => item.note && !choiceIds.has(item.id) && !item.skipped && item.state !== 'denied' && item.state !== 'live').map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}: ${one(noteText(item), PROMPT_LINE_MAX)}`, PROMPT_LINE_MAX)) });
   sections.push({ title: 'Skipped (ask later):', lines: items.filter((item) => item.skipped).map((item) => cutText(`- ${one(item.id, PROMPT_ID_MAX)}.${noteOf(item)}`, PROMPT_LINE_MAX)) });
   const openItems = result.openItems ?? items.filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id);
   sections.push({ title: 'Open items:', lines: openItems.map((id) => cutText(`- ${one(id, PROMPT_ID_MAX)}`, PROMPT_LINE_MAX)) });

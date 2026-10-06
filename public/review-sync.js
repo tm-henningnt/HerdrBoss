@@ -370,7 +370,7 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
 
   async function send(P, op) {
     const rev = revOf(P, op);
-    if (op.kind === 'note') return { reply: await request(noteUrl(P), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: op.patch.note, rev }) }), rev };
+    if (op.kind === 'note') return { reply: await request(noteUrl(P), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: op.patch.note, rev, version: op.version }) }), rev };
     return { reply: await request(itemUrl(P, op.item), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...op.patch, rev, opId: op.opId }) }), rev };
   }
 
@@ -436,6 +436,10 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
           else saved(P, op, body?.answer?.rev ?? rev + 1, { answer: body?.answer ?? null });
         } else if (reply.status === 409 && body?.code === 'closed') {
           dropAll(P, errorText(reply, 'The pack is closed. The change cannot be saved.'));
+        } else if (reply.status === 409 && op.kind === 'note' && body?.staleVersion) {
+          // The pack published a new version while the note waited. A note belongs to one version: drop it with the reason.
+          P.ops = P.ops.filter((entry) => entry !== op);
+          P.messages.set(op.id, unsaved(op, 'changed', '', false));
         } else if (reply.status === 409 && op.kind === 'note' && body?.current && body.current.note === op.patch.note) {
           // A retry after a lost response: the server has my note already.
           saved(P, op, body.current.rev, { note: body.current.note, rev: body.current.rev });

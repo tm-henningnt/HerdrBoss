@@ -392,10 +392,10 @@ test('the pack note uses rev too', (t) => {
   const dir = dataDir(t);
   publish(dir, folder());
   assert.equal(getPack(where(dir)).note, '');
-  const first = putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0 });
+  const first = putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0, version: 1 });
   assert.equal(first.ok, true);
   assert.equal(first.rev, 1);
-  const stale = putPackNote({ ...where(dir), note: 'Other.', rev: 0 });
+  const stale = putPackNote({ ...where(dir), note: 'Other.', rev: 0, version: 1 });
   assert.equal(stale.conflict, true);
   assert.equal(stale.current.note, 'Fix the dark cart.');
   assert.equal(getPack(where(dir)).noteRev, 1);
@@ -405,7 +405,7 @@ test('the pack note uses rev too', (t) => {
 test('a new version starts with an empty pack note, and its submit carries no note', (t) => {
   const dir = dataDir(t);
   publish(dir, folder());
-  putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0, version: 1 });
   assert.equal(getPack(where(dir)).note, 'Fix the dark cart.');
 
   publish(dir, folder({ tag: 9 }));
@@ -422,17 +422,52 @@ test('a new version starts with an empty pack note, and its submit carries no no
 test('a note belongs to one version: the v2 note shows in the v2 result only', (t) => {
   const dir = dataDir(t);
   publish(dir, folder());
-  putPackNote({ ...where(dir), note: 'First round.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'First round.', rev: 0, version: 1 });
   const first = submitPack({ ...where(dir), verdict: 'accept' }).result;
   assert.equal(first.note, 'First round.');
 
   publish(dir, folder({ tag: 9 }));
-  putPackNote({ ...where(dir), note: 'Second round.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'Second round.', rev: 0, version: 2 });
   const second = submitPack({ ...where(dir), verdict: 'deny' }).result;
   assert.equal(second.note, 'Second round.');
   assert.equal(getResult({ ...where(dir), version: 1 }).note, 'First round.', 'v1 keeps its own note');
   assert.equal(getPack({ ...where(dir), version: 1 }).note, 'First round.', 'the v1 page shows the v1 note');
   assert.equal(getPack(where(dir)).note, 'Second round.');
+});
+
+// RV4 rework F1: the note PUT carries the version that the page showed, so a note typed on v1 never lands on v2.
+test('a note typed on v1 is refused after a new version is published', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  putPackNote({ ...where(dir), note: 'Note for v1.', rev: 0, version: 1 });
+  publish(dir, folder({ tag: 9 }));
+  const refused = putPackNote({ ...where(dir), note: 'Typed against v1 text.', rev: 0, version: 1 });
+  assert.equal(refused.conflict, true, 'the old version note is refused');
+  assert.equal(refused.staleVersion, true);
+  assert.equal(refused.current.note, '', 'the current note stays empty');
+  assert.equal(refused.current.version, 2, 'the conflict names the current version');
+  assert.equal(getPack({ ...where(dir), version: 1 }).note, 'Note for v1.', 'the v1 note stays');
+  assert.equal(getPack(where(dir)).note, '', 'the v2 note stays empty');
+  // A request from an old page holds no version. It writes nothing.
+  const noVersion = putPackNote({ ...where(dir), note: 'No version.', rev: 0 });
+  assert.equal(noVersion.conflict, true);
+  assert.equal(noVersion.staleVersion, true);
+  assert.equal(getPack(where(dir)).note, '', 'no note was written');
+});
+
+// RV4 rework F3: a version without its own note row shows the nearest earlier note read-only.
+test('a version with no note row shows the nearest earlier note read-only', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  putPackNote({ ...where(dir), note: 'Note from v1.', rev: 0, version: 1 });
+  publish(dir, folder({ tag: 9 }));
+  const pack = getPack(where(dir));
+  assert.equal(pack.note, '', 'the current note is empty');
+  assert.deepEqual(pack.priorNote, { version: 1, text: 'Note from v1.' }, 'the earlier note shows read-only');
+  const { result } = submitPack({ ...where(dir), verdict: 'accept' });
+  assert.equal(result.note, '');
+  assert.equal(result.priorNote, undefined, 'the result holds no prior note');
+  assert.ok(!JSON.stringify(result).includes('Note from v1.'), 'the result holds no text of the earlier note');
 });
 
 test('a removed item contributes no note to a later result', (t) => {
@@ -467,7 +502,7 @@ test('a pack is submitted once, and a second submit after a new version is allow
   setMailId({ ...where(dir), mailId: 'mail-1' });
   answer(dir, 'cart-themes', { decision: 'deny', note: 'The total is hard to read.' });
   answer(dir, 'pay-button', { choice: 'b' });
-  putPackNote({ ...where(dir), note: 'Good direction.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'Good direction.', rev: 0, version: 1 });
 
   const submitted = submitPack({ ...where(dir), verdict: 'accept-with-changes', note: 'Fix the dark cart.', messageId: 'msg-1' });
   assert.equal(submitted.ok, true);

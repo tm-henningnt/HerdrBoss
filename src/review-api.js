@@ -212,9 +212,13 @@ export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, 
 
   async function putNote(req, slug, pack) {
     const body = await readJson(req, NOTE_BODY_LIMIT);
-    onlyFields(body, ['note', 'rev']);
-    const saved = store.putPackNote({ ...where(slug, pack), now: now(), note: body.note, rev: body.rev });
-    if (saved.conflict) return { status: 409, body: { error: 'The note changed on another device. The current note is in this response.', conflict: true, current: saved.current } };
+    onlyFields(body, ['note', 'rev', 'version']);
+    const saved = store.putPackNote({ ...where(slug, pack), now: now(), note: body.note, rev: body.rev, version: body.version });
+    if (saved.conflict) {
+      // A note of an older version, or of an old page without a version, gets its own 409: the page drops the note.
+      if (saved.staleVersion) return { status: 409, body: { error: 'The pack has a new version. The note belongs to the version that showed it.', conflict: true, staleVersion: true, current: saved.current } };
+      return { status: 409, body: { error: 'The note changed on another device. The current note is in this response.', conflict: true, current: saved.current } };
+    }
     notify(slug, pack, { note: true, rev: saved.rev });
     return { status: 200, body: saved };
   }

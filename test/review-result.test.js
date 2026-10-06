@@ -19,7 +19,7 @@ const {
 } = await import('../src/review-store.js');
 const {
   VERDICTS, VERDICT_LABEL, RESULT_JSON_MAX, RESULT_MARKDOWN_MAX, PROMPT_MAX, PROMPT_LINE_MAX,
-  proposeVerdict, singleLine, boundResult, resultMarkdown, promptText,
+  proposeVerdict, singleLine, boundResult, resultMarkdown, promptText, plannerPromptText,
 } = await import('../src/review-result.js');
 const {
   readMessages, postReview, postReviewResult, closeSubmittedReview, reviewResultDelivery, deliverQueued, ownerPromptText, MAX_DELIVERY_ATTEMPTS,
@@ -124,7 +124,7 @@ test('the submit stores the result JSON with the decisions, and it holds no file
   answer(dir, 'pay-button', { choice: 'b', note: 'Use the new one.' });
   answer(dir, 'live-form', { live: 'pending' });
   answer(dir, 'release-notes', { note: 'Fine.' });
-  putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0, version: 1 });
   const submitted = submitPack({ ...where(dir), verdict: 'accept-with-changes' });
   assert.equal(submitted.ok, true);
   const result = submitted.result;
@@ -166,6 +166,30 @@ test('a changed item carries the stale flag in the result', (t) => {
   assert.equal(item.state, 'changed');
   assert.equal(item.was.decision, 'accept');
   assert.equal(result.version, 2);
+});
+
+test('a stale item note is marked as from the earlier version in the JSON, the Markdown, and the planner prompt', (t) => {
+  const dir = dataDir(t);
+  publishVersion({ dir, now: T0, slug: 'shop', folder: folder(), publishedBy: 'orch' });
+  answer(dir, 'error-copy', { decision: 'accept', note: 'OLD-ITEM-NOTE-copy' });
+  answer(dir, 'cart-themes', { decision: 'accept', note: 'KEPT-ITEM-NOTE' });
+  const source = folder();
+  const manifest = JSON.parse(fs.readFileSync(path.join(source, 'manifest.json'), 'utf8'));
+  manifest.sections[1].items[0].text = 'The card was declined. Try again.';
+  fs.writeFileSync(path.join(source, 'manifest.json'), JSON.stringify(manifest));
+  publishVersion({ dir, now: T0 + 1000, slug: 'shop', folder: source, publishedBy: 'orch' });
+  const { result } = submitPack({ ...where(dir), verdict: 'accept-with-changes' });
+  const changed = result.items.find((entry) => entry.id === 'error-copy');
+  assert.equal(changed.note, 'OLD-ITEM-NOTE-copy');
+  assert.equal(changed.noteStale, true, 'a stale item note is marked in the JSON');
+  const kept = result.items.find((entry) => entry.id === 'cart-themes');
+  assert.equal(kept.note, 'KEPT-ITEM-NOTE');
+  assert.equal(kept.noteStale, undefined, 'an unchanged item keeps a plain note');
+  const markdown = resultMarkdown(result);
+  assert.ok(markdown.includes('OLD-ITEM-NOTE-copy'), 'the changed note is in the Markdown');
+  assert.ok(markdown.includes('(note from the earlier version)'), 'the Markdown marks the stale note');
+  assert.ok(!markdown.includes('KEPT-ITEM-NOTE (note from the earlier version)'), 'the kept note is plain in the Markdown');
+  assert.ok(plannerPromptText(result).includes('OLD-ITEM-NOTE-copy (note from the earlier version)'), 'the planner prompt marks the stale note');
 });
 
 test('the stored record holds the JSON and the Markdown, and a second submit of a version is refused', (t) => {
@@ -213,7 +237,7 @@ test('the Markdown lists the counts first, then denied and needs-live-check with
   answer(dir, 'live-form', { live: 'pending', note: 'Try the form on the phone.' });
   answer(dir, 'cart-themes', { decision: 'deny', note: 'Too faint in dark.\nAlso the border.' });
   answer(dir, 'error-copy', { decision: 'accept' });
-  putPackNote({ ...where(dir), note: 'Fix the dark cart first.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'Fix the dark cart first.', rev: 0, version: 1 });
   const { result } = submitPack({ ...where(dir), verdict: 'accept-with-changes' });
   const markdown = getResultRecord(where(dir)).markdown;
   assert.equal(markdown, resultMarkdown(result));
@@ -263,6 +287,11 @@ test('the prompt names the pack, the verdict, the counts, the denied items first
   assert.equal(lines.at(-1), 'Fetch the full result: herdr-boss review result checkout-redesign --version 2 --format json|md');
 });
 
+test('the owner prompt marks a stale note as from the earlier version', () => {
+  const text = promptText(promptResult({ items: [{ id: 'cart-themes', title: 'Cart', state: 'denied', decision: 'deny', note: 'OLD-NOTE', noteStale: true }] }));
+  assert.ok(text.includes('OLD-NOTE (note from the earlier version)'));
+});
+
 test('the prompt is cut at 1500 characters, keeps the fetch command, and each line is cut at 200', () => {
   const items = Array.from({ length: 80 }, (_, index) => ({ id: `item-${index}`, title: `T${index}`, state: 'denied', decision: 'deny', note: 'y'.repeat(600) }));
   const text = promptText(promptResult({ items, counts: { items: 80, accepted: 0, denied: 80, live: 0, noteOnly: 0, open: 0 } }));
@@ -307,7 +336,7 @@ test('the prompt holds no secret from a note', () => {
 
 test('the v2 result and its delivery hold no text of the v1 pack note', (t) => {
   const { dir, mail } = setup(t);
-  putPackNote({ ...where(dir), note: 'First round note.', rev: 0 });
+  putPackNote({ ...where(dir), note: 'First round note.', rev: 0, version: 1 });
   publishVersion({ dir, now: T0 + 1000, slug: 'shop', folder: folder(), publishedBy: 'orch' });
   const { result } = submitPack({ ...where(dir), verdict: 'accept' });
   assert.equal(result.version, 2);
