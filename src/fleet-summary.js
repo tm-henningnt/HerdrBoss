@@ -32,7 +32,14 @@ function pendingLogins(logins, mailbox, name) {
   });
 }
 
-export function buildFleetSummary({ settings, state = {}, health, ownerItems = [], reviewPacks = [], spend = [], logins = [], kind = null, machineSample = null, now = Date.now() }) {
+const HELPER_REASONS = ['setting-off', 'different-statusline', 'settings-unreadable', 'no-reading'];
+function publicClaudeHelper(value) {
+  if (value?.state === 'installed' && nullableCount(value.lastReadingSeconds) !== null) return { state: 'installed', lastReadingSeconds: value.lastReadingSeconds };
+  if (value?.state === 'not-installed' && HELPER_REASONS.includes(value.reason)) return { state: 'not-installed', reason: value.reason };
+  return null;
+}
+
+export function buildFleetSummary({ settings, state = {}, health, ownerItems = [], reviewPacks = [], spend = [], logins = [], claudeHelper = null, kind = null, machineSample = null, now = Date.now() }) {
   const machine = state.machine || {};
   const rawMailbox = Array.isArray(ownerItems) ? ownerItems : [];
   const publicLogins = (Array.isArray(logins) ? logins : []).filter((row) => row && typeof row.harness === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(row.harness))
@@ -90,6 +97,7 @@ export function buildFleetSummary({ settings, state = {}, health, ownerItems = [
       memoryFreePercent: number(machine.memFreePercent, 100), swapUsedMb: number(machine.swapUsedMB),
       ...machineReadings },
     workers: { running: nullableCount(state.control?.runningWorkers), max: nullableCount(state.control?.maxWorkers) },
+    ...(publicClaudeHelper(claudeHelper) ? { claudeUsageHelper: publicClaudeHelper(claudeHelper) } : {}),
     harnesses: publicLogins, boss, pending: pendingLogins(publicLogins, rawMailbox, settings.name), backup: { lastAt: null },
     projects, quotas: fleetQuotas(state.quotas, settings.accounts, settings.factoryId), spend,
     alerts: publicAlerts,

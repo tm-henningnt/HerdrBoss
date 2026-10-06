@@ -121,3 +121,80 @@ test('the image start script and the Dockerfile never touch a Mac path or a logi
   for (const text of [initScript, dockerfile]) assert.equal(/\.credentials|\.claude\.json|auth\.json/.test(text), false);
   assert.match(dockerfile, /ln -s \/home\/factory\/herdr-boss\/bin\/herdr-boss \/usr\/local\/bin\/herdr-boss/);
 });
+
+// FQ2: the state word and the state of the usage helper.
+
+import { claudeHelperWord, claudeHelperState } from '../src/factory-claude-helper.js';
+
+const withConfig = (dir, config) => {
+  fs.mkdirSync(path.join(dir, '.herdr-boss'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.herdr-boss', 'config.json'), JSON.stringify(config));
+};
+const reading = (dir, observedAt) => {
+  const folder = path.join(dir, '.herdr-boss', 'claude-rate-limits');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, 's1.json'), JSON.stringify({ observedAt, rate_limits: {} }));
+};
+
+test('the state word is installed, then unchanged on the second run', () => {
+  const dir = home();
+  assert.equal(claudeHelperWord({ home: dir }), 'installed');
+  const before = fs.readFileSync(settingsFile(dir), 'utf8');
+  assert.equal(claudeHelperWord({ home: dir }), 'unchanged');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude')), ['settings.json']);
+});
+
+test('a foreign statusLine gives the word foreign and no backup and no change', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const own = JSON.stringify({ statusLine: { type: 'command', command: 'my-own-line' } });
+  fs.writeFileSync(settingsFile(dir), own);
+  assert.equal(claudeHelperWord({ home: dir }), 'foreign');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), own);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude')), ['settings.json']);
+});
+
+test('an unreadable settings file gives the word unreadable', () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(settingsFile(dir), '{broken');
+  assert.equal(claudeHelperWord({ home: dir }), 'unreadable');
+});
+
+test('the setting off installs nothing and removes nothing foreign', () => {
+  const dir = home();
+  withConfig(dir, { factories: { claudeUsageHelper: false } });
+  assert.equal(claudeHelperWord({ home: dir }), 'off');
+  assert.equal(fs.existsSync(settingsFile(dir)), false);
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const own = JSON.stringify({ statusLine: { type: 'command', command: 'my-own-line' } });
+  fs.writeFileSync(settingsFile(dir), own);
+  assert.equal(claudeHelperWord({ home: dir }), 'off');
+  assert.equal(fs.readFileSync(settingsFile(dir), 'utf8'), own);
+  fs.writeFileSync(settingsFile(dir), JSON.stringify({ statusLine: ENTRY }));
+  assert.equal(claudeHelperWord({ home: dir }), 'removed');
+});
+
+test('the state has a fixed reason for each case that is not installed', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const dir = home();
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'no-reading' });
+  withConfig(dir, { factories: { claudeUsageHelper: false } });
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'setting-off' });
+  fs.rmSync(path.join(dir, '.herdr-boss'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(settingsFile(dir), JSON.stringify({ statusLine: { type: 'command', command: 'x' } }));
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'different-statusline' });
+  fs.writeFileSync(settingsFile(dir), '{broken');
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'settings-unreadable' });
+});
+
+test('the state is installed with the age of the newest reading', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const dir = home();
+  claudeHelperWord({ home: dir });
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'not-installed', reason: 'no-reading' });
+  reading(dir, '2026-10-06T11:59:18Z');
+  assert.deepEqual(claudeHelperState({ home: dir, now }), { state: 'installed', lastReadingSeconds: 42 });
+});

@@ -704,3 +704,22 @@ test('the builder registry write waits for the registry lock and the local entry
     assert.equal(f.output.join(''), 'No hosts.\n');
   } finally { f.cleanup(); }
 });
+
+test('configure installs the Claude usage helper in the service step and a failure keeps the exit code', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    const call = f.calls.map(({ args }) => args).find((args) => args.includes('claude-helper'));
+    assert.deepEqual(call.slice(-2), ['claude-helper', '--apply']);
+    assert.ok(call.includes('hf-demo') && call.includes('factory'));
+    assert.match(f.output.join(''), /Claude usage helper: /);
+    const run = f.docker.run.bind(f.docker);
+    f.docker.run = async (args, options) => {
+      if (args.includes('claude-helper')) throw new Error('The factory host is unreachable.');
+      return run(args, options);
+    };
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['configure', 'demo'], f.io), 3);
+    assert.match(f.output.join(''), /Claude usage helper: not applied, /);
+  } finally { f.cleanup(); }
+});

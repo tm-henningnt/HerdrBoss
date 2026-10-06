@@ -93,6 +93,7 @@ The head office supplies the registered kind for a remote factory.
 | `health` | State, tick age, Herdr reachability, and clock offset. |
 | `machine` | Load, CPU count, memory, and swap readings. |
 | `projects` | Slug, phase, state, status age, kit revision, and board counts. |
+| `claudeUsageHelper` | Optional. A container factory sets it. `state` is `installed` with `lastReadingSeconds`, or `not-installed` with `reason`. `reason` is `setting-off`, `different-statusline`, `settings-unreadable`, or `no-reading`. |
 | `quotas` | Harness, account HMAC digest, lane, use, reset time, state, and an optional `estimate`. |
 | `spend` | Day, role, harness, and USD amount. |
 | `alerts` | Public alert code, severity, and optional project slug. |
@@ -153,7 +154,10 @@ The schema does not set a minimum byte size.
 `fleet-summary.valid.minimal.json`, `fleet-summary.valid.nulls.json`,
 `fleet-summary.valid.opencode-estimate.json`, `fleet-summary.invalid.estimate-percent.json`,
 `fleet-summary.invalid.title-with-sharing-off.json`, and
-`fleet-summary.invalid.message-text.json` in [examples/](examples/).
+`fleet-summary.invalid.message-text.json`,
+`fleet-summary.valid.claude-helper-installed.json`, `fleet-summary.valid.claude-helper-not-installed.json`,
+`fleet-summary.invalid.claude-helper-unknown-reason.json`, `fleet-summary.invalid.claude-helper-installed-with-reason.json`, and
+`fleet-summary.invalid.claude-helper-negative-age.json` in [examples/](examples/).
 The complete example sets every 1.x addition.
 The minimal example is an older summary without them.
 The null example uses an unavailable reading.

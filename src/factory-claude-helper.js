@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { claudeRateLimitsDir } from './claude-statusline.js';
 
 export const CLAUDE_STATUSLINE_COMMAND = 'herdr-boss claude-statusline';
 const ENTRY = Object.freeze({ type: 'command', command: CLAUDE_STATUSLINE_COMMAND });
@@ -47,6 +48,47 @@ export function applyClaudeHelper({ home, enabled }) {
   if (present) return { state: 'refused', message: `The factory user already has a statusLine in ${file}. The usage helper is not installed and the Claude usage limit stays unknown. Remove that statusLine or turn the setting off.` };
   writeSettings(file, { ...settings, statusLine: { ...ENTRY } });
   return { state: 'installed' };
+}
+
+// One state word for the host tool: installed, unchanged, removed, off, foreign, or unreadable.
+// A foreign statusLine is never replaced, so no backup of it is needed.
+export function claudeHelperWord({ home }) {
+  const enabled = claudeHelperEnabled(path.join(home, '.herdr-boss'));
+  const result = applyClaudeHelper({ home, enabled });
+  if (result.state === 'refused') return /already has a statusLine/.test(result.message) ? 'foreign' : 'unreadable';
+  return !enabled && result.state === 'unchanged' ? 'off' : result.state;
+}
+
+function newestReadingMs(dir) {
+  let newest = null;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const file = path.join(dir, name);
+      const at = Date.parse(JSON.parse(fs.readFileSync(file, 'utf8')).observedAt);
+      const time = Number.isFinite(at) ? at : fs.statSync(file).mtimeMs;
+      if (newest === null || time > newest) newest = time;
+    } catch {}
+  }
+  return newest;
+}
+
+// The helper state for the Fleet summary. Reads the settings of the factory user and the readings folder. Never a login file.
+export function claudeHelperState({ home, now = Date.now() }) {
+  const dataDir = path.join(home, '.herdr-boss');
+  if (!claudeHelperEnabled(dataDir)) return { state: 'not-installed', reason: 'setting-off' };
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+    if (!isRecord(settings)) return { state: 'not-installed', reason: 'settings-unreadable' };
+  } catch (error) {
+    if (error.code !== 'ENOENT') return { state: 'not-installed', reason: 'settings-unreadable' };
+  }
+  if (Object.hasOwn(settings, 'statusLine') && !isOurs(settings.statusLine)) return { state: 'not-installed', reason: 'different-statusline' };
+  let newest = null;
+  try { newest = newestReadingMs(claudeRateLimitsDir(dataDir)); } catch {}
+  if (!isOurs(settings.statusLine) || newest === null) return { state: 'not-installed', reason: 'no-reading' };
+  return { state: 'installed', lastReadingSeconds: Math.max(0, Math.floor((now - newest) / 1000)) };
 }
 
 // The container start entry. A refusal prints one message and exits 0, so the container still starts.

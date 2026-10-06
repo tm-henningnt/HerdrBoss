@@ -325,6 +325,13 @@ function waitFixHtml(wait) {
   }
   return `<span data-fleet-wait-fix="instruction">${esc(fix)}</span>`;
 }
+const HELPER_REASONS = { 'setting-off': 'setting off', 'different-statusline': 'a different statusLine is set', 'settings-unreadable': 'the settings file is unreadable', 'no-reading': 'no reading yet' };
+function helperHtml(row) {
+  const helper = row.summary?.claudeUsageHelper;
+  const text = helper?.state === 'installed' && Number.isFinite(helper.lastReadingSeconds) ? `installed, last reading ${helper.lastReadingSeconds}s ago`
+    : helper?.state === 'not-installed' && HELPER_REASONS[helper.reason] ? `not installed, ${HELPER_REASONS[helper.reason]}` : null;
+  return text ? `<p class="small muted" data-fleet-claude-helper>Claude usage helper: ${esc(text)}</p>` : '';
+}
 function pendingHtml(row) {
   const waits = Array.isArray(row.pending) ? row.pending : [];
   if (!waits.length) return '';
@@ -404,6 +411,7 @@ export function fleetFactoryCard(row, reference = null, role = null) {
     + `<div class="facts">${facts}</div>`
     + lanesHtml(row)
     + estimatesHtml(row)
+    + helperHtml(row)
     + projects
     + `${projects ? `<p class="small muted">${projectNote}</p>` : ''}`
     + actionsHtml(row, kind)

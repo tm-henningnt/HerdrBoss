@@ -155,3 +155,20 @@ test('the pacing view displays a factory share read problem without private deta
   assert.match(html, /Factory shares could not be read/);
   assert.match(html, /Repair the fleet files/);
 });
+
+test('the Fleet card shows one Claude usage helper line for each state and none without the field', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const line = (claudeUsageHelper) => {
+    const summary = { ...fixture, kind: 'container' };
+    delete summary.claudeUsageHelper;
+    if (claudeUsageHelper) summary.claudeUsageHelper = claudeUsageHelper;
+    const html = fleetView({ factories: [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary }], pollSeconds: 30 });
+    return html.match(/<[^>]*data-fleet-claude-helper[^>]*>([^<]*)</)?.[1] ?? null;
+  };
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 42 }), 'Claude usage helper: installed, last reading 42s ago');
+  assert.equal(line({ state: 'not-installed', reason: 'setting-off' }), 'Claude usage helper: not installed, setting off');
+  assert.equal(line({ state: 'not-installed', reason: 'different-statusline' }), 'Claude usage helper: not installed, a different statusLine is set');
+  assert.equal(line({ state: 'not-installed', reason: 'settings-unreadable' }), 'Claude usage helper: not installed, the settings file is unreadable');
+  assert.equal(line({ state: 'not-installed', reason: 'no-reading' }), 'Claude usage helper: not installed, no reading yet');
+  assert.equal(line(null), null);
+});

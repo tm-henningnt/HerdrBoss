@@ -75,6 +75,7 @@ function updateFixture() {
   const expectedOrigin = 'https://example.invalid/org/herdr-boss.git';
   let remoteUrl = expectedOrigin, failFetch = false, failMerge = false, failGitReset = false, failServiceStart = false, failPause = false, failBackupRun = false, failHelperRemove = false, failHealth = false;
   let transportFault = () => false;
+  let helperReply = null;
   const dirty = new Set();
   const git = {};
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
@@ -89,6 +90,7 @@ function updateFixture() {
     }
     if (args[0] === 'volume' && args[1] === 'inspect') return f.volumes.has(args[2]) ? ok([f.volumes.get(args[2])]) : missing();
     if (args[0] === 'image' && args[1] === 'inspect') return imagePresent ? ok([image]) : missing();
+    if (args[0] === 'exec' && args.includes('claude-helper')) { if (helperReply instanceof Error) throw helperReply; return helperReply || ok('installed\n'); }
     if (args[0] === 'exec' && args.includes('herdr') && args.includes('get')) return ok({ result: { pane: { pane_id: 'pane:1', workspace_id: 'workspace:1', label: 'orch', cwd: '/home/factory/work/project' } } });
     if (args[0] === 'exec' && args.includes('node')) {
       if (String(args.at(-1)).includes('schema_version')) {
@@ -173,7 +175,7 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
+  return { ...f, docker, expectedOrigin, set helperReply(value) { helperReply = value; }, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
     set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
@@ -815,4 +817,33 @@ test('a stop time from an earlier update does not relax the stale state check of
     f.state = { ...f.state, updatedAt: new Date(Date.now() - 61_000).toISOString() };
     await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service', '--dry-run'], f.io), /cannot prove.*idle/i);
   } finally { Date.now = realNow; f.cleanup(); }
+});
+
+test('service update repairs the Claude usage helper after the restart and prints one line', async () => {
+  const f = updateFixture();
+  try {
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const names = f.calls.map(({ args }) => args);
+    const restart = names.findIndex((args) => args.includes('/command/s6-svc') && args.includes('-u'));
+    const helper = names.findIndex((args) => args.includes('claude-helper'));
+    assert.ok(restart >= 0 && helper > restart);
+    assert.deepEqual(names[helper].slice(-2), ['claude-helper', '--apply']);
+    assert.match(f.output.join(''), /Claude usage helper: installed\.\n/);
+    f.output.length = 0;
+    f.helperReply = { code: 0, stdout: 'unchanged\n', stderr: '' };
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.match(f.output.join(''), /Claude usage helper: installed, no change\.\n/);
+  } finally { f.cleanup(); }
+});
+
+test('a failing Claude usage helper step never fails the service update', async () => {
+  for (const reply of [{ code: 1, stdout: '', stderr: 'boom' }, new Error('The factory host is unreachable.')]) {
+    const f = updateFixture();
+    try {
+      f.helperReply = reply;
+      assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+      assert.match(f.output.join(''), /Claude usage helper: not applied, /);
+      assert.match(f.output.join(''), /Updated factory demo service/);
+    } finally { f.cleanup(); }
+  }
 });

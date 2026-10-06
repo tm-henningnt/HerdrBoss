@@ -321,3 +321,13 @@ test('the Fleet route starts no more than one poll in 30 seconds when no factory
     assert.equal(calls, first + 1);
   });
 });
+
+test('the summary builder carries the Claude usage helper state and omits it when none is given', async () => {
+  const { buildFleetSummary } = await import('../src/fleet-summary.js');
+  const base = { settings: { factoryId: 'win1', name: 'win1', dashboardUrl: 'https://win1.example', shareItemTitles: false, accounts: [] },
+    state: {}, health: { version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true }, now: Date.parse('2026-10-06T12:00:00Z') };
+  assert.equal('claudeUsageHelper' in buildFleetSummary(base), false);
+  assert.deepEqual(buildFleetSummary({ ...base, claudeHelper: { state: 'installed', lastReadingSeconds: 7, extra: 'x' } }).claudeUsageHelper, { state: 'installed', lastReadingSeconds: 7 });
+  assert.deepEqual(buildFleetSummary({ ...base, claudeHelper: { state: 'not-installed', reason: 'setting-off' } }).claudeUsageHelper, { state: 'not-installed', reason: 'setting-off' });
+  assert.equal('claudeUsageHelper' in buildFleetSummary({ ...base, claudeHelper: { state: 'bogus' } }), false);
+});

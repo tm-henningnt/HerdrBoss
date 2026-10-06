@@ -119,6 +119,7 @@ const USAGE = `herdr-boss <command>
   uninstall             Stop and remove the service.
   logs                  Show the server log.
   claude-statusline     Factory only. Claude Code runs it as the status line. Reads the status line JSON on stdin and keeps the usage windows only.
+  claude-helper --apply Factory only. Install or repair the Claude usage helper of the factory user. Prints one state word.
   lanes                 Print one line per quota provider and the unmetered models lane.
   quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]
                         Show the Codex quota plan. What-if options do not write the plan.
@@ -560,6 +561,12 @@ async function main() {
     // Runs in the Claude status line of a factory. It loads no config and creates no other file.
     const { claudeStatuslineCommand, claudeRateLimitsDir } = await import('./claude-statusline.js');
     process.exitCode = await claudeStatuslineCommand({ dir: claudeRateLimitsDir(DATA_DIR) });
+    return;
+  }
+  if (cmd === 'claude-helper') {
+    if (args[0] !== '--apply') throw new Error('Use herdr-boss claude-helper --apply.');
+    const { claudeHelperWord } = await import('./factory-claude-helper.js');
+    console.log(claudeHelperWord({ home: process.env.HOME || (await import('node:os')).homedir() }));
     return;
   }
   if (cmd === 'quota') {
