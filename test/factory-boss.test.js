@@ -96,7 +96,7 @@ function fixture({
         return { code: 0, stdout: '', stderr: '' };
       }
       if (args.slice(-3).join(' ') === 'opencode auth list') return authList;
-      if (args.includes('auth') && args.at(-1) === 'login') return { code: interactiveCode, stdout: 'private login output', stderr: '' };
+      if (args.includes('auth') && args.at(-1) === 'login') return { code: interactiveCode, stdout: `private login output ${FAKE_SECRET}`, stderr: '' };
       if ((args.includes('auth') || args.includes('login')) && args.at(-1) === 'status') return { code: verifierCode, stdout: 'private verifier output', stderr: '' };
       if (args.includes('project') && args.includes('paths')) {
         if (workspaceAppearsAfterPaths) {
@@ -831,16 +831,20 @@ function captureStreams(f) {
   return err;
 }
 
-test('factory login opencode exits 3 with the sign-in command when no credential is listed', async () => {
+test('factory login opencode runs the interactive login once and exits 3 when the login stays unverified', async () => {
   const f = fixture({ authList: OPENCODE_EMPTY });
   try {
     const err = captureStreams(f);
     assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 3);
+    const logins = f.dockerCalls.filter(({ args }) => args.includes('auth') && args.at(-1) === 'login');
+    assert.equal(logins.length, 1, 'the command starts one interactive login');
+    assert.deepEqual(logins[0].args, ['exec', '-it', '--user', 'factory', 'hf-demo', 'opencode', 'auth', 'login']);
+    assert.equal(logins[0].options.interactive, true);
+    assert.equal(logins[0].options.timeout, 30 * 60_000);
     const out = f.output.join('');
-    assert.ok(out.includes('OpenCode: not logged in in factory demo\n'));
-    assert.ok(out.includes('docker exec -it --user factory hf-demo opencode auth login'));
-    assert.equal(f.dockerCalls.some(({ args }) => args.at(-1) === 'login'), false, 'the command never starts a login');
-    assert.deepEqual(f.dockerCalls.find(({ args }) => args.at(-1) === 'list').args, ['exec', '--user', 'factory', 'hf-demo', 'opencode', 'auth', 'list']);
+    assert.match(out, /OpenCode: not logged in in factory demo/);
+    assert.equal(out.includes(FAKE_SECRET), false, 'the login output never reaches the terminal');
+    assert.equal(out.includes('auth.json'), false);
     assert.equal(err.join(''), '');
   } finally { f.cleanup(); }
 });
@@ -848,22 +852,25 @@ test('factory login opencode exits 3 with the sign-in command when no credential
 test('factory login opencode exits 3 when the credential list command fails', async () => {
   const f = fixture({ authList: { code: 1, stdout: '', stderr: 'boom' } });
   try {
+    captureStreams(f);
     assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 3);
-    assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo\n'));
+    assert.equal(f.dockerCalls.filter(({ args }) => args.includes('auth') && args.at(-1) === 'login').length, 1);
+    assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo'));
   } finally { f.cleanup(); }
 });
 
-test('factory login opencode exits 0 and prints only the credential count', async () => {
+test('factory login opencode exits 0 and prints only the credential count after a verified login', async () => {
   const f = fixture({ authList: OPENCODE_LISTED });
   try {
     const err = captureStreams(f);
     assert.equal(await factoryCommand(['login', 'demo', 'opencode'], f.io), 0);
     assert.equal(f.output.join(''), 'OpenCode: logged in in factory demo (2 credentials)\n');
+    assert.equal(f.dockerCalls.filter(({ args }) => args.includes('auth') && args.at(-1) === 'login').length, 1);
     assert.equal(err.join(''), '');
   } finally { f.cleanup(); }
 });
 
-test('factory login opencode never prints a value from the auth list', async () => {
+test('factory login opencode never prints a value from the login or the auth list', async () => {
   for (const authList of [OPENCODE_LISTED, { code: 0, stdout: `${FAKE_SECRET}\n`, stderr: FAKE_SECRET }]) {
     const f = fixture({ authList });
     try {

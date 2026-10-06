@@ -443,16 +443,21 @@ function dryRunText(name, harness, resume) {
   return `${lines.join('\n')}\n`;
 }
 
+// Run an interactive harness login in the labeled factory container. The terminal stays attached, so the command captures no output.
+function runHarnessLogin(docker, containerName, command) {
+  return docker.run(['exec', '-it', '--user', 'factory', containerName, ...command], { interactive: true, timeout: LOGIN_TIMEOUT_MS });
+}
+
 async function openCodeLogin(name, io) {
   try {
-    const { record, host, docker } = await inspectFactory(name, io);
+    const { record, docker } = await inspectFactory(name, io);
+    await runHarnessLogin(docker, record.containerName, ['opencode', 'auth', 'login']);
     const count = await openCodeCredentialCount(docker, name);
     if (count > 0) {
       io.stdout.write(`OpenCode: logged in in factory ${name} (${count} ${count === 1 ? 'credential' : 'credentials'})\n`);
       return 0;
     }
-    const prefix = host.transport === 'local' ? 'docker' : 'docker --context <context from the private connection store>';
-    io.stdout.write(`${openCodeMissingLine(name)}\nRun this command at an Owner terminal:\n${prefix} exec -it --user factory ${record.containerName} opencode auth login\n`);
+    io.stdout.write(`${openCodeMissingLine(name)}\n`);
     return 3;
   } catch {
     io.stdout.write('failed\n');
@@ -469,7 +474,7 @@ export async function factoryLoginCommand(args, io) {
   try {
     const { record, docker } = await inspectFactory(name, io);
     const command = harness === 'claude' ? ['claude', 'auth', 'login'] : ['codex', 'login', '--device-auth'];
-    const result = await docker.run(['exec', '-it', '--user', 'factory', record.containerName, ...command], { interactive: true, timeout: LOGIN_TIMEOUT_MS });
+    const result = await runHarnessLogin(docker, record.containerName, command);
     const verified = await verifyHarnessLogin(docker, name, harness);
     const ok = result.code === 0 && verified;
     if (ok) {
