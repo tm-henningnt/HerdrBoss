@@ -29,6 +29,7 @@ docker ${FACTORY_BUILDER:+buildx} build ${FACTORY_BUILDER:+--builder "$FACTORY_B
   --build-arg "CLAUDE_CODE_VERSION=$(pin claudeCode)" \
   --build-arg "CODEX_VERSION=$(pin codex)" \
   --build-arg "OPENCODE_VERSION=$(pin opencode)" \
+  --build-arg "CODEXBAR_VERSION=$(pin codexbar)" \
   --build-arg "CHROMIUM_VERSION=$(pin chromium)" \
   --build-arg "PINS_SHA256=$pins_sha" \
   --build-arg "PINS_JSON=$pins_json" \

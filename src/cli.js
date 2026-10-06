@@ -163,6 +163,7 @@ const USAGE = `herdr-boss <command>
   logs                  Show the server log.
   claude-statusline     Factory only. Claude Code runs it as the status line. Reads the status line JSON on stdin and keeps the usage windows only.
   claude-helper --apply Factory only. Install or repair the Claude usage helper of the factory user. Prints one state word.
+  codexbar-install --apply Factory only. Install or repair the pinned CodexBar CLI in the home folder of the factory user. Prints one state word.
   lanes                 Print one line per quota provider and the unmetered models lane.
   quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]
                         Show the Codex quota plan. What-if options do not write the plan.
@@ -609,6 +610,12 @@ async function main() {
   if (cmd === 'claude-helper') {
     const { claudeHelperCommand } = await import('./factory-claude-helper.js');
     const code = claudeHelperCommand(args);
+    if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'codexbar-install') {
+    const { codexbarInstallCommand } = await import('./factory-codexbar.js');
+    const code = codexbarInstallCommand(args);
     if (code) process.exitCode = code;
     return;
   }

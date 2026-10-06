@@ -66,10 +66,11 @@ const isoTime = (value) => {
   return Number.isFinite(time) ? new Date(time).toISOString() : null;
 };
 
-// The Linux reader of OpenCode Go. The reading stays unknown. The row carries the manual reset time and the local estimate.
+// The Linux reader of OpenCode Go, used only as the fallback when CodexBar is missing. The reading stays unknown.
+// The row carries the manual reset time and the local estimate.
 export async function readOpenCodeGoQuota({ opencode = {}, run, timeoutMs } = {}) {
   const days = Number.isSafeInteger(opencode.days) && opencode.days >= 1 ? opencode.days : DEFAULT_STATS_DAYS;
   const reason = 'no usage reader in this factory';
   const estimate = await readOpenCodeEstimate({ days, run, timeoutMs });
-  return { provider: 'opencodego', unavailable: true, reason, error: reason, resetAt: isoTime(opencode.resetAt), estimate };
+  return { provider: 'opencodego', source: 'local', unavailable: true, reason, error: reason, resetAt: isoTime(opencode.resetAt), estimate };
 }

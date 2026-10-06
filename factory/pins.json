@@ -16,6 +16,7 @@
   "claudeCode": "2.1.288",
   "codex": "0.160.0",
   "opencode": "1.18.34",
+  "codexbar": "0.72.0",
   "chromium": "154.0.8037.92-1~deb13u1",
   "sha256": {
     "s6-overlay-noarch.tar.xz": "5379750ed30a84bbd2e2dd74847ba6b5bd29cd0b2e3ea2ec58049b57eb2eda12",
@@ -26,6 +27,8 @@
     "gh_2.102.0_linux_arm64.tar.gz": "7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484",
     "gh_2.102.0_linux_amd64.tar.gz": "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
     "herdr-linux-aarch64": "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0",
-    "herdr-linux-x86_64": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7"
+    "herdr-linux-x86_64": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7",
+    "CodexBarCLI-v0.72.0-linux-aarch64.tar.gz": "e0a305dae0e45ff947f49913b17beed137fe2faf7c81068b245c3689d9db7eb5",
+    "CodexBarCLI-v0.72.0-linux-x86_64.tar.gz": "1772b5a2f4d68b959cd969a8997e4141474959f5cc89adff15b134d075b78b70"
   }
 }
