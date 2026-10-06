@@ -29,7 +29,7 @@ export function parsePiModels(text) {
   const lines = String(text ?? '').split(/\r?\n/);
   const header = lines.findIndex((line) => /^\s*provider\s+model(\s|$)/i.test(line));
   if (header < 0) return null;
-  return lines.slice(header + 1).map((line) => line.trim().split(/\s+/)).filter((cells) => cells.length >= 2 && cells[0] && cells[1])
+  return lines.slice(header + 1).filter((line) => !/^\s*warning:/i.test(line)).map((line) => line.trim().split(/\s+/)).filter((cells) => cells.length >= 2 && cells[0] && cells[1])
     .map(([provider, model]) => `${provider}/${model}`);
 }
 

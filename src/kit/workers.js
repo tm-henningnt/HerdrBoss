@@ -7,6 +7,7 @@ import { appendDelegatedRun, compareChangedPaths, gitLog, gitWorkerChangedPaths,
 import { recordUsage } from '../usage.js';
 import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
+import { parsePiModels } from '../collect.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine, refreshKitIfRequired, safeRefreshKit } from './agents-check.js';
 import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
@@ -473,6 +474,46 @@ export function unmeteredGate(kind, model, rules) {
     return { error: `pi cannot run ${model}: the last pi --list-models result does not list it. ${reason} --force cannot bypass this refusal.` };
   }
   return {};
+}
+
+const PI_LISTING_LIMIT_MS = 10000;
+let piListingCache = null;
+
+// Run `pi --list-models` once. The only input is the model table. Never read Pi credential files here.
+export function runPiListing() {
+  return execFileSync('pi', ['--list-models'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: PI_LISTING_LIMIT_MS });
+}
+
+// The provider/model names that Pi lists now, or null when the listing fails, times out, or holds no rows.
+// The process keeps the answer for each runner function.
+export function listedPiModels(runner = runPiListing) {
+  if (piListingCache?.runner === runner) return piListingCache.models;
+  let models = null;
+  try { models = parsePiModels(runner()); } catch { models = null; }
+  if (!models?.length) models = null;
+  piListingCache = { runner, models };
+  return models;
+}
+
+// Refuse a Pi model that the live listing does not list. A failed listing warns and lets the start continue.
+export function piListingGate(kind, model, runner, output = () => {}) {
+  if (kind !== 'pi' || !runner) return;
+  const listed = listedPiModels(runner);
+  if (!listed) {
+    output('Warning: pi --list-models failed, timed out, or listed no models. worker start did not check that Pi lists the model.');
+    return;
+  }
+  if (listed.includes(model)) return;
+  const [provider, ...rest] = model.split('/');
+  const bare = rest.join('/');
+  const sameName = bare ? [...new Set(listed.filter((entry) => entry.slice(entry.indexOf('/') + 1) === bare).map((entry) => entry.split('/')[0]))] : [];
+  const ofProvider = listed.filter((entry) => entry.startsWith(`${provider}/`));
+  const parts = [`pi cannot run ${model}: pi --list-models does not list it.`];
+  if (sameName.length) parts.push(`Only the provider ${sameName.join(', ')} lists ${bare}.`);
+  if (ofProvider.length) parts.push(`Pi lists these ${provider} models: ${ofProvider.slice(0, 5).join(', ')}.`);
+  else parts.push(`Pi lists no ${provider} model. Pi has no credential for the ${provider} provider.`);
+  parts.push('--force cannot bypass this refusal.');
+  throw new Error(parts.join(' '));
 }
 
 // The current project's permitted unmetered models, after its allow-list. Empty when none apply.
@@ -1398,6 +1439,7 @@ function startWorkerOnce(name, options, {
   browserLookup,
   refreshKit = refreshKitIfRequired,
   tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags,
+  piModelLister = null,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
@@ -1466,6 +1508,7 @@ function startWorkerOnce(name, options, {
   }
   const freeGate = unmeteredGate(options.kind, model, rules);
   if (freeGate.error) throw new Error(freeGate.error);
+  piListingGate(options.kind, model, piModelLister, output);
   let factoryShare;
   if (provider) {
     try { factoryShare = readFactoryShares(bossDir)[provider]; }

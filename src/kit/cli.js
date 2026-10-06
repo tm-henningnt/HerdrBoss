@@ -8,7 +8,7 @@ import { activeLaunchRecords, enableModel, markModelUnavailable } from './model-
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
-import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, startWorker, stopOwnWorker } from './workers.js';
+import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
 import { pruneWorktrees } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
@@ -351,7 +351,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         forceSwap: flags.forceswap,
         planner: flags.planner,
       }, {
-        config, models: modelConfig, herdr, env, output, rulesFile,
+        config, models: modelConfig, herdr, env, output, rulesFile, piModelLister: runPiListing,
         projectStatus: flags.taskid == null && flags.issue == null
           ? listProjects().find((project) => project.slug === config.slug) || null
           : null,
