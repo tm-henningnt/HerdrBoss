@@ -722,7 +722,7 @@ Set `attachments.retentionDays` in the policy or under **Pictures** on Settings.
 
 ## Review packs
 
-A review pack is a folder of evidence with one question for each item. The Owner reads it in the Herdr Boss site, answers each item, and submits one result. The format and the reviewer pages are in [the design](ideas/review-packs.md). These commands publish a pack, import HTML pages, and read the result.
+A review pack is a folder of evidence with one question for each item. The Owner reads it in the Herdr Boss site, answers each item, and submits one result. The pack note belongs to one version: a new version starts with an empty note, and `review result --version N` prints the note of that version. The format and the reviewer pages are in [the design](ideas/review-packs.md). These commands publish a pack, import HTML pages, and read the result.
 
 | Command | Action |
 |---|---|

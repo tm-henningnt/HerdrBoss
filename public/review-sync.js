@@ -353,8 +353,10 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
       if (data.state === 'submitted' && !(op.kind === 'item' && (item?.reopened === true || retrySavedAnswer))) return false;
       // A 400 on the same version is a real refusal: drop the patch with the server sentence.
       if (op.recheck && op.version === data.version) { P.messages.set(op.id, unsaved(op, 'dropped', op.recheck)); return false; }
-      if (op.version === data.version || op.kind === 'note') { op.version = data.version; return true; }
-      if (item && item.hash === op.hash) { op.version = data.version; return true; }
+      // A pack note belongs to one version: it never moves to a new version. A note of an older version is dropped,
+      // like an item whose hash changed.
+      if (op.version === data.version) { op.version = data.version; return true; }
+      if (op.kind === 'item' && item && item.hash === op.hash) { op.version = data.version; return true; }
       P.messages.set(op.id, unsaved(op, 'changed', '', false));
       return false;
     });
@@ -528,7 +530,10 @@ export function createReviewSync({ fetch, base = '', storage = null, setTimer = 
       if (patch) item.answer = { ...(item.answer || {}), ...patch };
     }
     const note = pendingPatch(P.key, null, 'note');
-    if (note) data.note = note.note;
+    if (note) {
+      const op = P.ops.find((entry) => entry.id === 'note');
+      if (!op || op.version === data.version) data.note = note.note;
+    }
     return data;
   }
 

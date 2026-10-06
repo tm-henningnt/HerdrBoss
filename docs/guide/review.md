@@ -41,9 +41,10 @@ If the link does not open, the preview or the service is not running. Add a note
 
 1. Scroll to the summary below the sections.
 2. Read the list of denied, live, and open items.
-3. Check the proposed verdict: **Accept pack**, **Accept with changes**, or **Deny pack**. Choose another one if you want.
-4. Select **Submit review**.
-5. Confirm the verdict.
+3. Write a note for the whole pack in the note field. The note belongs to this version. A new version starts with an empty note. The note of an older version shows read-only with its version number.
+4. Check the proposed verdict: **Accept pack**, **Accept with changes**, or **Deny pack**. Choose another one if you want.
+5. Select **Submit review**.
+6. Confirm the verdict.
 
 You should see the summary become read-only with your verdict. The result shows **Delivered** when the agent has received it. If items are open, the page asks `N items are still open`. Select **Answer them first** or **Submit anyway**.
 
@@ -51,7 +52,7 @@ If the result shows **Failed**, select **Queue again**.
 
 ## What happens next
 
-The project lead reads your result. It fixes the denied items and starts the next task. When it fixes an item, it sends a new version of the pack. The pack then shows **N changed** in the list. Open the pack again and judge only the changed items.
+The project lead reads your result. It fixes the denied items and starts the next task. When it fixes an item, it sends a new version of the pack. The pack then shows **N changed** in the list. Open the pack again and judge only the changed items. A new version starts with an empty pack note. The note of the older version stays on that version.
 
 The pack moves to the folder **Done** after you submit it. Herdr Boss deletes a closed pack after 30 days.
 

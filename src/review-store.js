@@ -397,7 +397,10 @@ export function publishVersion({ dir, now, slug, folder, publishedBy = null, val
 
       // Keep the newest versions.
       const old = db.prepare('SELECT version FROM review_versions WHERE slug = ? AND pack = ? ORDER BY version DESC LIMIT -1 OFFSET ?').all(slug, pack, LIMITS.versionsKept).map((entry) => entry.version);
-      for (const oldVersion of old) db.prepare('DELETE FROM review_versions WHERE slug = ? AND pack = ? AND version = ?').run(slug, pack, oldVersion);
+      for (const oldVersion of old) {
+        db.prepare('DELETE FROM review_notes WHERE slug = ? AND pack = ? AND version = ?').run(slug, pack, oldVersion);
+        db.prepare('DELETE FROM review_versions WHERE slug = ? AND pack = ? AND version = ?').run(slug, pack, oldVersion);
+      }
       return { slug, pack, version, files: files.length, bytes, items: hashes.size, changed, added, removed, stale, pruned: old };
     });
   } catch (error) {
@@ -413,6 +416,23 @@ export function publishVersion({ dir, now, slug, folder, publishedBy = null, val
 
 function loadPack(db, slug, pack) {
   return db.prepare('SELECT * FROM review_packs WHERE slug = ? AND pack = ?').get(slug, pack);
+}
+
+// The pack note of one version. A legacy note came from an unknown older version: it shows read-only and is never part
+// of a result. A version with no row has an empty note and note rev 0.
+function readNote(db, slug, pack, version) {
+  const row = db.prepare('SELECT note, note_rev, legacy FROM review_notes WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, version);
+  if (!row) return { note: '', noteRev: 0, legacy: false, prior: null };
+  if (row.legacy) return { note: '', noteRev: 0, legacy: true, prior: { version: null, text: row.note } };
+  const earlier = row.note ? null : db.prepare("SELECT version, note FROM review_notes WHERE slug = ? AND pack = ? AND version < ? AND note <> '' AND legacy = 0 ORDER BY version DESC LIMIT 1").get(slug, pack, version);
+  return { note: row.note, noteRev: row.note_rev, legacy: false, prior: earlier ? { version: earlier.version, text: earlier.note } : null };
+}
+
+// Write the note of one version. The caller checks the rev. It returns the new rev.
+function writeNote(db, slug, pack, version, note, rev, at) {
+  db.prepare(`INSERT INTO review_notes(slug, pack, version, note, note_rev, legacy, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?)
+    ON CONFLICT(slug, pack, version) DO UPDATE SET note = excluded.note, note_rev = excluded.note_rev, legacy = 0, updated_at = excluded.updated_at`)
+    .run(slug, pack, version, note, rev, at);
 }
 
 // One pack at a version (the current one by default), with the answers and the derived states. It returns
@@ -449,6 +469,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
   const packState = groupState(states);
   const files = db.prepare('SELECT path, sha256, bytes, type, stored FROM review_files WHERE slug = ? AND pack = ? AND version = ? ORDER BY path').all(slug, pack, wanted);
   const submitted = db.prepare('SELECT verdict, submitted_at AS submittedAt, message_id AS messageId FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, wanted) ?? null;
+  const note = readNote(db, slug, pack, wanted);
   return {
     slug,
     pack,
@@ -458,8 +479,9 @@ export function getPack({ dir, slug, pack, version } = {}) {
     versions: db.prepare('SELECT version FROM review_versions WHERE slug = ? AND pack = ? ORDER BY version').all(slug, pack).map((entry) => entry.version),
     state: row.state,
     mailId: row.mail_id,
-    note: row.note,
-    noteRev: row.note_rev,
+    note: note.note,
+    noteRev: note.noteRev,
+    ...(note.prior ? { priorNote: note.prior } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
@@ -806,8 +828,10 @@ export function putPackNote({ dir, now, slug, pack, note, rev } = {}) {
   const at = stamp(now);
   return transaction(open(dir), (db) => {
     const row = requireOpenPack(db, slug, pack);
-    if (row.note_rev !== rev) return { ok: false, conflict: true, current: { note: row.note, rev: row.note_rev } };
-    db.prepare('UPDATE review_packs SET note = ?, note_rev = ?, updated_at = ? WHERE slug = ? AND pack = ?').run(note, rev + 1, at, slug, pack);
+    const current = readNote(db, slug, pack, row.current_version);
+    if (current.noteRev !== rev) return { ok: false, conflict: true, current: { note: current.note, rev: current.noteRev } };
+    writeNote(db, slug, pack, row.current_version, note, rev + 1, at);
+    db.prepare('UPDATE review_packs SET updated_at = ? WHERE slug = ? AND pack = ?').run(at, slug, pack);
     return { ok: true, note, rev: rev + 1 };
   });
 }
@@ -828,11 +852,14 @@ export function submitPack({ dir, now, slug, pack, verdict, note, messageId = nu
     const existing = db.prepare('SELECT result FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, row.current_version);
     if (existing) return { ok: false, conflict: 'submitted', result: parseJson(existing.result, null) };
     if (row.state !== 'open') throw new ReviewStoreError('closed', `The pack is ${row.state}. Publish a new version to review it again.`);
-    const bound = boundResult(buildResult(getPack({ dir, slug, pack }), verdict, note ?? row.note, at));
+    const current = readNote(db, slug, pack, row.current_version);
+    const bound = boundResult(buildResult(getPack({ dir, slug, pack }), verdict, note ?? current.note, at));
     const { result } = bound;
     db.prepare('INSERT INTO review_results(slug, pack, version, verdict, note, result, markdown, submitted_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(slug, pack, row.current_version, verdict, result.note, bound.json, resultMarkdown(result), at, messageId);
-    db.prepare("UPDATE review_packs SET state = 'submitted', closed_at = ?, updated_at = ?, note = ? WHERE slug = ? AND pack = ?").run(at, at, result.note, slug, pack);
+    // The note belongs to the submitted version. A legacy note of an unknown older version is never part of a result.
+    if (!current.legacy || result.note) writeNote(db, slug, pack, row.current_version, result.note, current.noteRev > 0 ? current.noteRev : (result.note ? 1 : 0), at);
+    db.prepare("UPDATE review_packs SET state = 'submitted', closed_at = ?, updated_at = ? WHERE slug = ? AND pack = ?").run(at, at, slug, pack);
     return { ok: true, result };
   });
 }

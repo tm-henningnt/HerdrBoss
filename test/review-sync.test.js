@@ -680,9 +680,10 @@ test('a newer version re-targets a queued patch when the item hash is unchanged,
   queue.retryNow();
   await drain(20);
   const writes = fetch.calls.filter((call) => call.method === 'PUT').map((call) => call.url.split('/').pop());
-  assert.deepEqual(writes, ['same', 'note'], 'only the unchanged item and the pack note are sent');
+  assert.deepEqual(writes, ['same'], 'only the unchanged item is sent; a pack note never moves to a new version');
   assert.equal(queue.itemStatus(KEY, 'moved').kind, 'changed');
   assert.equal(queue.itemStatus(KEY, 'gone').kind, 'changed');
+  assert.equal(queue.noteStatus(KEY).kind, 'changed', 'a note of the old version is dropped');
   assert.equal(queue.pendingCount(KEY), 0);
   assert.equal(storage.map.has(queueKey('shop', 'checkout', 1)), false, 'the old version key is gone');
 });

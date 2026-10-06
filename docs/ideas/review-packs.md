@@ -323,6 +323,7 @@ Reasons: the message store rewrites the whole file or table for each change, so 
 | Table | Columns |
 |---|---|
 | `review_packs` | `slug`, `pack`, `title`, `current_version`, `state` (`open`, `submitted`, `expired`), `mail_id`, `created_at`, `closed_at` |
+| `review_notes` | `slug`, `pack`, `version`, `note`, `note_rev`, `legacy` (1 for a note of an unknown older version), `updated_at`. The pack note belongs to one version. A new version starts with an empty note. |
 | `review_versions` | `slug`, `pack`, `version`, `manifest` (JSON text), `bytes`, `files`, `published_at`, `published_by` |
 | `review_items` | `slug`, `pack`, `version`, `item`, `section`, `hash`, `position` |
 | `review_answers` | `slug`, `pack`, `item`, `decision`, `choice`, `rating`, `live`, `viewed`, `note`, `pins` (JSON), `checks` (JSON), `hash` (the item hash at answer time), `rev`, `updated_at` |

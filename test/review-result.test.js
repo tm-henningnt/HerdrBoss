@@ -305,6 +305,17 @@ test('the prompt holds no secret from a note', () => {
 
 // ---------- Delivery through the Mailbox path ----------
 
+test('the v2 result and its delivery hold no text of the v1 pack note', (t) => {
+  const { dir, mail } = setup(t);
+  putPackNote({ ...where(dir), note: 'First round note.', rev: 0 });
+  publishVersion({ dir, now: T0 + 1000, slug: 'shop', folder: folder(), publishedBy: 'orch' });
+  const { result } = submitPack({ ...where(dir), verdict: 'accept' });
+  assert.equal(result.version, 2);
+  assert.ok(!JSON.stringify(result).includes('First round note.'), 'the v2 result holds no v1 note');
+  const record = postReviewResult({ result, replyTo: mail.id }, { dir, now: T0 + 2000 });
+  assert.ok(!record.text.includes('First round note.'), 'the v2 delivery holds no v1 note');
+});
+
 function submitAndQueue(dir, mail) {
   answer(dir, 'cart-themes', { decision: 'deny', note: 'Too faint.' });
   const { result } = submitPack({ ...where(dir), verdict: 'accept-with-changes', note: 'Fix it.' });

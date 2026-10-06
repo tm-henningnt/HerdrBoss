@@ -49,7 +49,7 @@ test('SQLite store uses WAL, a 5-second busy timeout, ordered migrations, and ba
   assert.equal(store.db.prepare('PRAGMA busy_timeout').get().timeout, 5000);
   assert.equal(store.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
   assert.equal(store.db.prepare('PRAGMA synchronous').get().synchronous, 1);
-  assert.deepEqual(store.db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4]);
+  assert.deepEqual(store.db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4, 5]);
   store.db.prepare('INSERT INTO messages(id, at, thread, record) VALUES (?, ?, ?, ?)')
     .run('backup-row', '2026-09-28T10:00:00.000Z', 'alpha', JSON.stringify({ id: 'backup-row', text: 'Backup.' }));
 
@@ -138,7 +138,7 @@ function databaseAtVersion2(dir, { withColumn }) {
 
 test('migration 3 on a fresh database gives the latest version and the markdown column', (t) => {
   const store = closeAfter(t, openSqliteStore({ dir: freshDir(t) }));
-  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4, 5]);
   assert.ok(hasMarkdown(store.db));
 });
 
@@ -146,7 +146,7 @@ test('migration 3 on a database at version 2 without the column adds it', (t) =>
   const dir = freshDir(t);
   databaseAtVersion2(dir, { withColumn: false });
   const store = closeAfter(t, openSqliteStore({ dir }));
-  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4, 5]);
   assert.ok(hasMarkdown(store.db));
 });
 
@@ -158,7 +158,7 @@ test('migration 3 on a database at version 2 with the column reaches version 3 w
   assert.ok(hasMarkdown(check));
   check.close();
   const store = closeAfter(t, openSqliteStore({ dir }));
-  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4, 5]);
   assert.equal(store.db.prepare('PRAGMA table_info(review_results)').all().filter((column) => column.name === 'markdown').length, 1);
 });
 
@@ -204,11 +204,11 @@ test('a pending migration on the live database is refused unless the root has a 
   assert.deepEqual(versionsOf(check), [1, 2], 'the refusal changes nothing');
   check.close();
   const allowed = closeAfter(t, openSqliteStore({ dir, guard: { liveDirs: [dir], sourceRoot: main } }));
-  assert.deepEqual(versionsOf(allowed.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(allowed.db), [1, 2, 3, 4, 5]);
   allowed.close();
   // A root that is not the main checkout reads a database that is at the version of the code.
   const read = closeAfter(t, openSqliteStore({ dir, guard: { liveDirs: [dir], sourceRoot: linked } }));
-  assert.deepEqual(versionsOf(read.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(read.db), [1, 2, 3, 4, 5]);
 });
 
 test('a temporary data dir migrates from any root', (t) => {
@@ -217,7 +217,7 @@ test('a temporary data dir migrates from any root', (t) => {
   databaseAtVersion2(temp, { withColumn: false });
   const { copy } = trees(t);
   const store = closeAfter(t, openSqliteStore({ dir: temp, guard: { liveDirs: [live], sourceRoot: copy } }));
-  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4, 5]);
 });
 
 test('a fresh live database is refused from a root that is not the main checkout, also through the message store', (t) => {
@@ -236,7 +236,7 @@ test('the service ignores the guard option: only a test run honors it', (t) => {
   t.after(() => { process.env.NODE_TEST_CONTEXT = context; });
   // Without the test context the guard option has no effect: the dir is not live for the real guard, so it migrates.
   const store = closeAfter(t, openSqliteStore({ dir, guard: { liveDirs: [dir], sourceRoot: copy } }));
-  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4]);
+  assert.deepEqual(versionsOf(store.db), [1, 2, 3, 4, 5]);
 });
 
 // The service start path in a child process: a copy of the source tree, the live dir is the temporary dir, and the PATH is empty.
@@ -266,7 +266,7 @@ test('the service start path migrates the live database from a main-like root wi
   const { tree, data, root } = copyTree(t, { git: 'dir' });
   const run = startPath(tree, data, root);
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(run.stdout.trim(), '4');
+  assert.equal(run.stdout.trim(), '5');
 });
 
 test('the same start path from a root with a .git file or with no .git refuses the pending migration', (t) => {

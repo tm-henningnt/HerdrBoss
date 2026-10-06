@@ -2446,6 +2446,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .review-field-label { display: block; margin: 18px 0 6px; padding: 0; color: var(--text); font-size: 14px; font-weight: 650; }
 .review-note-field { display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--text); font-family: var(--sans); font-size: 16px; line-height: 1.4; caret-color: var(--accent); resize: vertical; }
 .review-note-field:focus { border-color: var(--accent); outline: 1px solid var(--accent); }
+.review-prior-note { margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--muted); font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .review-note-status { min-height: 18px; margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
 .review-verdict { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .review-verdict-option { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); cursor: pointer; }

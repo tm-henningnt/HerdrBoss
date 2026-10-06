@@ -24,6 +24,66 @@ export function addColumnIfMissing(db, table, column, definition) {
   return true;
 }
 
+// RV4: the old schema stored one note for each pack. Migration 5 moves that note into review_notes, one note for each
+// pack version. The old row keeps its data, and review_pack_note_backup holds a copy of every old note before the move.
+// The function is idempotent: it uses IF NOT EXISTS and INSERT OR IGNORE, so a second run adds nothing.
+export function migratePackNotes(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_notes (
+      slug TEXT NOT NULL,
+      pack TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      note_rev INTEGER NOT NULL DEFAULT 0,
+      legacy INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (slug, pack, version),
+      FOREIGN KEY (slug, pack) REFERENCES review_packs(slug, pack) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS review_pack_note_backup (
+      slug TEXT NOT NULL,
+      pack TEXT NOT NULL,
+      note TEXT NOT NULL,
+      note_rev INTEGER NOT NULL,
+      current_version INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      target_version INTEGER,
+      legacy INTEGER NOT NULL DEFAULT 0,
+      backed_up_at TEXT NOT NULL,
+      PRIMARY KEY (slug, pack)
+    );
+  `);
+  const at = new Date().toISOString();
+  const insertBackup = db.prepare(`INSERT OR IGNORE INTO review_pack_note_backup(slug, pack, note, note_rev, current_version, state, updated_at, target_version, legacy, backed_up_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insertNote = db.prepare(`INSERT OR IGNORE INTO review_notes(slug, pack, version, note, note_rev, legacy, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const rows = db.prepare('SELECT slug, pack, note, note_rev, current_version, state, updated_at FROM review_packs').all();
+  for (const row of rows) {
+    if (!row.note && !row.note_rev) continue;
+    const target = noteTargetVersion(db, row);
+    insertBackup.run(row.slug, row.pack, row.note, row.note_rev, row.current_version, row.state, row.updated_at, target.version, target.legacy, at);
+    insertNote.run(row.slug, row.pack, target.version, row.note, row.note_rev, target.legacy, row.updated_at || at);
+  }
+}
+
+// The version that an old per-pack note belongs to. The note of a submitted current version stays on that version.
+// A note that equals the note of the last submit is the carried note of that version. A note of a current open version
+// after the last submit is new. With no submit and more than one version, the note belongs to an unknown older version:
+// it stays on the current version as a legacy note and is never part of a result.
+function noteTargetVersion(db, row) {
+  const current = row.current_version;
+  const last = db.prepare('SELECT version, note FROM review_results WHERE slug = ? AND pack = ? ORDER BY version DESC LIMIT 1').get(row.slug, row.pack);
+  if (!last) {
+    const versions = db.prepare('SELECT COUNT(*) AS n FROM review_versions WHERE slug = ? AND pack = ?').get(row.slug, row.pack).n;
+    return { version: current, legacy: versions > 1 ? 1 : 0 };
+  }
+  if (last.version === current) return { version: current, legacy: 0 };
+  if (last.version < current && last.note === row.note) return { version: last.version, legacy: 0 };
+  return { version: current, legacy: 0 };
+}
+
 const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // The main checkout has a .git directory. A linked worktree has a .git file. A copy of the source has neither.
@@ -203,6 +263,10 @@ const MIGRATIONS = [
         FOREIGN KEY (slug, pack) REFERENCES review_packs(slug, pack) ON DELETE CASCADE
       );
     `,
+  },
+  {
+    version: 5,
+    run: (db) => { migratePackNotes(db); },
   },
 ];
 

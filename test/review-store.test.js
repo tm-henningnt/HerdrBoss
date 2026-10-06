@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { assertTempDataDir } from '../src/data-dir-guard.js';
 import { validatePack } from '../src/review-pack.js';
 import { openSqliteStore } from '../src/sqlite-store.js';
+import { resultMarkdown } from '../src/review-result.js';
 import {
   publishVersion, putAnswer, putPackNote, getPack, listPacks, getResult, getFile, submitPack, sweep, deletePack, setMailId,
   packDirectory, ReviewStoreError,
@@ -116,16 +117,17 @@ function walk(root) {
 }
 
 const count = (dir, table) => openSqliteStore({ dir }).db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-const TABLES = ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers', 'review_results', 'review_reopened_items'];
+const TABLES = ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers', 'review_results', 'review_reopened_items', 'review_notes'];
 
 // ---------- Migration ----------
 
 test('the migrations create the review tables in an empty database', (t) => {
   const dir = dataDir(t);
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4, 5]);
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   for (const table of TABLES) assert.ok(names.includes(table), `table ${table} exists`);
+  assert.ok(names.includes('review_pack_note_backup'), 'the note migration keeps a backup table');
   assert.ok(db.prepare('PRAGMA table_info(review_reopened_items)').all().some((column) => column.name === 'op_id'));
   assert.ok(names.includes('messages'), 'the message table stays');
 });
@@ -144,7 +146,7 @@ test('the migrations upgrade a database that has migration 1 only', (t) => {
   `);
   old.close();
   const { db } = openSqliteStore({ dir });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_version ORDER BY version').all().map((row) => row.version), [1, 2, 3, 4, 5]);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n, 1);
   for (const table of TABLES) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
 });
@@ -399,6 +401,64 @@ test('the pack note uses rev too', (t) => {
   assert.equal(getPack(where(dir)).noteRev, 1);
 });
 
+// RV4: a pack-level note belongs to one pack version.
+test('a new version starts with an empty pack note, and its submit carries no note', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  putPackNote({ ...where(dir), note: 'Fix the dark cart.', rev: 0 });
+  assert.equal(getPack(where(dir)).note, 'Fix the dark cart.');
+
+  publish(dir, folder({ tag: 9 }));
+  assert.equal(getPack(where(dir)).version, 2);
+  assert.equal(getPack(where(dir)).note, '', 'the new version starts with an empty note');
+  assert.equal(getPack(where(dir)).noteRev, 0, 'the new version note rev starts at 0');
+  assert.equal(getPack({ ...where(dir), version: 1 }).note, 'Fix the dark cart.', 'the old note stays on v1');
+
+  const { result } = submitPack({ ...where(dir), verdict: 'accept' });
+  assert.equal(result.version, 2);
+  assert.equal(result.note, '', 'the v2 submit carries no v1 note');
+});
+
+test('a note belongs to one version: the v2 note shows in the v2 result only', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  putPackNote({ ...where(dir), note: 'First round.', rev: 0 });
+  const first = submitPack({ ...where(dir), verdict: 'accept' }).result;
+  assert.equal(first.note, 'First round.');
+
+  publish(dir, folder({ tag: 9 }));
+  putPackNote({ ...where(dir), note: 'Second round.', rev: 0 });
+  const second = submitPack({ ...where(dir), verdict: 'deny' }).result;
+  assert.equal(second.note, 'Second round.');
+  assert.equal(getResult({ ...where(dir), version: 1 }).note, 'First round.', 'v1 keeps its own note');
+  assert.equal(getPack({ ...where(dir), version: 1 }).note, 'First round.', 'the v1 page shows the v1 note');
+  assert.equal(getPack(where(dir)).note, 'Second round.');
+});
+
+test('a removed item contributes no note to a later result', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  answer(dir, 'error-copy', { decision: 'deny', note: 'Old removed note.' });
+  publish(dir, folder({ edit: (m) => { m.sections[1].items.splice(0, 1); } }));
+  const { result } = submitPack({ ...where(dir), verdict: 'accept-with-changes' });
+  assert.ok(!JSON.stringify(result).includes('Old removed note.'), 'the result holds no removed item note');
+  assert.equal(result.removed.find((entry) => entry.id === 'error-copy')?.note, undefined);
+  assert.equal(resultMarkdown(result).includes('Old removed note.'), false, 'the Markdown holds no removed item note');
+});
+
+// The chosen rule for a staying item: an item answer, including its note, belongs to the item. An unchanged item
+// keeps its answer and note across versions, like its decision. A changed item marks the answer stale and keeps the note.
+test('a staying unchanged item keeps its note across versions', (t) => {
+  const dir = dataDir(t);
+  publish(dir, folder());
+  answer(dir, 'cart-themes', { decision: 'accept', note: 'Keep this note.' });
+  publish(dir, folder({ tag: 9 }));
+  const item = getPack(where(dir)).items.find((entry) => entry.id === 'cart-themes');
+  assert.equal(item.answer.note, 'Keep this note.', 'an unchanged item keeps its note and its answer');
+  const { result } = submitPack({ ...where(dir), verdict: 'accept' });
+  assert.equal(result.items.find((entry) => entry.id === 'cart-themes').note, 'Keep this note.');
+});
+
 // ---------- Submit ----------
 
 test('a pack is submitted once, and a second submit after a new version is allowed', (t) => {
@@ -471,7 +531,7 @@ test('the sweep deletes a submitted pack 30 days after the submit and keeps the 
   const swept = sweep({ dir, now: T0 + 31 * DAY });
   assert.deepEqual(swept.deleted.map((entry) => `${entry.slug}/${entry.pack}`), ['shop/checkout-redesign']);
   assert.equal(fs.existsSync(path.join(dir, 'review-packs', 'shop', 'checkout-redesign')), false);
-  for (const table of ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers']) assert.equal(count(dir, table), 0, table);
+  for (const table of ['review_packs', 'review_versions', 'review_items', 'review_files', 'review_answers', 'review_notes']) assert.equal(count(dir, table), 0, table);
   assert.equal(count(dir, 'review_results'), 1);
   assert.equal(getResult(where(dir)).verdict, 'deny');
   assert.equal(getPack(where(dir)), null);

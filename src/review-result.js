@@ -98,7 +98,9 @@ export function buildResult(pack, verdict, note, at) {
     sections: pack.derived.sections.map((section) => ({ id: section.id, state: section.state })),
     items,
     openItems: items.filter((item) => item.state === 'open' || item.state === 'changed').map((item) => item.id),
-    removed: pack.removed.map((entry) => ({ id: entry.id, decision: entry.answer.decision, note: entry.answer.note })),
+    // A removed item keeps its earlier decision for the summary, but never its note: the note belongs to the version
+    // that the item was removed from, and it is not part of a later result.
+    removed: pack.removed.map((entry) => ({ id: entry.id, decision: entry.answer.decision })),
   };
 }
 

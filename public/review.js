@@ -360,8 +360,10 @@ function summaryHtml(pack, ui, esc) {
     const chosen = VERDICTS.some((verdict) => verdict.key === ui.verdict) ? ui.verdict : VERDICTS.some((verdict) => verdict.key === proposed) ? proposed : DEFAULT_VERDICT;
     const options = VERDICTS.map((verdict) => `<label class="review-verdict-option"><input type="radio" name="review-verdict" value="${verdict.key}"${verdict.key === chosen ? ' checked' : ''} data-review-verdict><span><b>${verdict.label}</b><small>${verdict.hint}</small></span>${verdict.key === proposed ? '<span class="review-proposed">Proposed</span>' : ''}</label>`).join('');
     const note = ui.note ?? pack.note ?? '';
+    const prior = pack.priorNote && !note ? priorNoteHtml(pack.priorNote, esc) : '';
     form = `<form class="review-submit-form" id="review-submit-form" data-review-submit data-key="review-form">`
       + `<label class="review-field-label" for="review-note">Note for the whole pack</label>`
+      + prior
       + `<textarea id="review-note" class="review-note-field" data-review-note maxlength="2000" rows="4" placeholder="What should the project do next?">${esc(note)}</textarea>`
       + syncStatusHtml(ui.noteSync || { kind: '' }, esc)
       + noteConflictHtml(ui.noteConflict, esc)
@@ -370,7 +372,8 @@ function summaryHtml(pack, ui, esc) {
     const verdict = verdictInfo(ui.result?.verdict ?? pack.verdict);
     const chip = pack.state === 'expired' ? chipHtml({ tone: 'open', label: 'Expired', icon: '' }, esc) : verdict ? chipHtml({ tone: verdict.tone, label: verdict.done, icon: verdict.icon }, esc) : '';
     const note = ui.result?.note ?? pack.note;
-    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
+    const prior = pack.priorNote && !note ? priorNoteHtml(pack.priorNote, esc) : '';
+    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${prior}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
   }
   return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${warning}${blocks}${form}</section>`;
 }
@@ -394,6 +397,12 @@ function noteConflictHtml(conflict, esc) {
   if (!conflict) return '';
   return `<div class="rv-conflict" role="alert"><p><b>The note changed on another device.</b> The other note: ${esc(conflict.theirs?.note || '(empty)')}</p>`
     + '<div class="rv-conflict-actions"><button type="button" class="rv-button" data-review-note-conflict="mine">Keep mine</button><button type="button" class="rv-button" data-review-note-conflict="theirs">Use theirs</button></div></div>';
+}
+
+// The note of an older version, shown read-only. A null version names a note of an unknown older version.
+function priorNoteHtml(prior, esc) {
+  const from = prior.version == null ? 'an unknown older version' : `v${prior.version}`;
+  return `<p class="review-prior-note" data-review-prior-note><b>Note from ${esc(from)} (read only):</b> ${esc(prior.text)}</p>`;
 }
 
 // The changes that waited offline and then met an answer from another device. The page asks once for all of them.
