@@ -1,6 +1,10 @@
 // Linux quota readers for a factory container. CodexBar does not exist on Linux, so each reader asks the harness itself.
 // A reader prints readings only. It reads no login file and passes no credential in argv or in the child environment.
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { DATA_DIR } from './config.js';
+import { claudeRateLimitsDir } from './claude-statusline.js';
 
 const KILL_GRACE_MS = 3000;
 const MISSING_LOGIN_REASON = 'no login for this harness in this factory';
@@ -134,8 +138,43 @@ export function readCodexQuota({ spawnJsonRpc: spawnRpc = spawnJsonRpc, timeoutM
   });
 }
 
+const CLAUDE_STALE_HOURS = 3;
+const CLAUDE_WINDOWS = [['primary', 'five_hour', 300], ['secondary', 'seven_day', 10080]];
+
+function newestClaudeReport(dir) {
+  let names;
+  try { names = fs.readdirSync(dir).filter((name) => name.endsWith('.json')); } catch { return null; }
+  let best = null;
+  for (const name of names) {
+    let report;
+    try { report = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    const observed = Date.parse(report?.observedAt);
+    if (!Number.isFinite(observed) || !report.rate_limits || typeof report.rate_limits !== 'object') continue;
+    if (!best || observed > best.observed) best = { observed, report };
+  }
+  return best;
+}
+
+// Read the files that `herdr-boss claude-statusline` wrote. The reader runs no Claude command and reads no login file.
+export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now = () => Date.now() } = {}) {
+  const current = typeof now === 'function' ? now() : now;
+  const best = newestClaudeReport(dir);
+  if (!best) return unavailable('claude', 'no Claude session has reported usage yet');
+  const windows = [];
+  for (const [key, source, windowMinutes] of CLAUDE_WINDOWS) {
+    const w = best.report.rate_limits[source];
+    if (!w || typeof w !== 'object' || !(w.resets_at * 1000 > current)) continue;
+    windows.push(buildWindow({ key, usedPercent: w.used_percentage, resetsAtSeconds: w.resets_at, windowMinutes }));
+  }
+  if (!windows.length) {
+    const old = current - best.observed >= CLAUDE_STALE_HOURS * 3600_000;
+    return unavailable('claude', `the last Claude usage report is ${old ? `older than ${CLAUDE_STALE_HOURS} hours and ` : ''}past its reset`);
+  }
+  return { provider: 'claude', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
+}
+
 // The Linux readers by provider. A provider without an entry keeps the unknown reading.
-export const LINUX_READERS = Object.freeze({ codex: readCodexQuota });
+export const LINUX_READERS = Object.freeze({ codex: readCodexQuota, claude: readClaudeQuota });
 
 // Run the Linux reader of a provider. Returns null when the provider has no reader.
 export async function readQuota(provider, { readers = LINUX_READERS, ...options } = {}) {

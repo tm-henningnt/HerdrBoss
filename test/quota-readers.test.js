@@ -50,7 +50,7 @@ test('codexbar rows win over the Linux reader', async () => {
 });
 
 test('readQuota returns null for a provider without a reader', async () => {
-  assert.equal(await readQuota('claude', {}), null);
+  assert.equal(await readQuota('opencodego', {}), null);
   assert.equal(typeof LINUX_READERS.codex, 'function');
 });
 

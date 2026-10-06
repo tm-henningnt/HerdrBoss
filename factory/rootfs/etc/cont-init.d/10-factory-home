@@ -6,6 +6,10 @@ for dir in .herdr-boss work .config .ssh .claude .codex; do mkdir -p "$home/$dir
 chmod 700 "$home/.ssh"
 # A named volume can mount as root. Give the user the volume roots without a deep walk of the work volume.
 chown factory:factory "$home" "$home/.herdr-boss" "$home/work" "$home/.config" "$home/.ssh" "$home/.claude" "$home/.codex"
+# The Claude usage helper writes its readings here. The folder is private to the factory user.
+mkdir -p "$home/.herdr-boss/claude-rate-limits"
+chown factory:factory "$home/.herdr-boss/claude-rate-limits"
+chmod 700 "$home/.herdr-boss/claude-rate-limits"
 # The code volume starts empty. Copy the seed checkout, with its .git directory, only when no checkout exists.
 if [ ! -d "$home/herdr-boss/.git" ]; then
   mkdir -p "$home/herdr-boss"
@@ -45,3 +49,6 @@ s6-setuidgid factory env HOME="$home" node -e '
   config.chromePath = "/usr/bin/chromium";
   fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
 ' "$home/.herdr-boss"
+# The Claude usage helper: set the statusLine key of the factory user settings, or remove it when the setting is off.
+# The setting is factories.claudeUsageHelper in config.json. An existing statusLine of the factory user is kept, with a message.
+s6-setuidgid factory env HOME="$home" node /opt/herdr-boss-seed/src/factory-claude-helper.js

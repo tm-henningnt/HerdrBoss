@@ -156,6 +156,8 @@ const DEFAULTS = {
   browser: { idleCloseMinutes: 20 },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
   analytics: { actionsMinutes: true },
+  // Install the Claude usage helper in the factory image home. The factory reads this key at each container start.
+  factories: { claudeUsageHelper: true },
   watch: {
     quietHours: false,
     maxWorkers: null,
@@ -214,6 +216,7 @@ const SERVICE_SETTINGS = [
   ['Service', 'allowedHosts'],
   ['Service', 'log.maxMegabytes'],
   ['Service', 'log.keepFiles'],
+  ['Service', 'factories.claudeUsageHelper'],
   ['Analytics', 'analytics.actionsMinutes'],
 ];
 
@@ -454,6 +457,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'watch.quietHours',
   'push',
   'analytics.actionsMinutes',
+  'factories.claudeUsageHelper',
 ]);
 const MAX_ALLOWED_HOSTS = 50;
 // One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.

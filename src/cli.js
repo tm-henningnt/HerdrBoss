@@ -120,6 +120,7 @@ const USAGE = `herdr-boss <command>
   install               Install and start the launchd agent.
   uninstall             Stop and remove the launchd agent.
   logs                  Show the server log.
+  claude-statusline     Factory only. Claude Code runs it as the status line. Reads the status line JSON on stdin and keeps the usage windows only.
   lanes                 Print one line per quota provider and the unmetered models lane.
   quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]
                         Show the Codex quota plan. What-if options do not write the plan.
@@ -555,6 +556,12 @@ async function main() {
     const { createHerdrRunner } = await import('./kit/workers.js');
     const code = planCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
+    return;
+  }
+  if (cmd === 'claude-statusline') {
+    // Runs in the Claude status line of a factory. It loads no config and creates no other file.
+    const { claudeStatuslineCommand, claudeRateLimitsDir } = await import('./claude-statusline.js');
+    process.exitCode = await claudeStatuslineCommand({ dir: claudeRateLimitsDir(DATA_DIR) });
     return;
   }
   if (cmd === 'quota') {

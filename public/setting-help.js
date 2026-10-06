@@ -11,6 +11,7 @@ export const APPLY = {
   restart: 'Change it in config.json. Restart the service.',
   now: 'The change takes effect at once.',
   'saved-restart': 'Select Save in the group. Restart the service for the change to take effect.',
+  'saved-factory-start': 'Select Save in the group. Each factory container applies the change at its next start.',
 };
 
 // The order of a group is the order on the page. `advanced` groups sit in the collapsed Advanced section.
@@ -752,6 +753,13 @@ export const SETTING_HELP = Object.fromEntries([
     raise: 'Turning it on frees disk space.',
     lower: 'Turning it off leaves the clones on disk.',
     apply: 'service',
+  }),
+  S('service', 'factories.claudeUsageHelper', 'Claude usage helper in factories', {
+    what: 'Lets a factory container show the Claude usage limit. The helper is the command herdr-boss claude-statusline. It is the status line of the factory user in Claude Code. It writes the two usage windows and the time to a private file in the factory data folder. It writes no other field of the status line input. The setting never changes the Claude settings on this Mac.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on shows the Claude usage limit of a factory while a Claude session runs there.',
+    lower: 'Turning it off removes the status line entry of the factory user. The Claude usage limit of a factory then shows as unknown.',
+    apply: 'saved-factory-start',
   }),
   S('service', 'tickSeconds', 'Tick seconds', {
     what: 'The time between two collection passes of the engine.',
