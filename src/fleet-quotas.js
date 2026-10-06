@@ -51,6 +51,8 @@ export function fleetQuotas(readings, accounts, factoryId) {
   // closed marker instead of an accountKey, so the fleet rollup can leave it out of the shared total.
   for (const reading of readings || []) {
     if (!reading || claimed.has(reading.provider)) continue;
+    // Like the account path, keep the first reading of a provider.
+    claimed.add(reading.provider);
     const harness = reading.provider === 'opencodego' ? 'opencode' : reading.provider;
     if (typeof harness !== 'string' || !HARNESS.test(harness)) continue;
     rows.push(...readingRows(reading, harness, { accountScope: 'this-factory' }));

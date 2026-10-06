@@ -166,7 +166,7 @@ The complete example sets every 1.x addition.
 The minimal example is an older summary without them.
 The null example uses an unavailable reading.
 The quota `estimate` is optional. It holds `days`, `tokens`, `costUsd`, and `omittedModels`. A factory sets it for a harness without a usage source, for example OpenCode Go. The row then has `usedPercent: null` and `status: unknown`. The estimate is the local use in that factory. It is never a percent and never a quota. `resetAt` of that row is the reset time that the Owner set by hand.
-A factory with no account record for a harness still reports that harness from its own readings. Each row then has `accountScope: "this-factory"` and no `accountKey`. The schema accepts the row. An older reader selects only its supported fields. The Fleet card labels the row `this factory only`.
+A factory with no account record for a harness still reports that harness from its own readings. Each row then has `accountScope: "this-factory"` and no `accountKey`. The schema accepts the row. A head office on contract 1.0.0 refuses a summary that holds such a row, because its schema requires `accountKey`. Update the head office before the factories. The Fleet card labels the row `this factory only`.
 
 ### Rollup
 

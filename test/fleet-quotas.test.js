@@ -56,3 +56,9 @@ test('an OpenCode Go reading without an account keeps the opencode harness and t
   assert.equal('accountKey' in rows[0], false);
   assert.deepEqual(rows[0].estimate, { days: 7, tokens: 10, costUsd: 0.5, omittedModels: 0 });
 });
+
+test('two readings of one provider without an account give one set of local rows', async () => {
+  const { fleetQuotas } = await load();
+  const rows = fleetQuotas([{ provider: 'claude', windows: [{ key: 'p', usedPercent: 3 }] }, { provider: 'claude', windows: [{ key: 'q', usedPercent: 80 }] }], [], 'win1');
+  assert.deepEqual(rows.map((row) => row.lane), ['p']);
+});
