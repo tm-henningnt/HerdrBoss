@@ -49,7 +49,7 @@ In the vendor test, a model failed to report a broken search tool in these cases
 | `codex`, `gpt-6.1-sol` (trial) | Tougher programming tasks: cross-cutting fixes, algorithms, takeovers, and tasks where `gpt-6-luna` needed rework. Cost effective and close to Astra level. | Trial until the Analytics scorecard has about 10 runs for this model. Record `--model-result` for every run with `worker collect`, so rework and time can be compared with `gpt-6-luna`. |
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
-| `pi`, `opencode-go/space-bunny-free` and `opencode-go/longcat-2.5-preview-free` (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Evidence is limited. Verify the full diff and each finding at its source. |
+| `pi`, `opencode-go/longcat-2.5-preview-free` and `opencode-go/space-bunny-free` (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Evidence is limited. Verify the full diff and each finding at its source. `space-bunny-free` was unavailable upstream on 2026-10-06; use `longcat-2.5-preview-free`. |
 | `opencode`, `opencode/ling-3.1-flash-free` and `opencode/fledge-alpha-free` (trial, unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Trial: the model has a `trial` tag until its scorecard has 5 results. Evidence is limited. Verify the full diff. Run it in the OpenCode harness only. Record `--model-result` for every run with `worker collect`. `opencode/fledge-alpha-free` is not available in the Owner's country; mark it with `herdr-boss models disable opencode/opencode/fledge-alpha-free` until the Owner re-enables it. |
 | `opencode`, free `opencode/` models (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Give an exact brief and a clear gate. Verify the full diff. Permission prompts and provider overload can stop work; then move the task to another lane. |
 
@@ -73,7 +73,7 @@ This list is descriptive only. `models.json` decides which models workers may us
 
 Free `opencode/` models run only in the OpenCode harness. The Pi allow-list holds only `opencode-go/` models.
 
-Herdr Boss hides a Pi model that `pi --list-models` does not list. Confirm a worker start before you rely on a model.
+Herdr Boss hides a Pi model that `pi --list-models` does not list. `worker start` also runs `pi --list-models` before it starts a Pi worker. Confirm a worker start before you rely on a model.
 
 Prefer DeepSeek for substantial mechanical work when both DeepSeek and Muse Spark are available.
 
@@ -106,6 +106,26 @@ pi --model <model> --models <same-model> --no-extensions -e ~/.pi/agent/extensio
 Do not let model cycling select an unapproved model.
 
 Read the bulletin before you choose a Pi model. Pi lists only the models that it can use. Herdr Boss runs `pi --list-models` and hides each Pi model that it does not list. `worker start` refuses such a model, and `--force` does not bypass the refusal. A missing provider means that Pi has no credential for it.
+
+`worker start` for kind `pi` runs `pi --list-models` once for each process, with a limit of 10 seconds. The command refuses a chosen model that the listing lacks. The message names the missing model, the provider that lists a model of the same name, and up to five listed models of the chosen provider. If `pi --list-models` fails or times out, the command prints a warning and starts the worker.
+
+The listing does not show an upstream outage. A listed model can still fail with `400: Upstream request failed: Model is unavailable.` Start another model in that case.
+
+### Pi models listed on 2026-10-06
+
+The Pi providers are `opencode-go` and `oc-sdk-go`. Only `opencode-go/` models are in the `models.json` allow-list. Pi can start a model that is not in the allow-list only outside `worker start`.
+
+Models of `opencode-go`:
+
+`deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro`, `deepseek-v4.1-flash`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`, `gpt-5.6-luna`, `gpt-6-luna`, `grok-4.6`, `grok-4.7`, `hy3`, `hy4-preview`, `kimi-k2.7-code`, `kimi-k3`, `longcat-2.0`, `longcat-2.5-preview-free`, `mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, `minimax-m2.7`, `minimax-m3`, `muse-spark-1.2-contributor`, `muse-spark-1.3-contributor`, `qwen3.7-plus`, `qwen3.8-flash`, `qwen3.8-max`, `space-bunny`, `space-bunny-free`.
+
+Models of `oc-sdk-go`:
+
+`deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro`, `deepseek-v4.1-flash`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`, `gpt-5.6-luna`, `gpt-6-luna`, `grok-4.5`, `grok-4.6`, `grok-4.7`, `hy3`, `hy4-preview`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`, `longcat-2.0`, `longcat-2.5-preview-free`, `mimo-v2.5`, `mimo-v2.5-pro`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, `minimax-m2.7`, `minimax-m3`, `muse-spark-1.2-contributor`, `muse-spark-1.3-contributor`, `qwen3.6-plus`, `qwen3.7-max`, `qwen3.7-plus`, `qwen3.8-flash`, `qwen3.8-max`, `space-bunny-free`.
+
+On 2026-10-06, `space-bunny-free` ended with `400: Upstream request failed: Model is unavailable.` under both providers. The free Pi lanes that answered are `opencode-go/longcat-2.5-preview-free` and `oc-sdk-go/longcat-2.5-preview-free`. `opencode-go/muse-spark-1.3-contributor` also answered.
+
+Pi prints `Warning: No models match pattern ...` for each enabled pattern in the Owner's Pi settings that matches no model. Ignore these lines. Do not edit the Owner's Pi settings.
 
 ### OpenCode
 

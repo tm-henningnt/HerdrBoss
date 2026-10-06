@@ -253,3 +253,7 @@ Summary: Integrate copied read-only review inputs and exact stop-own harness che
 ## f699614f9779
 Impact: useful
 Summary: Add the rule that a license is never inline to the kit, the worker brief, the project template, and the review task rules; the docs gate fails a branch whose shipped artifact holds a token-shaped string (snake, kebab, camel, and upper case key names, every line, the working tree with --include-worktree), and `check agents` tells a project whose kit file lacks the rule to run `herdr-boss kit install`.
+
+## 2fdd21406a4b
+Impact: useful
+Summary: Add `opencode-go/longcat-2.5-preview-free` to the Pi allow-list. `worker start` for kind `pi` runs `pi --list-models` once, refuses a model that the listing lacks, and warns and continues when the listing fails. `models.md` lists the current Pi models and notes that `space-bunny-free` was unavailable upstream on 2026-10-06.
