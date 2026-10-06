@@ -265,3 +265,7 @@ Summary: The Hourly check routine lists the locks and each managed project orche
 ## 0b9e96f689e8
 Impact: useful
 Summary: Browser output masks URLs with a repeated or missing scheme and stored hosts; bookmarks add refuses a scheme in the host; bookmarks list, add, rm, start, and open give a worker names and indexes only.
+
+## 972ff4357ef2
+Impact: useful
+Summary: `browser bookmarks SLUG open INDEX --new-tab` prints JSON with the new tab id, a masked title, and a masked URL again (BM2 had trimmed it to the bookmark list); when the open fails after it created a tab, the command closes the tab and exits non-zero. Project helpers can read the tab id.
