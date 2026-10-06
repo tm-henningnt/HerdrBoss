@@ -1,8 +1,12 @@
 import { isIP } from 'node:net';
+import { domainToASCII, domainToUnicode } from 'node:url';
 
 const WEB_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:']);
 const URL_FIELDS = new Set(['url', 'start', 'startUrl', 'startPage', 'pageUrl', 'targetUrl', 'webSocketDebuggerUrl']);
-const URL_TEXT_SOURCE = '(?<![\\p{L}\\p{N}_.-])(?:[a-z][a-z\\d+.-]*:\\/\\/|(?:https?|wss?):(?:\\/|(?=(?:https?|wss?):\\/))|about:|data:|javascript:|blob:)[^\\s"\'`<>]+';
+const SCHEME = '(?:https?|wss?|ftp|file)';
+// A scheme is followed by a slash run that may hold whitespace or a backslash, by a dotted host, or by another scheme.
+const SCHEME_SEP = `:(?:[\\\\/][\\s\\\\/]*|(?=[\\p{L}\\p{N}-]+\\.[\\p{L}\\p{N}])|(?=${SCHEME}:[\\\\/]))`;
+const URL_TEXT_SOURCE = `(?<![\\p{L}\\p{N}_.-])(?:${SCHEME}${SCHEME_SEP}(?:${SCHEME}${SCHEME_SEP})*|[a-z][a-z\\d+.-]*:\\/\\/|about:|data:|javascript:|blob:)[^\\s"'\`<>]+|(?<![\\p{L}\\p{N}_.:/\\\\-])\\/\\/(?=[\\p{L}\\p{N}-]+\\.)[^\\s"'\`<>]+`;
 const MAX_JWT_PART_LENGTH = 4096;
 const SECRET_FIELDS = /^[A-Za-z0-9_]*(?:code|state|session_state|access_token|id_token|refresh_token|token|key)$/i;
 // Status fields with fixed enum values. Their names end in a secret suffix, but they hold no secret.
@@ -37,20 +41,28 @@ function isLoopback(hostname) {
   return isIP(host) === 4 && host.split('.')[0] === '127';
 }
 
-const WEB_SCHEME_PREFIX = /^(?:https?|wss?):\/*/i;
+const WEB_SCHEME_PREFIX = /^(?:(?:https?|wss?|ftp|file):[\s\\/]*)+/i;
 const NON_WEB_SCHEMES = /^(?:about|data|javascript|blob|mailto|tel|chrome|devtools|view-source):/i;
 const BARE_HOST = /^(?:localhost|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?)(?::\d+)?(?:[/?#]|$)/iu;
+const MASKED_HOST_PROTOCOLS = new Set([...WEB_PROTOCOLS, 'ftp:', 'file:']);
 
-// Repair a URL with a repeated scheme (https://https://host), a single slash (https:/host), or no scheme
-// (host/path), so that the host is parsed as a host and not left in the path.
-function normalizeWebUrl(value) {
-  const text = value.trim();
+// Decode a percent-encoded scheme separator, once or repeatedly, so that https%253A%252F%252Fhost reads as a URL.
+function decodeSchemeEscapes(value) {
+  return value.replace(/(?<=\b(?:https?|wss?|ftp|file))(?:(?:%25)*(?:%25|%)(?:3a|2f|5c|0a|0d|09|20)|[:/\\])+/gi, (run) => run
+    .replace(/(?:%25)+(?=(?:3a|2f|5c|0a|0d|09|20))/gi, '%')
+    .replace(/%3a/gi, ':').replace(/%2f/gi, '/').replace(/%5c/gi, '\\')
+    .replace(/%0a/gi, '\n').replace(/%0d/gi, '\r').replace(/%09/gi, '\t').replace(/%20/gi, ' '));
+}
+
+// Repair a URL with a repeated scheme (https://https://host), a single slash, a backslash, whitespace after the
+// scheme, a colon without slashes, a leading //, or no scheme (host/path), so that the host is parsed as a host.
+export function repairWebUrl(value) {
+  let text = decodeSchemeEscapes(value).trim();
+  if (/^[<("'`]/.test(text)) text = text.replace(/^[<("'`]+/, '').replace(/[>)"'`,.;]+$/, '');
+  if (/^file:\/\/\//i.test(text)) return text;
   const first = WEB_SCHEME_PREFIX.exec(text);
-  if (first) {
-    let rest = text;
-    while (WEB_SCHEME_PREFIX.test(rest)) rest = rest.replace(WEB_SCHEME_PREFIX, '');
-    return `${first[0].split(':')[0].toLowerCase()}://${rest}`;
-  }
+  if (first) return `${first[0].split(':')[0].toLowerCase()}://${text.slice(first[0].length)}`;
+  if (/^\/\/[^\s/]/.test(text)) return `https:${text}`;
   if (!NON_WEB_SCHEMES.test(text) && !/^[a-z][a-z\d+.-]*:\/\//i.test(text) && BARE_HOST.test(text)) return `https://${text}`;
   return value;
 }
@@ -105,10 +117,23 @@ export function redactBrowserSecrets(value) {
     .replace(/\b(Bearer\s+)[^\s"'<>;,\\]+/gi, '$1<redacted>'));
 }
 
+function maskHostTokens(text, full) {
+  if (full) return text;
+  return text.replace(HOST_TEXT_TOKEN, (token) => {
+    const host = token.replace(/^\[|\]$/g, '');
+    if (isLoopback(host) || (!isIP(host) && !/[\p{L}]/u.test(host))) return token;
+    return maskedHost(host);
+  });
+}
+
 function maskKnownHosts(text, knownHosts) {
   let result = text;
+  const forms = new Set();
   for (const host of knownHosts) {
     if (typeof host !== 'string' || host.length < 3 || isLoopback(host)) continue;
+    for (const form of [host, domainToASCII(host), domainToUnicode(host)]) if (form) forms.add(form);
+  }
+  for (const host of forms) {
     result = result.replace(new RegExp(`(?<![\\p{L}\\p{N}_-])${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_-])`, 'giu'), maskedHost(host));
   }
   return result;
@@ -117,6 +142,7 @@ function maskKnownHosts(text, knownHosts) {
 export function maskBrowserText(value, { full = false, maskHosts = false, knownHosts = [] } = {}) {
   if (typeof value !== 'string') return value;
   // Decode raw text once, before JSON serialization can introduce escapes.
+  value = decodeSchemeEscapes(value);
   try { value = decodeURIComponent(value); } catch {}
   const maskText = (text) => {
     // Redact the complete JWT, including padding, before matching host names.
@@ -155,14 +181,20 @@ export function maskCliError(value, { full = false } = {}) {
 export function maskUrl(value, { full = false } = {}) {
   if (typeof value !== 'string') return value;
 
-  value = normalizeWebUrl(value);
+  value = repairWebUrl(value);
   let parsed;
   try { parsed = new URL(value); }
-  catch { return maskAppUuid(redactBrowserSecrets(value.split(/[?#]/, 1)[0]), { full }); }
+  catch {
+    let decoded = null;
+    try { decoded = decodeURIComponent(value); } catch {}
+    if (decoded !== null && decoded !== value) return maskUrl(decoded, { full });
+    // An unparsable value keeps no query and no fragment, and masks each host-like token.
+    return maskAppUuid(redactBrowserSecrets(maskHostTokens(value.split(/[?#]/, 1)[0], full)), { full });
+  }
 
   if (parsed.protocol === 'data:' || parsed.protocol === 'javascript:') return '<redacted-url>';
 
-  if (!WEB_PROTOCOLS.has(parsed.protocol)) {
+  if (!MASKED_HOST_PROTOCOLS.has(parsed.protocol)) {
     parsed.username = '';
     parsed.password = '';
     parsed.search = '';
@@ -170,7 +202,7 @@ export function maskUrl(value, { full = false } = {}) {
     return maskAppUuid(redactBrowserSecrets(parsed.href), { full });
   }
 
-  const host = full || isLoopback(parsed.hostname) ? parsed.hostname : maskedHost(parsed.hostname);
+  const host = full || !parsed.hostname || isLoopback(parsed.hostname) ? parsed.hostname : maskedHost(parsed.hostname);
   const port = explicitPort(value) || (parsed.port ? `:${parsed.port}` : '');
   return maskAppUuid(redactBrowserSecrets(`${parsed.protocol}//${host}${port}${parsed.pathname}`), { full });
 }

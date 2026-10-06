@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { maskBrowserText, maskDeep, maskUrl } from '../src/browser-url-mask.js';
+import { maskBrowserText, maskDeep, maskUrl, repairWebUrl } from '../src/browser-url-mask.js';
 
 test('browser masking is safe to repeat on API and engine output', () => {
   const input = { title: 'tenant1.example.test', bookmark: { name: 'Open tenant1.example.test', url: 'https://tenant1.example.test/callback?code=AAAAfakecode' } };
@@ -24,7 +24,7 @@ test('maskUrl keeps loopback hosts and removes credentials, queries, and fragmen
 test('maskUrl masks outside IP addresses and removes credentials from every URL', () => {
   assert.equal(maskUrl('https://192.0.2.9:8443/a?x=1#y'), 'https://<ip>:8443/a');
   assert.equal(maskUrl('https://user:pass@acme.example.com/a?x=1#y'), 'https://<tenant>.example.com/a');
-  assert.equal(maskUrl('ftp://user:pass@files.example.com/path'), 'ftp://files.example.com/path');
+  assert.equal(maskUrl('ftp://user:pass@files.example.com/path'), 'ftp://<tenant>.example.com/path');
 });
 
 test('maskUrl keeps non-web browser URLs and redacts active or embedded content', () => {
@@ -110,4 +110,67 @@ test('maskBrowserText masks a stored host and keeps the credential filter', () =
 test('maskDeep masks a stored host in a URL field of a bookmark', () => {
   const masked = maskDeep({ url: 'https://https://tenant1.example.test/a' });
   assert.ok(!JSON.stringify(masked).includes('tenant1'));
+});
+
+const LEAK_FORMS = [
+  'https:/ /tenant1.example.test/a',
+  'https:// tenant1.example.test/a',
+  'https: //tenant1.example.test/a',
+  'https://\ntenant1.example.test/a',
+  'https:\\\\tenant1.example.test\\a',
+  'https:\\tenant1.example.test',
+  'https:tenant1.example.test/a',
+  'http:tenant1.example.test',
+  '//tenant1.example.test/a',
+  'ftp://tenant1.example.test/a',
+  'file://tenant1.example.test/x',
+  'ftp://https://tenant1.example.test',
+  'https%253A%252F%252Ftenant1.example.test',
+  'https%3A%2F%2Ftenant1.example.test',
+  'https%253A%252F%252Fhttps%253A%252F%252Ftenant1.example.test',
+];
+
+test('maskBrowserText masks the host of every repaired scheme form', () => {
+  for (const form of LEAK_FORMS) {
+    const output = maskBrowserText(`see ${form} end`);
+    assert.ok(!output.includes('tenant1'), `${JSON.stringify(form)} leaked: ${output}`);
+  }
+});
+
+test('maskUrl masks the host of every repaired scheme form', () => {
+  for (const form of LEAK_FORMS) {
+    const output = maskUrl(form);
+    assert.ok(!output.includes('tenant1'), `${JSON.stringify(form)} leaked: ${output}`);
+  }
+});
+
+test('maskUrl decodes and unwraps a URL field before it masks', () => {
+  for (const form of [
+    'https%3A%2F%2Ftenant1.example.test%2Fa',
+    'https://tenant1.example.test%2fpath',
+    'https://tenant1.example.test%0a',
+    '"https://https://tenant1.example.test/a",',
+    '<https:/tenant1.example.test/a>',
+  ]) {
+    const output = maskUrl(form);
+    assert.ok(!output.includes('tenant1'), `${JSON.stringify(form)} leaked: ${output}`);
+  }
+});
+
+test('maskBrowserText keeps prose, file paths, and loopback readable', () => {
+  assert.equal(maskBrowserText('Use https: for the link and file: for paths.'), 'Use https: for the link and file: for paths.');
+  assert.equal(maskBrowserText('open file:///tmp/a.txt now'), 'open file:///tmp/a.txt now');
+  assert.equal(maskBrowserText('a // comment and src//x.js'), 'a // comment and src//x.js');
+  assert.equal(maskUrl('http://localhost:4477/x'), 'http://localhost:4477/x');
+});
+
+test('a known host also matches its punycode and Unicode forms', () => {
+  const unicode = maskBrowserText('x xn--bcher-kva.example.test y', { knownHosts: ['bücher.example.test'] });
+  assert.ok(!unicode.includes('bcher'), unicode);
+  const ascii = maskBrowserText('x bücher.example.test y', { knownHosts: ['xn--bcher-kva.example.test'] });
+  assert.ok(!ascii.includes('cher.example'), ascii);
+});
+
+test('repairWebUrl gives the real host of a legacy stored URL', () => {
+  assert.equal(new URL(repairWebUrl('https://https://tenant2.example.test/old')).hostname, 'tenant2.example.test');
 });

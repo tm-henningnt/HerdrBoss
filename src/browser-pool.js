@@ -309,8 +309,13 @@ export function listBrowserTabViewports(project, openTabIds) {
 // A bookmark URL must be http or https and must not hold a user name or a password.
 export function bookmarkUrl(value) {
   let parsed;
-  // A scheme inside the host part, such as https://https://host, is a typing error. Refuse it without an echo.
-  if (/^[a-z][a-z\d+.-]*:\/*[a-z][a-z\d+.-]*:\/\//i.test(String(value ?? '').trim())) throw new Error('A bookmark URL host must not hold a scheme. Write one scheme, then the host.');
+  const text = String(value ?? '').trim();
+  // A scheme, a backslash, whitespace, or a control character in the host part is a typing error. Refuse it
+  // without an echo. The authority is the text after the first scheme and its slashes, up to the next slash.
+  const authority = text.replace(/^[a-z][a-z\d+.-]*:/i, '').replace(/^\/*/, '').split(/[/?#]/, 1)[0];
+  const hostName = authority.slice(authority.lastIndexOf('@') + 1).replace(/:\d*$/, '');
+  if (/[\\\s\u0000-\u001f\u007f]/.test(authority) || /^(?:https?|wss?)$/i.test(hostName)
+    || /^[a-z][a-z\d+.-]*:\/*[a-z][a-z\d+.-]*:\/\//i.test(text)) throw new Error('A bookmark URL host must not hold a scheme, a backslash, or a space. Write one scheme, then the host.');
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('A bookmark URL must use http or https.'); }
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('A bookmark URL must use http or https.');
   if (parsed.username || parsed.password) throw new Error('Bookmarks must not hold credentials.');

@@ -386,3 +386,93 @@ test('bookmarks list keeps the full list for the Owner', (t) => {
   const { run } = bookmarksCli(t);
   assert.equal(JSON.parse(run(['bookmarks', 'alpha', 'list']).stdout).bookmarks[3].url, 'https://<tenant>.example.org/');
 });
+
+const WORKER_ENVS = {
+  'all pane variables': { HERDR_ENV: '1', HERDR_PANE_ID: 'p1', HERDR_WORKSPACE_ID: 'w1' },
+  'only HERDR_WORKTREE': { HERDR_WORKTREE: '/tmp/worktree-x' },
+};
+
+test('a worker with only HERDR_WORKTREE gets names and indexes, also with --full', (t) => {
+  const { run } = bookmarksCli(t);
+  for (const [label, extra] of Object.entries(WORKER_ENVS)) {
+    for (const flags of [[], ['--full']]) {
+      const result = run(['bookmarks', 'alpha', 'list', ...flags], extra);
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.deepEqual(Object.keys(output), ['bookmarks'], label);
+      assert.deepEqual(Object.keys(output.bookmarks[0]).sort(), ['index', 'name'], label);
+      assert.ok(!result.stdout.includes('acme.example.com/start'), label);
+      assert.ok(!result.stdout.includes('docs.example.org'), label);
+      assert.ok(!result.stdout.includes('"url"'), label);
+    }
+  }
+});
+
+test('a worker with --full never sees a host from a bookmark name', (t) => {
+  const { run } = bookmarksCli(t);
+  const result = run(['bookmarks', 'alpha', 'list', '--full'], WORKER_ENVS['only HERDR_WORKTREE']);
+  assert.ok(!result.stdout.includes('acme.example.com'), result.stdout);
+});
+
+test('bookmarks add refuses a backslash, whitespace, control character, or scheme word as host', (t) => {
+  const { run, dataDir } = bookmarksCli(t);
+  for (const url of [
+    'https:\\https://tenant9.example.test',
+    'https://\nhttps://tenant9.example.test',
+    'https:\\\\tenant9.example.test',
+    'https:/ /tenant9.example.test',
+    'https://https:8080/tenant9.example.test',
+  ]) {
+    const result = run(['bookmarks', 'alpha', 'add', 'Bad', url]);
+    assert.notEqual(result.status, 0, JSON.stringify(url));
+    assert.ok(!`${result.stdout}${result.stderr}`.includes('tenant9'), JSON.stringify(url));
+  }
+  const start = run(['bookmarks', 'alpha', 'start', 'https:\\https://tenant9.example.test']);
+  assert.notEqual(start.status, 0);
+  assert.ok(!`${start.stdout}${start.stderr}`.includes('tenant9'));
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'browser-sessions.json'), 'utf8')).alpha;
+  assert.ok(!JSON.stringify(stored).includes('tenant9'));
+});
+
+test('a worker gets names and indexes only from add, rm, and start', (t) => {
+  const { run } = bookmarksCli(t);
+  const extra = WORKER_ENVS['only HERDR_WORKTREE'];
+  const runs = [
+    ['bookmarks', 'alpha', 'add', 'Docs', 'https://new.example.net/docs'],
+    ['bookmarks', 'alpha', 'rm', '0'],
+    ['bookmarks', 'alpha', 'start', 'https://start.example.net/'],
+    ['bookmarks', 'alpha', 'add', 'Docs2', 'https://new2.example.net/docs', '--full'],
+  ];
+  for (const args of runs) {
+    const result = run(args, extra);
+    // The caller check needs no live Herdr when only HERDR_WORKTREE is set.
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(output), ['bookmarks']);
+    assert.ok(output.bookmarks.every((b) => Object.keys(b).sort().join() === 'index,name'));
+    assert.ok(!/example\.net|"url"|startPage/.test(result.stdout), result.stdout);
+  }
+});
+
+test('the Owner keeps masked output from add', (t) => {
+  const { run } = bookmarksCli(t);
+  const result = run(['bookmarks', 'alpha', 'add', 'Docs', 'https://new.example.net/docs']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).bookmarks.at(-1).url, 'https://<tenant>.example.net/docs');
+});
+
+test('the top-level error text masks a stored host, also from a legacy stored URL', (t) => {
+  const { dataDir } = bookmarksCli(t);
+  const file = path.join(dataDir, 'browser-sessions.json');
+  const sessions = JSON.parse(fs.readFileSync(file, 'utf8'));
+  sessions.alpha.bookmarks.push({ name: 'Legacy', url: 'https://https://tenant2.example.test/old' });
+  fs.writeFileSync(file, JSON.stringify(sessions));
+  const script = `
+    import { browserErrorText } from ${JSON.stringify(new URL('../src/cli.js', import.meta.url).href)};
+    process.stdout.write(await browserErrorText('getaddrinfo ENOTFOUND tenant2.example.test and acme.example.com', { full: false }));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, HERDR_BOSS_DIR: dataDir, HOME: path.dirname(dataDir) } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!result.stdout.includes('tenant2'), result.stdout);
+  assert.ok(!result.stdout.includes('acme.example.com'), result.stdout);
+});

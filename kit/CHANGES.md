@@ -264,4 +264,4 @@ Summary: The Hourly check routine lists the locks and each managed project orche
 
 ## PENDING
 Impact: useful
-Summary: Browser output masks URLs with a repeated or missing scheme and stored hosts; bookmarks add refuses a scheme in the host; bookmarks list gives a worker names and indexes only.
+Summary: Browser output masks URLs with a repeated or missing scheme and stored hosts; bookmarks add refuses a scheme in the host; bookmarks list, add, rm, start, and open give a worker names and indexes only.

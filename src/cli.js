@@ -8,7 +8,7 @@ import { loadConfig, migrateAccessFiles, assertPreviewDataDir, assertLiveDataDir
 import { writeProject, statusWarnings, capDoneTasks, STATUS_WARN_BYTES, SLUG } from './projects.js';
 import { loadProjectConfig } from './kit/config.js';
 import { TRIAL_RESULT_TARGET, untilText } from './kit/model-unavailable.js';
-import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from './browser-url-mask.js';
+import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets, repairWebUrl } from './browser-url-mask.js';
 import { planDeviationText, projectionText } from './quota-plan.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -81,9 +81,29 @@ async function verifyBrowserCaller(slug, { env = process.env, herdr = null } = {
   throw new Error(`The ${slug} browser belongs to project ${slug}. This pane is in workspace ${where}, ${owner ? `which belongs to project ${owner}` : 'which belongs to no project'}. Only a pane in the ${slug} workspace or the Boss can change it.`);
 }
 
-// A shell with a Herdr pane variable is an agent. Only a shell with none is the Owner (as in verifyNightCaller).
+// A host stored in a bookmark or start page is masked as plain text too, also when it is not part of a URL.
+// A URL stored in a legacy bad form is repaired first, so the real host is collected.
+function storedBrowserHosts(sessions) {
+  const hosts = new Set();
+  for (const record of Object.values(sessions)) {
+    for (const value of [...(Array.isArray(record?.bookmarks) ? record.bookmarks.map((b) => b?.url) : []), record?.startPage]) {
+      if (typeof value !== 'string') continue;
+      try { const host = new URL(repairWebUrl(value)).hostname; if (host) hosts.add(host); } catch {}
+    }
+  }
+  return [...hosts];
+}
+
+export async function browserErrorText(message, { full = false } = {}) {
+  let knownHosts = [];
+  try { knownHosts = storedBrowserHosts((await import('./browser-pool.js')).listBrowserSessions()); } catch {}
+  return maskBrowserText(message, { full, knownHosts });
+}
+
+// A shell with a Herdr pane or worktree variable is a worker. Only a shell with none is the Owner. The rule guards
+// against accidents. It is not a security boundary: a worker can unset the variables.
 function isHerdrPane(env) {
-  return env.HERDR_ENV === '1' || Boolean(env.HERDR_PANE_ID) || Boolean(env.HERDR_WORKSPACE_ID);
+  return env.HERDR_ENV === '1' || Boolean(env.HERDR_PANE_ID) || Boolean(env.HERDR_WORKSPACE_ID) || Boolean(env.HERDR_WORKTREE);
 }
 
 // Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop the
@@ -169,8 +189,8 @@ const USAGE = `herdr-boss <command>
   browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
-  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page. A worker sees names and indexes only.
-  browser bookmarks SLUG add NAME URL  Add one bookmark. The URL host must not hold a scheme.
+  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page. A worker sees names and indexes only, also from add, rm, start, and open.
+  browser bookmarks SLUG add NAME URL  Add one bookmark. The URL host must not hold a scheme, a backslash, or a space.
   browser bookmarks SLUG rm INDEX  Remove one bookmark.
   browser bookmarks SLUG open INDEX [--new-tab] [--full]  Open a bookmark in the current tab or a new tab.
   browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
@@ -786,18 +806,15 @@ async function main() {
         if (!match) throw new Error(`${subject} must be percentages from 0% to 100%, for example 42% 65%.`);
         return Number(value.slice(0, -1)) / 100;
       };
-      // A host stored in a bookmark or start page is masked as plain text too, also when it is not part of a URL.
-      const storedHosts = () => {
-        const hosts = new Set();
-        for (const record of Object.values(listBrowserSessions())) {
-          for (const value of [...(Array.isArray(record?.bookmarks) ? record.bookmarks.map((b) => b?.url) : []), record?.startPage]) {
-            try { const host = new URL(value).hostname; if (host) hosts.add(host); } catch {}
-          }
-        }
-        return [...hosts];
-      };
-      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full, knownHosts: storedHosts() })));
+      const printBrowser = (value, formatter = maskBrowserText) => console.log(redactBrowserSecrets(formatter(value, { full, knownHosts: storedBrowserHosts(listBrowserSessions()) })));
       const printBrowserJson = (value) => printBrowser(value, formatBrowserJson);
+      // A worker gets the index and the name of each bookmark only, never a URL or the start page. --full never
+      // widens that output. The Owner keeps the masked state.
+      const printBookmarks = (state) => {
+        if (!isHerdrPane(process.env)) return printBrowserJson(state);
+        const names = { bookmarks: state.bookmarks.map((bookmark, index) => ({ index, name: bookmark.name })) };
+        console.log(redactBrowserSecrets(formatBrowserJson(names, { full: false, knownHosts: storedBrowserHosts(listBrowserSessions()) })));
+      };
       if (args[0] === 'sweep-clones' && (args.length === 1 || (args.length === 2 && args[1] === '--dry-run'))) {
         const { codeSignCloneDir, sweepCodeSignClones } = await import('./clone-sweep.js');
         const { fmtDuration } = await import('./rules.js');
@@ -929,29 +946,27 @@ async function main() {
         printBrowser('Key sent.');
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'list' && args.length === 3) {
-        const list = listBookmarks(args[1]);
-        // A worker (any Herdr pane) gets names and indexes only. The Owner at a plain terminal keeps the full list.
-        if (isHerdrPane(process.env)) printBrowserJson({ bookmarks: list.bookmarks.map((bookmark, index) => ({ index, name: bookmark.name })) });
-        else printBrowserJson(list);
+        printBookmarks(listBookmarks(args[1]));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'add' && args[3] && args[4] && args.length === 5) {
         await verifyBrowserCaller(args[1]);
-        printBrowserJson(addBookmark(args[1], { name: args[3], url: args[4] }));
+        printBookmarks(addBookmark(args[1], { name: args[3], url: args[4] }));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'rm' && args[3] && args.length === 4) {
         await verifyBrowserCaller(args[1]);
-        printBrowserJson(removeBookmark(args[1], args[3]));
+        printBookmarks(removeBookmark(args[1], args[3]));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'start' && args[3] && args.length === 4) {
         await verifyBrowserCaller(args[1]);
-        printBrowserJson(setStartPage(args[1], args[3] === 'none' ? null : args[3]));
+        printBookmarks(setStartPage(args[1], args[3] === 'none' ? null : args[3]));
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'open' && args[3] && (args.length === 4 || (args.length === 5 && args[4] === '--new-tab'))) {
         await verifyBrowserCaller(args[1]);
         const bookmark = listBookmarks(args[1]).bookmarks[Number(args[3])];
         if (!bookmark) throw new Error('Bookmark index is out of range.');
-        if (args[4] === '--new-tab') printBrowserJson(await browserNewTab(args[1], bookmark.url));
-        else printBrowserJson(await browserNavigate(args[1], null, bookmark.url));
+        const opened = args[4] === '--new-tab' ? await browserNewTab(args[1], bookmark.url) : await browserNavigate(args[1], null, bookmark.url);
+        if (isHerdrPane(process.env)) printBookmarks(listBookmarks(args[1]));
+        else printBrowserJson(opened);
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) {
@@ -1276,11 +1291,11 @@ if (process.argv[1]) {
 }
 
 if (directInvocation) {
-  main().catch((error) => {
+  main().catch(async (error) => {
     const e = sandboxWriteError(error);
     const full = process.argv.includes('--full');
     const message = process.argv[2] === 'browser'
-      ? maskBrowserText(e.message, { full })
+      ? await browserErrorText(e.message, { full })
       : maskCliError(e.message, { full });
     console.error(message);
     process.exit(e.exitCode ?? 1);
