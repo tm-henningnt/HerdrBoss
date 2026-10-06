@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 
 export const DEFAULT_PROMPT_TIMEOUT_SECONDS = 25;
+export const DEFAULT_CALL_TIMEOUT_MS = 2500;
 // These keys are best-known harness defaults. Read-back decides whether they worked.
 const CLEAR_KEYS = Object.freeze({ claude: ['esc', 'esc'], codex: ['ctrl+u'] });
 
@@ -80,8 +81,8 @@ function paneInputText(raw) {
   return input.join('\n').replace(/\n+$/, '');
 }
 
-export function deliverAgentPrompt(pane, text, { herdr, kind, agentName, expectedLabel, timeoutMs = agentPromptTimeoutMs() }) {
-  const options = { timeout: Math.min(timeoutMs, 2500), killSignal: 'SIGKILL' };
+export function deliverAgentPrompt(pane, text, { herdr, kind, agentName, expectedLabel, timeoutMs = agentPromptTimeoutMs(), callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS }) {
+  const options = { timeout: Math.min(timeoutMs, callTimeoutMs), killSignal: 'SIGKILL' };
   const paneId = (info) => info?.pane_id ?? info?.paneId ?? info?.id;
   const currentPane = () => {
     const response = checked(herdr(['pane', 'get', pane], options));

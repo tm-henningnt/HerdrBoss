@@ -615,7 +615,7 @@ function targetAddress(pane, control, runs = []) {
     agentName: details.agentName, expectedLabel: details.expectedLabel };
 }
 
-export function tellAgent(target, text, { env = process.env, herdr, control = {}, runs = null, dir = DATA_DIR, dataDir = dir, kind = 'task', replyTo = null, now = Date.now() } = {}) {
+export function tellAgent(target, text, { env = process.env, herdr, control = {}, runs = null, dir = DATA_DIR, dataDir = dir, kind = 'task', replyTo = null, now = Date.now(), callTimeoutMs } = {}) {
   if (!TELL_KINDS.has(kind)) return { exitCode: 2, reason: `--kind must be one of ${[...TELL_KINDS].join(', ')}.` };
   if (typeof text !== 'string' || !text.trim()) return { exitCode: 1, reason: 'The agent message text is empty.' };
   let record;
@@ -629,7 +629,7 @@ export function tellAgent(target, text, { env = process.env, herdr, control = {}
       replyTo, taskId: from.taskId ?? to.taskId, runId: from.runId ?? to.runId }, { dir, now });
   } catch (error) { return { exitCode: 1, reason: String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 200) }; }
   try {
-    const delivery = deliverAgentPrompt(record.to.pane, text, { herdr, kind: record.to.kind, ...deliveryTarget, timeoutMs: agentPromptTimeoutMs({ dir: dataDir }) });
+    const delivery = deliverAgentPrompt(record.to.pane, text, { herdr, kind: record.to.kind, ...deliveryTarget, timeoutMs: agentPromptTimeoutMs({ dir: dataDir }), ...(callTimeoutMs ? { callTimeoutMs } : {}) });
     if (delivery.exitCode) throw Object.assign(new Error(delivery.reason), { exitCode: delivery.exitCode });
     const updated = openMessageStore({ dir }).update(record.id, { status: 'delivered' }, { now });
     let metadataWarning;
