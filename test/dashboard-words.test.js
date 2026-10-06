@@ -23,7 +23,8 @@ function retiredWordsIn(file) {
   const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   const found = [];
   for (const { line, text } of literalSegments(source)) {
-    const plain = readableText(text);
+    // A command name keeps the retired word. Reference and commands are outside the plain-word rule.
+    const plain = readableText(text).replace(/herdr-boss harness [a-z-]+/g, '');
     // A literal without a space or a capital is a key, a class name, or a route.
     if (KEYS.has(text)) continue;
     // A plain lowercase word without markup is a key, a class name, or a route. The same word between tags is visible text.

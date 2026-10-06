@@ -258,6 +258,6 @@ Summary: Add the rule that a license is never inline to the kit, the worker brie
 Impact: useful
 Summary: Add `opencode-go/longcat-2.5-preview-free` to the Pi allow-list. `worker start` for kind `pi` runs `pi --list-models` once, refuses a model that the listing lacks, and warns and continues when the listing fails. `models.md` lists the current Pi models and notes that `space-bunny-free` was unavailable upstream on 2026-10-06.
 
-## 79716b4d22ad
+## e3f548b0a095
 Impact: useful
 Summary: The Hourly check routine lists the locks and each managed project orchestrator pane's idle age before it decides to nudge; the service snapshot lists only managed workspaces, gives a numeric age only when the clock and the pane state time are usable and in order, prints unknown or unavailable otherwise, and the routine never nudges a working or paused pane or infers an age.
