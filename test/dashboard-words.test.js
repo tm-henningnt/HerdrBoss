@@ -15,7 +15,9 @@ const RETIRED = [
 // Keys that the service sends. The page maps each one to a plain label.
 const KEYS = new Set(['Quota', 'Quota plan']);
 
-const FILES = ['public/app.js', 'public/setting-help.js'];
+const FILES = ['public/app.js', 'public/setting-help.js', 'public/fleet.js'];
+// The Fleet page is scanned for the retired word "quota" only.
+const ONLY = { 'public/fleet.js': /^usage limit$/ };
 
 function retiredWordsIn(file) {
   const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
@@ -29,6 +31,7 @@ function retiredWordsIn(file) {
     const doubled = plain.match(/\b([a-z]+) \1\b/i);
     if (doubled) found.push(`${file}:${line} doubled word "${doubled[0]}": ${plain.trim().slice(0, 80)}`);
     for (const [pattern, word] of RETIRED) {
+      if (ONLY[file] && !ONLY[file].test(word)) continue;
       const match = plain.match(pattern);
       if (match) found.push(`${file}:${line} "${match[0]}" should be "${word}": ${plain.trim().slice(0, 80)}`);
     }

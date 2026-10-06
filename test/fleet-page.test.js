@@ -101,7 +101,7 @@ test('the compact comparison carries every hand-computed fact for each factory',
   // The fresh-only totals are the hand-computed sums.
   assert.match(html, /data-fleet-total="workers"><span class="fleet-k">Workers<\/span><span class="fleet-v">5<\/span>/);
   assert.match(html, /data-fleet-total="spend"><span class="fleet-k">Spend · latest factory days<\/span><span class="fleet-v">\$14\.30<\/span>/);
-  assert.match(html, /data-fleet-total="quota"><span class="fleet-k">Quota burn<\/span><span class="fleet-v">61%<\/span>/);
+  assert.match(html, /data-fleet-total="quota"><span class="fleet-k">Usage limit burn<\/span><span class="fleet-v">61%<\/span>/);
   // F1: the named non-fresh factory is visible, not only in a title attribute.
   assert.match(visibleTotal(html, 'workers'), /2 of 3 · win2 unavailable/);
   assert.match(visibleTotal(html, 'spend'), /win2 unavailable/);

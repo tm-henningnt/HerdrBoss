@@ -189,7 +189,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
   <section class="totals" aria-label="Fleet totals">
     <div class="total"><span class="k">Workers</span><span class="v">5</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
     <div class="total"><span class="k">Spend today</span><span class="v">$14.30</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 unknown</span></div>
-    <div class="total"><span class="k">Quota burn</span><span class="v">61%</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
+    <div class="total"><span class="k">Usage limit burn</span><span class="v">61%</span><span class="s">as of 12 s &middot; 2 of 3 factories &middot; win2 last good</span></div>
   </section>
 
   <!-- 2. Compact alert strip. Collapsed at every width; the label names the fix in words. -->
@@ -255,7 +255,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
   <section class="compare" aria-label="Factory comparison">
     <div class="cmp-row head">
       <span class="cmp-cell">Factory</span><span class="cmp-cell">Kind</span><span class="cmp-cell">Health</span><span class="cmp-cell">Last seen</span>
-      <span class="cmp-cell">Workers</span><span class="cmp-cell">Worst quota</span><span class="cmp-cell">Spend</span><span class="cmp-cell">Owner</span><span class="cmp-cell">Version / kit</span>
+      <span class="cmp-cell">Workers</span><span class="cmp-cell">Worst usage limit</span><span class="cmp-cell">Spend</span><span class="cmp-cell">Owner</span><span class="cmp-cell">Version / kit</span>
     </div>
     <div class="cmp-row">
       <span class="cmp-cell cmp-name"><span class="cmp-k">Factory</span>factory-zero</span>
@@ -263,7 +263,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>4 s</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>2 / 8</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>61% claude</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst usage limit</span>61% claude</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$6.10</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>2</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 2e0a5d394ccc</span>
@@ -275,7 +275,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="cmp-cell cmp-health"><span class="state healthy"><span class="cmp-k">Health</span>&#9679; healthy</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>12 s</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>3 / 8</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>61% claude</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst usage limit</span>61% claude</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>$8.20</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>1</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>0.1.0 / 9c1f04ea77b2 <span class="drift">drift</span></span>
@@ -287,7 +287,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
       <span class="cmp-cell cmp-health"><span class="state offline"><span class="cmp-k">Health</span>&#9679; offline</span></span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>5 min</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>last good 1</span>
-      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>last good 24%</span>
+      <span class="cmp-cell hide-phone"><span class="cmp-k">Worst usage limit</span>last good 24%</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>unknown</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>last good 0</span>
       <span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>unknown</span>
@@ -320,7 +320,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     </div>
 
     <div class="lanes">
-      <h3>Quota</h3>
+      <h3>Usage limit</h3>
       <button class="lane-more" type="button" aria-expanded="false">3 lanes &middot; worst 61%</button>
       <div class="lane worst">
         <span class="who">claude &middot; weekly <span class="muted small">shared &middot; a2b4&hellip;91c0</span></span>
@@ -386,7 +386,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     </div>
 
     <div class="lanes">
-      <h3>Quota</h3>
+      <h3>Usage limit</h3>
       <button class="lane-more" type="button" aria-expanded="false">2 lanes &middot; worst 61%</button>
       <div class="lane worst">
         <span class="who">claude &middot; weekly <span class="muted small">shared &middot; a2b4&hellip;91c0</span></span>
@@ -443,7 +443,7 @@ body.phone .fact{border-right:0;border-bottom:1px solid var(--line)}
     </div>
 
     <div class="lanes">
-      <h3>Quota &middot; last good data</h3>
+      <h3>Usage limit &middot; last good data</h3>
       <button class="lane-more" type="button" aria-expanded="false">1 lane &middot; worst 24%</button>
       <div class="lane worst">
         <span class="who">codex &middot; weekly <span class="muted small">shared &middot; 7e10&hellip;44ab</span></span>

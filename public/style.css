@@ -368,6 +368,13 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .worker-config .files-list .mono { font-family: var(--mono); font-size: 12px; }
 .warnbox { border: 1px dashed var(--crit); color: var(--crit); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }
 
+@media (max-width: 480px) {
+  .quota-summary summary { flex-wrap: wrap; }
+  .quota-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); overflow-x: visible; flex: 1 1 100%; }
+  .quota-summary-item { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .quota-summary-item:last-child { border-bottom: 0; }
+  .quota-summary .fold-hint { flex: 1 1 100%; padding: 10px 0; }
+}
 @media (max-width: 760px) {
   .top { padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top)); padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); gap: 10px; }
   main { padding: 16px 16px 48px; padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
@@ -731,6 +738,13 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
   .quota-foldout { grid-template-columns: 1fr; padding: 8px 16px; }
   .quota-foldout .provider { border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 0; }
   .quota-foldout .provider:last-child { border-bottom: 0; }
+}
+@media (max-width: 480px) {
+  .quota-summary summary { flex-wrap: wrap; }
+  .quota-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); overflow-x: visible; flex: 1 1 100%; }
+  .quota-summary-item { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .quota-summary-item:last-child { border-bottom: 0; }
+  .quota-summary .fold-hint { flex: 1 1 100%; padding: 10px 0; }
 }
 @media (max-width: 760px) {
   .top { flex-wrap: wrap; }
@@ -1404,6 +1418,13 @@ p.wizard-errors { padding-left: 10px; }
 .mail-compose form { display: grid; gap: 8px; padding: 14px; }
 .mail-compose { max-height: none; }
 .mail-error { color: var(--crit); }
+@media (max-width: 480px) {
+  .quota-summary summary { flex-wrap: wrap; }
+  .quota-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); overflow-x: visible; flex: 1 1 100%; }
+  .quota-summary-item { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .quota-summary-item:last-child { border-bottom: 0; }
+  .quota-summary .fold-hint { flex: 1 1 100%; padding: 10px 0; }
+}
 @media (max-width: 760px) {
   .top { gap: 8px; }
   .top-icon { width: 44px; height: 44px; }
@@ -1651,6 +1672,13 @@ p.wizard-errors { padding-left: 10px; }
 
 /* Phone header: one row with the brand mark, the menu button, the four icons, and Help. The page name in the menu button
    shortens before the row wraps. The connection text is for screen readers; a warn line under the bar shows a lost connection. */
+@media (max-width: 480px) {
+  .quota-summary summary { flex-wrap: wrap; }
+  .quota-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); overflow-x: visible; flex: 1 1 100%; }
+  .quota-summary-item { flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .quota-summary-item:last-child { border-bottom: 0; }
+  .quota-summary .fold-hint { flex: 1 1 100%; padding: 10px 0; }
+}
 @media (max-width: 760px) {
   .top { flex-wrap: nowrap; gap: 4px; padding: 3px 12px; padding-top: calc(3px + env(safe-area-inset-top)); padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
   .top .brand { flex: none; justify-content: center; width: 40px; gap: 0; font-size: 0; }

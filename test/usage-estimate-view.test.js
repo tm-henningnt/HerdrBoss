@@ -59,3 +59,14 @@ test('the Fleet card names the reason for the unknown OpenCode Go limit', async 
   const html = fleetView({ factories: rows, pollSeconds: 30, rollup: buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') }) });
   assert.match(html, /OpenCode Go · usage limit unknown \(no usage reader in this factory\)/);
 });
+
+test('the Fleet card estimate row is not a hidden "more" lane', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const rows = [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary: { ...fixture, kind: 'container', factoryId: 'win1', name: 'win1' } }];
+  const rollup = buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') });
+  const html = fleetView({ factories: rows, pollSeconds: 30, rollup });
+  const tag = html.match(/<div class="([^"]*)" data-fleet-estimate="opencode"/);
+  assert.ok(tag, 'the estimate row renders');
+  assert.ok(!tag[1].split(/\s+/).includes('more'), `estimate row class is "${tag[1]}"`);
+});

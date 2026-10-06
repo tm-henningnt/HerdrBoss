@@ -31,7 +31,7 @@ Each total uses fresh values only. A cached or never-seen factory is named in th
 |---|---|---|
 | Workers | `workers.running` (G1) | Sum over fresh factories. Name cached and never-seen factories. |
 | Spend today | `spend[]` | Select one date for each fresh factory (section 1.2). Sum the known values. A factory with no row for that date, or an unpriced row, is `unknown`, not zero. Name it. |
-| Quota burn | `quotas[].usedPercent` | Highest over fresh factories. Exclude and name a null reading, a cached factory, and a never-seen factory. |
+| Usage limit burn | `quotas[].usedPercent` | Highest over fresh factories. Exclude and name a null reading, a cached factory, and a never-seen factory. |
 
 ### 1.2 The selected factory date
 

@@ -71,7 +71,7 @@ function workersInfo(row) {
 }
 function quotaInfo(row) {
   const quota = row.quota;
-  if (!quota) return { text: UNKNOWN, reason: 'quota unknown' };
+  if (!quota) return { text: UNKNOWN, reason: 'usage limit unknown: no reading in this summary' };
   const reading = `${quota.usedPercent}% ${quota.harness ?? 'unknown harness'}`;
   return { text: row.freshness === 'cached' ? `last good ${reading}` : reading };
 }
@@ -155,13 +155,13 @@ export function fleetTotals(totals) {
   const quota = totals?.quota || {};
   const mixedDays = typeof spend.coverage === 'string' && spend.coverage.includes('latest factory day');
   const spendLabel = mixedDays ? 'Spend · latest factory days' : 'Spend today';
-  const entries = [['workers', 'Workers', workers], ['spend', spendLabel, spend], ['quota', 'Quota burn', quota]];
+  const entries = [['workers', 'Workers', workers], ['spend', spendLabel, spend], ['quota', 'Usage limit burn', quota]];
   return `<section class="fleet-totals" data-fleet-totals aria-label="Fleet totals"><div class="fleet-total-row">${
     totalCard('workers', 'Workers', num(workers.value) ? { text: String(workers.value) } : { text: UNKNOWN })
   }${
     totalCard('spend', spendLabel, num(spend.value) ? { text: money(spend.value) } : { text: UNKNOWN })
   }${
-    totalCard('quota', 'Quota burn', num(quota.value) ? { text: `${quota.value}%` } : { text: UNKNOWN })
+    totalCard('quota', 'Usage limit burn', num(quota.value) ? { text: `${quota.value}%` } : { text: UNKNOWN })
   }</div><div class="fleet-coverage">${
     entries.map(([key, label, total]) => coverageLine(key, label, total)).join('')
   }</div>${coverageDetail(entries)}</section>`;
@@ -242,7 +242,7 @@ export function fleetComparison(factories, reference = null) {
       + `<span class="cmp-cell cmp-health"><span class="state ${healthClass(row)}"><span class="cmp-k">Health</span>● ${valueHtml(health)}</span></span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Last seen</span>${lastSeen.iso ? `<time datetime="${esc(lastSeen.iso)}">${esc(lastSeen.text)}</time>` : esc(lastSeen.text)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Workers</span>${valueHtml(workers)}</span>`
-      + `<span class="cmp-cell hide-phone"><span class="cmp-k">Worst quota</span>${valueHtml(quota)}</span>`
+      + `<span class="cmp-cell hide-phone"><span class="cmp-k">Worst usage limit</span>${valueHtml(quota)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>${valueHtml(spend)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>${valueHtml(owner)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>${valueHtml(version)}</span>`
@@ -250,7 +250,7 @@ export function fleetComparison(factories, reference = null) {
       + `</div>`;
   });
   return `<section class="fleet-compare" data-fleet-comparison aria-label="Factory comparison"><div class="cmp-row cmp-head" aria-hidden="true">`
-    + ['Factory', 'Kind', 'Health', 'Last seen', 'Workers', 'Worst quota', 'Spend', 'Owner', 'Version / kit'].map((heading) => `<span class="cmp-cell">${esc(heading)}</span>`).join('')
+    + ['Factory', 'Kind', 'Health', 'Last seen', 'Workers', 'Worst usage limit', 'Spend', 'Owner', 'Version / kit'].map((heading) => `<span class="cmp-cell">${esc(heading)}</span>`).join('')
     + `</div>${rows.join('')}</section>`;
 }
 
@@ -275,7 +275,7 @@ function lanesHtml(row) {
   const lanes = [...readable].sort((left, right) => right.usedPercent - left.usedPercent);
   if (!lanes.length) return '';
   const worst = lanes[0];
-  return `<div class="lanes" data-fleet-lanes data-key="fleet-lanes:${esc(String(row.name))}" data-keep-attrs="class"><h3>Quota${row.freshness === 'cached' ? ' · last good data' : ''}</h3>`
+  return `<div class="lanes" data-fleet-lanes data-key="fleet-lanes:${esc(String(row.name))}" data-keep-attrs="class"><h3>Usage limit${row.freshness === 'cached' ? ' · last good data' : ''}</h3>`
     + `<button class="lane-more" type="button" data-fleet-lane-toggle aria-expanded="false" data-keep-attrs="aria-expanded">${lanes.length} lane${lanes.length === 1 ? '' : 's'} · worst ${esc(String(worst.usedPercent))}%</button>`
     + lanes.map((lane, index) => laneHtml(lane, index === 0)).join('') + `</div>`;
 }
@@ -285,7 +285,7 @@ function estimatesHtml(row) {
   if (!rows.length) return '';
   const lines = rows.map((lane) => {
     const reset = typeof lane.resetAt === 'string' && lane.resetAt ? ` · resets <time datetime="${esc(lane.resetAt)}">${esc(lane.resetAt)}</time> (set by hand)` : '';
-    return `<div class="lane more" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''}</span>`
+    return `<div class="lane" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''}</span>`
       + `<span class="mono small">${esc(ESTIMATE_LABEL)}: ${esc(usageEstimateText(lane.estimate))}${reset}</span></div>`;
   });
   return `<div class="lanes" data-key="fleet-estimates:${esc(String(row.name))}"><h3>Local estimate${row.freshness === 'cached' ? ' · last good data' : ''}</h3>${lines.join('')}</div>`;
