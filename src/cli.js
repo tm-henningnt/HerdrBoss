@@ -12,8 +12,6 @@ import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets } from '.
 import { planDeviationText, projectionText } from './quota-plan.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const LABEL = 'no.tallmaker.herdr-boss';
-const PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 
 export function formatBrowserJson(value, options = {}) {
   return redactBrowserSecrets(JSON.stringify(maskDeep(value, options), null, 2));
@@ -117,8 +115,8 @@ const USAGE = `herdr-boss <command>
   setup [--resume] [--dry-run] [--pacing paced|unpaced]  Run the first-hour setup. Exit 3 when it waits for you.
   publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.
-  install               Install and start the launchd agent.
-  uninstall             Stop and remove the launchd agent.
+  install               Install and start the service: the launchd agent on macOS, a systemd user service on Linux.
+  uninstall             Stop and remove the service.
   logs                  Show the server log.
   lanes                 Print one line per quota provider and the unmetered models lane.
   quota plan codex [--burst-pace N] [--announce TIME[:full|partial]] [--what-if TIME] [--json]
@@ -577,6 +575,7 @@ async function main() {
     if (args.includes('--read-only-preview')) assertPreviewDataDir();
     else if (!args.includes('--host')) assertLiveDataDir(); // --host without a preview is a usage error below
   }
+  if (cmd === 'install' || cmd === 'uninstall') (await import('./install.js')).assertServiceSupported(cmd);
   const cfg = loadConfig();
   switch (cmd) {
     case 'lanes': {
@@ -1212,41 +1211,17 @@ async function main() {
     }
     case 'install': {
       migrateAccessFiles(cfg);
-      // A package manager upgrade removes a versioned path such as .../Cellar/node/<version>/bin/node.
-      // Prefer a stable link on PATH that points to the same binary, so the service survives an upgrade.
-      const stable = ['/opt/homebrew/bin/node', '/usr/local/bin/node'].find((candidate) => {
-        try { return fs.realpathSync(candidate) === fs.realpathSync(process.execPath); } catch { return false; }
-      });
-      const node = stable || process.execPath;
-      const log = path.join(DATA_DIR, 'server.log');
-      const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key>
-  <array><string>${node}</string><string>${path.join(ROOT, 'src', 'cli.js')}</string><string>serve</string></array>
-  <key>WorkingDirectory</key><string>${ROOT}</string>
-  <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${log}</string>
-  <key>StandardErrorPath</key><string>${log}</string>
-</dict>
-</plist>
-`;
-      fs.mkdirSync(path.dirname(PLIST), { recursive: true });
-      try { execFileSync('launchctl', ['bootout', `gui/${process.getuid()}`, PLIST], { stdio: 'ignore' }); } catch {}
-      fs.writeFileSync(PLIST, plist);
-      execFileSync('launchctl', ['bootstrap', `gui/${process.getuid()}`, PLIST]);
-      console.log(`installed ${PLIST}\ndashboard ${dashboardUrl(cfg)}`);
+      const { installService } = await import('./install.js');
+      // The installer owns the service file and the service commands. It keeps the configured data directory so the
+      // service never writes into the data directory of another factory.
+      const { lines } = installService({ root: ROOT, dataDir: DATA_DIR, defaultDataDir: path.join(os.homedir(), '.herdr-boss'), dashboard: dashboardUrl(cfg) });
+      for (const line of lines) console.log(line);
       break;
     }
     case 'uninstall': {
-      try { execFileSync('launchctl', ['bootout', `gui/${process.getuid()}`, PLIST], { stdio: 'ignore' }); } catch {}
-      try { fs.unlinkSync(PLIST); } catch {}
-      console.log('uninstalled');
+      const { uninstallService } = await import('./install.js');
+      const { lines } = uninstallService({ root: ROOT, dataDir: DATA_DIR });
+      for (const line of lines) console.log(line);
       break;
     }
     case 'logs': {
