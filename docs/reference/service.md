@@ -153,7 +153,13 @@ The secret store holds the login entries that no tool uses now. The store keeps 
 - `index.json` holds metadata only: the name, the provider, the label, the tool, the quota window, the last use, the expiry, the hash of the sealed value, and the hash of the login entry that the last swap wrote. It never holds a value.
 - A secret name matches `^[a-z0-9][a-z0-9-]{0,63}$`.
 
-The dashboard shows the metadata of each secret. The dashboard never shows a value and cannot set a value. Set a value only with `herdr-boss secret set` at a terminal. That command is a later slice.
+Use `herdr-boss secret set NAME [--provider P --label L --expires ISO]` to store a value from stdin. A terminal prompt does not echo the value. Use `herdr-boss secret list` to print names and metadata. Use `herdr-boss secret remove NAME` to type the name again and remove the value and its previous copy. Use `herdr-boss secret check [NAME]` to print `ok` or `failed` for each value.
+
+The check decrypts each value in memory. It accepts 1 to 4096 bytes of valid UTF-8 with no control character and no leading or trailing whitespace. The per-provider validator table is empty until a provider format is verified. The list, check, and audit record never print or store a value.
+
+Each command appends one JSON line to `audit.jsonl` in the secrets directory. The file has mode `0600`. The line holds the name, action, and time. It holds no value, key, or value length.
+
+Run `secret set`, `secret remove`, and `secret check` in an Owner terminal. They refuse in an agent pane and exit 3. `secret list` works in a pane. Exit 0 means done. Exit 1 means invalid input, a failed check, or another command failure.
 
 The master key is 32 random bytes.
 
@@ -168,4 +174,3 @@ An agent runs as the same user as Herdr Boss. The file mode does not stop that a
 When a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line, collection checks each configured artifact rule. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. Collection warns when the newest source file is newer than the oldest artifact file, or when matching sources have no matching artifacts. It prints each warning and includes it in the `artifactWarnings` summary field. The warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
 `worker collect` records one usage event per worker run before merge. An unknown tool-call count stays `null`, and the ledger accepts `null` as unknown. If an older kit reports a ledger entry with `null` as invalid, install a HerdrBoss kit version that accepts `null`, then run `herdr-boss ledger check` again. This check reads the ledger. Do not replace `null` with `0` or edit the ledger entry. After a successful collection, Herdr Boss prints a reminder to merge the branch and then run `herdr-boss worktree prune --apply`. Collection does not remove a worktree. `herdr-boss usage record FILE` adds measured events. The Analytics page shows recorded usage and its coverage. Quota percentages are global per provider. They are not project token counts.
-

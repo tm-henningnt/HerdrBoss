@@ -25,6 +25,30 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss tick [--json]` | Collect once and print alerts. Sends no prompt and stops no process. `--json` prints the full snapshot. |
 | `herdr-boss logs` | Print the last 100 lines of the server log. It reads `service.log` in the data directory when that file exists, and `server.log` otherwise. |
 | `herdr-boss kit-path` | Print the path of the shared kit (skill, templates, model list). |
+| `herdr-boss secret set NAME [--provider P --label L --expires ISO]` | Store a value from stdin. Run it in an Owner terminal. |
+| `herdr-boss secret list` | Print secret names and metadata. It also works in an agent pane. |
+| `herdr-boss secret remove NAME` | Ask for the name again, then remove the sealed values. Run it in an Owner terminal. |
+| `herdr-boss secret check [NAME]` | Check each value and print `ok` or `failed`. Run it in an Owner terminal. |
+
+### Secret commands
+
+`secret set` reads the value from stdin only. When stdin is a terminal, it prompts without echo. Do not put a value in an argument. The command refuses an extra argument and says to use stdin. It accepts `--provider` and `--label` as lower case slugs. It accepts `--expires` as an ISO date and time. On success, it prints the secret name and secrets-directory path.
+
+`secret list` prints each name with its provider, label, and expiry. It does not decrypt a value. It works in an agent pane.
+
+`secret remove` asks you to type the name again. It overwrites and deletes the sealed value and its previous copy. It calls a named hook for the secret journal. The journal is not in use yet.
+
+`secret check` decrypts each selected value in memory. It checks authenticated decryption, a size of 1 to 4096 bytes, valid UTF-8, no control characters, and no leading or trailing whitespace. A later provider validator can check a verified provider format. The validator table is empty today. The command prints only the name and `ok` or `failed`.
+
+The commands append one JSON object to `audit.jsonl` in the secrets directory. The file has mode `0600`. Each line holds the name, action, and time. It holds no value, key, or value length.
+
+`secret set`, `secret remove`, and `secret check` refuse in a Herdr agent pane. The command prints `Run this command at a terminal. It is not available in an agent pane.` and exits 3. `secret list` is available in a pane.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The command finished. |
+| 1 | The input is invalid, a check failed, or the command failed. |
+| 3 | The command refused to run in an agent pane. |
 
 On Linux, `serve` checks for `lsof` and the procps `ps` command at start. A missing tool gives an installation warning in standard error and in the dashboard event log. The service continues. The check runs beside the first tick and does not delay it. The read-only preview skips the check. Install the named package to enable its process checks.
 

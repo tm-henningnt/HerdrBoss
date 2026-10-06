@@ -120,7 +120,7 @@ export async function openBookmark(slug, index, { newTab = false, pool }) {
 
 // A shell with a Herdr pane or worktree variable is a worker. Only a shell with none is the Owner. The rule guards
 // against accidents. It is not a security boundary: a worker can unset the variables.
-function isHerdrPane(env) {
+export function isHerdrPane(env) {
   return env.HERDR_ENV === '1' || Boolean(env.HERDR_PANE_ID) || Boolean(env.HERDR_WORKSPACE_ID) || Boolean(env.HERDR_WORKTREE);
 }
 
@@ -191,6 +191,10 @@ const USAGE = `herdr-boss <command>
   usage summary         Summarize project and provider usage.
   spend [--days N] [--json]  Print the token use and estimated cost per day and role for all harnesses.
   store import|export messages  Import or export messages through SQLite.
+  secret set NAME [--provider P --label L --expires ISO]  Store a value from stdin. Owner terminal only.
+  secret list             Print names and metadata. Available in agent panes.
+  secret remove NAME      Remove a value after you type the name again. Owner terminal only.
+  secret check [NAME]     Check stored values. Owner terminal only.
   browser request SLUG [--full] [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
   browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]  Set one tab's device metrics.
@@ -518,6 +522,11 @@ async function main() {
   if (cmd === 'kit-path') {
     const { KIT_ROOT } = await import('./kit/config.js');
     console.log(KIT_ROOT);
+    return;
+  }
+  if (cmd === 'secret') {
+    const { secretCommand } = await import('./secret-cli.js');
+    process.exitCode = await secretCommand(args, { env: process.env, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
     return;
   }
   if (cmd === 'scratch') {
