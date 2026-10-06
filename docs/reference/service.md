@@ -143,6 +143,26 @@ The server writes its log lines to standard output and to `service.log` in the d
 
 When Roamgate runs and its token file exists, the header shows a **Roamgate** link. Herdr Boss reads that token only when you open the link.
 
+## Secret store
+
+The secret store holds the login entries that no tool uses now. The store keeps each secret in a sealed file. It protects the inactive logins only: the opencode and pi login files keep the active login in plain form.
+
+- The store is `~/.config/herdr-boss/secrets/`. The directory has mode `0700`.
+- One file holds one secret: `NAME.sealed`, mode `0600`. The file holds the value with AES-256-GCM. Each write uses a new random 96-bit nonce. The secret name binds the file, so a renamed file does not open under another name.
+- `NAME.sealed.prev` holds the previous value with the same format.
+- `index.json` holds metadata only: the name, the provider, the label, the tool, the quota window, the last use, the expiry, the hash of the sealed value, and the hash of the login entry that the last swap wrote. It never holds a value.
+- A secret name matches `^[a-z0-9][a-z0-9-]{0,63}$`.
+
+The dashboard shows the metadata of each secret. The dashboard never shows a value and cannot set a value. Set a value only with `herdr-boss secret set` at a terminal. That command is a later slice.
+
+The master key is 32 random bytes.
+
+- On macOS the keychain holds the key. The `security` command receives the key through stdin, never as a process argument.
+- On Linux the key is a file outside the volumes that `factory backup` copies. A copy of the `home` volume holds no master key.
+- A backup that holds both the store and the key opens the store. On Linux, keep the store and the key in different backups.
+
+An agent runs as the same user as Herdr Boss. The file mode does not stop that agent. The rule "agents must not read the private directory" is the barrier. The store protects against a stolen file copy and against a value in a log line. It does not protect against a hostile process of the same user.
+
 ## Usage records
 
 When a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line, collection checks each configured artifact rule. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. Collection warns when the newest source file is newer than the oldest artifact file, or when matching sources have no matching artifacts. It prints each warning and includes it in the `artifactWarnings` summary field. The warning does not change the independent gate result. The orchestrator decides whether the gate passed.
