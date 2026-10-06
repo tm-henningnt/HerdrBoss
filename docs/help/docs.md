@@ -30,7 +30,9 @@ The Help panel of a dashboard page can show text from `docs/help/`. The Docs pag
 
 ## Docs gate
 
-A change of behavior needs a change of the docs or of the page help in the same branch. The check `node scripts/docs-gate.js` enforces this rule. See `docs/reference/docs-gate.md`.
+A change of behavior needs a change of the docs or of the page help in the same branch. The check `node scripts/docs-gate.js` enforces this rule.
+
+The gate also checks the shipped artifacts of the branch. A license is never inline: a release, a bundle, a demo, a fixture, or a test app holds no license text, no license token, no key text, and no licensed state. The gate stops a branch when an artifact holds a token-shaped string. A public verification key stays allowed. See `docs/reference/docs-gate.md`.
 
 ## Access
 

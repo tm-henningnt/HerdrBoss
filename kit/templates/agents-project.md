@@ -12,4 +12,5 @@ Read [README.md](README.md) for the purpose of this project. Put product notes a
 
 - This repository can become public. Before each commit, read the full diff for secrets, tokens, local file contents, and details from other projects.
 - Never write a secret, token, key, or password into a file, a pane, or a report.
+- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed.
 - Push only with `herdr-boss push`.

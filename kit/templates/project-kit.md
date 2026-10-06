@@ -8,6 +8,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Do not edit another project's repository.
 - Do not copy secrets, tenant hosts, client names, or app IDs into this project.
 - Cite each source file in `docs/orchestration/memory.md`.
+- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed.
 - Read this file and `docs/orchestration/memory.md` at start and at resume, before you choose work. The session start hook prints both files.
 - When a `Kit updated` notice arrives, run `herdr-boss kit update` and continue. The command prints the current kit file. Do not read the file again.
 - Commit a changed kit file, `AGENTS.md` stub, or hook with your next commit. Do not make a separate commit for it.
