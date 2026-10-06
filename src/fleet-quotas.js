@@ -31,17 +31,28 @@ export function provisionAccount(body, { file }) {
 
 const percent = (value) => Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
 const timestamp = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z') : null;
+const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const amount = (value) => Number.isFinite(value) && value >= 0 ? value : null;
+// The local usage estimate of a harness without a usage source. It has no percent. Keep only the closed fields.
+function fleetEstimate(value) {
+  if (!value || typeof value !== 'object') return null;
+  const days = count(value.days), tokens = count(value.tokens), costUsd = amount(value.costUsd), omittedModels = count(value.omittedModels);
+  return days && tokens !== null && costUsd !== null ? { days, tokens, costUsd, omittedModels: omittedModels ?? 0 } : null;
+}
 export function fleetQuotas(readings, accounts, factoryId) {
   return validateAccounts(accounts).filter((account) => account.scope.includes(factoryId)).flatMap((account) => {
     const provider = account.harness === 'opencode' ? 'opencodego' : account.harness;
     const reading = (readings || []).find((row) => row.provider === provider);
-    const windows = reading?.windows?.length ? reading.windows : [{ key: 'unknown' }];
+    // A reading without windows has no percent. The manual reset time and the local estimate of OpenCode Go ride on that row.
+    const windows = reading?.windows?.length ? reading.windows : [{ key: 'unknown', resetsAt: reading?.resetAt }];
+    const estimate = reading?.windows?.length ? null : fleetEstimate(reading?.estimate);
     return windows.map((window) => {
       const usedPercent = percent(window.usedPercent);
       return { harness: account.harness, accountKey: account.accountKey,
         lane: typeof window.key === 'string' && SLUG.test(window.key) ? window.key : 'unknown',
         usedPercent, resetAt: timestamp(window.resetsAt),
-        status: reading?.error || reading?.stale || usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : window.willLast === false ? 'ahead' : 'ok' };
+        status: reading?.error || reading?.stale || usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : window.willLast === false ? 'ahead' : 'ok',
+        ...(estimate ? { estimate } : {}) };
     });
   });
 }

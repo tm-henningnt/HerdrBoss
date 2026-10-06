@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
+import { readOpenCodeGoQuota } from './opencode-estimate.js';
 
 const KILL_GRACE_MS = 3000;
 const MISSING_LOGIN_REASON = 'no login for this harness in this factory';
@@ -24,7 +25,10 @@ export function buildWindow({ key, label, usedPercent, resetsAtSeconds, windowMi
   };
 }
 
+// An unavailable row is an unknown reading: no reader, no login, or no limit to read. It is not a probe failure.
 const unavailable = (provider, reason) => ({ provider, unavailable: true, reason, error: reason });
+// A failed row is a probe failure: a rate limit, a backend error, a timeout, or a changed protocol. keepStaleRows keeps the last good reading as stale.
+const failed = (provider, error) => ({ provider, error });
 
 // Start a child with JSON-RPC lines on stdio. The child gets the environment of this process and no extra value.
 export function spawnJsonRpc({ command, args = [] }) {
@@ -60,7 +64,7 @@ function oneLine(value) {
 
 function codexRow(result, observedAt) {
   const snapshot = result?.rateLimits;
-  if (!snapshot || typeof snapshot !== 'object') return unavailable('codex', 'Codex usage read returned no rate limits');
+  if (!snapshot || typeof snapshot !== 'object') return failed('codex', 'Codex usage read returned no rate limits');
   const windows = [];
   for (const key of ['primary', 'secondary']) {
     const w = snapshot[key];
@@ -110,12 +114,12 @@ export function readCodexQuota({ spawnJsonRpc: spawnRpc = spawnJsonRpc, timeoutM
     try {
       child = spawnRpc({ command: 'codex', args: ['app-server', '--listen', 'stdio://'] });
     } catch (error) {
-      finish(unavailable('codex', error?.code === 'ENOENT' ? 'codex is not installed in this factory' : `Codex usage read failed: ${oneLine(error?.message)}`));
+      finish(error?.code === 'ENOENT' ? unavailable('codex', 'codex is not installed in this factory') : failed('codex', `Codex usage read failed: ${oneLine(error?.message)}`));
       return;
     }
-    timer = setTimeout(() => finish(unavailable('codex', `Codex usage read timed out after ${Math.max(1, Math.round(timeoutMs / 1000))} s`)), Math.max(1, timeoutMs));
-    child.onError((error) => finish(unavailable('codex', error?.code === 'ENOENT' ? 'codex is not installed in this factory' : `Codex usage read failed: ${oneLine(error?.message)}`)));
-    child.onClose(() => finish(unavailable('codex', 'Codex usage read ended: the app server exited before it answered')));
+    timer = setTimeout(() => finish(failed('codex', `Codex usage read timed out after ${Math.max(1, Math.round(timeoutMs / 1000))} s`)), Math.max(1, timeoutMs));
+    child.onError((error) => finish(error?.code === 'ENOENT' ? unavailable('codex', 'codex is not installed in this factory') : failed('codex', `Codex usage read failed: ${oneLine(error?.message)}`)));
+    child.onClose(() => finish(failed('codex', 'Codex usage read ended: the app server exited before it answered')));
     child.onLine((line) => {
       let message;
       try { message = JSON.parse(line); } catch { return; }
@@ -124,7 +128,8 @@ export function readCodexQuota({ spawnJsonRpc: spawnRpc = spawnJsonRpc, timeoutM
       pending.delete(message.id);
       if (message.error) {
         const text = oneLine(message.error.message);
-        finish(unavailable('codex', LOGIN_TEXT.test(text) ? MISSING_LOGIN_REASON : `Codex usage read failed: ${text || 'JSON-RPC error'}`));
+        if (LOGIN_TEXT.test(text)) finish(unavailable('codex', MISSING_LOGIN_REASON));
+        else finish(failed('codex', /method not found/i.test(text) ? 'codex app-server protocol changed' : `Codex usage read failed: ${text || 'JSON-RPC error'}`));
         return;
       }
       if (method === 'initialize') {
@@ -174,7 +179,7 @@ export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now
 }
 
 // The Linux readers by provider. A provider without an entry keeps the unknown reading.
-export const LINUX_READERS = Object.freeze({ codex: readCodexQuota, claude: readClaudeQuota });
+export const LINUX_READERS = Object.freeze({ codex: readCodexQuota, claude: readClaudeQuota, opencodego: readOpenCodeGoQuota });
 
 // Run the Linux reader of a provider. Returns null when the provider has no reader.
 export async function readQuota(provider, { readers = LINUX_READERS, ...options } = {}) {

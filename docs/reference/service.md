@@ -28,6 +28,10 @@ A missing usage reader or login is not a failure. The reading is unknown, and th
 - `no usage reader in this factory`: the probe command is not installed. A container factory has no CodexBar on Linux. The Codex reader replaces CodexBar there and gives its own reasons, listed in `docs/cli.md`.
 - `no login for this harness in this factory`: the harness has no login.
 
+OpenCode Go has no usage source. In a factory its row is unknown with the reason `no usage reader in this factory`. The row carries `resetAt` from the setting `quota.opencodeGoResetAt` and `estimate` from `opencode stats --models --days N` (`quota.opencodeStatsDays`). The estimate has `days`, `tokens`, `costUsd`, and `omittedModels`. It is labeled `used in this factory (local estimate)`, and it is never a percent.
+
+A Codex rate limit, a backend error, a timeout, and a changed protocol (`codex app-server protocol changed`) are probe failures. The row keeps the last good reading as stale.
+
 This state raises no Boss warning, no provider back-off, and no fleet alert. The bulletin says "Usage limits are unknown for Claude (no usage reader in this factory). Not a probe failure." The provider card, the lane, and the Boss node show the reason. If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss. A missing reader never starts that warning.
 
 `codexbar` can exit with code 1 and still return a good provider row. Herdr Boss keeps that row. A Claude timeout starts the back-off. Other errors wait for the next quota interval. The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Each row records the provider, duration, timeout, outcome, ended step, killed PID and PID state, and kill signal. The outcome is `success`, `timeout`, `failed`, or `unavailable`. A missing usage reader or login records `unavailable`. The file does not store probe error text.

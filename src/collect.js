@@ -304,7 +304,7 @@ function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
   } catch {}
 }
 
-export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE, providers = QUOTA_PROVIDERS, factory = isFactoryRole(), readers = LINUX_READERS } = {}) {
+export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE, providers = QUOTA_PROVIDERS, factory = isFactoryRole(), readers = LINUX_READERS, opencode = {} } = {}) {
   const result = [];
   for (const provider of QUOTA_PROVIDERS) {
     if (!providers.includes(provider)) continue;
@@ -319,7 +319,7 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
     // CodexBar is missing in a factory container. Ask the Linux reader of the provider. A Mac process keeps the unknown reading.
     if (failure?.code === 'ENOENT' && factory && typeof readers?.[provider] === 'function') {
       try {
-        readerRow = await readers[provider]({ timeoutMs, now });
+        readerRow = await readers[provider]({ timeoutMs, now, opencode });
         failure = null;
       } catch (error) { failure = error; }
     }

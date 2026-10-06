@@ -50,7 +50,7 @@ test('codexbar rows win over the Linux reader', async () => {
 });
 
 test('readQuota returns null for a provider without a reader', async () => {
-  assert.equal(await readQuota('opencodego', {}), null);
+  assert.equal(await readQuota('pi', {}), null);
   assert.equal(typeof LINUX_READERS.codex, 'function');
 });
 
@@ -146,12 +146,31 @@ test('a not-logged-in JSON-RPC error gives an unavailable row with the login rea
   assert.equal(row.error, row.reason);
 });
 
-test('another JSON-RPC error gives an unavailable row with a plain reason', async () => {
+test('a backend JSON-RPC error gives a failed row, not an unavailable row', async () => {
+  const { spawnJsonRpc } = fakeTransport({ replies: { initialize: INITIALIZED, 'account/rateLimits/read': { error: { code: -32000, message: 'rate limit exceeded' } } } });
+  const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 1000 });
+  assert.equal(row.unavailable, undefined);
+  assert.equal(row.error, 'Codex usage read failed: rate limit exceeded');
+});
+
+test('a refused method names the protocol change', async () => {
   const { spawnJsonRpc } = fakeTransport({ replies: { initialize: INITIALIZED, 'account/rateLimits/read': { error: { code: -32601, message: 'Method not found' } } } });
   const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 1000 });
-  assert.equal(row.unavailable, true);
-  assert.match(row.reason, /^Codex usage read failed: Method not found$/);
-  assert.doesNotMatch(row.reason, /no usage reader/);
+  assert.equal(row.unavailable, undefined);
+  assert.equal(row.error, 'codex app-server protocol changed');
+});
+
+test('a failed Codex read keeps the last good reading as stale, without the unknown marker', async () => {
+  const { keepStaleRows } = await import('../src/collect.js');
+  const { spawnJsonRpc } = fakeTransport({ replies: { initialize: INITIALIZED, 'account/rateLimits/read': { error: { code: -32000, message: 'backend unavailable' } } } });
+  const quotas = await collectQuotas({ runner: async () => { throw missingReader; }, factory: true, readers: { codex: (options) => readCodexQuota({ ...options, spawnJsonRpc }) }, historyFile: historyFile(), providers: ['codex'] });
+  const good = { provider: 'codex', plan: 'pro', windows: [{ key: 'primary', usedPercent: 10, resetsAt: '2026-10-06T12:00:00.000Z', windowMinutes: 300 }], observedAt: '2026-10-06T09:00:00.000Z' };
+  const [row] = keepStaleRows(quotas, [good], Date.parse(good.observedAt), Date.parse('2026-10-06T09:05:00Z'));
+  assert.equal(row.stale, true);
+  assert.equal(row.windows[0].usedPercent, 10);
+  assert.equal(row.unavailable, undefined);
+  assert.match(row.error, /backend unavailable/);
+  assert.equal(fleetQuotas([row], [{ harness: 'codex', accountKey: 'a'.repeat(64), scope: ['f'] }], 'f')[0].status, 'unknown');
 });
 
 test('an API key login gives an unavailable row', async () => {
@@ -173,12 +192,12 @@ test('a missing codex binary gives an unavailable row that names codex', async (
 test('a child that never answers ends at the timeout and receives SIGTERM', async () => {
   const { spawnJsonRpc, state } = fakeTransport({ replies: {}, silent: true });
   const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 20 });
-  assert.equal(row.unavailable, true);
-  assert.match(row.reason, /^Codex usage read timed out after \d+ s$/);
+  assert.equal(row.unavailable, undefined);
+  assert.match(row.error, /^Codex usage read timed out after \d+ s$/);
   assert.ok(state.signals.includes('SIGTERM'));
 });
 
-test('a child that exits before it answers gives an unavailable row', async () => {
+test('a child that exits before it answers gives a failed row', async () => {
   const state = { signals: [] };
   const spawnJsonRpc = () => {
     let onClose = () => {};
@@ -186,8 +205,8 @@ test('a child that exits before it answers gives an unavailable row', async () =
     return { onLine() {}, onError() {}, onClose: (fn) => { onClose = fn; }, send() {}, closeInput() {}, kill(s) { state.signals.push(s); } };
   };
   const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 1000 });
-  assert.equal(row.unavailable, true);
-  assert.match(row.reason, /exited before it answered/);
+  assert.equal(row.unavailable, undefined);
+  assert.match(row.error, /exited before it answered/);
 });
 
 test('collectQuotas returns the Codex reader row in a factory with no codexbar', async () => {

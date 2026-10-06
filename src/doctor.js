@@ -7,10 +7,13 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCodexRoots } from './harness.js';
+import { claudeRateLimitsDir } from './claude-statusline.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
 export const DOCTOR_MIN_MEMORY_BYTES = 8 * 1024 ** 3;
+// The Claude helper file is stale after this age. It matches the stale limit of the Claude reader.
+export const DOCTOR_CLAUDE_USAGE_MAX_AGE_MS = 3 * 3600_000;
 // The orchestrator verified the Mac installers. ONB1g extends the Linux column.
 export const DOCTOR_INSTALL_FIXES = Object.freeze({
   node: { darwin: 'Run brew install node. Use Node 26.10 or later. Put node on PATH.', linux: 'Follow the Node vendor instructions. Install Node 26.10 or later. Put node on PATH.' },
@@ -21,7 +24,7 @@ export const DOCTOR_INSTALL_FIXES = Object.freeze({
   'opencode-installed': { darwin: 'Run npm install -g opencode-ai. Put opencode on PATH.', linux: 'Follow the OpenCode vendor instructions. Put opencode on PATH.' },
   'pi-installed': { darwin: 'Run npm install -g @earendil-works/pi-coding-agent. Put pi on PATH.', linux: 'Run npm install -g @earendil-works/pi-coding-agent. Put pi on PATH.' },
   gh: { darwin: 'Run brew install gh. Put gh on PATH.', linux: 'Install the GitHub command gh with the package manager of your system. Put gh on PATH.' },
-  codexbar: { darwin: 'Run brew install --cask codexbar. Put codexbar on PATH.', linux: 'CodexBar does not exist on Linux. Use the Linux usage reader when it is available.' },
+  codexbar: { darwin: 'Run brew install --cask codexbar. Put codexbar on PATH.', linux: 'CodexBar does not exist on Linux and is not needed. The Codex usage and Claude usage checks replace it.' },
 });
 const LABEL = 'no.tallmaker.herdr-boss';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -74,6 +77,7 @@ function jsonc(value) {
 function checks({ home, env, factoryHost }) {
   const command = (id, stepId, name, cmd, args, fix, pass = nonempty) => ({ id, stepId, name, fix, pass, request: { kind: 'command', command: cmd, args } });
   const read = (id, name, file, fix, pass) => ({ id, stepId: 'settings', name, fix, pass, request: { kind: 'read', file: path.join(home, file) } });
+  // `only` limits a check to one platform. The os check runs first and sets the platform.
   const rows = [
     { id: 'os', stepId: 'check', name: 'Operating system', fix: 'Use macOS or Linux. On Windows, install Ubuntu under WSL2 and run this command in Ubuntu.', pass: (value) => ['darwin', 'linux'].includes(value), request: { kind: 'platform' } },
     command('node', 'tools', 'Node', 'node', ['--version'], null, (value) => {
@@ -126,10 +130,14 @@ function checks({ home, env, factoryHost }) {
     { ...read('opencode-settings', 'OpenCode worker profile', '.config/opencode/opencode.json', 'Copy the worker profile from kit/templates/harness/opencode-worker-agent.json into ~/.config/opencode/opencode.json under agent.worker.', (value) => object(jsonc(value)?.agent?.worker)), request: { kind: 'opencode-settings' } },
     { id: 'disk', stepId: 'check', name: 'Disk', fix: 'Free at least 5 GiB on the disk that holds your home folder. Remove only files that you own.', pass: (value) => Number(value?.bavail) * Number(value?.bsize) >= DOCTOR_MIN_DISK_BYTES, request: { kind: 'disk', file: home } },
     { id: 'memory', stepId: 'check', name: 'Memory', fix: 'Use a computer with at least 8 GiB of memory. For a factory, give it at least 8 GiB.', pass: (value) => Number(value) >= DOCTOR_MIN_MEMORY_BYTES, request: { kind: 'memory' } },
-    command('usage-reading', 'pacing', 'Usage reading', 'codexbar', ['usage', '--format', 'json', '--provider', 'claude'], 'Only you: sign in to Claude Code. Set the Claude usage source in CodexBar to Auto. Run doctor again.', (value) => {
+    { ...command('usage-reading', 'pacing', 'Usage reading', 'codexbar', ['usage', '--format', 'json', '--provider', 'claude'], 'Only you: sign in to Claude Code. Set the Claude usage source in CodexBar to Auto. Run doctor again.', (value) => {
       const rows = json(value);
       return Array.isArray(rows) && rows.some((row) => row?.provider === 'claude' && !row.error && typeof row.usage?.primary?.usedPercent === 'number' && row.usage.primary.usedPercent >= 0 && row.usage.primary.usedPercent <= 100);
-    }),
+    }), only: 'darwin' },
+    { ...command('codex-usage', 'pacing', 'Codex usage reader login', 'codex', ['login', 'status'], 'Install Codex in the factory image and log in as the factory user. Run doctor again.', (value) => /^Logged in\b/i.test(text(value))), only: 'linux' },
+    { ...command('codex-version', 'pacing', 'Codex version', 'codex', ['--version'], 'Install Codex in the factory image. The usage reader runs codex app-server.', (value) => /\d+\.\d+\.\d+/.test(text(value))), only: 'linux' },
+    { id: 'claude-usage-file', stepId: 'pacing', name: 'Claude usage helper file', fix: 'Start a Claude session in the factory. Check that Claude usage helper in factories is on in Settings. Run doctor again.', pass: (value) => Number.isFinite(value) && value >= 0 && value <= DOCTOR_CLAUDE_USAGE_MAX_AGE_MS, request: { kind: 'claude-usage-age' }, only: 'linux' },
+    { ...command('claude-version', 'pacing', 'Claude version', 'claude', ['--version'], 'Install Claude Code in the factory image. The status line helper runs inside it.', (value) => /\d+\.\d+\.\d+/.test(text(value))), only: 'linux' },
     { id: 'service-answers', stepId: 'dashboard', name: 'Service answers', fix: 'Run bin/herdr-boss install from the Herdr Boss folder. Run doctor again after the service starts.', pass: (value) => value?.status === 200 && value.body?.schema === 1 && value.body?.contractVersion === '1.0.0' && typeof value.body?.version === 'string' && /^[a-f0-9]{12,64}$/.test(value.body?.kitRevision), request: { kind: 'health' } },
   ];
   if (factoryHost) rows.push(
@@ -244,6 +252,17 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
         return true;
       }
       case 'disk': return fs.statfs(request.file);
+      // Return the age of the newest helper file in milliseconds, or null. Only the modification time is read, never the content.
+      case 'claude-usage-age': {
+        const dir = claudeRateLimitsDir(env.HERDR_BOSS_DIR || path.join(home, '.herdr-boss'));
+        let newest = null;
+        for (const name of await fs.readdir(dir).catch(() => [])) {
+          if (!name.endsWith('.json')) continue;
+          const stat = await fs.stat(path.join(dir, name)).catch(() => null);
+          if (stat?.isFile() && (newest === null || stat.mtimeMs > newest)) newest = stat.mtimeMs;
+        }
+        return newest === null ? null : Math.max(0, Date.now() - newest);
+      }
       case 'read': return readSettings(request.file, signal);
       case 'opencode-settings': {
         for (const file of openCodeFiles) {
@@ -280,6 +299,7 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
   for (const check of checks({ home, env, factoryHost })) {
     // Setup checks one shared step at a time. The OS probe selects its installer text.
     if (stepId && check.stepId !== stepId && check.id !== 'os') continue;
+    if (check.only && check.only !== platform) continue;
     const controller = new AbortController();
     let timer;
     let timedOut = false;

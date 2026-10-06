@@ -1812,7 +1812,7 @@ export class Engine extends EventEmitter {
     const skipped = this.claudeProbeSkip(startedAt) ? ['claude'] : [];
     const providers = QUOTA_PROVIDERS.filter((provider) => !skipped.includes(provider));
     let read;
-    try { read = Promise.resolve(this.collectors.collectQuotas({ timeouts, now: this.clock, providers })); } catch (error) { read = Promise.reject(error); }
+    try { read = Promise.resolve(this.collectors.collectQuotas({ timeouts, now: this.clock, providers, opencode: { resetAt: this.cfg.quota.opencodeGoResetAt, days: this.cfg.quota.opencodeStatsDays } })); } catch (error) { read = Promise.reject(error); }
     this.quotaRead = read.then(
       (quotas) => {
         // A skipped provider keeps its last row, with its age.

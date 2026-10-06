@@ -93,7 +93,7 @@ The head office supplies the registered kind for a remote factory.
 | `health` | State, tick age, Herdr reachability, and clock offset. |
 | `machine` | Load, CPU count, memory, and swap readings. |
 | `projects` | Slug, phase, state, status age, kit revision, and board counts. |
-| `quotas` | Harness, account HMAC digest, lane, use, reset time, and state. |
+| `quotas` | Harness, account HMAC digest, lane, use, reset time, state, and an optional `estimate`. |
 | `spend` | Day, role, harness, and USD amount. |
 | `alerts` | Public alert code, severity, and optional project slug. |
 | `shareItemTitles`, `ownerItems` | Title sharing flag, counts, item IDs, kinds, and optional titles. |
@@ -151,11 +151,13 @@ The schema does not set a minimum byte size.
 `fleet-summary.valid.titles-off.json`, `fleet-summary.valid.unknown-readings.json`,
 `fleet-summary.valid.transferred.json`, `fleet-summary.valid.complete.json`,
 `fleet-summary.valid.minimal.json`, `fleet-summary.valid.nulls.json`,
+`fleet-summary.valid.opencode-estimate.json`, `fleet-summary.invalid.estimate-percent.json`,
 `fleet-summary.invalid.title-with-sharing-off.json`, and
 `fleet-summary.invalid.message-text.json` in [examples/](examples/).
 The complete example sets every 1.x addition.
 The minimal example is an older summary without them.
 The null example uses an unavailable reading.
+The quota `estimate` is optional. It holds `days`, `tokens`, `costUsd`, and `omittedModels`. A factory sets it for a harness without a usage source, for example OpenCode Go. The row then has `usedPercent: null` and `status: unknown`. The estimate is the local use in that factory. It is never a percent and never a quota. `resetAt` of that row is the reset time that the Owner set by hand.
 
 ### Rollup
 

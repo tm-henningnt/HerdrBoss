@@ -2,6 +2,8 @@
 // The page renders the totals, the collapsed alert strip, the compact comparison, and the factory cards.
 // T6 wires the exported hooks and the data-action / data-copy attributes.
 
+import { ESTIMATE_LABEL, usageEstimateText } from './usage-estimate.js';
+
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const num = (value) => typeof value === 'number' && Number.isFinite(value);
 const UNKNOWN = 'unknown';
@@ -277,6 +279,17 @@ function lanesHtml(row) {
     + `<button class="lane-more" type="button" data-fleet-lane-toggle aria-expanded="false" data-keep-attrs="aria-expanded">${lanes.length} lane${lanes.length === 1 ? '' : 's'} · worst ${esc(String(worst.usedPercent))}%</button>`
     + lanes.map((lane, index) => laneHtml(lane, index === 0)).join('') + `</div>`;
 }
+// OpenCode Go has no usage source. Its row has no percent. It carries the estimate of the local use in this factory.
+function estimatesHtml(row) {
+  const rows = (row.summary?.quotas || []).filter((lane) => lane?.estimate && usageEstimateText(lane.estimate));
+  if (!rows.length) return '';
+  const lines = rows.map((lane) => {
+    const reset = typeof lane.resetAt === 'string' && lane.resetAt ? ` · resets <time datetime="${esc(lane.resetAt)}">${esc(lane.resetAt)}</time> (set by hand)` : '';
+    return `<div class="lane more" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}</span>`
+      + `<span class="mono small">${esc(ESTIMATE_LABEL)}: ${esc(usageEstimateText(lane.estimate))}${reset}</span></div>`;
+  });
+  return `<div class="lanes" data-key="fleet-estimates:${esc(String(row.name))}"><h3>Local estimate${row.freshness === 'cached' ? ' · last good data' : ''}</h3>${lines.join('')}</div>`;
+}
 function boardHtml(project) {
   const board = project.board || {};
   const cell = (key, label) => `${esc(label)} <b>${num(board[key]) ? board[key] : UNKNOWN}</b>`;
@@ -390,6 +403,7 @@ export function fleetFactoryCard(row, reference = null, role = null) {
     + pendingHtml(row)
     + `<div class="facts">${facts}</div>`
     + lanesHtml(row)
+    + estimatesHtml(row)
     + projects
     + `${projects ? `<p class="small muted">${projectNote}</p>` : ''}`
     + actionsHtml(row, kind)

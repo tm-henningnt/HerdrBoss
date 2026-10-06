@@ -220,6 +220,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value gives the critical alert earlier. Keep it above the warning level.',
     apply: 'service',
   }),
+  S('quotas', 'quota.opencodeGoResetAt', 'OpenCode Go reset time', {
+    what: 'The time at which the OpenCode Go subscription period resets. OpenCode Go has no usage source that Herdr Boss can read, so you set the time by hand. The Fleet page and the usage limit card show it next to the unknown reading. It gives a reset time and no percent.',
+    default: 'Blank', unit: 'Time', range: 'Blank, or an ISO time such as 2026-10-09T10:00:00Z',
+    raise: 'A later time shows a later reset.',
+    lower: 'A blank value shows no reset time. The OpenCode Go reading stays unknown.',
+    apply: 'service',
+  }),
+  S('quotas', 'quota.opencodeStatsDays', 'OpenCode Go estimate days', {
+    what: 'The number of days that the local estimate of OpenCode Go use covers. The estimate comes from opencode stats, which counts the sessions in this factory only. It shows tokens and cost, labeled used in this factory (local estimate). It is never a percent and never a quota.',
+    default: '7', unit: 'Days', range: 'A whole number of 1 to 90',
+    raise: 'A higher value counts more days of local use.',
+    lower: 'A lower value counts fewer days of local use.',
+    apply: 'service',
+  }),
 
   // Machine
   S('machine', 'machine.guardEnabled', 'Machine guard', {

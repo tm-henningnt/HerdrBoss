@@ -398,6 +398,32 @@
               "exhausted",
               "unknown"
             ]
+          },
+          "estimate": {
+            "type": "object",
+            "properties": {
+              "days": {
+                "$ref": "common.v1.schema.json#/$defs/count",
+                "minimum": 1
+              },
+              "tokens": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              },
+              "costUsd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "omittedModels": {
+                "$ref": "common.v1.schema.json#/$defs/count"
+              }
+            },
+            "required": [
+              "days",
+              "tokens",
+              "costUsd",
+              "omittedModels"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
