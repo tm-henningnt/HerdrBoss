@@ -1,6 +1,6 @@
 # MSG1: the messaging map and the rules
 
-Status: design only. This note holds no product code. Slice R writes the code of the rules. The slices MSG2, MSG3, and MSG4 start after R.
+Status: design only. This note holds no product code. The first slice, rules in code, writes the code of the rules. The menu slice (MSG3) runs in parallel with it. Live updates (MSG2) start after it. MSG4 closes out.
 
 Scope: the message paths of Herdr Boss, the dashboard surfaces (Chat, Mailbox, the Messages panel), the CLI texts, the live update, and the menu.
 
@@ -40,8 +40,8 @@ Every cell below is verified in the code, unless the cell says `unverified`.
 | Review submit delivery: `postReviewResult`. | `thread` slug; `from` owner; `to` orch; `kind` `review-result`; `replyTo` the review item; `status` queued. Source: `postReviewResult` (`src/messages.js:726`). | None. | No Mailbox item. `deliverQueued` sends it to the planner or orch pane as a prompt. Source: `deliverQueued` (`src/messages.js:558`). | No reply. | yes |
 | Review item reopen answer: `postReviewAnswer`. | `thread` slug; `from` owner; `to` orch; `kind` `review-answer`; `status` queued. Source: `postReviewAnswer` (`src/messages.js:747`). | None. | No Mailbox item. Delivered as a prompt. | No reply. | yes |
 | Goal notice after a failed `goal set`. | `thread` slug or boss; `from` boss; `to` owner; `kind` `reply`; `action` `answer`; `status` new. Source: `postGoalNotice` (`src/goal-notice.js:30`). | None. | Chat and Mailbox "Needs you". | The Owner answers or closes it. | yes |
-| Kit updated notice. | No record. The engine formats the notice and sends a prompt to each orch pane and the boss pane. Source: the kit notice prompt send (`src/engine.js:3338`). | None. | No GUI surface. | No reply through the store. | yes |
-| Resource notices (lock, lease, browser health, handover). | No record. The engine sends a prompt with `promptService`. Source: `src/engine.js:744`, `src/engine.js:1069`, `src/engine.js:1957`, `src/engine.js:2782`. | None. | No GUI surface. | No reply through the store. | yes |
+| Kit updated notice. | No record. The engine formats the notice and sends a prompt to each orch pane and the boss pane. Source: the kit notice is built in `src/kit-notice.js:90`. | None. | No GUI surface. | No reply through the store. | yes |
+| Resource notices (lock, lease, browser health, handover). | No record. The engine sends a prompt with `promptService`. Source: `src/engine.js:744`, `src/engine.js:1069`, `src/engine.js:1957`, `src/engine.js:2782`, `src/engine.js:3338`. | None. | No GUI surface. | No reply through the store. | yes |
 
 Note: the Chat page shows a record with the `channel` mail or both as a bubble today. Source: `chatRecords` keeps every record that is not an agent record and not a mail answer (`src/messages.js:148`). The Chat bubble render is `chatBubble` (`public/app.js:4335`).
 
@@ -79,10 +79,12 @@ The Owner asked for five rules. Each rule below gives the rule, the exact code c
   2. A record with `replyTo` naming a parent in the same thread copies the parent's channel. A reply copies the kind family of the message it answers.
   3. A `report` or a `review` is `mail`.
   4. Every other record is `chat`.
-  The function reads the parent record through `byId` when `replyTo` is set. `messageChannel` stays the only function that decides the channel.
+  The function reads the parent record through a new `byId` argument when `replyTo` is set. Every caller passes `byId`: `isMailRecord` (`src/messages.js:191`), `mailboxCounts` (`src/messages.js:216`, `src/messages.js:217`), the mailbox view (`src/messages.js:313`), and `src/server.js:589`, `:604`, `:628`, and `:654`. `messageChannel` stays the only function that decides the channel.
 - `src/messages.js`, `sayMessage` (`src/messages.js:627`) and `validateOwnerSend` (`src/messages.js:57`): no change to the stored `kind`. The channel follows the parent through the table. A reply to a Mailbox item is a mail record. A reply to a chat message is a chat record.
-- `src/messages.js`, `isMailRecord` (`src/messages.js:191`) and `mailboxCounts` (`src/messages.js:211`): read `messageChannel`, so one function decides the channel. No change.
+- `src/messages.js`, `isMailRecord` (`src/messages.js:191`) and `mailboxCounts` (`src/messages.js:211`): pass `byId` to `messageChannel`. The channel stays decided in one function.
 - `src/goal-notice.js:30`: no change. The goal notice is a `reply` with `action: 'answer'`, so row 1 returns `both`. The Chat card stays visible.
+
+**Count effect.** A `review`, a `report`, and a goal notice with the action `decide`, `approve`, or `answer` are `both`. A `review` and a `report` are `mail` today, so their unread moves from `mailUnread` to the needs-you count and the Chat card count. The slice updates the count tests for this.
 
 **Conflict with rule (c).** Rule (c) says a needs-you record is `both`. Rule (a) says a reply copies its parent's channel. The table resolves the conflict. Row 1 runs first, so a review or a goal notice with a needs-you action is `both`. Row 2 runs next, so an Owner answer to that item copies the `both` channel. The Chat card stays visible and the Mailbox keeps the item.
 
@@ -113,7 +115,7 @@ The Owner asked for five rules. Each rule below gives the rule, the exact code c
 - `src/messages.js`, `messageChannel` (`src/messages.js:129`): the table of rule (a) returns `both` for a needs-you record at row 1. No new function.
 - `src/messages.js`, `isMailboxItem` (`src/messages.js:122`): no change. The current kind list already accepts `reply`, `report`, and `review`. A needs-you record is a Mailbox item through its kind.
 - `src/messages.js`, `chatRecords` (`src/messages.js:148`): no change. The record stays in the thread list. The client render marks it as a card.
-- `public/app.js`, `chatBubble` (`public/app.js:4339`): the early return (`record.channel === 'mail'`) catches a mail information item. A `report` or `review` with a needs-you action falls through to the card path (`isCard`, `public/app.js:4349`). The card shows the action, the text, a link to `/mailbox?folder=needs-you&item=<id>`, and the answer through `chatAnswerTo` (`public/app.js:4343`).
+- `public/app.js`, `chatBubble` (`public/app.js:4339`): the early return (`record.channel === 'mail'`) catches a mail information item. A `report` or `review` with a needs-you action leaves the early return. Today `isCard` is true only for `action === 'answer'` or when `chatActionOptions` returns options (`public/app.js:4298` to `public/app.js:4349`). `chatActionOptions` returns options only for `approve` or a Choices list, so a `decide` item without choices stays a plain bubble. Rule (c) changes `isCard` so that every needs-you action gives a card. The card shows the action, the text, a link to `/mailbox?folder=needs-you&item=<id>`, and the answer through `chatAnswerTo` (`public/app.js:4343`).
 - `public/mail-bar.js`, `mailBarItem` (`public/mail-bar.js:10`): no change. The card in the thread uses the same item.
 
 **Migration.** No field change. The Mailbox already lists these records (`mailboxView`, `src/messages.js:297`). The change adds the card to the Chat render only. No store rewrite.
@@ -136,14 +138,14 @@ The Owner asked for five rules. Each rule below gives the rule, the exact code c
 
 ### Rule (e): the CLI output names the place
 
-**Rule.** The CLI names the place of the new record. Examples: "Posted as a Mailbox item (decide)" and "Sent in chat". The new texts do not use the word "thread".
+**Rule.** The CLI names the place of the new record. Examples: "posted as a Mailbox item (decide)" and "sent in chat". The new texts do not use the word "thread".
 
 **Code changes.**
 
 - `src/messages.js`, new `placeText(record)`: return one of these strings:
-  - `Posted as a Mailbox item (${action})` for a record with a needs-you action.
-  - `Posted as a Mailbox item (read)` for a Mailbox information item.
-  - `Sent in chat` for every other record.
+  - `posted as a Mailbox item (${action})` for a record with a needs-you action.
+  - `posted as a Mailbox item (read)` for a Mailbox information item.
+  - `sent in chat` for every other record.
 - `src/cli.js`, the `say` branch (`src/cli.js:361`): print the new line from the table in section 4.
 - `src/cli.js`, the `mail post` branch (`src/cli.js:380`): print the new line from the table in section 4.
 - `src/cli.js`, the `mail close` branch (`src/cli.js:372`): name the Mailbox.
@@ -159,11 +161,11 @@ The table below gives the old text and the new text for each command that posts 
 
 | Command | Old text | New text |
 | --- | --- | --- |
-| `say "TEXT"` (chat) | `Message <id> is in the <T> thread for the Owner.` | `Message <id> Sent in chat.` |
-| `say --action <a> "TEXT"` | `Message <id> is in the <T> thread for the Owner.` | `Message <id> Posted as a Mailbox item (<a>).` |
-| `say --reply-to <p> "TEXT"` | `Message <id> is in the <T> thread for the Owner.` | `Message <id> Answered <p>.` |
-| `mail post FILE --action read` | `Report <id> is in the boss thread for the Owner.` | `Report <id> Posted as a Mailbox item (read).` |
-| `mail post FILE --action <a>` | `Report <id> is in the boss thread for the Owner.` | `Report <id> Posted as a Mailbox item (<a>).` |
+| `say "TEXT"` (chat) | `Message <id> is in the <T> thread for the Owner.` | `Message <id> sent in chat.` |
+| `say --action <a> "TEXT"` | `Message <id> is in the <T> thread for the Owner.` | `Message <id> posted as a Mailbox item (<a>).` |
+| `say --reply-to <p> "TEXT"` | `Message <id> is in the <T> thread for the Owner.` | `Message <id> sent as an answer to <p>.` |
+| `mail post FILE --action read` | `Report <id> is in the boss thread for the Owner.` | `Report <id> posted as a Mailbox item (read).` |
+| `mail post FILE --action <a>` | `Report <id> is in the boss thread for the Owner.` | `Report <id> posted as a Mailbox item (<a>).` |
 | `mail close <id>… --note TEXT` | `Closed <N> Owner mailbox item(s) as answered through the Boss.` | `Closed <N> Mailbox item(s) as answered through the Boss.` |
 | `messages relay <id>… --by boss` | `Relayed <N> queued Owner message(s).` | `Relayed <N> queued chat message(s).` |
 | `review publish` | `Mailbox item <id> asks the Owner to decide.` | No change. This text already names the place. |
@@ -171,9 +173,9 @@ The table below gives the old text and the new text for each command that posts 
 
 ## 5. The slices
 
-Each slice fits one worker. The file lists below keep the slices apart. Slice R runs first. MSG3 runs in parallel with R. MSG2 starts after R. MSG4 closes out.
+Each slice fits one worker. The file lists below keep the slices apart. Slice 1 (rules in code) runs first. MSG3 runs in parallel with it. MSG2 starts after it. MSG4 closes out.
 
-### Slice R: rules in code
+### Slice 1: rules in code
 
 Runs first. It writes the code of rules (a), (b), (c), (d), and (e).
 
@@ -188,7 +190,7 @@ Runs first. It writes the code of rules (a), (b), (c), (d), and (e).
 
 ### MSG2: live updates
 
-Starts after R. It owns the live-update sites and the server event code.
+Starts after slice 1. It owns the live-update sites and the server event code.
 
 **Owned files.**
 
@@ -205,7 +207,7 @@ Starts after R. It owns the live-update sites and the server event code.
 
 ### MSG3: one menu
 
-Runs in parallel with R. It owns the menu.
+Runs in parallel with slice 1. It owns the menu.
 
 **Owned files.**
 
@@ -229,7 +231,7 @@ Runs in parallel with R. It owns the menu.
 
 ### File ownership summary
 
-| File | R | MSG2 | MSG3 | MSG4 |
+| File | Slice 1 | MSG2 | MSG3 | MSG4 |
 | --- | --- | --- | --- | --- |
 | `docs/plans/msg1-messaging.md` | owner | read | read | read |
 | `public/mail-live.js` | — | owner | — | — |
@@ -242,7 +244,7 @@ Runs in parallel with R. It owns the menu.
 | `public/index.html`, `public/style.css` | — | — | owner | — |
 | `docs/user-guide.md`, `docs/cli.md`, `HELP` | — | — | — | owner |
 
-R and MSG3 run in parallel. R owns `chatBubble` and `chatActionCard` in `public/app.js`. MSG3 owns the menu functions. No overlap. MSG2 starts after R and owns the live-update sites. No overlap with R or MSG3.
+Slice 1 and MSG3 run in parallel. Slice 1 owns `chatBubble` and `chatActionCard` in `public/app.js`. MSG3 owns the menu functions. No overlap. MSG2 starts after slice 1 and owns the live-update sites. No overlap with slice 1 or MSG3.
 
 ## 6. Migration and rollback
 

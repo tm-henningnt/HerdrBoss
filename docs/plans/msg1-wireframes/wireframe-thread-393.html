@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MSG1 wireframe: thread view, phone 393</title>
+<style>
+  /* A self-contained wireframe. The colors are the design tokens of public/style.css.
+     The layout does not load a font, an image, or a script. The frame is 393 px wide. */
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7;
+    --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90; --accent: #b4501a;
+    --ok: #2a7d45; --warn: #946012; --crit: #c2362b; --info: #3a6ea5; --track: #ebe7df;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+      --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+      --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --track: #2a2825;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  .stage { display: flex; gap: 16px; flex-wrap: wrap; padding: 16px; align-items: flex-start; }
+  .phone { width: min(393px, 100%); height: 1060px; border: 1px solid var(--line); border-radius: 26px; background: var(--panel); overflow: hidden; position: relative; display: flex; flex-direction: column; }
+  .bar { display: flex; align-items: center; gap: 6px; min-height: 52px; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  /* The logo is the menu button. The tap target is 44 by 44 px. */
+  .logo-button { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); position: relative; flex: 0 0 auto; }
+  .logo-button[aria-expanded="true"] { border-color: var(--accent); }
+  .logo-button svg { width: 22px; height: 22px; fill: none; stroke: var(--accent); stroke-width: 2; }
+  .logo-button circle:first-child { fill: var(--accent); }
+  .bar h1 { flex: 1; margin: 0 4px; font-size: 17px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .count { color: var(--muted); font: 500 13px var(--mono); }
+  .icons { display: flex; }
+  .icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--muted); position: relative; font: 600 12px var(--mono); }
+  .icon.needs { color: var(--accent); }
+  .badge { position: absolute; top: 0; right: 2px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 9px var(--mono); display: grid; place-items: center; }
+  .scroll { flex: 1; overflow: auto; padding: 12px; display: grid; gap: 10px; align-content: start; background: var(--bg); }
+  .section-label { display: inline-block; border: 1px dashed var(--accent); color: var(--accent); font: 600 10px var(--mono); padding: 1px 6px; border-radius: 6px; justify-self: start; }
+  .bubble { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--panel); }
+  .bubble.owner { border-left: 3px solid var(--info); }
+  .bubble.agent { border-left: 3px solid var(--accent); }
+  .bubble p { margin: 0; }
+  .who { color: var(--muted); font-size: 12px; }
+  .card { border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 12px; padding: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .card h3 { margin: 0 0 4px; font-size: 14px; }
+  .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.mail { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); color: var(--accent); }
+  .link { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .choice { display: block; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-top: 8px; background: var(--panel); font-weight: 600; }
+  .choice.recommended { border-color: var(--accent); color: var(--accent); }
+  .states { display: grid; gap: 6px; margin-top: 8px; }
+  .state { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .dot.queued { background: var(--faint); }
+  .dot.sent { background: var(--info); }
+  .dot.failed { background: var(--crit); }
+  .dot.relayed { background: var(--ok); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .actionbar { border-top: 1px solid var(--line); background: var(--panel); padding: 8px; display: grid; gap: 8px; }
+  .actionbar .row { display: flex; gap: 8px; }
+  .actionbar input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); color: var(--text); }
+  .send { width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; }
+  .secondary { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; background: var(--panel-2); color: var(--text); font-weight: 600; }
+  /* The open menu. The drawer starts under the bar, so the menu button stays visible. */
+  .scrim { position: absolute; inset: 53px 0 0 0; background: color-mix(in srgb, var(--text) 35%, transparent); }
+  .drawer { position: absolute; inset: 53px auto 0 0; width: 300px; overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-weight: 650; }
+  .drawer nav { display: grid; gap: 2px; }
+  .drawer a { display: flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 600; }
+  .drawer a.current { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); }
+  .drawer hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; width: 100%; }
+  .drawer .help { margin-top: auto; display: flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--panel-2); font-weight: 600; }
+  .caption { width: 100%; max-width: 393px; color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div>
+    <div class="phone">
+      <div class="bar">
+        <button class="logo-button" type="button" aria-label="Menu" aria-expanded="false" aria-controls="drawer-closed">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 7l4 3M18 7l-4 3M6 17l4-3M18 17l-4-3"/></svg>
+        </button>
+        <h1>Chat<span class="count">3</span></h1>
+        <span class="icons">
+          <span class="icon">chat<span class="badge">2</span></span>
+          <span class="icon">mail<span class="badge">1</span></span>
+          <span class="icon needs">!<span class="badge">3</span></span>
+        </span>
+      </div>
+
+      <div class="scroll">
+        <span class="section-label">message and reply in the thread</span>
+        <div class="bubble owner"><div class="who">Owner · 09:12</div><p>Please make the cart total visible on the phone layout.</p></div>
+        <div class="bubble agent"><div class="who">Project lead · 09:18</div><p>Done. The total now sits above the checkout button.</p></div>
+
+        <span class="section-label">a decision is a Mailbox item and a card in the thread</span>
+        <div class="card">
+          <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3>Review: cart total (v2)</h3><span class="tag mail">decide</span></div>
+          <p class="muted" style="margin:6px 0 0">4 items. One item asks for a decision.</p>
+          <button class="choice recommended" type="button">Accept the total above the button</button>
+          <button class="choice" type="button">Deny</button>
+          <p style="margin:10px 0 0"><a class="link" href="#">Open the item in the Mailbox</a></p>
+        </div>
+
+        <span class="section-label">sending, sent, failed, relayed</span>
+        <div class="bubble agent"><div class="who">You · 09:21</div>
+          <div class="states">
+            <div class="state"><span class="dot queued"></span>Sending</div>
+            <div class="state"><span class="dot sent"></span>Sent</div>
+            <div class="state"><span class="dot failed"></span>Not delivered. <a class="link" href="#">Try again</a></div>
+            <div class="state"><span class="dot relayed"></span>Relayed by the Boss</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actionbar">
+        <div class="row"><input type="text" placeholder="Message…" aria-label="Message"><button class="send" type="button" aria-label="Send">›</button></div>
+        <div class="row"><button class="secondary" type="button">Attach a picture</button><button class="secondary" type="button">Close as answered elsewhere</button></div>
+      </div>
+
+      <div class="scrim" hidden></div>
+      <div class="drawer" id="drawer-closed" role="dialog" aria-label="Menu" hidden>
+        <div class="drawer-head"><span>Herdr Boss</span><button class="secondary" type="button" aria-label="Close the menu">Close</button></div>
+        <div class="muted">Mailbox folders</div>
+        <nav aria-label="Mailbox folders">
+          <a href="#">Needs you</a><a href="#">Inbox</a><a href="#">Reports and updates</a><a href="#">Done</a><a href="#">Sent</a>
+        </nav>
+        <hr>
+        <nav aria-label="Pages">
+          <a href="#">Overview</a><a href="#">Fleet</a><a href="#">Board</a><a href="#">Reviews</a><a href="#">Agents</a><a href="#">Projects</a><a href="#">Browsers</a><a href="#">Allocation</a><a href="#">Analytics</a><a class="current" href="#">Chat</a><a href="#">Settings</a><a href="#">Docs</a>
+        </nav>
+        <hr>
+        <span class="help">Help</span>
+      </div>
+    </div>
+    <p class="caption">Closed. The logo is the menu button. The thread shows the message, the reply, the decision card, and the four send states.</p>
+  </div>
+
+  <div>
+    <div class="phone">
+      <div class="bar">
+        <button class="logo-button" type="button" aria-label="Menu" aria-expanded="true" aria-controls="drawer-open">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 7l4 3M18 7l-4 3M6 17l4-3M18 17l-4-3"/></svg>
+        </button>
+        <h1>Chat<span class="count">3</span></h1>
+        <span class="icons">
+          <span class="icon">chat<span class="badge">2</span></span>
+          <span class="icon">mail<span class="badge">1</span></span>
+          <span class="icon needs">!<span class="badge">3</span></span>
+        </span>
+      </div>
+
+      <div class="scroll">
+        <span class="section-label">message and reply in the thread</span>
+        <div class="bubble owner"><div class="who">Owner · 09:12</div><p>Please make the cart total visible on the phone layout.</p></div>
+        <div class="bubble agent"><div class="who">Project lead · 09:18</div><p>Done. The total now sits above the checkout button.</p></div>
+
+        <span class="section-label">a decision is a Mailbox item and a card in the thread</span>
+        <div class="card">
+          <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3>Review: cart total (v2)</h3><span class="tag mail">decide</span></div>
+          <p class="muted" style="margin:6px 0 0">4 items. One item asks for a decision.</p>
+          <button class="choice recommended" type="button">Accept the total above the button</button>
+          <button class="choice" type="button">Deny</button>
+          <p style="margin:10px 0 0"><a class="link" href="#">Open the item in the Mailbox</a></p>
+        </div>
+
+        <span class="section-label">sending, sent, failed, relayed</span>
+        <div class="bubble agent"><div class="who">You · 09:21</div>
+          <div class="states">
+            <div class="state"><span class="dot queued"></span>Sending</div>
+            <div class="state"><span class="dot sent"></span>Sent</div>
+            <div class="state"><span class="dot failed"></span>Not delivered. <a class="link" href="#">Try again</a></div>
+            <div class="state"><span class="dot relayed"></span>Relayed by the Boss</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actionbar">
+        <div class="row"><input type="text" placeholder="Message…" aria-label="Message"><button class="send" type="button" aria-label="Send">›</button></div>
+        <div class="row"><button class="secondary" type="button">Attach a picture</button><button class="secondary" type="button">Close as answered elsewhere</button></div>
+      </div>
+
+      <div class="scrim"></div>
+      <div class="drawer" id="drawer-open" role="dialog" aria-label="Menu">
+        <div class="drawer-head"><span>Herdr Boss</span><button class="secondary" type="button" aria-label="Close the menu">Close</button></div>
+        <div class="muted">Mailbox folders</div>
+        <nav aria-label="Mailbox folders">
+          <a href="#">Needs you</a><a href="#">Inbox</a><a href="#">Reports and updates</a><a href="#">Done</a><a href="#">Sent</a>
+        </nav>
+        <hr>
+        <nav aria-label="Pages">
+          <a href="#">Overview</a><a href="#">Fleet</a><a href="#">Board</a><a href="#">Reviews</a><a href="#">Agents</a><a href="#">Projects</a><a href="#">Browsers</a><a href="#">Allocation</a><a href="#">Analytics</a><a class="current" href="#">Chat</a><a href="#">Settings</a><a href="#">Docs</a>
+        </nav>
+        <hr>
+        <span class="help">Help</span>
+      </div>
+    </div>
+    <p class="caption">Open. The menu button shows the open state. The menu has every section, also Fleet, Settings, and Docs.</p>
+  </div>
+</div>
+</body>
+</html>

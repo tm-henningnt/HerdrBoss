@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MSG1 wireframe: thread view, desktop 1280</title>
+<style>
+  /* A self-contained wireframe. The colors are the design tokens of public/style.css.
+     The layout does not load a font, an image, or a script. */
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --panel-2: #f8f6f2; --line: #e3dfd7;
+    --text: #1d1b18; --muted: #6f6a61; --faint: #a19b90; --accent: #b4501a;
+    --ok: #2a7d45; --warn: #946012; --crit: #c2362b; --info: #3a6ea5; --track: #ebe7df;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121110; --panel: #1b1a18; --panel-2: #22201d; --line: #2e2b27;
+      --text: #ece8e1; --muted: #a39d92; --faint: #6c665d; --accent: #ef8a4a;
+      --ok: #5cbf7a; --warn: #e0a84a; --crit: #ef6a5e; --info: #74a6dd; --track: #2a2825;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .top { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; white-space: nowrap; }
+  .brand svg { width: 20px; height: 20px; fill: none; stroke: var(--accent); stroke-width: 2; }
+  .brand circle:first-child { fill: var(--accent); }
+  .nav { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); flex-wrap: wrap; }
+  .nav a { padding: 5px 10px; border-radius: 5px; color: var(--muted); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+  .nav a.current { color: var(--text); background: var(--panel); }
+  .spacer { flex: 1; }
+  .icons { display: flex; gap: 6px; }
+  .icon { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); position: relative; }
+  .icon.needs { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--accent); color: #fff; font: 600 10px var(--mono); display: grid; place-items: center; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; margin-top: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
+  h3 { margin: 0 0 4px; font-size: 14px; }
+  .thread { display: grid; gap: 10px; }
+  .who { color: var(--muted); font-size: 12px; }
+  .bubble { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+  .bubble.owner { border-left: 3px solid var(--info); }
+  .bubble.agent { border-left: 3px solid var(--accent); }
+  .bubble p { margin: 0; }
+  .card { border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 12px; padding: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.mail { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); color: var(--accent); }
+  .link { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .choices { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .choice { border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; background: var(--panel); font-weight: 600; }
+  .choice.recommended { border-color: var(--accent); color: var(--accent); }
+  .states { display: grid; gap: 6px; margin-top: 10px; }
+  .state { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.queued { background: var(--faint); }
+  .dot.sent { background: var(--info); }
+  .dot.failed { background: var(--crit); }
+  .dot.relayed { background: var(--ok); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+  .item.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fab { margin-top: 12px; display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 99px; padding: 8px 16px; background: var(--panel-2); font-weight: 600; }
+  .drawer { margin-top: 16px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px; background: var(--panel); }
+  .drawer ul { margin: 8px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .drawer li { padding: 7px 10px; border-radius: 8px; background: var(--panel-2); font-weight: 600; font-size: 13px; }
+  .drawer li.current { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--accent); }
+  .section-label { display: inline-block; border: 1px dashed var(--accent); color: var(--accent); font: 600 11px var(--mono); padding: 1px 6px; border-radius: 6px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="note">MSG1 wireframe — thread view at 1280 px. Light and dark follow the system theme. All names are invented.</p>
+
+  <span class="section-label">one menu, desktop</span>
+  <header class="top">
+    <span class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 7l4 3M18 7l-4 3M6 17l4-3M18 17l-4-3"/></svg>Herdr Boss</span>
+    <nav class="nav" aria-label="Main navigation">
+      <a href="#">Overview</a><a href="#">Fleet</a><a href="#">Board</a><a href="#">Reviews</a><a href="#">Agents</a><a href="#">Projects</a><a href="#">Browsers</a><a href="#">Allocation</a><a href="#">Analytics</a><a href="#" class="current">Chat</a><a href="#">Settings</a><a href="#">Docs</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="icons">
+      <span class="icon">chat<span class="badge">2</span></span>
+      <span class="icon">mail<span class="badge">1</span></span>
+      <span class="icon needs">!<span class="badge">3</span></span>
+    </span>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Thread · shop-app</h2>
+      <div class="thread">
+        <span class="section-label">message and reply in the thread</span>
+        <div class="bubble owner">
+          <div class="who">Owner · 09:12</div>
+          <p>Please make the cart total visible on the phone layout.</p>
+        </div>
+        <div class="bubble agent">
+          <div class="who">Project lead · 09:18</div>
+          <p>Done. The total now sits above the checkout button. The change is on branch shop2cart.</p>
+        </div>
+
+        <span class="section-label">a request for a decision is a Mailbox item and a card in the thread</span>
+        <div class="card">
+          <div class="card-head">
+            <h3>Review: cart total on the phone layout (v2)</h3>
+            <span class="tag mail">Mailbox item · decide</span>
+          </div>
+          <p class="muted" style="margin:6px 0 0">The pack holds 4 items. One item asks for a decision.</p>
+          <div class="choices">
+            <span class="choice recommended">Accept the total above the button</span>
+            <span class="choice">Deny</span>
+            <span class="choice">Note</span>
+          </div>
+          <p style="margin:10px 0 0"><a class="link" href="#">Open the item in the Mailbox</a> <span class="muted">· mailbox?folder=needs-you&amp;item=m-abc123</span></p>
+        </div>
+
+        <span class="section-label">one send state on the message and on the card</span>
+        <div class="bubble agent">
+          <div class="who">You · 09:21</div>
+          <div class="states">
+            <div class="state"><span class="dot queued"></span>Sending</div>
+            <div class="state"><span class="dot sent"></span>Sent</div>
+            <div class="state"><span class="dot failed"></span>Not delivered. <a class="link" href="#">Try again</a></div>
+            <div class="state"><span class="dot relayed"></span>Relayed by the Boss</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <h2>Mailbox item</h2>
+      <div class="item open">
+        <div class="row"><strong>Review: cart total on the phone layout (v2)</strong><span class="tag mail">decide</span></div>
+        <p class="muted" style="margin:6px 0 0">The answer shows on this item and in the thread. One history.</p>
+        <p class="muted" style="margin:8px 0 0">Answer: “Accept the total above the button.” · 09:24</p>
+        <p style="margin:8px 0 0"><a class="link" href="#">Answer in the review page</a></p>
+      </div>
+      <h2 style="margin-top:16px">Delivery state</h2>
+      <p class="muted" style="margin:0">Sending, sent, failed, relayed. One source: the stored record. The list, the thread, and the badges read it.</p>
+      <button class="fab" type="button">New message</button>
+    </aside>
+  </div>
+
+  <span class="section-label" style="margin-top:24px">the one menu with every section</span>
+  <div class="drawer">
+    <strong>Menu</strong>
+    <div class="muted">The same component on every page. Fleet, Settings, and Docs are present.</div>
+    <ul>
+      <li>Overview</li><li>Fleet</li><li>Board</li>
+      <li>Reviews</li><li>Agents</li><li>Projects</li>
+      <li>Browsers</li><li>Allocation</li><li>Analytics</li>
+      <li class="current">Chat</li><li>Settings</li><li>Docs</li>
+      <li>Help</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
