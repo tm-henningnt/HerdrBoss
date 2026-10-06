@@ -18,7 +18,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory docker HOST -- ARGS...',
   '       factory connect [--check|--undo] NAME',
   '       factory attach NAME [--undo]',
-  '       factory login NAME claude|codex',
+  '       factory login NAME claude|codex|opencode',
   '       factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]',
   '       factory update NAME --tier service|image [--dry-run] [--accept-data-loss] [--allow-boss-restart]',
   '       factory backup NAME [--file FILE] [--include-home]',
