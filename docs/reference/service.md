@@ -25,7 +25,7 @@ When a quota read fails, Herdr Boss keeps the last good quotas. The error text n
 
 A missing usage reader or login is not a failure. The reading is unknown, and the row carries the reason:
 
-- `no usage reader in this factory`: the probe command is not installed. A container factory has no CodexBar on Linux.
+- `no usage reader in this factory`: the probe command is not installed. A container factory has no CodexBar on Linux. The Codex reader replaces CodexBar there and gives its own reasons, listed in `docs/cli.md`.
 - `no login for this harness in this factory`: the harness has no login.
 
 This state raises no Boss warning, no provider back-off, and no fleet alert. The bulletin says "Usage limits are unknown for Claude (no usage reader in this factory). Not a probe failure." The provider card, the lane, and the Boss node show the reason. If the Claude probe fails for over 60 minutes, Herdr Boss sends one warning to the Boss. A missing reader never starts that warning.

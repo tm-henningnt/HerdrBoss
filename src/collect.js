@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { DATA_DIR } from './config.js';
 import { collectLinuxMachine } from './linux-machine.js';
+import { isFactoryRole } from './factory-role.js';
+import { LINUX_READERS } from './quota-readers.js';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
@@ -302,30 +304,41 @@ function writeQuotaProbeHistory(row, file = QUOTA_PROBE_HISTORY_FILE) {
   } catch {}
 }
 
-export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE, providers = QUOTA_PROVIDERS } = {}) {
+export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAULT_QUOTA_TIMEOUTS_MS, now = () => Date.now(), historyFile = QUOTA_PROBE_HISTORY_FILE, providers = QUOTA_PROVIDERS, factory = isFactoryRole(), readers = LINUX_READERS } = {}) {
   const result = [];
   for (const provider of QUOTA_PROVIDERS) {
     if (!providers.includes(provider)) continue;
     const timeoutMs = Number.isFinite(timeouts?.[provider]) ? timeouts[provider] : DEFAULT_QUOTA_TIMEOUTS_MS[provider];
-    let row = null, failure = null;
+    let row = null, failure = null, readerRow = null;
     const startedAt = Number(now());
     try {
       const rows = await codexbarRows(runner, ['--provider', provider], timeoutMs);
       row = rows.find((item) => item.provider === provider) || null;
       if (!row) failure = new Error(`${provider} quota row is missing`);
     } catch (error) { failure = error; }
+    // CodexBar is missing in a factory container. Ask the Linux reader of the provider. A Mac process keeps the unknown reading.
+    if (failure?.code === 'ENOENT' && factory && typeof readers?.[provider] === 'function') {
+      try {
+        readerRow = await readers[provider]({ timeoutMs, now });
+        failure = null;
+      } catch (error) { failure = error; }
+    }
     const finishedAt = Number(now());
     const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
     const killedPidState = ['exited', 'alive', 'unknown'].includes(failure?.killedPidState) ? failure.killedPidState : null;
     const rowErrorText = row?.error ? (typeof row.error === 'string' ? row.error : row.error.message || '') : '';
-    const unavailable = failure ? quotaUnavailableReason(failure) : quotaUnavailableReason(rowErrorText);
+    const unavailable = readerRow ? (readerRow.unavailable ? readerRow.reason : null) : failure ? quotaUnavailableReason(failure) : quotaUnavailableReason(rowErrorText);
     writeQuotaProbeHistory({
       at: new Date(finishedAt).toISOString(), provider,
-      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome: unavailable ? 'unavailable' : quotaProbeOutcome(row, failure),
+      durationMs: Math.max(0, finishedAt - startedAt), timeoutMs, outcome: unavailable ? 'unavailable' : quotaProbeOutcome(row ?? readerRow, failure),
       endedStep: quotaProbeEndedStep(row, failure),
       killedPid, killedPidState,
       killSignal: ['SIGTERM', 'SIGKILL'].includes(failure?.signal) ? failure.signal : null,
     }, historyFile);
+    if (readerRow) {
+      result.push(readerRow);
+      continue;
+    }
     if (failure) {
       result.push(unavailable
         ? { provider, unavailable: true, reason: unavailable, error: unavailable }
