@@ -27,12 +27,20 @@ export function classify(file, rules) {
   return 'other';
 }
 
+// A key name that holds a license or a token: license, license_key, LICENSE_KEY, licenseToken, access_token, license-key.
+// A word that only starts with the name, such as tokenizer, is not a key name.
+const KEY_NAME = '(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*?(?:licen[cs]e|token)(?:[_-]?(?:key|token|text|blob|data|value|code))*(?![A-Za-z0-9])';
+const BLOB = '[A-Za-z0-9+/=_-]{40,}';
+// A key at the end of a line, optionally followed by a YAML block marker. The value is on a later line.
+const KEY_ONLY_LINE = new RegExp(`${KEY_NAME}["']?\\s*[:=]\\s*(?:[|>][-+]?)?\\s*$`, 'i');
+const BLOB_ONLY_LINE = new RegExp(`^\\s*["']?${BLOB}["']?,?\\s*$`);
+
 // The token-shaped strings that the gate finds in a shipped artifact. Each entry is a class name and a pattern.
 // A JWT has three base64url parts, and its first part starts with eyJ.
 export const TOKEN_PATTERNS = [
   ['jwt', /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/],
   ['PEM private key block', /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/],
-  ['license blob', /\b(?:licen[cs]e(?:Key)?|token)\b["']?\s*[:=]\s*["']?[A-Za-z0-9+/=_-]{40,}/i],
+  ['license blob', new RegExp(`${KEY_NAME}["']?\\s*[:=]\\s*["']?${BLOB}`, 'i')],
 ];
 
 // A line with the allow marker keeps its fake test strings. The marker is the exact text below.
@@ -42,18 +50,29 @@ export const ALLOW_MARKER = 'herdr-boss: allow-test-token';
 const PUBLIC_KEY_LINE = /-----BEGIN (?:[A-Z0-9 ]+ )?(?:PUBLIC KEY|CERTIFICATE)-----/;
 
 // The token classes of one text, without the values. A line with the allow marker, a public verification key,
-// or a certificate gives no class. An empty array means the text holds no token-shaped string.
+// or a certificate gives no class. A blob on the line after a license key gives the class license blob.
+// An empty array means the text holds no token-shaped string. The scan reads every line.
 export function scanTokenText(text) {
   const classes = [];
-  for (const line of String(text).split('\n').slice(0, 20000)) {
-    if (line.includes(ALLOW_MARKER) || PUBLIC_KEY_LINE.test(line)) continue;
-    for (const [name, pattern] of TOKEN_PATTERNS) if (pattern.test(line) && !classes.includes(name)) classes.push(name);
+  const add = (name) => { if (!classes.includes(name)) classes.push(name); };
+  const source = String(text);
+  let keyOnly = false;
+  for (let start = 0; start <= source.length;) {
+    let end = source.indexOf('\n', start);
+    if (end === -1) end = source.length;
+    const line = source.slice(start, end);
+    start = end + 1;
+    if (!line.trim()) continue;
+    if (line.includes(ALLOW_MARKER) || PUBLIC_KEY_LINE.test(line)) { keyOnly = false; continue; }
+    for (const [name, pattern] of TOKEN_PATTERNS) if (pattern.test(line)) add(name);
+    if (keyOnly && BLOB_ONLY_LINE.test(line)) add('license blob');
+    keyOnly = KEY_ONLY_LINE.test(line);
   }
   return classes;
 }
 
 function git(root, args) {
-  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 30 });
 }
 
 // The reason of each Docs-Exempt trailer line in the commit messages. A line with no reason does not count.
@@ -73,12 +92,15 @@ function fileEntries(root, mergeBase, head, file) {
     .map(([, glob, reason]) => ({ glob, reason: reason.trim() }));
 }
 
-// The token classes of each changed shipped artifact. It reads the content at head. A binary file gives no class.
-function tokenFindings(root, head, files, rules) {
+// The token classes of each changed shipped artifact. It reads the content at head, or the working tree content
+// with includeWorktree. A deleted file and a binary file give no class.
+function tokenFindings(root, head, files, rules, includeWorktree) {
   const findings = [];
   for (const file of files.filter((name) => matches(name, rules.tokens || []))) {
     let content;
-    try { content = git(root, ['show', `${head}:${file}`]); } catch { continue; }
+    try {
+      content = includeWorktree ? fs.readFileSync(path.join(root, file), 'utf8') : git(root, ['show', `${head}:${file}`]);
+    } catch { continue; }
     if (/\0/.test(content)) continue;
     const classes = scanTokenText(content);
     if (classes.length) findings.push({ file, classes });
@@ -129,7 +151,7 @@ function checkDocsChange({ root = process.cwd(), base = 'main', head = 'HEAD', r
 export function checkDocsGate(options = {}) {
   const docs_ = checkDocsChange(options);
   const rules = options.rules ?? loadRules();
-  const tokens = tokenFindings(options.root ?? process.cwd(), options.head ?? 'HEAD', docs_.files, rules);
+  const tokens = tokenFindings(options.root ?? process.cwd(), options.head ?? 'HEAD', docs_.files, rules, Boolean(options.includeWorktree));
   const tokenLines = tokens.flatMap((finding) => [
     'Token gate failed: a shipped artifact of the branch holds a token-shaped string.',
     ...finding.classes.map((name) => `  token: ${finding.file}: ${name}`),

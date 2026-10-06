@@ -108,7 +108,7 @@ Do not weaken acceptance criteria or remove an existing test to get a pass.
 
 Keep each change inside the allowed paths.
 
-A license is never inline. Do not add license text, a license token, key text, or a licensed state to a release, a bundle, a demo, a fixture, or a test app, also not for testing. The Owner issues the license in a license extension for the tenant. That extension is the carrier extension. Public verification keys in code stay allowed.
+A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed.
 
 The task can list decisions already made. Do not reopen them.
 

@@ -43,15 +43,15 @@ A change to `test/`, `scripts/`, or `package.json` is not a behavior change.
 
 ## Token check
 
-A license is never inline. A release, a bundle, a demo, a fixture, or a test app holds no license text, no license token, no key text, and no licensed state. The check reads each changed artifact in the `tokens` globs and stops the branch on a token-shaped string. A unit test file is not a shipped artifact, so the gate does not scan it.
+A license is never inline. A release, a bundle, a demo, a fixture, or a test app holds no license text, no license token, no key text, and no licensed state. The check reads each changed artifact in the `tokens` globs and stops the branch on a token-shaped string. The check reads every line of a file. With `--include-worktree`, the check reads the working tree content of an uncommitted file. A unit test file is not a shipped artifact, so the gate does not scan `test/*.test.js`. Binary files, such as archives, are not scanned.
 
-The `tokens` key in `scripts/docs-gate.config.json` holds the globs. They cover `public/`, `bin/`, `factory/`, `release/`, `releases/`, `dist/`, `build/`, `demo/`, `demos/`, `fixture/`, `fixtures/`, `test-app/`, `test-apps/`, and the artifact folders `test/fixtures/`, `test/apps/`, and `test/demos/`.
+The `tokens` key in `scripts/docs-gate.config.json` holds the globs. They cover `src/`, `kit/`, `scripts/`, `examples/`, the files in the repository root, `public/`, `bin/`, `factory/`, `release/`, `releases/`, `dist/`, `build/`, `demo/`, `demos/`, `fixture/`, `fixtures/`, `test-app/`, `test-apps/`, and the artifact folders `test/fixtures/`, `test/apps/`, and `test/demos/`.
 
 | Token class | Meaning |
 |---|---|
 | `jwt` | A token with three base64url parts, where the first part starts with `eyJ`. |
 | `PEM private key block` | A `-----BEGIN ... PRIVATE KEY-----` line. |
-| `license blob` | A long base64 value after a key such as `license`, `licenseKey`, or `token`. |
+| `license blob` | A long base64 value after a key name that holds `license` or `token`, in snake, kebab, camel, or upper case, for example `license_key`, `LICENSE_KEY`, `licenseToken`, `access_token`, or `license-key`. The value can be on the line after the key, as in YAML. |
 
 Two things stay allowed:
 

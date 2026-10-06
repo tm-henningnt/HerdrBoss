@@ -1547,7 +1547,7 @@ The hook prints the digest of `kit update --quiet` before the kit file. On a cur
 
 `check agents` prints each finding in `AGENTS.md` or the kit file as `LEVEL line N: message`. `LEVEL` is `error` or `warn`.
 
-`check agents` also checks the required kit rules. A kit file that lacks a rule gives an error that names the rule and the fix, for example `docs/orchestration/herdr-boss.md has no rule that a license is never inline; run herdr-boss kit install`. The rule is the rule that a license is never inline: no release, bundle, demo, fixture, or test app holds license text, a license token, key text, or a licensed state. The Owner issues the license in a license extension for the tenant. A public verification key in code stays allowed.
+`check agents` also checks the required kit rules. A kit file that lacks a rule gives an error that names the rule and the fix, for example `docs/orchestration/herdr-boss.md has no rule that a license is never inline; run herdr-boss kit install`. The rule is the rule that a license is never inline: no release, bundle, demo, fixture, or test app holds license text, a license token, key text, or a licensed state. The Owner issues the license in a license extension for the tenant. A public verification key in code stays allowed. The token check does not scan binary archives.
 
 `check agents` also scans these orchestration files in the directory of `AGENTS.md`, usually the Git top level:
 

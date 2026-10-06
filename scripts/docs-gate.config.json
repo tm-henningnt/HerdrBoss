@@ -22,6 +22,11 @@
     "docs/gate-exemptions"
   ],
   "tokens": [
+    "src/**",
+    "kit/**",
+    "scripts/**",
+    "examples/**",
+    "*",
     "public/**",
     "bin/**",
     "factory/**",

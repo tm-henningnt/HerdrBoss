@@ -33,7 +33,7 @@ Read this file before you dispatch a reviewer or a review subagent.
 
 ## License check
 
-- Put this rule in a review task brief: a license is never inline. Report each release, bundle, demo, fixture, or test app that holds license text, a license token, key text, or a licensed state, also for testing. The Owner issues the license in a license extension for the tenant. That extension is the carrier extension. A public verification key in code is allowed.
+- Put this rule in a review task brief: a license is never inline. Report each release, bundle, demo, fixture, or test app that holds a license, token, key text, or licensed state. Report this also for tests. The Owner issues the license to the tenant in the carrier extension. A public verification key is allowed in code. A token is not allowed.
 - A finding is enough. Do not ask for a license. The reviewer never receives one.
 
 ## Review-pack values

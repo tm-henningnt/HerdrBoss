@@ -136,3 +136,94 @@ test('the token scan does not print the value it found', (t) => {
   assert.ok(!result.out.includes('eyJhbGciOiJIUzI1NiJ9'), 'the gate printed the token');
   assert.ok(!result.out.includes(LICENSE_BLOB), 'the gate printed the license blob');
 });
+
+test('the token scanner finds a license blob under snake, kebab, camel, and upper case key names', async () => {
+  const { scanTokenText } = await import('../scripts/docs-gate.js');
+  for (const key of ['license_key', 'LICENSE_KEY', 'licenseToken', 'access_token', 'accessToken', 'license-key', 'LicenseKey']) {
+    assert.deepEqual(scanTokenText(`${key}: "${LICENSE_BLOB}"\n`), ['license blob'], key);
+    assert.deepEqual(scanTokenText(`${key}=${LICENSE_BLOB}\n`), ['license blob'], `${key}=`);
+  }
+});
+
+test('the token scanner finds a license blob on the line after the key', async () => {
+  const { scanTokenText } = await import('../scripts/docs-gate.js');
+  assert.deepEqual(scanTokenText(`license:\n  ${LICENSE_BLOB}\n`), ['license blob']);
+  assert.deepEqual(scanTokenText(`access_token: |\n  ${LICENSE_BLOB}\n`), ['license blob']);
+  assert.deepEqual(scanTokenText(`license:\n\n  "${LICENSE_BLOB}"\n`), ['license blob']);
+  assert.deepEqual(scanTokenText(`license:\n  ${LICENSE_BLOB} # herdr-boss: allow-test-token\n`), []);
+  assert.deepEqual(scanTokenText(`license:\n  name: MIT\n`), []);
+});
+
+test('the token scanner keeps the false-positive checks with the wider key names', async () => {
+  const { scanTokenText } = await import('../scripts/docs-gate.js');
+  assert.deepEqual(scanTokenText(`sha256: ${LICENSE_BLOB}\n`), []);
+  assert.deepEqual(scanTokenText(`integrity_sha256 = "${LICENSE_BLOB}"\n`), []);
+  assert.deepEqual(scanTokenText(`tokenizer = "${LICENSE_BLOB}"\n`), []);
+  assert.deepEqual(scanTokenText(`const logo = 'data:image/png;base64,${LICENSE_BLOB}';\n`), []);
+  assert.deepEqual(scanTokenText(`${PUBLIC_KEY}\nlicense_key = key\n`), []);
+});
+
+test('the token scanner reads every line of a long text', async () => {
+  const { scanTokenText } = await import('../scripts/docs-gate.js');
+  const filler = 'x\n'.repeat(30000);
+  assert.deepEqual(scanTokenText(`${filler}const t = '${JWT}';\n`), ['jwt']);
+});
+
+test('the gate reads a file larger than the default git output buffer', (t) => {
+  const root = fixture(t);
+  bundle(root, 'public/app.js', `${'// filler line of text for the size\n'.repeat(60000)}const t = '${JWT}';\n`);
+  const result = gate(root);
+  assert.equal(result.code, 1, result.out);
+});
+
+test('the gate reads an uncommitted file with --include-worktree', (t) => {
+  const root = fixture(t);
+  write(root, 'public/new.js', `const t = '${JWT}';\n`);
+  write(root, 'docs/guide.md', '# Guide\n\nMore text.\n');
+  assert.equal(gate(root).code, 0);
+  const result = gate(root, ['--include-worktree']);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /public\/new\.js/);
+});
+
+test('the gate reads the working tree content of a modified file with --include-worktree', (t) => {
+  const root = fixture(t);
+  write(root, 'public/app.js', `const t = '${JWT}';\n`);
+  write(root, 'docs/guide.md', '# Guide\n\nMore text.\n');
+  const result = gate(root, ['--include-worktree']);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /public\/app\.js/);
+});
+
+test('the token globs cover the source, kit, script, example, and root files', async () => {
+  const { loadRules } = await import('../scripts/docs-gate.js');
+  const { tokens } = loadRules();
+  for (const glob of ['src/**', 'kit/**', 'scripts/**', 'examples/**', '*']) assert.ok(tokens.includes(glob), glob);
+  assert.ok(!tokens.some((glob) => glob.startsWith('test/') && !glob.startsWith('test/fixtures') && !glob.startsWith('test/apps') && !glob.startsWith('test/demos')));
+});
+
+test('the gate fails when a source file or a root file holds a JWT', (t) => {
+  for (const file of ['src/auth.js', 'kit/templates/x.md', 'scripts/tool.js', 'examples/demo/a.js', 'config.json']) {
+    const root = fixture(t);
+    bundle(root, file, `const t = '${JWT}';\n`);
+    const result = gate(root);
+    assert.equal(result.code, 1, `${file}: ${result.out}`);
+    git(root, ['checkout', '-q', 'main']);
+    git(root, ['branch', '-q', '-D', 'feature']);
+  }
+});
+
+test('the tracked tree of this repository passes the token check outside test files', async () => {
+  const { scanTokenText, loadRules } = await import('../scripts/docs-gate.js');
+  const rules = loadRules();
+  const files = git(repo, ['ls-files']).split('\n').filter(Boolean);
+  const globs = rules.tokens.map((glob) => new RegExp(`^${glob.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*')}$`));
+  const found = [];
+  for (const file of files.filter((name) => globs.some((re) => re.test(name)))) {
+    let text;
+    try { text = fs.readFileSync(path.join(repo, file), 'utf8'); } catch { continue; }
+    if (text.includes('\0')) continue;
+    if (scanTokenText(text).length) found.push(file);
+  }
+  assert.deepEqual(found, []);
+});
