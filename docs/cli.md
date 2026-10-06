@@ -1702,7 +1702,7 @@ The viewport command sets the real window size, so every CDP client sees it. It 
 
 A project keeps at most 30 bookmarks. A bookmark URL must use `http` or `https` and must not hold a user name or a password. The start page opens in the first tab of the next launch. The bookmarks and the start page stay in the project record in `browser-sessions.json`. The output filter also masks a URL with a repeated, malformed, encoded, or missing scheme, and the host of an `ftp` or `file` URL, and any text that equals a host stored in a bookmark or start page. Store a host without a scheme in a local config.
 
-A caller is a worker when one of `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`, or `HERDR_WORKTREE` is set. For a worker, `bookmarks list`, `add`, `rm`, `start`, and `open` print the index and the name of each bookmark only. `--full` does not widen this output. This rule guards against accidents. It is not a security boundary, because a worker can unset the variables.
+A caller is a worker when one of `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`, or `HERDR_WORKTREE` is set. For a worker, `bookmarks list`, `add`, `rm`, `start`, and `open` print the index and the name of each bookmark only. `--full` does not widen this output or a browser error message for a worker. This rule guards against accidents. It is not a security boundary, because a worker can unset the variables.
 
 ## Orchestrator handover
 

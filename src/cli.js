@@ -94,7 +94,9 @@ function storedBrowserHosts(sessions) {
   return [...hosts];
 }
 
-export async function browserErrorText(message, { full = false } = {}) {
+// A worker never gets --full output, also in an error message.
+export async function browserErrorText(message, { full = false, env = process.env } = {}) {
+  if (isHerdrPane(env)) full = false;
   let knownHosts = [];
   try { knownHosts = storedBrowserHosts((await import('./browser-pool.js')).listBrowserSessions()); } catch {}
   return maskBrowserText(message, { full, knownHosts });

@@ -319,6 +319,9 @@ export function bookmarkUrl(value) {
   try { parsed = new URL(String(value ?? '').trim()); } catch { throw new Error('A bookmark URL must use http or https.'); }
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('A bookmark URL must use http or https.');
   if (parsed.username || parsed.password) throw new Error('Bookmarks must not hold credentials.');
+  // The parsed host also decodes %68ttps and drops a trailing dot, so check it again here.
+  const parsedHost = parsed.hostname.replace(/\.$/, '').toLowerCase();
+  if (!parsedHost || /^(?:https?|wss?)$/.test(parsedHost)) throw new Error('A bookmark URL host must not hold a scheme, a backslash, or a space. Write one scheme, then the host.');
   return parsed.href;
 }
 

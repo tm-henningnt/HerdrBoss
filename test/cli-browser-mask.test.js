@@ -476,3 +476,36 @@ test('the top-level error text masks a stored host, also from a legacy stored UR
   assert.ok(!result.stdout.includes('tenant2'), result.stdout);
   assert.ok(!result.stdout.includes('acme.example.com'), result.stdout);
 });
+
+test('bookmarks add refuses a scheme word as the parsed hostname', (t) => {
+  const { run, dataDir } = bookmarksCli(t);
+  for (const url of ['https://%68ttps/tenant9.example.test', 'https://wss./tenant9.example.test', 'https://https.:80/tenant9.example.test']) {
+    const result = run(['bookmarks', 'alpha', 'add', 'Bad', url]);
+    assert.notEqual(result.status, 0, url);
+    assert.ok(!`${result.stdout}${result.stderr}`.includes('tenant9'), url);
+  }
+  assert.ok(!fs.readFileSync(path.join(dataDir, 'browser-sessions.json'), 'utf8').includes('tenant9'));
+});
+
+test('bookmarks add keeps a plain URL and a host that starts with a scheme word', (t) => {
+  const { run } = bookmarksCli(t);
+  for (const url of ['https://plain.example.test/a', 'https://https-proxy.example.test/a']) {
+    const result = run(['bookmarks', 'alpha', 'add', 'Ok', url]);
+    assert.equal(result.status, 0, `${url}: ${result.stderr}`);
+  }
+});
+
+test('the error text for a worker never unmasks a host with --full, and the Owner keeps --full', (t) => {
+  const { dataDir } = bookmarksCli(t);
+  const script = (env) => `
+    import { browserErrorText } from ${JSON.stringify(new URL('../src/cli.js', import.meta.url).href)};
+    process.stdout.write(await browserErrorText('ENOTFOUND https://other.example.org/x', { full: true }));
+  `;
+  const base = { ...process.env, HERDR_BOSS_DIR: dataDir, HOME: path.dirname(dataDir) };
+  for (const key of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_WORKTREE']) delete base[key];
+  const owner = spawnSync(process.execPath, ['--input-type=module', '-e', script()], { encoding: 'utf8', env: base });
+  assert.equal(owner.stdout, 'ENOTFOUND https://other.example.org/x');
+  const worker = spawnSync(process.execPath, ['--input-type=module', '-e', script()], { encoding: 'utf8', env: { ...base, HERDR_WORKTREE: '/tmp/wt-x' } });
+  assert.ok(!worker.stdout.includes('other.example.org'), worker.stdout);
+  assert.ok(worker.stdout.includes('<tenant>'), worker.stdout);
+});
