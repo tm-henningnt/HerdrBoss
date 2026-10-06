@@ -1163,8 +1163,8 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Service settings (Advanced)
 
-- Controls: The values that the service uses: collection intervals, worker clean-up, browser clean-up, and the network address. Each row shows its source.
-- Effect: Workers, notices, browsers, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.
+- Controls: The values that the service uses: collection intervals, worker clean-up, browser clean-up, release repositories, and the network address. Each row shows its source.
+- Effect: Workers, notices, browsers, release approval, and the machine. A value here changes when a worker pane closes, a done worker is reported, or an idle browser closes.
 - Safe to change: A row with an input is safe to change. A row without an input is read-only. Change it in config.json.
 - Restart: The push row needs a service restart. Other rows with inputs apply after Save. A read-only row needs a service restart.
 
@@ -1196,6 +1196,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Allowed hosts | `allowedHosts` | Host names that the server accepts in addition to localhost, this machine, and names that end in .ts.net. Enter a name such as factory-two, *.localhost for each name below localhost, or *.example.test for each name below example.test. A wildcard needs two labels after *., except *.localhost. A port, an address, and a bare * are not allowed. | Empty list | List of host names | Up to 50 names | A request that names a listed host passes the host check. A request from another machine still needs the access token. | Remove a name to refuse requests that use it. | Select Save in the group. The change takes effect at once. |
 | Log size limit | `log.maxMegabytes` | The size at which the server log file service.log rotates. The server also writes the log to standard output. | 10 | Megabytes | 1 to 1000 | The log file holds more history and uses more disk space. | The log file rotates sooner and holds less history. | Select Save in the group. The change takes effect at once. |
 | Old log files | `log.keepFiles` | The number of rotated log files that Herdr Boss keeps, as service.log.1 and service.log.2. | 2 | Files | 1 to 2 | More history stays on disk. | Herdr Boss deletes the older file at the next rotation. | Select Save in the group. The change takes effect at once. |
+| Allowed release repositories | `releases.repos` | Limits release request and release publish to the repositories in this list. Each row gives the GitHub repository name, project slug, and release kind. The Owner must approve each request in the Mailbox before publish. | Empty list | List of repositories | Unique GitHub repository names with a project slug and release kind | Add a repository when a project lead needs to request a release. | Remove a repository to refuse its release requests and publications. | Select Save in the group. The change takes effect at once. |
 
 #### Usage limit plan (Advanced)
 

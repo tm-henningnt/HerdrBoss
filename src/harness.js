@@ -17,6 +17,11 @@ const STOP_OWN_RULE = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"],
 // malformed, broader, or prompt line does not count.
 const STOP_OWN_RULE_PATTERN = /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*"herdr-boss"\s*,\s*"worker"\s*,\s*"stop-own"\s*\]\s*,\s*decision\s*=\s*"(allow|forbidden)"\s*\)/;
 const STOP_OWN_COMMENT = '# A worker stops its own process through the helper, never with a raw signal.';
+const RELEASE_COMMANDS = ['request', 'publish'];
+const CLAUDE_RELEASE_RULES = {
+  request: 'Run only `herdr-boss release request`.',
+  publish: 'Run only `herdr-boss release publish`.',
+};
 const FORBIDDEN_PS = ['e', '-E', 'eww', 'auxe', 'auxeww'];
 const PROJECTS_LABEL = 'Herdr Boss projects';
 const PROJECTS_LINE = `**${PROJECTS_LABEL}**`;
@@ -50,6 +55,24 @@ function stopOwnRuleState(text) {
     const decision = STOP_OWN_RULE_PATTERN.exec(line)?.[1];
     if (decision === 'allow') allow = true;
     else if (decision === 'forbidden') forbidden = true;
+  }
+  if (allow && forbidden) return 'conflict';
+  if (forbidden) return 'forbidden';
+  return allow ? 'allow' : null;
+}
+
+// Read one exact Codex command prefix. A broader, malformed, commented, or prompt rule does not count.
+function codexPrefixRuleState(text, target) {
+  let allow = false;
+  let forbidden = false;
+  for (const line of String(text).split('\n')) {
+    const match = /^\s*prefix_rule\(\s*pattern\s*=\s*(\[[^\]]*\])\s*,\s*decision\s*=\s*"(allow|forbidden)"\s*\)\s*$/.exec(line);
+    if (!match) continue;
+    let pattern;
+    try { pattern = JSON.parse(match[1]); } catch { continue; }
+    if (!Array.isArray(pattern) || pattern.length !== target.length || pattern.some((part, index) => part !== target[index])) continue;
+    if (match[2] === 'allow') allow = true;
+    else forbidden = true;
   }
   if (allow && forbidden) return 'conflict';
   if (forbidden) return 'forbidden';
@@ -519,6 +542,14 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     else if (stopOwn === 'conflict') add('bad', 'codex rules', 'Stop-own rule', `${rulesFile} allows and forbids the stop-own rule at the same time; the rules conflict; remove one of the two rules`);
     else add('missing', 'codex rules', 'Stop-own rule', `${rulesFile} has no stop-own rule; run herdr-boss harness sync or add: ${STOP_OWN_RULE}`);
     for (const arg of FORBIDDEN_PS) add(forbidden.has(arg) ? 'ok' : 'missing', 'codex rules', `Forbidden ps ${arg} rule`, forbidden.has(arg) ? `ps ${arg} is forbidden` : `ps ${arg} is not forbidden in ${rulesFile}`);
+    for (const command of RELEASE_COMMANDS) {
+      const rule = `prefix_rule(pattern=["herdr-boss", "release", "${command}"], decision="allow")`;
+      const status = codexPrefixRuleState(rules, ['herdr-boss', 'release', command]);
+      if (status === 'allow') add('ok', 'codex rules', `Release ${command} permission`, `release ${command} is allowed in ${rulesFile}`);
+      else if (status === 'forbidden') add('bad', 'codex rules', `Release ${command} permission`, `${rulesFile} forbids release ${command}; remove the forbidden rule before adding: ${rule}`);
+      else if (status === 'conflict') add('bad', 'codex rules', `Release ${command} permission`, `${rulesFile} allows and forbids release ${command}; remove one of the conflicting rules`);
+      else add('missing', 'codex rules', `Release ${command} permission`, `${rulesFile} has no release ${command} rule; add: ${rule}`);
+    }
   }
 
   // Read the autoMode key only.
@@ -536,6 +567,17 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
       const parent = named ? null : parentCovering(line, project.repo, home);
       if (parent) add('ok', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} covers ${project.repo} (${project.slug}) through the parent folder ${parent}`);
       else add(named ? 'ok' : 'missing', 'claude autoMode', 'Herdr Boss projects line', `${PROJECTS_LINE} ${named ? 'names' : 'does not name'} ${project.repo} (${project.slug})`);
+    }
+  }
+  const autoMode = settings.value?.autoMode;
+  if (!settings.error) {
+    const allow = Array.isArray(autoMode?.allow) ? autoMode.allow : [];
+    for (const command of RELEASE_COMMANDS) {
+      const rule = CLAUDE_RELEASE_RULES[command];
+      const has = allow.includes(rule);
+      add(has ? 'ok' : 'missing', 'claude autoMode', `Release ${command} permission`, has
+        ? `release ${command} is allowed in ${settingsFile}`
+        : `${settingsFile} has no autoMode.allow line for release ${command}; add: ${rule}`);
     }
   }
 

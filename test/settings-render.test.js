@@ -48,7 +48,7 @@ async function views(code = source) {
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, chatBubble, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -91,6 +91,67 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   await app.saveServiceSettings('Paths', button);
   assert.deepEqual(sent.changes, { worktreeRoot: '/tmp/worker trees', projectRoot: '~/projects' });
   assert.equal(button.disabled, false);
+});
+
+test('Settings shows and saves release repository rows with all three fields', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const repos = [{ name: 'example-org/example-app', project: 'example', kind: 'app' }];
+  const s = fixture();
+  s.serviceSettings = serviceSettingsView({ releases: { repos } });
+  const html = app.settingsView(s);
+  assert.equal((html.match(/data-setting-help="releases\.repos"/g) || []).length, 1, 'the row has one setting help button');
+  assert.doesNotMatch(html, /<p class="setting-help"><strong>Allowed release repositories<\/strong><\/p>/);
+  assert.doesNotMatch(html, /Only listed repositories can use release request/);
+  assert.match(html, /data-release-repo-add/);
+  assert.match(html, /data-release-repo-remove/);
+  for (const field of ['name', 'project', 'kind']) assert.match(html, new RegExp(`data-release-repo-field="${field}"`));
+  assert.match(html, /data-save-service-settings="Releases"/);
+
+  const empty = app.settingsView({ ...s, serviceSettings: serviceSettingsView({ releases: { repos: [] } }) });
+  assert.match(empty, /data-release-repo-empty[^>]*>No repositories are allowed\.<\/p>/);
+  assert.equal((empty.match(/data-setting-help="releases\.repos"/g) || []).length, 1, 'the empty list still has one setting help button');
+  assert.doesNotMatch(empty, /Only listed repositories can use release request/);
+
+  const inputs = [
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'name' }, value: 'example-org/example-app' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'project' }, value: 'example' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'kind' }, value: 'app' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'name' }, value: ' ' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'project' }, value: '' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'kind' }, value: '' },
+  ];
+  app.context.document = {
+    querySelectorAll: (selector) => selector.includes('data-release-repo-field') ? inputs : [
+      { type: 'hidden', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases' }, value: '' },
+    ],
+    querySelector: () => ({ textContent: '' }),
+  };
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ settings: [{ group: 'Releases', setting: 'releases.repos', value: repos, source: 'config' }] }) };
+  };
+  const button = { disabled: false };
+  await app.saveServiceSettings('Releases', button);
+  assert.deepEqual(sent.changes, { 'releases.repos': repos });
+  assert.equal(button.disabled, false);
+});
+
+test('Owner Chat renders a release report as an Approve and Reject card', async () => {
+  const app = await views();
+  app.context.safeMarkdownHtml = (source) => `<p>${source}</p>`;
+  const html = app.chatBubble({
+    id: 'release-approval-1', thread: 'example', from: 'orch', to: 'owner', kind: 'report', channel: 'mail',
+    action: 'approve', title: 'Release approval: example-org/example-app v1.0.0',
+    text: '# Release approval request\n\nRepository: example-org/example-app\nTag: v1.0.0\n\n## Effect\nApprove makes the release public.',
+    release: { repo: 'example-org/example-app', tag: 'v1.0.0' }, at: '2026-10-07T10:00:00Z',
+  });
+  assert.match(html, /chat-card/);
+  assert.match(html, /Repository: example-org\/example-app/);
+  assert.match(html, /data-chat-value="Approved\."[^>]*>Approve<\/button>/);
+  assert.match(html, /data-chat-value="Rejected\."[^>]*>Reject<\/button>/);
+  assert.match(html, /Open in Mailbox/);
 });
 
 test('each provider quota row names the source and the age of its reading', async () => {

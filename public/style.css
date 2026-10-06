@@ -1638,6 +1638,13 @@ p.wizard-errors { padding-left: 10px; }
 .service-settings-table td:nth-child(2) input[type="number"] { width: 112px; max-width: 100%; }
 .service-settings-table td:nth-child(2) input[type="text"] { width: 32ch; max-width: 100%; }
 .service-settings-table td:nth-child(2) input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; }
+.release-repos-editor { display: grid; gap: 8px; min-width: 460px; }
+.release-repo-rows { display: grid; gap: 8px; }
+.release-repo-row { display: grid; grid-template-columns: minmax(170px, 2fr) minmax(110px, 1fr) minmax(100px, 1fr) auto; gap: 8px; align-items: end; }
+.release-repo-row label { display: grid; gap: 3px; min-width: 0; color: var(--muted); font-size: 11px; }
+.service-settings-table .release-repo-row input[type="text"] { width: 100%; min-width: 0; }
+.release-repo-row button { min-height: 32px; white-space: nowrap; }
+.release-repos-editor > .setting-help { margin: 0; }
 .service-settings-note { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }
 
 /* Read-only harness readiness on the Settings page. */
@@ -1768,6 +1775,9 @@ pre { max-width: 100%; overflow-x: auto; }
   .browser-navigate button { min-height: 44px; }
   .service-settings-table td:nth-child(2) input[type="checkbox"] { width: 22px; height: 22px; }
   .service-settings-table td:nth-child(2) input[type="text"] { width: 112px; }
+  .service-settings-table .release-repo-row input[type="text"] { width: 100%; }
+  .release-repo-row { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
+  .release-repo-row button { grid-column: 2; justify-self: end; }
   .service-settings-table td:has(> input[type="checkbox"]) { display: flex; align-items: center; min-height: 44px; }
 }
 

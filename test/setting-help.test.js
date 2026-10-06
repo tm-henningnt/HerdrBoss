@@ -51,6 +51,21 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
+test('the release repository setting explains the approval rule in Settings and Help', () => {
+  const item = SETTING_HELP['releases.repos'];
+  assert.ok(item, 'releases.repos has a help row');
+  assert.equal(item.group, 'service');
+  assert.match(item.what, /release request.*release publish/i);
+  assert.match(item.what, /Owner.*approve.*Mailbox/i);
+  const help = app.slice(app.indexOf('const HELP ='));
+  const settingsStart = help.indexOf("settings: ['Settings',");
+  const nextPage = help.indexOf("\n  agents: ['Agents',", settingsStart);
+  assert.ok(settingsStart >= 0 && nextPage > settingsStart, 'the Settings Help entry is present');
+  const settingsHelp = help.slice(settingsStart, nextPage);
+  assert.match(settingsHelp, /In <b>Releases<\/b>, list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish\./);
+  assert.doesNotMatch(help, /release-approvals/);
+});
+
 test('quota plan settings share the Usage limit plan help group and documented defaults', () => {
   const group = SETTING_GROUPS.find((item) => item.id === 'quota-plan');
   assert.equal(group?.title, 'Usage limit plan');
