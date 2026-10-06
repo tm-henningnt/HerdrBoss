@@ -169,7 +169,7 @@ const ITEM = (id, text, action, extra = {}) => ({ id, at: '2026-10-05T09:00:00.0
 test('a prepared successor prompt carries the three generated sections beside the capped three-source read', (t) => {
   const f = handoffFixture(t, { agents: AGENTS });
   seed(f, {
-    memory: ['# Memory', '- 2026-10-05: The Owner keeps the bootstrap cap.'].join('\n'),
+    memory: ['# Memory', `- ${new Date().toISOString().slice(0, 10)}: The Owner keeps the bootstrap cap.`].join('\n'),
     items: [ITEM('m-1', 'Approve the release plan', 'approve'), ITEM('m-2', 'Night report', 'read')],
     tasks: [{ id: 't-12', title: 'Merge the release', status: 'doing', mailboxId: 'm-1', waitingOn: 'owner', ask: 'Approve the release plan.' }],
   });
@@ -185,7 +185,7 @@ test('a prepared successor prompt carries the three generated sections beside th
   assert.match(prompt, /m-1 \[approve\]: Approve the release plan/);
   assert.match(prompt, /m-2 \[read\]: Night report/);
   assert.match(prompt, /t-12: Merge the release \(mailboxId m-1\)/);
-  assert.match(prompt, /2026-10-05: The Owner keeps the bootstrap cap\./);
+  assert.match(prompt, new RegExp(`${new Date().toISOString().slice(0, 10)}: The Owner keeps the bootstrap cap\\.`));
   assert.match(prompt, /End Boss rules\.[\s\S]*End Open items\./);
 });
 
