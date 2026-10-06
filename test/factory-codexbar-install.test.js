@@ -1,7 +1,10 @@
 import './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ensureCodexbar } from '../src/factory-codexbar-install.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { ensureCodexbar, pinnedVersion } from '../src/factory-codexbar-install.js';
 
 const io = () => { const out = []; return { out, stdout: { write: (text) => out.push(text) } }; };
 const transport = (reply) => { const calls = []; return { calls, run: async (args) => { calls.push(args); return typeof reply === 'function' ? reply(args) : reply; } }; };
@@ -39,6 +42,19 @@ test('a config word adds a fixed second line and no file content is echoed', asy
   const output = io();
   assert.equal(await ensureCodexbar(transport({ code: 0, stdout: 'installed\nconfig-invalid\n', stderr: '' }), 'demo', output), 'installed');
   assert.deepEqual(output.out, ['CodexBar: installed 0.72.0.\n', 'CodexBar config: invalid.\n']);
+});
+
+test('pinnedVersion reads the pins file that the caller passes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexbar-pins-'));
+  try {
+    const file = path.join(dir, 'pins.json');
+    fs.writeFileSync(file, JSON.stringify({ codexbar: '1.2.3' }));
+    assert.equal(pinnedVersion(file), '1.2.3');
+    fs.writeFileSync(file, JSON.stringify({ codexbar: 'nope' }));
+    assert.equal(pinnedVersion(file), null);
+    fs.writeFileSync(file, JSON.stringify({}));
+    assert.equal(pinnedVersion(file), null);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a failing step prints the fixed line, never throws, and prints no container output', async () => {

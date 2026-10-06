@@ -145,6 +145,9 @@ export function installCodexbar({
         try { extract(tarFile, unpacked); } catch { return finish('download-failed', home, null); }
         const produced = path.join(unpacked, 'codexbar');
         if (!fs.existsSync(produced)) return finish('download-failed', home, null);
+        // lstat does not follow a link: a linked member is refused with the fixed reason, and nothing is copied.
+        const producedStat = fs.lstatSync(produced);
+        if (!producedStat.isFile() || producedStat.isSymbolicLink()) return finish('download-failed', home, null);
         const bin = path.join(home, '.local', 'bin', 'codexbar');
         fs.mkdirSync(path.dirname(bin), { recursive: true, mode: 0o755 });
         fs.copyFileSync(produced, bin);

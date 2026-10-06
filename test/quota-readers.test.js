@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectQuotas } from '../src/collect.js';
-import { spawnJsonRpc as realSpawnJsonRpc, buildWindow, readCodexQuota, readQuota, LINUX_READERS } from '../src/quota-readers.js';
+import { spawnJsonRpc as realSpawnJsonRpc, buildWindow, readClaudeQuota, readCodexQuota, readQuota, LINUX_READERS } from '../src/quota-readers.js';
 import { fleetQuotas } from '../src/fleet-quotas.js';
 
 const missingReader = Object.assign(new Error('spawn codexbar ENOENT'), { code: 'ENOENT', syscall: 'spawn codexbar', path: 'codexbar' });
@@ -22,6 +22,43 @@ test('a factory process uses the Linux reader when codexbar is missing', async (
   assert.equal(codex.windows[0].usedPercent, 10);
   assert.equal(codex.unavailable, undefined);
   assert.deepEqual(asked, [1234]);
+});
+
+test('an error row falls back to the own reader in a factory', async () => {
+  const runner = async () => JSON.stringify([{ provider: 'codex', error: { message: 'not logged in' } }]);
+  const readers = { codex: async () => reading('codex') };
+  const quotas = await collectQuotas({ runner, factory: true, readers, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(quotas[0].windows[0].usedPercent, 10);
+  assert.equal(quotas[0].unavailable, undefined);
+});
+
+test('a non-zero exit with no usable rows falls back to the own reader in a factory', async () => {
+  const runner = async () => { throw Object.assign(new Error('Command failed'), { code: 1, stdout: '', stderr: 'boom' }); };
+  const readers = { codex: async () => reading('codex') };
+  const quotas = await collectQuotas({ runner, factory: true, readers, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(quotas[0].windows[0].usedPercent, 10);
+  assert.equal(quotas[0].unavailable, undefined);
+});
+
+test('a timeout attempts the own reader once in a factory and keeps the timeout reason when the reader fails', async () => {
+  const timeout = Object.assign(new Error('codexbar timed out after 20 s'), { killed: true, signal: 'SIGTERM', killedPid: 4242, killedPidState: 'exited' });
+  const asked = [];
+  const readers = { codex: async (options) => { asked.push(options.timeoutMs); return reading('codex'); } };
+  const ok = await collectQuotas({ runner: async () => { throw timeout; }, factory: true, readers, historyFile: historyFile(), providers: ['codex'], timeouts: { codex: 20000 } });
+  assert.equal(ok[0].windows[0].usedPercent, 10);
+  assert.deepEqual(asked, [20000]);
+  const failed = await collectQuotas({ runner: async () => { throw timeout; }, factory: true, readers: { codex: async () => { throw new Error('Codex usage read failed: backend unavailable'); } }, historyFile: historyFile(), providers: ['codex'], timeouts: { codex: 20000 } });
+  assert.match(failed[0].error, /timed out after 20 s/);
+  assert.equal(failed[0].unavailable, undefined);
+});
+
+test('partial rows with a non-zero exit stay used and do not call the own reader', async () => {
+  const runner = async () => { throw Object.assign(new Error('Command failed'), { code: 1, stdout: JSON.stringify([{ provider: 'codex', usage: { primary: { usedPercent: 7, resetsAt: '2026-10-06T12:00:00Z', windowMinutes: 300 } } }]), stderr: '' }); };
+  let called = 0;
+  const readers = { codex: async () => { called += 1; return reading('codex'); } };
+  const quotas = await collectQuotas({ runner, factory: true, readers, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(quotas[0].windows[0].usedPercent, 7);
+  assert.equal(called, 0);
 });
 
 test('a provider without a Linux reader keeps the unknown reading in a factory', async () => {
@@ -47,6 +84,15 @@ test('codexbar rows win over the Linux reader', async () => {
   const quotas = await collectQuotas({ runner, factory: true, readers: { codex: async () => { called += 1; return reading('codex'); } }, historyFile: historyFile(), providers: ['codex'] });
   assert.equal(called, 0);
   assert.equal(quotas[0].windows[0].usedPercent, 5);
+});
+
+test('a codexbar source outside the safe shape becomes unknown', async () => {
+  const runner = async () => JSON.stringify([{ provider: 'codex', source: '<img src=x onerror=1>', usage: { primary: { usedPercent: 5, resetsAt: '2026-10-06T12:00:00Z', windowMinutes: 300 } } }]);
+  const [row] = await collectQuotas({ runner, factory: true, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(row.source, 'unknown');
+  const missing = async () => JSON.stringify([{ provider: 'codex', usage: { primary: { usedPercent: 5, resetsAt: '2026-10-06T12:00:00Z', windowMinutes: 300 } } }]);
+  const [noSource] = await collectQuotas({ runner: missing, factory: true, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(noSource.source, 'unknown');
 });
 
 test('a reading names the codexbar strategy and an own reader names its source', async () => {
@@ -116,7 +162,7 @@ test('the Codex reader maps primary and secondary windows', async () => {
   const { spawnJsonRpc, state } = fakeTransport({ replies: { initialize: INITIALIZED, 'account/rateLimits/read': LIMITS } });
   const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 1000, now: () => Date.parse('2026-10-06T10:00:00Z') });
   assert.equal(row.provider, 'codex');
-  assert.equal(row.source, 'oauth');
+  assert.equal(row.source, 'app-server');
   assert.equal(row.plan, 'pro');
   assert.deepEqual(row.windows.map((w) => w.key), ['primary', 'secondary']);
   assert.equal(row.windows[0].resetsAt, new Date(1790000000 * 1000).toISOString());
@@ -145,6 +191,24 @@ test('the Codex reader adds each named extra limit as an extra window', async ()
   assert.deepEqual(row.windows.map((w) => w.key), ['primary', 'secondary', 'codex_other']);
   assert.equal(row.windows[2].extra, true);
   assert.equal(row.windows[2].label, 'Other model');
+});
+
+test('the Claude status line helper reading names the helper source', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-reader-'));
+  try {
+    const now = Date.parse('2026-09-21T10:00:00.000Z');
+    fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify({
+      observedAt: new Date(now).toISOString(),
+      rate_limits: {
+        five_hour: { used_percentage: 20, resets_at: 1790000000 },
+        seven_day: { used_percentage: 30, resets_at: 1790500000 },
+      },
+    }));
+    const row = await readClaudeQuota({ dir, now: () => now });
+    assert.equal(row.source, 'helper');
+    assert.equal(row.windows.length, 2);
+    assert.equal(row.windows[0].usedPercent, 20);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a not-logged-in JSON-RPC error gives an unavailable row with the login reason', async () => {

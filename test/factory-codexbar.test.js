@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { applyCodexbarConfig, codexbarConfigText, codexbarInstallCommand, codexbarPins, codexbarTarget, installCodexbar, parseCodexbarVersion } from '../src/factory-codexbar.js';
 
@@ -147,6 +148,29 @@ test('an unsupported architecture and both download failures give fixed states',
   try {
     assert.equal(installCodexbar({ home: arch.home, version: pins.version, arch: 'ppc64', hashes: arch.hashes, deps: arch.deps }).state, 'unsupported-architecture');
   } finally { fs.rmSync(arch.home, { recursive: true, force: true }); }
+});
+
+test('a symlink member in a hash-valid tarball is refused with a fixed reason and writes no binary', () => {
+  const pins = codexbarPins();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexbar-symlink-'));
+  try {
+    const target = path.join(dir, 'secret.txt');
+    fs.writeFileSync(target, 'INVENTED-SECRET');
+    fs.symlinkSync(target, path.join(dir, 'codexbar'));
+    const tarFile = path.join(dir, 'cli.tar.gz');
+    assert.equal(spawnSync('tar', ['-czf', tarFile, '-C', dir, 'codexbar'], { stdio: ['ignore', 'ignore', 'pipe'] }).status, 0);
+    const body = fs.readFileSync(tarFile);
+    const home = tempHome();
+    try {
+      const result = installCodexbar({
+        home, version: pins.version, arch: 'x64',
+        hashes: { x86_64: sha256(body), aarch64: sha256(body) },
+        deps: { readVersion: () => null, download: (_url, file) => { fs.writeFileSync(file, body); }, validate: () => true },
+      });
+      assert.deepEqual(result, { state: 'download-failed', configInvalid: false });
+      assert.equal(fs.existsSync(path.join(home, '.local', 'bin', 'codexbar')), false);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('an extracted archive without the binary and a failed config validation give fixed words', () => {

@@ -14,8 +14,8 @@ const REASONS = Object.freeze({
   'no-network': 'no network',
 });
 
-function pinnedVersion() {
-  const version = JSON.parse(fs.readFileSync(PINS_FILE, 'utf8'))?.codexbar;
+export function pinnedVersion(pins = PINS_FILE) {
+  const version = JSON.parse(fs.readFileSync(pins, 'utf8'))?.codexbar;
   return typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? version : null;
 }
 

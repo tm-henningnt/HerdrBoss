@@ -12,7 +12,7 @@ providers `codex`, `claude`, and `opencodego`, each with the source `auto`.
 
 `collectQuotas` runs `codexbar usage --format json --provider <p>` first, as it does on the Mac. It falls
 back to the own readers only when `codexbar` is missing. The own Codex reader and the Claude status line stay
-as fallbacks. A reading names its source in the dashboard, for example `oauth`, `web`, `cli`, `api`, or `local`.
+as fallbacks. A reading names its source in the dashboard, for example `app-server`, `helper`, `oauth`, `cli`, or `api`.
 
 ## OpenCode Go account windows
 

@@ -85,7 +85,7 @@ function codexRow(result, observedAt) {
   const credits = snapshot.credits && typeof snapshot.credits === 'object' ? snapshot.credits : null;
   return {
     provider: 'codex',
-    source: 'oauth',
+    source: 'app-server',
     plan: typeof snapshot.planType === 'string' ? snapshot.planType : null,
     windows,
     credits: credits && credits.balance != null ? { remaining: credits.balance } : null,
@@ -179,7 +179,7 @@ export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now
   }
   // An old report with an open window is a probe failure: keepStaleRows keeps the last good reading as stale, and it turns unknown later.
   if (stale) return failed('claude', `the last Claude usage report is older than ${CLAUDE_STALE_HOURS} hours`);
-  return { provider: 'claude', source: 'web', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
+  return { provider: 'claude', source: 'helper', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
 }
 
 // The Linux readers by provider. A provider without an entry keeps the unknown reading.

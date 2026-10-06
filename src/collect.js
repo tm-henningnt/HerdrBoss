@@ -316,12 +316,18 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
       row = rows.find((item) => item.provider === provider) || null;
       if (!row) failure = new Error(`${provider} quota row is missing`);
     } catch (error) { failure = error; }
-    // CodexBar is missing in a factory. Ask the own Linux reader of the provider. A Mac process keeps the unknown reading.
-    if (failure?.code === 'ENOENT' && factory && typeof readers?.[provider] === 'function') {
+    // CodexBar is missing, exits non-zero without usable rows, returns an error row, or times out in a factory.
+    // Ask the own Linux reader of the provider. A Mac process keeps the unknown reading.
+    const codexbarUnusable = Boolean(failure) || Boolean(row?.error);
+    if (factory && typeof readers?.[provider] === 'function' && codexbarUnusable) {
       try {
         readerRow = await readers[provider]({ timeoutMs, now, opencode });
         failure = null;
-      } catch (error) { failure = error; }
+        row = null;
+      } catch (error) {
+        // A missing binary keeps the reader reason. Any other codexbar failure keeps its own reason first.
+        if (failure?.code === 'ENOENT') failure = error;
+      }
     }
     const finishedAt = Number(now());
     const killedPid = Number.isInteger(failure?.killedPid) && failure.killedPid > 0 ? failure.killedPid : null;
@@ -397,8 +403,8 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
       : [];
     result.push({
       provider: r.provider,
-      // The strategy that codexbar used, for example oauth, web, cli, api, or local. It is null when codexbar omits it.
-      source: typeof r.source === 'string' && r.source ? r.source : null,
+      // The strategy that codexbar used, for example oauth, web, cli, api, or local. Any other value becomes unknown.
+      source: typeof r.source === 'string' && /^[a-z][a-z0-9-]{0,15}$/.test(r.source) ? r.source : 'unknown',
       plan: u.loginMethod || u.identity?.loginMethod || null,
       windows,
       credits: r.credits ? { remaining: r.credits.remaining } : null,

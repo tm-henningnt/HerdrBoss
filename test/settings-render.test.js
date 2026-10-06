@@ -97,8 +97,8 @@ test('each provider quota row names the source and the age of its reading', asyn
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
   const fresh = fixture();
-  fresh.quotas = [{ provider: 'codex', source: 'oauth', observedAt: new Date().toISOString(), windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: '2026-10-20T00:00:00.000Z' }] }];
-  assert.match(app.settingsView(fresh), /source oauth · reading .* ago/);
+  fresh.quotas = [{ provider: 'codex', source: 'app-server', observedAt: new Date().toISOString(), windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: '2026-10-20T00:00:00.000Z' }] }];
+  assert.match(app.settingsView(fresh), /source app-server · reading .* ago/);
   const unknown = fixture();
   unknown.quotas = [{ provider: 'codex', source: 'local', unavailable: true, reason: 'no login for this harness in this factory' }];
   assert.match(app.settingsView(unknown), /source local · no login for this harness in this factory/);
