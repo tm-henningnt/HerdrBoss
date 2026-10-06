@@ -93,6 +93,17 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   assert.equal(button.disabled, false);
 });
 
+test('each provider quota row names the source and the age of its reading', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const fresh = fixture();
+  fresh.quotas = [{ provider: 'codex', source: 'oauth', observedAt: new Date().toISOString(), windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: '2026-10-20T00:00:00.000Z' }] }];
+  assert.match(app.settingsView(fresh), /source oauth · reading .* ago/);
+  const unknown = fixture();
+  unknown.quotas = [{ provider: 'codex', source: 'local', unavailable: true, reason: 'no login for this harness in this factory' }];
+  assert.match(app.settingsView(unknown), /source local · no login for this harness in this factory/);
+});
+
 test('Quota plan settings render editable values with decimal steps and save as numbers or text', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });

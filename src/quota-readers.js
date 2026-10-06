@@ -1,4 +1,4 @@
-// Linux quota readers for a factory container. CodexBar does not exist on Linux, so each reader asks the harness itself.
+// Linux quota readers for a factory container. They are the fallback for a factory without a working CodexBar; each reader asks the harness itself.
 // A reader prints readings only. It reads no login file and passes no credential in argv or in the child environment.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -85,6 +85,7 @@ function codexRow(result, observedAt) {
   const credits = snapshot.credits && typeof snapshot.credits === 'object' ? snapshot.credits : null;
   return {
     provider: 'codex',
+    source: 'oauth',
     plan: typeof snapshot.planType === 'string' ? snapshot.planType : null,
     windows,
     credits: credits && credits.balance != null ? { remaining: credits.balance } : null,
@@ -178,7 +179,7 @@ export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now
   }
   // An old report with an open window is a probe failure: keepStaleRows keeps the last good reading as stale, and it turns unknown later.
   if (stale) return failed('claude', `the last Claude usage report is older than ${CLAUDE_STALE_HOURS} hours`);
-  return { provider: 'claude', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
+  return { provider: 'claude', source: 'web', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
 }
 
 // The Linux readers by provider. A provider without an entry keeps the unknown reading.

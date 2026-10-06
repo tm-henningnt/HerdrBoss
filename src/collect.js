@@ -233,7 +233,7 @@ export function codexbarError(err, timeoutMs = DEFAULT_QUOTA_TIMEOUT_MS, provide
 }
 
 // A missing usage reader or login makes the reading unknown. The probe did not fail, so this never warns the Boss,
-// backs off the provider, or counts as failed quota data. A container factory has no CodexBar on Linux.
+// backs off the provider, or counts as failed quota data. CodexBar is the first reader in every factory; the own readers are the fallback.
 const MISSING_READER = /\bENOENT\b|command not found|not found on this machine/i;
 const MISSING_LOGIN = /not logged in|not authenticated|no (?:credentials|login)\b|login (?:required|expired|is missing)|sign in\b/i;
 export function quotaUnavailableReason(value) {
@@ -316,7 +316,7 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
       row = rows.find((item) => item.provider === provider) || null;
       if (!row) failure = new Error(`${provider} quota row is missing`);
     } catch (error) { failure = error; }
-    // CodexBar is missing in a factory container. Ask the Linux reader of the provider. A Mac process keeps the unknown reading.
+    // CodexBar is missing in a factory. Ask the own Linux reader of the provider. A Mac process keeps the unknown reading.
     if (failure?.code === 'ENOENT' && factory && typeof readers?.[provider] === 'function') {
       try {
         readerRow = await readers[provider]({ timeoutMs, now, opencode });
@@ -397,6 +397,8 @@ export async function collectQuotas({ runner = runQuotaCommand, timeouts = DEFAU
       : [];
     result.push({
       provider: r.provider,
+      // The strategy that codexbar used, for example oauth, web, cli, api, or local. It is null when codexbar omits it.
+      source: typeof r.source === 'string' && r.source ? r.source : null,
       plan: u.loginMethod || u.identity?.loginMethod || null,
       windows,
       credits: r.credits ? { remaining: r.credits.remaining } : null,

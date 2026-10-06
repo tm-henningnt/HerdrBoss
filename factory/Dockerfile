@@ -12,6 +12,7 @@ ARG GH_VERSION
 ARG CLAUDE_CODE_VERSION
 ARG CODEX_VERSION
 ARG OPENCODE_VERSION
+ARG CODEXBAR_VERSION
 ARG CHROMIUM_VERSION
 ARG PINS_SHA256
 ARG PINS_JSON
@@ -25,7 +26,7 @@ ENV TZ=Europe/Oslo \
     DISABLE_AUTOUPDATER=1 \
     OPENCODE_DISABLE_AUTOUPDATE=true
 RUN set -eu; \
-    for name in S6_VERSION NODE_VERSION HERDR_VERSION GH_VERSION CLAUDE_CODE_VERSION CODEX_VERSION OPENCODE_VERSION CHROMIUM_VERSION; do \
+    for name in S6_VERSION NODE_VERSION HERDR_VERSION GH_VERSION CLAUDE_CODE_VERSION CODEX_VERSION OPENCODE_VERSION CODEXBAR_VERSION CHROMIUM_VERSION; do \
       eval "value=\${$name:-}"; \
       [ -n "$value" ] || { echo "Build argument $name is empty. Build with factory/build.sh." >&2; exit 1; }; \
     done
@@ -46,11 +47,14 @@ RUN set -eu; \
     fetch https://nodejs.org/dist/v${NODE_VERSION} node-v${NODE_VERSION}-linux-${NA}.tar.xz; \
     fetch https://github.com/ogulcancelik/herdr/releases/download/v${HERDR_VERSION} herdr-linux-${HA}; \
     fetch https://github.com/cli/cli/releases/download/v${GH_VERSION} gh_${GH_VERSION}_linux_${GA}.tar.gz; \
+    CB=CodexBarCLI-v${CODEXBAR_VERSION}-linux-${HA}; fetch https://github.com/steipete/CodexBar/releases/download/v${CODEXBAR_VERSION} ${CB}.tar.gz; \
     tar -C / -Jxp -f s6-overlay-noarch.tar.xz; \
     tar -C / -Jxp -f s6-overlay-${S6A}.tar.xz; \
     tar -C /usr/local --strip-components=1 -Jx --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/share/doc' --exclude='*/share/man' -f node-v${NODE_VERSION}-linux-${NA}.tar.xz; \
     install -m 0755 herdr-linux-${HA} /usr/local/bin/herdr; \
     tar -C /usr/local --strip-components=1 -zx --wildcards '*/bin/gh' -f gh_${GH_VERSION}_linux_${GA}.tar.gz; \
+    tar -xzf ${CB}.tar.gz codexbar; \
+    install -m 0755 codexbar /usr/local/bin/codexbar; \
     cd /; rm -rf /tmp/dl /tmp/checksums.txt
 RUN npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force

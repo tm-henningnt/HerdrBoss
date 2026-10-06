@@ -49,6 +49,14 @@ test('codexbar rows win over the Linux reader', async () => {
   assert.equal(quotas[0].windows[0].usedPercent, 5);
 });
 
+test('a reading names the codexbar strategy and an own reader names its source', async () => {
+  const runner = async () => JSON.stringify([{ provider: 'codex', source: 'openai-web', usage: { primary: { usedPercent: 5, resetsAt: '2026-10-06T12:00:00Z', windowMinutes: 300 } } }]);
+  const [fromCodexbar] = await collectQuotas({ runner, factory: true, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(fromCodexbar.source, 'openai-web');
+  const [fromReader] = await collectQuotas({ runner: async () => { throw missingReader; }, factory: true, readers: { codex: async () => reading('codex') }, historyFile: historyFile(), providers: ['codex'] });
+  assert.equal(Object.hasOwn(fromReader, 'source'), false, 'the fallback keeps the reader row as it is');
+});
+
 test('readQuota returns null for a provider without a reader', async () => {
   assert.equal(await readQuota('pi', {}), null);
   assert.equal(typeof LINUX_READERS.codex, 'function');
@@ -108,6 +116,7 @@ test('the Codex reader maps primary and secondary windows', async () => {
   const { spawnJsonRpc, state } = fakeTransport({ replies: { initialize: INITIALIZED, 'account/rateLimits/read': LIMITS } });
   const row = await readCodexQuota({ spawnJsonRpc, timeoutMs: 1000, now: () => Date.parse('2026-10-06T10:00:00Z') });
   assert.equal(row.provider, 'codex');
+  assert.equal(row.source, 'oauth');
   assert.equal(row.plan, 'pro');
   assert.deepEqual(row.windows.map((w) => w.key), ['primary', 'secondary']);
   assert.equal(row.windows[0].resetsAt, new Date(1790000000 * 1000).toISOString());

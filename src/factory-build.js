@@ -37,7 +37,7 @@ async function buildContext(io) {
     const args = {
       BASE_IMAGE: `${pins.base.image}:${pins.base.tag}@${pins.base.digest}`,
       S6_VERSION: pins.s6Overlay, NODE_VERSION: pins.node, HERDR_VERSION: pins.herdr, GH_VERSION: pins.gh,
-      CLAUDE_CODE_VERSION: pins.claudeCode, CODEX_VERSION: pins.codex, OPENCODE_VERSION: pins.opencode, CHROMIUM_VERSION: pins.chromium,
+      CLAUDE_CODE_VERSION: pins.claudeCode, CODEX_VERSION: pins.codex, OPENCODE_VERSION: pins.opencode, CODEXBAR_VERSION: pins.codexbar, CHROMIUM_VERSION: pins.chromium,
       PINS_SHA256: createHash('sha256').update(raw).digest('hex'), PINS_JSON: JSON.stringify(pins), BUILD_DATE: new Date().toISOString(), SOURCE_REVISION: revision,
     };
     if (Object.values(args).some((value) => typeof value !== 'string' || !value)) throw new Error('A factory build pin is missing.');
