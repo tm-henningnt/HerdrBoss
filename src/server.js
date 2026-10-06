@@ -25,6 +25,8 @@ import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.
 import { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, listBookmarks, addBookmark, renameBookmark, moveBookmark, removeBookmark, setStartPage, bookmarkUrl } from './browser-pool.js';
 import { listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, browserCloseTab, tabAttached } from './browser-preview.js';
 import { listHandoffs } from './handoff.js';
+import { watchReleaseAnswers } from './release.js';
+import { createHerdrRunner } from './kit/workers.js';
 import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
 import { createRotatingLog } from './server-log.js';
@@ -353,6 +355,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     if (typeof engine.observeMessageChange === 'function') engine.observeMessageChange(event);
     else broadcast('message', event);
   });
+
+  // A release approval that the Owner answers sends one notice to the requesting pane. Nothing polls.
+  const stopReleaseWatch = readOnlyPreview ? () => {} : watchReleaseAnswers(messageStore, { dir: DATA_DIR, herdr: createHerdrRunner() });
 
   // The unread count must follow a read or an answer at once, not at the next tick.
   const refreshMailbox = (records = readMessages(), push = false) => {
@@ -1342,6 +1347,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     clearTimeout(debounce);
     projectsWatcher.close();
     stopMessageWatch();
+    stopReleaseWatch();
   });
   const loop = async () => {
     try {
@@ -1362,6 +1368,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     }
     if (tickPromise) await tickPromise.catch(() => {});
     stopMessageWatch();
+    stopReleaseWatch();
   };
   return { server, engine, close };
 }
