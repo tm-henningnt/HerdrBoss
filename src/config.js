@@ -175,6 +175,8 @@ const DEFAULTS = {
   providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
+  // Repositories that herdr-boss release can request and publish. Each entry is { name, project, kind }.
+  releases: { repos: [] },
 };
 
 const CONFIG_SOURCE = Symbol('configSource');
@@ -495,6 +497,34 @@ export function hostAllowedByList(hostname, list) {
   });
 }
 
+// Validate the releases.repos setting. Each entry is { name, project, kind }.
+// name is the GitHub repository in OWNER/REPO form. project is the project slug. kind is the release kind.
+export function validateReleasesRepos(value) {
+  if (!Array.isArray(value)) return { repos: [], errors: ['releases.repos must be an array.'] };
+  const errors = [];
+  const repos = [];
+  const names = new Set();
+  value.forEach((repo, index) => {
+    const label = `releases.repos[${index}]`;
+    if (!repo || typeof repo !== 'object' || Array.isArray(repo)) { errors.push(`${label} must be an object.`); return; }
+    if (typeof repo.name !== 'string' || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(repo.name)) {
+      errors.push(`${label}.name must be a GitHub repository in OWNER/REPO form.`);
+    } else if (names.has(repo.name)) {
+      errors.push(`${label}.name ${repo.name} is a duplicate.`);
+    } else {
+      names.add(repo.name);
+    }
+    if (typeof repo.project !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(repo.project)) {
+      errors.push(`${label}.project must be a project slug.`);
+    }
+    if (typeof repo.kind !== 'string' || !repo.kind.length || repo.kind.length > 50) {
+      errors.push(`${label}.kind must be a string of 1 to 50 characters.`);
+    }
+    if (!errors.length || errors[errors.length - 1]?.startsWith(label)) repos.push(repo);
+  });
+  return { repos, errors };
+}
+
 const NULLABLE_SERVICE_SETTINGS = new Set(['watch.maxWorkers']);
 const WATCH_WORKER_LANES = new Set(['unmetered', 'codex', 'claude', 'opencodego']);
 
@@ -678,6 +708,9 @@ export function loadConfig() {
   const pools = validateResourcePools(cfg.resourcePools, { dashboardPort: cfg.port });
   cfg.resourcePools = pools.errors.length ? [] : pools.pools;
   cfg.resourcePoolErrors = pools.errors;
+  const releases = validateReleasesRepos(cfg.releases?.repos);
+  cfg.releases = { repos: releases.repos };
+  cfg.releasesRepoErrors = releases.errors;
   return cfg;
 }
 

@@ -627,6 +627,13 @@ async function main() {
     if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
+  if (cmd === 'release') {
+    const { releaseCommand } = await import('./release.js');
+    const { createHerdrRunner } = await import('./kit/workers.js');
+    const code = await releaseCommand(args, { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR, config: cfg });
+    if (code) process.exitCode = code;
+    return;
+  }
   // Check the startup data directory before loadConfig() creates it.
   if (cmd === 'serve') {
     if (args.includes('--read-only-preview')) assertPreviewDataDir();
