@@ -228,7 +228,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('quotas', 'quota.opencodeStatsDays', 'OpenCode Go estimate days', {
-    what: 'The number of days that the local estimate of OpenCode Go use covers. The estimate comes from opencode stats, which counts the sessions in this factory only. It shows tokens and cost, labeled used in this factory (local estimate). It is never a percent and never a quota.',
+    what: 'The number of days that the local estimate of OpenCode Go use covers. The estimate comes from opencode stats, which counts the sessions in this factory only. It shows tokens and cost, labeled used in this factory (local estimate). It is never a percent and never a usage limit.',
     default: '7', unit: 'Days', range: 'A whole number of 1 to 90',
     raise: 'A higher value counts more days of local use.',
     lower: 'A lower value counts fewer days of local use.',
