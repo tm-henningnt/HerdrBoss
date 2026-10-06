@@ -769,7 +769,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
   S('service', 'factories.claudeUsageHelper', 'Claude usage helper in factories', {
-    what: 'Lets a factory container show the Claude usage limit. The helper is the command herdr-boss claude-statusline. It is the status line of the factory user in Claude Code. It writes the two usage windows and the time to a private file in the factory data folder. It writes no other field of the status line input. The setting never changes the Claude settings on this Mac.',
+    what: 'Lets a factory container show the Claude usage limit. The helper is the command herdr-boss claude-statusline. It is the status line of the factory user in Claude Code. It writes the two usage windows and the time to a private file in the factory data folder. It writes no other field of the status line input. The setting never changes the Claude settings on this Mac. The switch is read in the data folder of the factory. Set it in the Settings or the config.json of that factory. The value on this Mac does not reach a factory.',
     default: 'On', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on shows the Claude usage limit of a factory while a Claude session runs there.',
     lower: 'Turning it off removes the status line entry of the factory user. The Claude usage limit of a factory then shows as unknown.',

@@ -93,3 +93,35 @@ test('the Fleet summary quota row is unknown, keeps the reset time, and carries 
     estimate: { days: 7, tokens: 270_018_600, costUsd: 2.37, omittedModels: 2 } });
   assert.doesNotMatch(JSON.stringify(quota), /usedPercent":\d/);
 });
+
+test('the real opencode run gives the child an allow-listed environment with NO_COLOR and no secret', async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-bin-'));
+  const out = path.join(bin, 'env.txt');
+  fs.writeFileSync(path.join(bin, 'opencode'), `#!/bin/sh\nenv | cut -d= -f1 > '${out}'\nprintf 'model tokens steps cost\\nopencode-go/x#d 1k 1 $0.01\\n'\n`, { mode: 0o755 });
+  const saved = { PATH: process.env.PATH, HERDR_BOSS_TOKEN: process.env.HERDR_BOSS_TOKEN };
+  process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
+  process.env.HERDR_BOSS_TOKEN = 'not-a-real-secret';
+  try {
+    const estimate = await readOpenCodeEstimate({ days: 7 });
+    assert.equal(estimate.tokens, 1000);
+    const keys = fs.readFileSync(out, 'utf8').split('\n');
+    assert.ok(!keys.includes('HERDR_BOSS_TOKEN'));
+    assert.ok(keys.includes('NO_COLOR'));
+    assert.ok(keys.includes('PATH'));
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test('the reset time needs seconds and a zone, like the setting', async () => {
+  const run = async () => OUTPUT;
+  for (const resetAt of ['2026-10-09T10:00', '2026-10-09T10:00:00', '2026-10-09']) {
+    assert.equal((await readOpenCodeGoQuota({ opencode: { resetAt }, run })).resetAt, null);
+  }
+  assert.equal((await readOpenCodeGoQuota({ opencode: { resetAt: '2026-10-09T10:00:00Z' }, run })).resetAt, '2026-10-09T10:00:00.000Z');
+});
+
+test('no sessions found gives a zero estimate as for an empty table', () => {
+  const estimate = parseOpenCodeStats('No sessions found\n', 7);
+  assert.deepEqual(estimate, { days: 7, tokens: 0, costUsd: 0, omittedModels: 0, models: [] });
+});

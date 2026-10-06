@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
 import { readOpenCodeGoQuota } from './opencode-estimate.js';
+import { readerChildEnv } from './child-env.js';
 
 const KILL_GRACE_MS = 3000;
 const MISSING_LOGIN_REASON = 'no login for this harness in this factory';
@@ -30,9 +31,9 @@ const unavailable = (provider, reason) => ({ provider, unavailable: true, reason
 // A failed row is a probe failure: a rate limit, a backend error, a timeout, or a changed protocol. keepStaleRows keeps the last good reading as stale.
 const failed = (provider, error) => ({ provider, error });
 
-// Start a child with JSON-RPC lines on stdio. The child gets the environment of this process and no extra value.
+// Start a child with JSON-RPC lines on stdio. The child gets the allow-listed environment of readerChildEnv and no extra value.
 export function spawnJsonRpc({ command, args = [] }) {
-  const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'ignore'] });
+  const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'ignore'], env: readerChildEnv() });
   let buffer = '';
   const handlers = { line: () => {}, close: () => {}, error: () => {} };
   child.stdout.setEncoding('utf8');
@@ -165,6 +166,7 @@ export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now
   const current = typeof now === 'function' ? now() : now;
   const best = newestClaudeReport(dir);
   if (!best) return unavailable('claude', 'no Claude session has reported usage yet');
+  const stale = current - best.observed > CLAUDE_STALE_HOURS * 3600_000;
   const windows = [];
   for (const [key, source, windowMinutes] of CLAUDE_WINDOWS) {
     const w = best.report.rate_limits[source];
@@ -172,9 +174,10 @@ export async function readClaudeQuota({ dir = claudeRateLimitsDir(DATA_DIR), now
     windows.push(buildWindow({ key, usedPercent: w.used_percentage, resetsAtSeconds: w.resets_at, windowMinutes }));
   }
   if (!windows.length) {
-    const old = current - best.observed >= CLAUDE_STALE_HOURS * 3600_000;
-    return unavailable('claude', `the last Claude usage report is ${old ? `older than ${CLAUDE_STALE_HOURS} hours and ` : ''}past its reset`);
+    return unavailable('claude', `the last Claude usage report is ${stale ? `older than ${CLAUDE_STALE_HOURS} hours and ` : ''}past its reset`);
   }
+  // An old report with an open window is a probe failure: keepStaleRows keeps the last good reading as stale, and it turns unknown later.
+  if (stale) return failed('claude', `the last Claude usage report is older than ${CLAUDE_STALE_HOURS} hours`);
   return { provider: 'claude', plan: null, windows, credits: null, resetCredits: null, updatedAt: new Date(best.observed).toISOString(), observedAt: new Date(current).toISOString() };
 }
 
