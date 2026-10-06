@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=0b9e96f689e8 -->
+<!-- herdr-boss kit v=972ff4357ef2 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -25,6 +25,7 @@ These are the shared operating rules for the orchestrator of this project.
 - A `codex` worker can use the `herdr-boss browser` commands (`tab new`, `navigate`, `screenshot`, `click`, `key`, `text`) on its project browser. Herdr Boss runs that browser outside the sandbox. Use these commands for a visual check of a served page.
 - Keep `herdr-boss browser` a thin helper for visual checks. Do not use it as a Playwright or agent-browser replacement, or for general page automation or scripting.
 - Store a host in a local config or a bookmark without a scheme. A worker gets names and indexes only from `herdr-boss browser bookmarks list`. Never paste a tenant host into a report or a transcript.
+- `herdr-boss browser bookmarks SLUG open INDEX --new-tab` prints JSON with the new tab `id`, a masked `title`, and a masked `url`. It closes the new tab and exits non-zero when the open fails.
 - Pass each worker `toolSuggestion` to the Boss in one line. The Boss decides the change.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
