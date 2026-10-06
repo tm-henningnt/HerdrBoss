@@ -6,10 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { claudeRateLimitsDir } from './claude-statusline.js';
+import { isInsideContainer } from './factory-core.js';
 
 export const CLAUDE_STATUSLINE_COMMAND = 'herdr-boss claude-statusline';
 const ENTRY = Object.freeze({ type: 'command', command: CLAUDE_STATUSLINE_COMMAND });
-const isOurs = (value) => value && typeof value === 'object' && value.type === ENTRY.type && value.command === ENTRY.command;
+// An entry is ours when it runs `herdr-boss claude-statusline`, with any path prefix and any extra key.
+const OWN_COMMAND = /^(?:\S*\/)?herdr-boss claude-statusline$/;
+const isOurs = (value) => Boolean(value) && typeof value === 'object' && value.type === ENTRY.type && typeof value.command === 'string' && OWN_COMMAND.test(value.command.trim());
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
 // The switch is `factories.claudeUsageHelper` in config.json of the data folder. It is on unless the value is false.
@@ -44,7 +47,11 @@ export function applyClaudeHelper({ home, enabled }) {
     writeSettings(file, rest);
     return { state: 'removed' };
   }
-  if (present && isOurs(settings.statusLine)) return { state: 'unchanged' };
+  if (present && isOurs(settings.statusLine)) {
+    if (settings.statusLine.command === ENTRY.command) return { state: 'unchanged' };
+    writeSettings(file, { ...settings, statusLine: { ...settings.statusLine, command: ENTRY.command } });
+    return { state: 'installed' };
+  }
   if (present) return { state: 'refused', message: `The factory user already has a statusLine in ${file}. The usage helper is not installed and the Claude usage limit stays unknown. Remove that statusLine or turn the setting off.` };
   writeSettings(file, { ...settings, statusLine: { ...ENTRY } });
   return { state: 'installed' };
@@ -89,6 +96,18 @@ export function claudeHelperState({ home, now = Date.now() }) {
   try { newest = newestReadingMs(claudeRateLimitsDir(dataDir)); } catch {}
   if (!isOurs(settings.statusLine) || newest === null) return { state: 'not-installed', reason: 'no-reading' };
   return { state: 'installed', lastReadingSeconds: Math.max(0, Math.floor((now - newest) / 1000)) };
+}
+
+// The command `herdr-boss claude-helper --apply`. It writes the settings file of the home folder, so it runs only in a container.
+// Returns the exit code. A usage error throws.
+export function claudeHelperCommand(args, { home = process.env.HOME || os.homedir(), isContainer = isInsideContainer, print = (text) => console.log(text) } = {}) {
+  if (args[0] !== '--apply') throw new Error('Use herdr-boss claude-helper --apply.');
+  if (!isContainer()) {
+    print('The Claude usage helper command runs only inside a factory container. Nothing was changed.');
+    return 1;
+  }
+  print(claudeHelperWord({ home }));
+  return 0;
 }
 
 // The container start entry. A refusal prints one message and exits 0, so the container still starts.

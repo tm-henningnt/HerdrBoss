@@ -166,6 +166,11 @@ test('the Fleet card shows one Claude usage helper line for each state and none 
     return html.match(/<[^>]*data-fleet-claude-helper[^>]*>([^<]*)</)?.[1] ?? null;
   };
   assert.equal(line({ state: 'installed', lastReadingSeconds: 42 }), 'Claude usage helper: installed, last reading 42s ago');
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 59 }), 'Claude usage helper: installed, last reading 59s ago');
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 60 }), 'Claude usage helper: installed, last reading 1 min ago');
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 720 }), 'Claude usage helper: installed, last reading 12 min ago');
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 7200 }), 'Claude usage helper: installed, last reading 2 h ago');
+  assert.equal(line({ state: 'installed', lastReadingSeconds: 90000 }), 'Claude usage helper: installed, last reading 1 d ago');
   assert.equal(line({ state: 'not-installed', reason: 'setting-off' }), 'Claude usage helper: not installed, setting off');
   assert.equal(line({ state: 'not-installed', reason: 'different-statusline' }), 'Claude usage helper: not installed, a different statusLine is set');
   assert.equal(line({ state: 'not-installed', reason: 'settings-unreadable' }), 'Claude usage helper: not installed, the settings file is unreadable');

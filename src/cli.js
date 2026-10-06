@@ -564,9 +564,9 @@ async function main() {
     return;
   }
   if (cmd === 'claude-helper') {
-    if (args[0] !== '--apply') throw new Error('Use herdr-boss claude-helper --apply.');
-    const { claudeHelperWord } = await import('./factory-claude-helper.js');
-    console.log(claudeHelperWord({ home: process.env.HOME || (await import('node:os')).homedir() }));
+    const { claudeHelperCommand } = await import('./factory-claude-helper.js');
+    const code = claudeHelperCommand(args);
+    if (code) process.exitCode = code;
     return;
   }
   if (cmd === 'quota') {

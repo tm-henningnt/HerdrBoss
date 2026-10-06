@@ -325,10 +325,17 @@ function waitFixHtml(wait) {
   }
   return `<span data-fleet-wait-fix="instruction">${esc(fix)}</span>`;
 }
+// The age of a reading: seconds below 60, then minutes, hours, and days.
+function readingAgo(seconds) {
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  return `${Math.floor(seconds / 86400)} d ago`;
+}
 const HELPER_REASONS = { 'setting-off': 'setting off', 'different-statusline': 'a different statusLine is set', 'settings-unreadable': 'the settings file is unreadable', 'no-reading': 'no reading yet' };
 function helperHtml(row) {
   const helper = row.summary?.claudeUsageHelper;
-  const text = helper?.state === 'installed' && Number.isFinite(helper.lastReadingSeconds) ? `installed, last reading ${helper.lastReadingSeconds}s ago`
+  const text = helper?.state === 'installed' && Number.isFinite(helper.lastReadingSeconds) ? `installed, last reading ${readingAgo(helper.lastReadingSeconds)}`
     : helper?.state === 'not-installed' && HELPER_REASONS[helper.reason] ? `not installed, ${HELPER_REASONS[helper.reason]}` : null;
   return text ? `<p class="small muted" data-fleet-claude-helper>Claude usage helper: ${esc(text)}</p>` : '';
 }
