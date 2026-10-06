@@ -102,6 +102,22 @@ export async function browserErrorText(message, { full = false, env = process.en
   return maskBrowserText(message, { full, knownHosts });
 }
 
+// Open a bookmark. With newTab, the result is { id, title, url }. When a step after the tab was created fails, the
+// command closes that tab and throws a plain message with no URL. The same shape goes to a worker and to the Owner.
+export async function openBookmark(slug, index, { newTab = false, pool }) {
+  const bookmark = pool.listBookmarks(slug).bookmarks[Number(index)];
+  if (!bookmark) throw new Error('Bookmark index is out of range.');
+  if (!newTab) return pool.browserNavigate(slug, null, bookmark.url);
+  const tab = await pool.browserNewTab(slug, bookmark.url);
+  try {
+    const page = (await pool.listBrowserTabs(slug)).find((entry) => entry.id === tab.id);
+    return { id: tab.id, title: page?.title ?? '', url: page?.url || bookmark.url };
+  } catch {
+    try { await pool.browserCloseTab(slug, tab.id, { force: true }); } catch {}
+    throw new Error('The bookmark did not open a tab. The command closed the new tab.');
+  }
+}
+
 // A shell with a Herdr pane or worktree variable is a worker. Only a shell with none is the Owner. The rule guards
 // against accidents. It is not a security boundary: a worker can unset the variables.
 function isHerdrPane(env) {
@@ -191,7 +207,7 @@ const USAGE = `herdr-boss <command>
   browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
   browser text SLUG --stdin [--tab ID]  Send text from standard input without echoing it.
   browser key SLUG KEY [--tab ID]  Send Tab, Enter, Backspace, arrow keys, etc.
-  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page. A worker sees names and indexes only, also from add, rm, start, and open.
+  browser bookmarks SLUG list [--full]  List the project bookmarks and the start page. A worker sees names and indexes only, also from add, rm, and start.
   browser bookmarks SLUG add NAME URL  Add one bookmark. The URL host must not hold a scheme, a backslash, or a space.
   browser bookmarks SLUG rm INDEX  Remove one bookmark.
   browser bookmarks SLUG open INDEX [--new-tab] [--full]  Open a bookmark in the current tab or a new tab.
@@ -964,11 +980,9 @@ async function main() {
       }
       else if (args[0] === 'bookmarks' && args[1] && args[2] === 'open' && args[3] && (args.length === 4 || (args.length === 5 && args[4] === '--new-tab'))) {
         await verifyBrowserCaller(args[1]);
-        const bookmark = listBookmarks(args[1]).bookmarks[Number(args[3])];
-        if (!bookmark) throw new Error('Bookmark index is out of range.');
-        const opened = args[4] === '--new-tab' ? await browserNewTab(args[1], bookmark.url) : await browserNavigate(args[1], null, bookmark.url);
-        if (isHerdrPane(process.env)) printBookmarks(listBookmarks(args[1]));
-        else printBrowserJson(opened);
+        const opened = await openBookmark(args[1], args[3], { newTab: args[4] === '--new-tab', pool: { listBookmarks, browserNewTab, browserNavigate, browserCloseTab, listBrowserTabs } });
+        // The result holds a tab ID, a title, and a URL. A worker never gets --full.
+        console.log(redactBrowserSecrets(formatBrowserJson(opened, { full: full && !isHerdrPane(process.env), knownHosts: storedBrowserHosts(listBrowserSessions()) })));
       }
       else if (args[0] === 'request' && args[1] && args.includes('--headless') && args.includes('--visible')) throw new Error('Choose either --headless or --visible.');
       else if (args[0] === 'request' && args[1] && args.slice(2).every((flag) => ['--reserve', '--headless', '--visible'].includes(flag))) {

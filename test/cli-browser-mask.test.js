@@ -509,3 +509,61 @@ test('the error text for a worker never unmasks a host with --full, and the Owne
   assert.ok(!worker.stdout.includes('other.example.org'), worker.stdout);
   assert.ok(worker.stdout.includes('<tenant>'), worker.stdout);
 });
+
+function fakePool({ failList = false } = {}) {
+  const calls = { closed: [], created: [], navigated: [] };
+  const pool = {
+    listBookmarks: () => ({ bookmarks: [{ name: 'Docs', url: 'https://tenant.example.test/docs?x=1' }] }),
+    browserNewTab: async (slug, url) => { calls.created.push(url); return { id: 'tab-9' }; },
+    browserNavigate: async (slug, tab, url) => { calls.navigated.push(url); return { url }; },
+    browserCloseTab: async (slug, id, options) => { calls.closed.push([id, options]); return { closed: id }; },
+    listBrowserTabs: async () => {
+      if (failList) throw new Error('could not read https://tenant.example.test/docs');
+      return [{ id: 'tab-9', title: 'Docs', url: 'https://tenant.example.test/docs' }];
+    },
+  };
+  return { pool, calls };
+}
+
+test('bookmarks open --new-tab returns the tab ID, a title, and a URL, and no bookmark list', async () => {
+  const { openBookmark } = await import('../src/cli.js');
+  const { pool } = fakePool();
+  const opened = await openBookmark('alpha', '0', { newTab: true, pool });
+  assert.deepEqual(Object.keys(opened).sort(), ['id', 'title', 'url']);
+  assert.equal(opened.id, 'tab-9');
+  assert.ok(!('bookmarks' in opened));
+  const printed = JSON.parse(formatBrowserJson(opened, { full: false }));
+  assert.equal(printed.id, 'tab-9');
+  assert.ok(!JSON.stringify(printed).includes('tenant.example.test'));
+});
+
+test('bookmarks open --new-tab closes the new tab and prints no URL when a later step fails', async () => {
+  const { openBookmark } = await import('../src/cli.js');
+  const { pool, calls } = fakePool({ failList: true });
+  await assert.rejects(openBookmark('alpha', '0', { newTab: true, pool }), (error) => {
+    assert.ok(!error.message.includes('tenant.example.test'));
+    assert.match(error.message, /did not open a tab/);
+    return true;
+  });
+  assert.equal(calls.closed.length, 1);
+  assert.equal(calls.closed[0][0], 'tab-9');
+});
+
+test('bookmarks open without --new-tab keeps the navigate shape and an out-of-range index fails', async () => {
+  const { openBookmark } = await import('../src/cli.js');
+  const { pool, calls } = fakePool();
+  assert.deepEqual(Object.keys(await openBookmark('alpha', '0', { pool })), ['url']);
+  assert.equal(calls.navigated.length, 1);
+  await assert.rejects(openBookmark('alpha', '5', { newTab: true, pool }), /out of range/);
+  assert.equal(calls.created.length, 0);
+});
+
+test('bookmarks open prints no bookmark list to a worker or the Owner', (t) => {
+  const { run } = bookmarksCli(t);
+  for (const extra of [{}, { HERDR_WORKTREE: '/tmp/worktree-x' }]) {
+    const result = run(['bookmarks', 'alpha', 'open', '99', '--new-tab', '--full'], extra);
+    assert.notEqual(result.status, 0);
+    assert.ok(!result.stdout.includes('"bookmarks"'));
+    assert.ok(!(result.stdout + result.stderr).includes('acme.example.com'));
+  }
+});
