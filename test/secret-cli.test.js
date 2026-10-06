@@ -134,11 +134,67 @@ test('secret set refuses a positional value with a fixed stdin message and no se
 
 test('secret set prompts on a TTY without echoing the value', async (t) => {
   const fx = fixture(t);
-  const result = await invoke(fx, ['set', 'alpha'], `${VALUE}\n`, { isTTY: true });
+  const result = await invoke(fx, ['set', 'alpha'], Buffer.from('abc\x08d\x7fe\n'), { isTTY: true });
   assert.equal(result.code, 0);
   assert.match(result.stdout, /secret value/i);
-  assert.doesNotMatch(result.stdout + result.stderr, new RegExp(VALUE));
+  assert.equal(fx.store(fx.keyProvider.read()).getSecretValue('alpha').toString('utf8'), 'abe');
+  assert.doesNotMatch(result.stdout + result.stderr, /abc|abe/);
   assert.deepEqual(result.rawModes, [true, false], 'the TTY input echo is disabled and restored');
+});
+
+test('secret set stops a TTY value at Ctrl-D', async (t) => {
+  const fx = fixture(t);
+  const result = await invoke(fx, ['set', 'alpha'], Buffer.from('terminal-value\x04ignored\n'), { isTTY: true });
+  assert.equal(result.code, 0);
+  assert.equal(fx.store(fx.keyProvider.read()).getSecretValue('alpha').toString('utf8'), 'terminal-value');
+  assert.deepEqual(result.rawModes, [true, false]);
+});
+
+test('Ctrl-C cancels secret set with exit 130 and writes no store or audit files', async (t) => {
+  const fx = fixture(t);
+  const result = await invoke(fx, ['set', 'alpha'], Buffer.from('partial-value\x03'), { isTTY: true });
+  assert.equal(result.code, 130);
+  assert.deepEqual(result.rawModes, [true, false]);
+  assert.deepEqual(fx.keyCalls, []);
+  assert.equal(fs.existsSync(fx.dir), false);
+  assert.deepEqual(auditLines(fx.dir), []);
+});
+
+test('secret set rejects empty or oversized input and any whitespace except one final LF', async (t) => {
+  const fx = fixture(t);
+  const cases = [
+    { name: 'empty', value: Buffer.alloc(0) },
+    { name: 'double-newline', value: Buffer.from('value\n\n') },
+    { name: 'space', value: Buffer.from('value with space') },
+    { name: 'tab', value: Buffer.from('value\twith-tab') },
+    { name: 'too-long', value: Buffer.alloc(4097, 0x61) },
+    { name: 'over-cap', value: Buffer.alloc(4098, 0x61) },
+  ];
+  for (const entry of cases) {
+    const result = await invoke(fx, ['set', entry.name], entry.value);
+    assert.equal(result.code, 1, `${entry.name} is refused`);
+    assert.match(result.stderr, /secret value/i);
+    assert.equal(fs.existsSync(path.join(fx.dir, `${entry.name}.sealed`)), false);
+  }
+  const emptyTTY = await invoke(fx, ['set', 'empty-tty'], Buffer.from('\r'), { isTTY: true });
+  assert.equal(emptyTTY.code, 1);
+  assert.match(emptyTTY.stderr, /secret value/i);
+  const tooLongTTY = await invoke(fx, ['set', 'too-long-tty'], Buffer.alloc(4097, 0x61), { isTTY: true });
+  assert.equal(tooLongTTY.code, 1);
+  assert.deepEqual(tooLongTTY.rawModes, [true, false]);
+  assert.deepEqual(fx.keyCalls, [], 'invalid values do not create or read a master key');
+  assert.equal(fs.existsSync(path.join(fx.dir, 'index.json')), false);
+});
+
+test('secret set accepts a 4096-byte value and removes one final LF', async (t) => {
+  const fx = fixture(t);
+  const value = Buffer.alloc(4096, 0x61);
+  const result = await invoke(fx, ['set', 'maximum'], Buffer.concat([value, Buffer.from('\n')]));
+  assert.equal(result.code, 0);
+  assert.deepEqual(fx.store(fx.keyProvider.read()).getSecretValue('maximum'), value);
+  const crlf = await invoke(fx, ['set', 'crlf'], Buffer.from('invented-crlf-value\r\n'));
+  assert.equal(crlf.code, 0);
+  assert.equal(fx.store(fx.keyProvider.read()).getSecretValue('crlf').toString('utf8'), 'invented-crlf-value');
 });
 
 test('secret list prints metadata only and remains available in an agent pane', async (t) => {
@@ -240,10 +296,20 @@ test('set, remove, and check refuse in an agent pane with exit 3; list still wor
     assert.equal(result.stderr.trim(), 'Run this command at a terminal. It is not available in an agent pane.');
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(VALUE));
   }
+  assert.equal(auditLines(fx.dir).length, 0, 'a refused command does not append an audit line');
   const listed = await invoke(fx, ['list'], '', { env: paneEnv });
   assert.equal(listed.code, 0);
   assert.match(listed.stdout, /alpha/);
   assert.doesNotMatch(listed.stdout, new RegExp(VALUE));
+});
+
+test('an agent-pane refusal creates no secrets directory and reads no key', async (t) => {
+  const fx = fixture(t);
+  const result = await invoke(fx, ['set', 'alpha'], `${VALUE}\n`, { env: { ...fx.env, HERDR_ENV: '1' } });
+  assert.equal(result.code, 3);
+  assert.equal(fs.existsSync(fx.dir), false);
+  assert.deepEqual(fx.keyCalls, []);
+  assert.deepEqual(auditLines(fx.dir), []);
 });
 
 test('metadata flags reject invalid provider slugs and non-ISO expiry values', async (t) => {

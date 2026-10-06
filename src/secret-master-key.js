@@ -24,11 +24,12 @@ export function assertMasterKey(key) {
   return key;
 }
 
-function writeKeyAtomic(filesystem, file, key) {
+function writeKeyExclusive(filesystem, file, key) {
   const directory = path.dirname(file);
   filesystem.mkdirSync(directory, { recursive: true, mode: 0o700 });
   filesystem.chmodSync(directory, 0o700);
-  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`);
+  // Write a complete temporary file, then link it. A link never replaces a file, so a reader sees the whole key or no file.
+  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   let fd;
   try {
     fd = filesystem.openSync(temporary, 'wx', 0o600);
@@ -37,11 +38,10 @@ function writeKeyAtomic(filesystem, file, key) {
     filesystem.fsyncSync(fd);
     filesystem.closeSync(fd);
     fd = undefined;
-    filesystem.renameSync(temporary, file);
-  } catch (error) {
+    filesystem.linkSync(temporary, file);
+  } finally {
     if (fd !== undefined) { try { filesystem.closeSync(fd); } catch {} }
     try { filesystem.unlinkSync(temporary); } catch {}
-    throw error;
   }
 }
 
@@ -49,9 +49,17 @@ function writeKeyAtomic(filesystem, file, key) {
 export function createFileKeyProvider({ path: file = LINUX_MASTER_KEY_PATH, fs: filesystem = fs, random = randomBytes } = {}) {
   function read() {
     let raw;
-    try { raw = filesystem.readFileSync(file); }
+    try {
+      const mode = filesystem.statSync(file).mode & 0o777;
+      if (mode & 0o077) throw new Error(`The master key file ${file} has unsafe permissions; run chmod 600 ${file}.`);
+      raw = filesystem.readFileSync(file);
+    }
     catch (error) {
-      if (error.code === 'ENOENT') throw new Error('The master key file does not exist.');
+      if (error.code === 'ENOENT') {
+        const missing = new Error('The master key file does not exist.');
+        missing.code = 'ENOENT';
+        throw missing;
+      }
       throw error;
     }
     if (raw.length !== MASTER_KEY_BYTES) throw new Error('The master key file must hold 32 bytes.');
@@ -59,13 +67,18 @@ export function createFileKeyProvider({ path: file = LINUX_MASTER_KEY_PATH, fs: 
   }
   function write(key) {
     assertMasterKey(key);
-    writeKeyAtomic(filesystem, file, key);
+    writeKeyExclusive(filesystem, file, key);
   }
   function ensure() {
-    try { return read(); } catch (error) { if (!/does not exist/.test(error.message)) throw error; }
+    try { return read(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const key = Buffer.from(random(MASTER_KEY_BYTES));
-    write(key);
-    return key;
+    try {
+      write(key);
+      return key;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return read();
+    }
   }
   return { path: file, read, write, ensure };
 }

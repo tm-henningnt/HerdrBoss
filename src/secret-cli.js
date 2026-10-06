@@ -9,13 +9,17 @@ const SECRET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ISO_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
 const AGENT_PANE_MESSAGE = 'Run this command at a terminal. It is not available in an agent pane.';
 const STDIN_VALUE_MESSAGE = 'Secret values must come from stdin. Use stdin.';
+const SECRET_VALUE_MESSAGE = 'Secret values must hold 1 to 4096 bytes of UTF-8 text with no whitespace.';
+const MAX_SECRET_BYTES = 4096;
+const MAX_STDIN_BYTES = MAX_SECRET_BYTES + 1;
 
 // Add a provider-specific validator only after its login-entry format is verified.
 export const SECRET_PROVIDER_VALIDATORS = Object.freeze({});
 
-function secretError(message) {
+function secretError(message, exitCode = 1) {
   const error = new Error(message);
   error.secretCommandError = true;
+  error.secretCommandExitCode = exitCode;
   return error;
 }
 
@@ -69,10 +73,23 @@ function parseSetArgs(args) {
   return { name: args[0], meta };
 }
 
-async function readAll(stream) {
+async function readAll(stream, limit) {
   const chunks = [];
-  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  return Buffer.concat(chunks);
+  let length = 0;
+  for await (const chunk of stream) {
+    const remaining = limit - length;
+    if (typeof chunk === 'string') {
+      if (Buffer.byteLength(chunk) > remaining) throw secretError(SECRET_VALUE_MESSAGE);
+      chunks.push(Buffer.from(chunk));
+      length += Buffer.byteLength(chunk);
+      continue;
+    }
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    if (bytes.length > remaining) throw secretError(SECRET_VALUE_MESSAGE);
+    chunks.push(bytes);
+    length += bytes.length;
+  }
+  return Buffer.concat(chunks, length);
 }
 
 async function readPromptLine(input, output, prompt) {
@@ -85,18 +102,51 @@ async function readPromptLine(input, output, prompt) {
 async function readHiddenLine(input, output) {
   const restoreRawMode = input.isRaw === true;
   input.setRawMode(true);
-  try { return await readPromptLine(input, output, 'Secret value: '); }
-  finally {
-    input.setRawMode(restoreRawMode);
-    output.write('\n');
-  }
+  output.write('Secret value: ');
+  return new Promise((resolve, reject) => {
+    const bytes = [];
+    let complete = false;
+
+    function finish(error) {
+      if (complete) return;
+      complete = true;
+      input.off('data', onData);
+      input.off('end', onEnd);
+      input.off('error', onError);
+      input.setRawMode(restoreRawMode);
+      output.write('\n');
+      if (error) reject(error);
+      else resolve(Buffer.from(bytes));
+    }
+
+    function onData(chunk) {
+      const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      for (const byte of incoming) {
+        if (byte === 0x03) return finish(secretError('Secret input cancelled.', 130));
+        if (byte === 0x04 || byte === 0x0a || byte === 0x0d) return finish();
+        if (byte === 0x08 || byte === 0x7f) {
+          let last = bytes.pop();
+          while (last !== undefined && (last & 0xc0) === 0x80) last = bytes.pop();
+          continue;
+        }
+        if (bytes.length >= MAX_SECRET_BYTES) return finish(secretError(SECRET_VALUE_MESSAGE));
+        bytes.push(byte);
+      }
+    }
+
+    function onEnd() { finish(); }
+    function onError() { finish(secretError('Could not read the secret value.')); }
+    input.on('data', onData);
+    input.once('end', onEnd);
+    input.once('error', onError);
+  });
 }
 
 async function readSecret(input, output) {
-  if (input?.isTTY) return Buffer.from(await readHiddenLine(input, output), 'utf8');
-  const value = await readAll(input);
+  if (input?.isTTY) return readHiddenLine(input, output);
+  const value = await readAll(input, MAX_STDIN_BYTES);
   if (value.subarray(-2).equals(Buffer.from('\r\n'))) return value.subarray(0, -2);
-  if (value.length && (value.at(-1) === 0x0a || value.at(-1) === 0x0d)) return value.subarray(0, -1);
+  if (value.at(-1) === 0x0a) return value.subarray(0, -1);
   return value;
 }
 
@@ -114,12 +164,12 @@ function writeAudit(dir, { name, action, now }) {
 }
 
 function genericFormatValid(value) {
-  if (!Buffer.isBuffer(value) || value.length < 1 || value.length > 4096) return false;
+  if (!Buffer.isBuffer(value) || value.length < 1 || value.length > MAX_SECRET_BYTES) return false;
   let decoded;
   try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(value); }
   catch { return false; }
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(decoded)) return false;
-  return decoded === decoded.trim();
+  return !/\s/u.test(decoded);
 }
 
 function checkValue(store, entry, providerValidators) {
@@ -157,6 +207,7 @@ async function executeSecretCommand(action, args, context) {
   if (action === 'set') {
     const { name, meta } = parseSetArgs(args);
     const value = await readSecret(stdin, stdout);
+    if (!genericFormatValid(value)) throw secretError(SECRET_VALUE_MESSAGE);
     const store = createSecretStore({ dir, key: keyProvider.ensure() });
     store.putSecret(name, value, meta);
     writeLine(stdout, `stored ${name} in ${dir}.`);
@@ -225,16 +276,17 @@ export async function secretCommand(args = [], {
     ? '*'
     : (typeof args[1] === 'string' && validSlug(args[1]) ? args[1] : '');
   let exitCode = 1;
+  if (['set', 'remove', 'check'].includes(action) && isHerdrPane(env)) {
+    writeLine(stderr, AGENT_PANE_MESSAGE);
+    return 3;
+  }
+
   try {
-    if (['set', 'remove', 'check'].includes(action) && isHerdrPane(env)) {
-      writeLine(stderr, AGENT_PANE_MESSAGE);
-      exitCode = 3;
-    } else {
-      exitCode = await executeSecretCommand(action, args.slice(1), {
-        dir, keyProvider, stdin, stdout, providerValidators,
-      });
-    }
+    exitCode = await executeSecretCommand(action, args.slice(1), {
+      dir, keyProvider, stdin, stdout, providerValidators,
+    });
   } catch (error) {
+    if (error?.secretCommandExitCode === 130) return 130;
     writeLine(stderr, error?.secretCommandError ? error.message : 'Secret command failed.');
     exitCode = 1;
   }

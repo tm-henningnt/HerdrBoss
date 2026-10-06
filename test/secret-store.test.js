@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto';
 // The store tests use a temporary HOME and a temporary HERDR_BOSS_DIR through test-env.js. The master key is
 // invented, the values are invented, and no test reads a real login file or the Owner's keychain.
 const here = path.dirname(fileURLToPath(import.meta.url));
-const srcDir = path.join(here, '..', 'src');
 const { PRIVATE_ACCESS_DIR } = await import('../src/config.js');
 const {
   SECRET_NAME, SECRET_FORMAT_VERSION, NONCE_BYTES, TAG_BYTES, MASTER_KEY_BYTES,
@@ -196,14 +195,35 @@ test('the store refuses a master key that is not 32 bytes', (t) => {
   assert.throws(() => createSecretStore({ dir, key: 'not-a-key' }), /32 bytes/i);
 });
 
-test('the server and the API route modules never reach getSecretValue', async () => {
-  const module = await import('../src/secret-store.js');
-  assert.equal('getSecretValue' in module, false);
-  const files = ['server.js', ...fs.readdirSync(srcDir).filter((name) => name.endsWith('-api.js'))];
-  for (const name of files) {
-    const source = fs.readFileSync(path.join(srcDir, name), 'utf8');
-    assert.doesNotMatch(source, /getSecretValue/, `${name} imports getSecretValue`);
+function secretValueReferences(root) {
+  const references = [];
+  for (const directory of ['src', 'public']) {
+    const visit = (relative) => {
+      for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
+        const child = path.join(relative, entry.name);
+        if (entry.isDirectory()) visit(child);
+        else if (entry.isFile() && /\.(?:js|mjs|cjs|html)$/.test(entry.name)) {
+          const normalized = child.split(path.sep).join('/');
+          const testFile = child.split(path.sep).some((part) => part === 'test' || part === '__tests__')
+            || /\.(?:test|spec)\.js$/.test(entry.name);
+          if (!testFile && !['src/secret-store.js', 'src/secret-cli.js'].includes(normalized)
+            && fs.readFileSync(path.join(root, child), 'utf8').includes('getSecretValue')) references.push(normalized);
+        }
+      }
+    };
+    visit(directory);
   }
+  return references.sort();
+}
+
+test('server and public JavaScript do not import or use getSecretValue', (t) => {
+  assert.deepEqual(secretValueReferences(path.join(here, '..')), []);
+
+  const copy = tempDir(t);
+  fs.cpSync(path.join(here, '..', 'src'), path.join(copy, 'src'), { recursive: true });
+  fs.cpSync(path.join(here, '..', 'public'), path.join(copy, 'public'), { recursive: true });
+  fs.appendFileSync(path.join(copy, 'src', 'server.js'), "\nimport { getSecretValue } from './secret-store.js';\n");
+  assert.deepEqual(secretValueReferences(copy), ['src/server.js'], 'the scan finds a planted import in a temporary source copy');
 });
 
 test('the file key provider creates a 0600 file in a 0700 directory and reads the same key', (t) => {
@@ -219,12 +239,57 @@ test('the file key provider creates a 0600 file in a 0700 directory and reads th
   assert.equal(fs.readFileSync(file).length, MASTER_KEY_BYTES);
 });
 
+test('concurrent file key creation keeps one key and both providers use the winner', (t) => {
+  const root = tempDir(t);
+  const file = path.join(root, 'keys', 'master-key');
+  let initialReads = 0;
+  const raceFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === 'statSync' || property === 'readFileSync') return (name, ...args) => {
+        if (name === file && initialReads < 2) {
+          initialReads += 1;
+          const error = new Error('not found');
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return target[property](name, ...args);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const first = createFileKeyProvider({ path: file, fs: raceFs, random: () => Buffer.alloc(MASTER_KEY_BYTES, 0x41) });
+  const second = createFileKeyProvider({ path: file, fs: raceFs, random: () => Buffer.alloc(MASTER_KEY_BYTES, 0x42) });
+
+  const firstKey = first.ensure();
+  const secondKey = second.ensure();
+  assert.deepEqual(firstKey, secondKey);
+  assert.equal(initialReads, 2, 'both providers observed a missing key before exclusive creation');
+  const writer = createSecretStore({ dir: path.join(root, 'store'), key: firstKey });
+  const reader = createSecretStore({ dir: path.join(root, 'store'), key: secondKey });
+  writer.putSecret('alpha', 'invented-race-value');
+  assert.equal(reader.getSecretValue('alpha').toString('utf8'), 'invented-race-value');
+  assert.deepEqual(fs.readFileSync(file), firstKey);
+});
+
 test('the file key provider refuses a file that is not 32 bytes', (t) => {
   const root = tempDir(t);
   const file = path.join(root, 'master-key');
   fs.writeFileSync(file, Buffer.alloc(31), { mode: 0o600 });
   const provider = createFileKeyProvider({ path: file });
   assert.throws(() => provider.read(), /32 bytes/i);
+});
+
+test('the file key provider refuses group or other permissions with a chmod instruction', (t) => {
+  const root = tempDir(t);
+  const file = path.join(root, 'master-key');
+  fs.writeFileSync(file, KEY, { mode: 0o600 });
+  fs.chmodSync(file, 0o660);
+  const provider = createFileKeyProvider({ path: file });
+  assert.throws(() => provider.read(), (error) => {
+    assert.equal(error.message, `The master key file ${file} has unsafe permissions; run chmod 600 ${file}.`);
+    return true;
+  });
 });
 
 test('the macOS keychain adapter never puts key material in a process argument', () => {

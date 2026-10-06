@@ -153,18 +153,18 @@ The secret store holds the login entries that no tool uses now. The store keeps 
 - `index.json` holds metadata only: the name, the provider, the label, the tool, the quota window, the last use, the expiry, the hash of the sealed value, and the hash of the login entry that the last swap wrote. It never holds a value.
 - A secret name matches `^[a-z0-9][a-z0-9-]{0,63}$`.
 
-Use `herdr-boss secret set NAME [--provider P --label L --expires ISO]` to store a value from stdin. A terminal prompt does not echo the value. Use `herdr-boss secret list` to print names and metadata. Use `herdr-boss secret remove NAME` to type the name again and remove the value and its previous copy. Use `herdr-boss secret check [NAME]` to print `ok` or `failed` for each value.
+Use `herdr-boss secret set NAME [--provider P --label L --expires ISO]` to store a value from stdin. A terminal prompt does not echo the value. Backspace and Delete remove the last character. Enter or Ctrl-D ends the value. Ctrl-C cancels the command and exits 130. A pipe may end with one LF or CRLF; the command strips that final newline. It refuses an empty value, a value over 4096 bytes, and any other whitespace. It reads at most 4097 bytes from stdin. Use `herdr-boss secret list` to print names and metadata. Use `herdr-boss secret remove NAME` to type the name again and remove the value and its previous copy. Use `herdr-boss secret check [NAME]` to print `ok` or `failed` for each value.
 
-The check decrypts each value in memory. It accepts 1 to 4096 bytes of valid UTF-8 with no control character and no leading or trailing whitespace. The per-provider validator table is empty until a provider format is verified. The list, check, and audit record never print or store a value.
+The check decrypts each value in memory. It accepts 1 to 4096 bytes of valid UTF-8 with no control character and no whitespace. The per-provider validator table is empty until a provider format is verified. The list, check, and audit record never print or store a value.
 
-Each command appends one JSON line to `audit.jsonl` in the secrets directory. The file has mode `0600`. The line holds the name, action, and time. It holds no value, key, or value length.
+Each secret command appends one JSON line to `audit.jsonl` in the secrets directory, except a command refused in an agent pane or a `secret set` cancelled with Ctrl-C. The file has mode `0600`. The line holds the name, action, and time. It holds no value, key, or value length.
 
-Run `secret set`, `secret remove`, and `secret check` in an Owner terminal. They refuse in an agent pane and exit 3. `secret list` works in a pane. Exit 0 means done. Exit 1 means invalid input, a failed check, or another command failure.
+Run `secret set`, `secret remove`, and `secret check` in an Owner terminal. They refuse in an agent pane and exit 3. This guard prevents accidents. It is not a security boundary because an agent can unset the environment variables. `secret list` works in a pane. Exit 0 means done. Exit 1 means invalid input, a failed check, or another command failure. Exit 130 means you cancelled `secret set` with Ctrl-C.
 
 The master key is 32 random bytes.
 
 - On macOS the keychain holds the key. The `security` command receives the key through stdin, never as a process argument.
-- On Linux the key is a file outside the volumes that `factory backup` copies. A copy of the `home` volume holds no master key.
+- On Linux the key is a file with mode `0600`, outside the volumes that `factory backup` copies. Herdr Boss refuses group or other access and says to run `chmod 600`. A copy of the `home` volume holds no master key.
 - A backup that holds both the store and the key opens the store. On Linux, keep the store and the key in different backups.
 
 An agent runs as the same user as Herdr Boss. The file mode does not stop that agent. The rule "agents must not read the private directory" is the barrier. The store protects against a stolen file copy and against a value in a log line. It does not protect against a hostile process of the same user.
