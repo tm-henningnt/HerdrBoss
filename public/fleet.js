@@ -332,7 +332,7 @@ function readingAgo(seconds) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
   return `${Math.floor(seconds / 86400)} d ago`;
 }
-const HELPER_REASONS = { 'setting-off': 'setting off', 'different-statusline': 'a different statusLine is set', 'settings-unreadable': 'the settings file is unreadable', 'no-reading': 'no reading yet' };
+const HELPER_REASONS = { 'setting-off': 'setting off', 'different-statusline': 'a statusLine from the Owner exists', 'settings-unreadable': 'the settings file is unreadable', 'no-reading': 'no reading yet' };
 function helperHtml(row) {
   const helper = row.summary?.claudeUsageHelper;
   const text = helper?.state === 'installed' && Number.isFinite(helper.lastReadingSeconds) ? `installed, last reading ${readingAgo(helper.lastReadingSeconds)}`

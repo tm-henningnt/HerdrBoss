@@ -172,7 +172,7 @@ test('the Fleet card shows one Claude usage helper line for each state and none 
   assert.equal(line({ state: 'installed', lastReadingSeconds: 7200 }), 'Claude usage helper: installed, last reading 2 h ago');
   assert.equal(line({ state: 'installed', lastReadingSeconds: 90000 }), 'Claude usage helper: installed, last reading 1 d ago');
   assert.equal(line({ state: 'not-installed', reason: 'setting-off' }), 'Claude usage helper: not installed, setting off');
-  assert.equal(line({ state: 'not-installed', reason: 'different-statusline' }), 'Claude usage helper: not installed, a different statusLine is set');
+  assert.equal(line({ state: 'not-installed', reason: 'different-statusline' }), 'Claude usage helper: not installed, a statusLine from the Owner exists');
   assert.equal(line({ state: 'not-installed', reason: 'settings-unreadable' }), 'Claude usage helper: not installed, the settings file is unreadable');
   assert.equal(line({ state: 'not-installed', reason: 'no-reading' }), 'Claude usage helper: not installed, no reading yet');
   assert.equal(line(null), null);

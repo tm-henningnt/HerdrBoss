@@ -21,7 +21,7 @@ test('the host step runs the helper as the factory user in the container and pri
 
 test('each state word has a fixed line and the second run says unchanged', async () => {
   const lines = { installed: 'installed', unchanged: 'installed, no change', removed: 'removed, the setting is off', off: 'not installed, the setting is off',
-    foreign: 'not installed, a different statusLine is set', unreadable: 'not installed, the settings file is unreadable' };
+    foreign: 'not installed, a statusLine from the Owner exists', unreadable: 'not installed, the settings file is unreadable' };
   for (const [value, text] of Object.entries(lines)) {
     const output = io();
     assert.equal(await ensureClaudeHelper(transport(word(value)), 'demo', output), value);

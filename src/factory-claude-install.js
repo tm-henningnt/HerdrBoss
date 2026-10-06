@@ -5,7 +5,7 @@ const LINES = Object.freeze({
   unchanged: 'installed, no change',
   removed: 'removed, the setting is off',
   off: 'not installed, the setting is off',
-  foreign: 'not installed, a different statusLine is set',
+  foreign: 'not installed, a statusLine from the Owner exists',
   unreadable: 'not installed, the settings file is unreadable',
 });
 
