@@ -22,7 +22,7 @@ Use JSON Schema draft 2020-12.
 Each schema file has a unique `$id` and a `version` annotation.
 Its `description` states the version.
 The initial version is **1.0.0**.
-Each exchanged document has `schema: 1` and `contractVersion: "1.0.0"`.
+Each exchanged document has `schema: 1` and a `contractVersion`.
 `schema` is the major contract number.
 `contractVersion` is the contract version, not the factory software version.
 
@@ -73,7 +73,7 @@ Do not treat a valid example as authorization.
 **Purpose:** Give the head office a small, allow-listed view of one factory.
 **Producer:** The factory summary serializer at `GET /api/fleet/summary`.
 **Consumer:** The head office poller and Fleet page.
-**Version:** 1.0.0; major schema number 1.
+**Version:** 1.1.0; major schema number 1.
 **Schema:** [fleet-summary.v1.schema.json](schema/fleet-summary.v1.schema.json).
 **Sources:** Tickets [16](../tickets/factories/16-fleet-summary.md) and
 [17](../tickets/factories/17-head-office-fleet-page.md).
@@ -94,7 +94,7 @@ The head office supplies the registered kind for a remote factory.
 | `machine` | Load, CPU count, memory, and swap readings. |
 | `projects` | Slug, phase, state, status age, kit revision, and board counts. |
 | `claudeUsageHelper` | Optional. A container factory sets it. `state` is `installed` with `lastReadingSeconds`, or `not-installed` with `reason`. `reason` is `setting-off`, `different-statusline`, `settings-unreadable`, or `no-reading`. |
-| `quotas` | Harness, account HMAC digest, lane, use, reset time, state, and an optional `estimate`. |
+| `quotas` | Harness, account HMAC digest or the local marker, lane, use, reset time, state, and an optional `estimate`. |
 | `spend` | Day, role, harness, and USD amount. |
 | `alerts` | Public alert code, severity, and optional project slug. |
 | `shareItemTitles`, `ownerItems` | Title sharing flag, counts, item IDs, kinds, and optional titles. |
@@ -120,6 +120,8 @@ An old reader selects only its supported fields.
 | `machine.utcOffsetMinutes` | The local UTC offset of the factory in minutes, a signed number, or `null`. |
 | `backup.lastAt` | The UTC time of the last backup, or `null` when the head office does not know it. |
 | `ownerItems.rows[].projectSlug` | The project of an Owner item. Omit the field for a factory-level item. |
+| `quotas[].accountKey` | The HMAC digest of a shared account. Optional only when `accountScope` is `this-factory`. A row has `accountKey` or `accountScope`, never both, never neither. |
+| `quotas[].accountScope` | Optional. The closed value `this-factory`. The row comes from this factory and has no account record. It has no `accountKey`. The human text is "no account key". |
 
 A new field holds no path, token, account identity, message text, login output, or command output.
 
@@ -156,16 +158,19 @@ The schema does not set a minimum byte size.
 `fleet-summary.invalid.title-with-sharing-off.json`, and
 `fleet-summary.invalid.message-text.json`,
 `fleet-summary.valid.claude-helper-installed.json`, `fleet-summary.valid.claude-helper-not-installed.json`,
-`fleet-summary.invalid.claude-helper-unknown-reason.json`, `fleet-summary.invalid.claude-helper-installed-with-reason.json`, and
-`fleet-summary.invalid.claude-helper-negative-age.json` in [examples/](examples/).
+`fleet-summary.valid.local-quota.json`,
+`fleet-summary.invalid.claude-helper-unknown-reason.json`, `fleet-summary.invalid.claude-helper-installed-with-reason.json`,
+`fleet-summary.invalid.claude-helper-negative-age.json`, `fleet-summary.invalid.account-key-and-scope.json`,
+`fleet-summary.invalid.account-key-missing.json`, and `fleet-summary.invalid.account-scope-unknown.json` in [examples/](examples/).
 The complete example sets every 1.x addition.
 The minimal example is an older summary without them.
 The null example uses an unavailable reading.
 The quota `estimate` is optional. It holds `days`, `tokens`, `costUsd`, and `omittedModels`. A factory sets it for a harness without a usage source, for example OpenCode Go. The row then has `usedPercent: null` and `status: unknown`. The estimate is the local use in that factory. It is never a percent and never a quota. `resetAt` of that row is the reset time that the Owner set by hand.
+A factory with no account record for a harness still reports that harness from its own readings. Each row then has `accountScope: "this-factory"` and no `accountKey`. The schema accepts the row. An older reader selects only its supported fields. The Fleet card labels the row `this factory only`.
 
 ### Rollup
 
-Build the Fleet rollup from accepted summaries and one injected time. Include only known readings from summaries that are at most 90 seconds old in totals. Name cached, never-seen, unknown, and unpriced readings in coverage. Do not count an unknown reading as zero. Show cached values only with their summary age. Select one spend day for each factory. If today's factory-calendar row is missing, use the latest factory day and show its date. Use the highest fresh value for each shared quota lane.
+Build the Fleet rollup from accepted summaries and one injected time. Include only known readings from summaries that are at most 90 seconds old in totals. Name cached, never-seen, unknown, and unpriced readings in coverage. Do not count an unknown reading as zero. Show cached values only with their summary age. Select one spend day for each factory. If today's factory-calendar row is missing, use the latest factory day and show its date. Use the highest fresh value for each shared quota lane. Leave a row with the `this-factory` marker out of the shared quota total. Show that row on the factory card with the label `this factory only`.
 
 ## Head office role record
 

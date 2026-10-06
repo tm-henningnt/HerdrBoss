@@ -530,3 +530,35 @@ test('an absent Boss and a healthy poll never create a wait', () => {
     assert.ok(!row.alerts.some((alert) => alert.code === 'boss' || alert.label.includes('Waiting')), 'no Boss wait alert');
   }
 });
+
+test('a quota row without an account record stays out of the fleet total but stays on the factory', () => {
+  const rows = [
+    factory('factory-zero', {
+      summary: summary('factory-zero', { quotas: [{ harness: 'codex', accountKey, lane: 'weekly', usedPercent: 41, status: 'ok' }] }),
+    }),
+    factory('win1', {
+      summary: summary('win1', { quotas: [{ harness: 'claude', accountScope: 'this-factory', lane: 'weekly', usedPercent: 99, status: 'ok' }] }),
+    }),
+  ];
+
+  const result = rollup(rows);
+  assert.equal(result.totals.quota.value, 41);
+  assert.match(result.totals.quota.coverage, /1 of 2 factories reporting/);
+  assert.match(result.totals.quota.coverage, /win1 \(this factory only\)/);
+  assert.equal(result.factories[1].quota.usedPercent, 99);
+});
+
+test('a factory with a shared and a local reading contributes only the shared reading to the fleet total', () => {
+  const row = factory('factory-zero', {
+    summary: summary('factory-zero', {
+      quotas: [
+        { harness: 'codex', accountKey, lane: 'weekly', usedPercent: 30, status: 'ok' },
+        { harness: 'claude', accountScope: 'this-factory', lane: 'weekly', usedPercent: 99, status: 'ok' },
+      ],
+    }),
+  });
+
+  const totals = rollup([row]).totals;
+  assert.equal(totals.quota.value, 30);
+  assert.match(totals.quota.coverage, /^1 of 1 factories reporting/);
+});

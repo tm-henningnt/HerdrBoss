@@ -331,3 +331,39 @@ test('the summary builder carries the Claude usage helper state and omits it whe
   assert.deepEqual(buildFleetSummary({ ...base, claudeHelper: { state: 'not-installed', reason: 'setting-off' } }).claudeUsageHelper, { state: 'not-installed', reason: 'setting-off' });
   assert.equal('claudeUsageHelper' in buildFleetSummary({ ...base, claudeHelper: { state: 'bogus' } }), false);
 });
+
+test('the summary and rollup hold no account identity or HMAC key, and a factory without an account record keeps its own rows', async () => {
+  const { provisionAccount } = await import('../src/fleet-quotas.js');
+  const { buildFleetSummary } = await import('../src/fleet-summary.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const identity = 'invented-owner@example.invalid';
+  const hmacKey = 'invented-shared-hmac-key-with-at-least-32-bytes';
+  const dir = fs.mkdtempSync(path.join(root, 'fleet-privacy-'));
+  const account = provisionAccount({ harness: 'codex', identity, hmacKey, scope: ['win1'] }, { file: path.join(dir, 'fleet-accounts.json') });
+  const readings = [
+    { provider: 'codex', windows: [{ key: 'weekly', usedPercent: 42, resetsAt: '2026-10-09T10:00:00Z' }] },
+    { provider: 'claude', windows: [{ key: 'weekly', usedPercent: 12, resetsAt: '2026-10-09T10:00:00Z' }] },
+  ];
+  const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true, clockOffsetSeconds: null };
+  const now = Date.parse('2026-10-06T10:00:00Z');
+  const state = { quotas: readings, projects: [], machine: {}, control: {} };
+  const summary = buildFleetSummary({ settings: { factoryId: 'win1', name: 'win1', dashboardUrl: 'https://win1.example', shareItemTitles: false, accounts: [account] }, state, health, now, kind: 'container' });
+  assert.equal(summary.contractVersion, '1.1.0');
+  assert.equal(summary.quotas.find((row) => row.harness === 'codex').accountKey, account.accountKey);
+  const rollup = buildFleetRollup([{ name: 'win1', factoryId: 'win1', status: 'healthy', ageSeconds: 5, lastSeenAt: '2026-10-06T10:00:00Z', summary }], { now });
+  for (const text of [JSON.stringify(summary), JSON.stringify(rollup)]) {
+    assert.equal(text.includes(identity), false, 'no identity in the JSON');
+    assert.equal(text.includes(hmacKey), false, 'no HMAC key in the JSON');
+  }
+
+  const local = buildFleetSummary({ settings: { factoryId: 'win2', name: 'win2', dashboardUrl: 'https://win2.example', shareItemTitles: false, accounts: [] }, state, health, now, kind: 'container' });
+  const codex = local.quotas.find((row) => row.harness === 'codex');
+  assert.equal(codex.accountScope, 'this-factory');
+  assert.equal('accountKey' in codex, false);
+  const localRollup = buildFleetRollup([{ name: 'win2', factoryId: 'win2', status: 'healthy', ageSeconds: 5, lastSeenAt: '2026-10-06T10:00:00Z', summary: local }], { now });
+  for (const text of [JSON.stringify(local), JSON.stringify(localRollup)]) {
+    assert.equal(text.includes(identity), false);
+    assert.equal(text.includes(hmacKey), false);
+  }
+  assert.equal(localRollup.totals.quota.value, 'unknown');
+});

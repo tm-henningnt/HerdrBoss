@@ -2149,6 +2149,7 @@ The command refuses a different ID after initialization.
 Do not copy that identity file to another factory.
 
 Run private provisioning at an Owner terminal.
+Run the `herdr-boss fleet account` command only as the Owner. The orchestrator never runs it.
 Do not put an identity or a credential in a command argument, pane, report, or repository.
 The `--from-file -` option reads JSON from standard input.
 
@@ -2165,7 +2166,7 @@ Use the `Authorization: Bearer` header.
 Do not put a credential in a URL.
 Credentials have no dashboard field because they are secrets.
 
-`GET /api/fleet/summary` returns contract 1.0.0 from the local factory.
+`GET /api/fleet/summary` returns contract 1.1.0 from the local factory.
 `GET /api/fleet` returns the head office's last good summaries and their ages.
 It adds the field `rollup` with the fleet totals and the per-factory alerts.
 A failed rollup returns `rollup: null` and a short `rollupError`.
@@ -2178,7 +2179,7 @@ A read-only preview refuses changes and makes no remote fleet requests.
 The summary uses the existing local quota collector.
 CodexBar uses the same JSON interface on Linux.
 An absent reader or partial reading gives `null` and `unknown`.
-An account without a provisioned identity has no quota row.
+An account without a provisioned identity has no shared account row. The factory still reports its own reading for that harness, with the marker `accountScope: "this-factory"`, no `accountKey`, and the card label `this factory only`. That row stays out of the fleet shared total. Provision the account with `herdr-boss fleet account --from-file FILE` to share it across factories.
 Pi has no confirmed Linux quota reader in this slice.
 ### Factory shares and guidance
 

@@ -40,19 +40,34 @@ function fleetEstimate(value) {
   return days && tokens !== null && costUsd !== null ? { days, tokens, costUsd, omittedModels: omittedModels ?? 0 } : null;
 }
 export function fleetQuotas(readings, accounts, factoryId) {
-  return validateAccounts(accounts).filter((account) => account.scope.includes(factoryId)).flatMap((account) => {
+  const rows = [];
+  const claimed = new Set();
+  for (const account of validateAccounts(accounts).filter((account) => account.scope.includes(factoryId))) {
     const provider = account.harness === 'opencode' ? 'opencodego' : account.harness;
-    const reading = (readings || []).find((row) => row.provider === provider);
-    // A reading without windows has no percent. The manual reset time and the local estimate of OpenCode Go ride on that row.
-    const windows = reading?.windows?.length ? reading.windows : [{ key: 'unknown', resetsAt: reading?.resetAt }];
-    const estimate = reading?.windows?.length ? null : fleetEstimate(reading?.estimate);
-    return windows.map((window) => {
-      const usedPercent = percent(window.usedPercent);
-      return { harness: account.harness, accountKey: account.accountKey,
-        lane: typeof window.key === 'string' && SLUG.test(window.key) ? window.key : 'unknown',
-        usedPercent, resetAt: timestamp(window.resetsAt),
-        status: reading?.error || reading?.stale || usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : window.willLast === false ? 'ahead' : 'ok',
-        ...(estimate ? { estimate } : {}) };
-    });
+    claimed.add(provider);
+    rows.push(...readingRows((readings || []).find((row) => row.provider === provider), account.harness, { accountKey: account.accountKey }));
+  }
+  // A factory without an account record for a harness still reports its own reading. The row has the
+  // closed marker instead of an accountKey, so the fleet rollup can leave it out of the shared total.
+  for (const reading of readings || []) {
+    if (!reading || claimed.has(reading.provider)) continue;
+    const harness = reading.provider === 'opencodego' ? 'opencode' : reading.provider;
+    if (typeof harness !== 'string' || !HARNESS.test(harness)) continue;
+    rows.push(...readingRows(reading, harness, { accountScope: 'this-factory' }));
+  }
+  return rows;
+}
+
+function readingRows(reading, harness, scope) {
+  // A reading without windows has no percent. The manual reset time and the local estimate of OpenCode Go ride on that row.
+  const windows = reading?.windows?.length ? reading.windows : [{ key: 'unknown', resetsAt: reading?.resetAt }];
+  const estimate = reading?.windows?.length ? null : fleetEstimate(reading?.estimate);
+  return windows.map((window) => {
+    const usedPercent = percent(window.usedPercent);
+    return { harness, ...scope,
+      lane: typeof window.key === 'string' && SLUG.test(window.key) ? window.key : 'unknown',
+      usedPercent, resetAt: timestamp(window.resetsAt),
+      status: reading?.error || reading?.stale || usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : window.willLast === false ? 'ahead' : 'ok',
+      ...(estimate ? { estimate } : {}) };
   });
 }

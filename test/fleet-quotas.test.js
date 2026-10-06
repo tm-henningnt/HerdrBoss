@@ -30,3 +30,29 @@ test('quota export preserves a partial reading and reports a missing reader as u
   ]);
   assert.deepEqual(fleetQuotas([], [account], 'another-factory'), []);
 });
+
+test('a factory with no account record still emits its own reading rows with the closed marker', async () => {
+  const { fleetQuotas } = await load();
+  const readings = [{ provider: 'codex', windows: [{ key: 'primary', usedPercent: 25, resetsAt: '2026-10-09T10:00:00Z' }] }];
+  const rows = fleetQuotas(readings, [], 'win1');
+  assert.deepEqual(rows, [{ harness: 'codex', accountScope: 'this-factory', lane: 'primary', usedPercent: 25, resetAt: '2026-10-09T10:00:00Z', status: 'ok' }]);
+  assert.equal('accountKey' in rows[0], false);
+});
+
+test('a reading with an in-scope account is not repeated as a local row', async () => {
+  const { fleetQuotas } = await load();
+  const readings = [{ provider: 'codex', windows: [{ key: 'primary', usedPercent: 25, resetsAt: '2026-10-09T10:00:00Z' }] }];
+  const rows = fleetQuotas(readings, [account], 'factory-zero');
+  assert.deepEqual(rows, [{ harness: 'codex', accountKey: account.accountKey, lane: 'primary', usedPercent: 25, resetAt: '2026-10-09T10:00:00Z', status: 'ok' }]);
+});
+
+test('an OpenCode Go reading without an account keeps the opencode harness and the local estimate', async () => {
+  const { fleetQuotas } = await load();
+  const readings = [{ provider: 'opencodego', estimate: { days: 7, tokens: 10, costUsd: 0.5, omittedModels: 0 }, resetAt: '2026-10-09T10:00:00Z' }];
+  const rows = fleetQuotas(readings, [], 'win2');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].harness, 'opencode');
+  assert.equal(rows[0].accountScope, 'this-factory');
+  assert.equal('accountKey' in rows[0], false);
+  assert.deepEqual(rows[0].estimate, { days: 7, tokens: 10, costUsd: 0.5, omittedModels: 0 });
+});

@@ -86,7 +86,7 @@ export function buildFleetSummary({ settings, state = {}, health, ownerItems = [
   const bossPane = Array.isArray(panes) ? panes.find((pane) => pane?.label === 'boss') : null;
   const boss = { running: Array.isArray(panes) ? Boolean(bossPane?.agent) : null,
     harness: typeof bossPane?.agent === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(bossPane.agent) ? bossPane.agent : null };
-  return assertFleetSummary({ schema: 1, contractVersion: '1.0.0', factoryId: settings.factoryId, name: settings.name,
+  return assertFleetSummary({ schema: 1, contractVersion: '1.1.0', factoryId: settings.factoryId, name: settings.name,
     kind: ['native', 'container'].includes(kind) ? kind : null,
     version: health.version, kitRevision, generatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z'), dashboardUrl: settings.dashboardUrl,
     health: { status: health.herdrReachable === false || tickAgeSeconds > 90 ? 'degraded' : health.herdrReachable === true && tickAgeSeconds !== null ? 'healthy' : 'unknown',

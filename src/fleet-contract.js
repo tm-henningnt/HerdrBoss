@@ -19,11 +19,19 @@ export function assertFleetSummary(body) {
   if (errors.length) throw new Error(`The fleet summary does not match the supported contract: ${errors[0]}.`);
   return body;
 }
+// The contract version that this head office reads and writes.
+const SUPPORTED_VERSION = '1.1.0';
+function versionDrift(version) {
+  if (version === SUPPORTED_VERSION) return null;
+  const [a, b] = [version, SUPPORTED_VERSION].map((value) => value.split('.').map(Number));
+  for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] > b[i] ? 'head office older' : 'factory older';
+  return null;
+}
 export function acceptFleetSummary(body, dashboardUrl) {
   if (!body || body.schema !== 1 || typeof body.contractVersion !== 'string' || !/^1\.\d+\.\d+$/.test(body.contractVersion)) throw new Error('The fleet summary version is unsupported.');
   const selection = select(body, summarySchema);
   assertFleetSummary(selection);
   if (new URL(selection.dashboardUrl).origin !== new URL(dashboardUrl).origin) throw new Error('The fleet summary belongs to another dashboard.');
   if (!Number.isFinite(Date.parse(selection.generatedAt))) throw new Error('The fleet summary time is invalid.');
-  return { summary: selection, drift: selection.contractVersion === '1.0.0' ? null : 'head office older' };
+  return { summary: selection, drift: versionDrift(selection.contractVersion) };
 }

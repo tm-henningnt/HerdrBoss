@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "factoryId": "factory-zero",
   "name": "factory-zero",
   "kind": "native",
@@ -76,6 +76,14 @@
       "accountKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "lane": "weekly",
       "usedPercent": 20,
+      "resetAt": "2026-10-09T10:00:00Z",
+      "status": "ok"
+    },
+    {
+      "harness": "claude",
+      "accountScope": "this-factory",
+      "lane": "weekly",
+      "usedPercent": 12,
       "resetAt": "2026-10-09T10:00:00Z",
       "status": "ok"
     }

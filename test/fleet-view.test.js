@@ -177,3 +177,21 @@ test('the Fleet card shows one Claude usage helper line for each state and none 
   assert.equal(line({ state: 'not-installed', reason: 'no-reading' }), 'Claude usage helper: not installed, no reading yet');
   assert.equal(line(null), null);
 });
+
+test('a usage row without an account record shows the this factory only label and the no account key tooltip', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const summary = { ...fixture, kind: 'container', quotas: [{ harness: 'claude', accountScope: 'this-factory', lane: 'weekly', usedPercent: 55, status: 'ok' }] };
+  const html = fleetView({ factories: [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary }], pollSeconds: 30 });
+  assert.match(html, /this factory only/);
+  assert.match(html, /title="no account key"/);
+  assert.doesNotMatch(html, /shared/);
+});
+
+test('a usage row with an account record keeps the shared label and the short key', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const summary = { ...fixture, kind: 'container', quotas: [{ harness: 'claude', accountKey: 'a'.repeat(64), lane: 'weekly', usedPercent: 55, status: 'ok' }] };
+  const html = fleetView({ factories: [{ name: 'win1', status: 'healthy', ageSeconds: 0, kind: 'container', lastSeenAt: fixture.generatedAt, summary }], pollSeconds: 30 });
+  assert.match(html, /shared/);
+  assert.match(html, /aaaa…aaaa/);
+  assert.doesNotMatch(html, /this factory only/);
+});

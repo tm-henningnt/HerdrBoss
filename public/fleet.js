@@ -261,12 +261,16 @@ const STALE_SECONDS = 2 * 60 * 60;
 function fact(label, info, extra = '') {
   return `<div class="fact"><span class="k">${esc(label)}</span><span class="v">${valueHtml(info)}${extra}</span></div>`;
 }
+function laneScopeHtml(lane) {
+  if (lane.accountScope === 'this-factory') return '<span class="muted small" title="no account key">this factory only</span>';
+  return `<span class="muted small">shared${shortKey(lane.accountKey) ? ` · ${esc(shortKey(lane.accountKey))}` : ''}</span>`;
+}
 function laneHtml(lane, worst) {
   const used = lane.usedPercent;
   const cls = used >= 90 ? 'crit' : used >= 70 ? 'warn' : '';
   const status = lane.status === 'unknown' ? 'last good' : lane.status === 'warning' ? 'warning' : 'ok';
   return `<div class="lane${worst ? ' worst' : ' more'}" data-fleet-lane="${esc(lane.harness ?? UNKNOWN)}-${esc(lane.lane ?? UNKNOWN)}">`
-    + `<span class="who">${esc(lane.harness ?? 'unknown harness')} · ${esc(lane.lane ?? 'unknown lane')} <span class="muted small">shared${shortKey(lane.accountKey) ? ` · ${esc(shortKey(lane.accountKey))}` : ''}</span></span>`
+    + `<span class="who">${esc(lane.harness ?? 'unknown harness')} · ${esc(lane.lane ?? 'unknown lane')} ${laneScopeHtml(lane)}</span>`
     + `<span class="mono">${esc(String(used))}% <span class="pill">${esc(status)}</span></span>`
     + `<span class="bar"><i class="${cls}" style="width:${esc(String(used))}%"></i></span></div>`;
 }
@@ -285,7 +289,7 @@ function estimatesHtml(row) {
   if (!rows.length) return '';
   const lines = rows.map((lane) => {
     const reset = typeof lane.resetAt === 'string' && lane.resetAt ? ` · resets <time datetime="${esc(lane.resetAt)}">${esc(lane.resetAt)}</time> (set by hand)` : '';
-    return `<div class="lane estimate" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''}</span>`
+    return `<div class="lane estimate" data-fleet-estimate="${esc(lane.harness === 'opencode' ? 'opencode' : lane.harness ?? UNKNOWN)}"><span class="who">${esc(lane.harness === 'opencode' ? 'OpenCode Go' : lane.harness ?? 'unknown harness')} · usage limit ${UNKNOWN}${lane.harness === 'opencode' ? ' (no usage reader in this factory)' : ''} ${laneScopeHtml(lane)}</span>`
       + `<span class="mono small">${esc(ESTIMATE_LABEL)}: ${esc(usageEstimateText(lane.estimate))}${reset}</span></div>`;
   });
   return `<div class="lanes" data-key="fleet-estimates:${esc(String(row.name))}"><h3>Local estimate${row.freshness === 'cached' ? ' · last good data' : ''}</h3>${lines.join('')}</div>`;

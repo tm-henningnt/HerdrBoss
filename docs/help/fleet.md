@@ -1,6 +1,6 @@
 # Fleet help
 
-The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. The health cell becomes red and shows the reason. Last seen shows the last successful poll. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. Spend shows USD by day, role, and harness.
+The head office reads each registered factory every 30 seconds. A factory outage keeps its last good summary and shows its age. The health cell becomes red and shows the reason. Last seen shows the last successful poll. Shared account quota uses the highest reading for each account and lane. It does not add repeated readings. A factory with no account record for a harness shows its own reading with the label `this factory only` and the tooltip `no account key`. That row stays out of the shared total. Spend shows USD by day, role, and harness.
 
 Each fleet total shows a short coverage line. The line gives the as-of age, the count of reporting factories, and the names of the factories that are not fresh. Open Coverage detail under the totals to read the reason for each factory and the selected spend days.
 

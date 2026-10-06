@@ -56,6 +56,18 @@ function factoryQuota(summary) {
   return { harness: best.harness, lane: best.lane, usedPercent: best.usedPercent, resetAt: best.resetAt ?? null };
 }
 
+// A row with an accountKey belongs to a shared account and may join the fleet dedupe.
+// A row with the closed marker is the reading of this factory only and stays out of that total.
+function sharedQuotaReadings(summary) {
+  return (Array.isArray(summary?.quotas) ? summary.quotas : [])
+    .filter((row) => isNumber(row?.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100 && typeof row.accountKey === 'string');
+}
+
+function localQuotaReadings(summary) {
+  return (Array.isArray(summary?.quotas) ? summary.quotas : [])
+    .filter((row) => isNumber(row?.usedPercent) && row.usedPercent >= 0 && row.usedPercent <= 100 && typeof row.accountKey !== 'string');
+}
+
 function unknownQuotaLanes(row) {
   const readings = Array.isArray(row.summary?.quotas) ? row.summary.quotas : [];
   return readings
@@ -70,7 +82,8 @@ function coverageReason(row, metric) {
   if (metric === 'quota') {
     if (row.hasQuota) return null;
     const lanes = unknownQuotaLanes(row);
-    return lanes.length ? `quota unknown: ${lanes.join(', ')}` : 'quota unknown';
+    if (lanes.length) return `quota unknown: ${lanes.join(', ')}`;
+    return localQuotaReadings(row.summary).length ? 'this factory only' : 'quota unknown';
   }
   return 'unknown';
 }
@@ -151,7 +164,7 @@ function factoryRow(row, role, now) {
     pending: factoryWaits(row, kind, summary, now),
     projects: Array.isArray(summary?.projects) ? summary.projects.map((project) => ({ ...project, ...(project.board ? { board: { ...project.board } } : {}) })) : [],
     ownerItems: Number.isSafeInteger(needsOwner) && needsOwner >= 0 ? needsOwner : null,
-    hasQuota: quota !== null,
+    hasQuota: sharedQuotaReadings(summary).length > 0,
     alerts: [],
   };
 }
@@ -276,8 +289,8 @@ export function buildFleetRollup(factories, { now, role = null } = {}) {
   for (const row of knownQuotas) {
     for (const reading of row.summary.quotas) {
       if (!isNumber(reading?.usedPercent) || reading.usedPercent < 0 || reading.usedPercent > 100) continue;
-      const sharedAccount = typeof reading.accountKey === 'string' ? reading.accountKey : row.summary.factoryId ?? row.name;
-      const key = `${reading.harness ?? ''}\0${sharedAccount}\0${reading.lane ?? ''}`;
+      if (typeof reading.accountKey !== 'string') continue;
+      const key = `${reading.harness ?? ''}\0${reading.accountKey}\0${reading.lane ?? ''}`;
       const previous = quotaLanes.get(key);
       if (!previous || reading.usedPercent > previous.usedPercent) quotaLanes.set(key, reading);
     }
