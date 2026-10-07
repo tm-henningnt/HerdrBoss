@@ -173,6 +173,30 @@ test('a symlink member in a hash-valid tarball is refused with a fixed reason an
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('the release layout installs: codexbar is a link to the regular file CodexBarCLI', () => {
+  const pins = codexbarPins();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexbar-layout-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'CodexBarCLI'), 'INVENTED-BINARY', { mode: 0o755 });
+    fs.symlinkSync('CodexBarCLI', path.join(dir, 'codexbar'));
+    const tarFile = path.join(dir, 'cli.tar.gz');
+    assert.equal(spawnSync('tar', ['-czf', tarFile, '-C', dir, 'CodexBarCLI', 'codexbar'], { stdio: ['ignore', 'ignore', 'pipe'] }).status, 0);
+    const body = fs.readFileSync(tarFile);
+    const home = tempHome();
+    try {
+      const result = installCodexbar({
+        home, version: pins.version, arch: 'x64',
+        hashes: { x86_64: sha256(body), aarch64: sha256(body) },
+        deps: { readVersion: () => null, download: (_url, file) => { fs.writeFileSync(file, body); }, validate: () => true },
+      });
+      assert.deepEqual(result, { state: 'installed', configInvalid: false });
+      const bin = path.join(home, '.local', 'bin', 'codexbar');
+      assert.equal(fs.lstatSync(bin).isSymbolicLink(), false);
+      assert.equal(fs.readFileSync(bin, 'utf8'), 'INVENTED-BINARY');
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('an extracted archive without the binary and a failed config validation give fixed words', () => {
   const pins = codexbarPins();
   const empty = fakeInstall(pins, { extract: false });

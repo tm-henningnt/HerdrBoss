@@ -100,9 +100,13 @@ function defaultDownload(url, file) {
   }
 }
 
+// The release holds CodexBarCLI as a file and codexbar as a link to it. Extract the file by name; the link alone would dangle.
 function defaultExtract(tarFile, dir) {
-  const result = spawnSync('tar', ['-xzf', tarFile, '-C', dir, 'codexbar'], { stdio: ['ignore', 'ignore', 'pipe'] });
-  if (result.error || result.status !== 0) throw new Error('The CodexBar archive cannot be unpacked.');
+  for (const member of ['CodexBarCLI', 'codexbar']) {
+    const result = spawnSync('tar', ['-xzf', tarFile, '-C', dir, member], { stdio: ['ignore', 'ignore', 'pipe'] });
+    if (!result.error && result.status === 0) return;
+  }
+  throw new Error('The CodexBar archive cannot be unpacked.');
 }
 
 function defaultValidate({ home }) {
@@ -143,11 +147,12 @@ export function installCodexbar({
         if (sha256File(tarFile) !== target.sha256) return finish('hash-mismatch', home, null);
         fs.mkdirSync(unpacked, { recursive: true });
         try { extract(tarFile, unpacked); } catch { return finish('download-failed', home, null); }
-        const produced = path.join(unpacked, 'codexbar');
-        if (!fs.existsSync(produced)) return finish('download-failed', home, null);
-        // lstat does not follow a link: a linked member is refused with the fixed reason, and nothing is copied.
-        const producedStat = fs.lstatSync(produced);
-        if (!producedStat.isFile() || producedStat.isSymbolicLink()) return finish('download-failed', home, null);
+        // The release holds CodexBarCLI as a file and codexbar as a link to it. Use the first regular file.
+        // lstat does not follow a link: a linked member is never copied, and nothing is written when no regular file exists.
+        const produced = ['CodexBarCLI', 'codexbar'].map((name) => path.join(unpacked, name)).find((candidate) => {
+          try { const stat = fs.lstatSync(candidate); return stat.isFile() && !stat.isSymbolicLink(); } catch { return false; }
+        });
+        if (!produced) return finish('download-failed', home, null);
         const bin = path.join(home, '.local', 'bin', 'codexbar');
         fs.mkdirSync(path.dirname(bin), { recursive: true, mode: 0o755 });
         fs.copyFileSync(produced, bin);
