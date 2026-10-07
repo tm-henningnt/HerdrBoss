@@ -326,7 +326,14 @@ function jsonlIn(dir) {
 function logFiles(home, now, known) {
   const files = [];
   const claude = path.join(home, '.claude', 'projects');
-  for (const folder of listDir(claude).filter((e) => e.isDirectory())) for (const file of jsonlIn(path.join(claude, folder.name))) files.push({ harness: 'claude', file });
+  for (const folder of listDir(claude).filter((e) => e.isDirectory())) {
+    const projectDir = path.join(claude, folder.name);
+    for (const file of jsonlIn(projectDir)) files.push({ harness: 'claude', file });
+    // A subagent transcript is in <session ID>/subagents/. Its usage belongs to the role of the parent session.
+    for (const session of listDir(projectDir).filter((e) => e.isDirectory())) {
+      for (const file of jsonlIn(path.join(projectDir, session.name, 'subagents'))) files.push({ harness: 'claude', file, sub: session.name });
+    }
+  }
   const codex = path.join(home, '.codex', 'sessions');
   const oldest = dayOf(now - (SPEND_FILE_DAYS + 1) * DAY_MS);
   for (const y of listDir(codex).filter((e) => e.isDirectory() && /^\d{4}$/.test(e.name))) {
@@ -457,7 +464,7 @@ export async function scanSpend({
     try { fd = fs.openSync(item.file, 'r'); } catch { continue; }
     // The raw folder and session ID live in this object only. The state keeps their hashes.
     const ctx = { model: st.model, prev: st.prev, seen: st.seen ? new Map(Object.entries(st.seen)) : undefined };
-    if (item.harness === 'claude') ctx.sessionId = path.basename(item.file, '.jsonl');
+    if (item.harness === 'claude') ctx.sessionId = item.sub || path.basename(item.file, '.jsonl');
     const parse = PARSERS[item.harness];
     const wanted = WANTED[item.harness];
     let info = null;
@@ -481,7 +488,7 @@ export async function scanSpend({
           const at = result.at ?? st.lastAt ?? item.stat.mtimeMs;
           st.lastAt = Math.max(st.lastAt || 0, at);
           st.firstAt = st.firstAt == null ? at : Math.min(st.firstAt, at);
-          addDaily(daily, dayOf(at), info.role, item.harness, result.model, result.usage, result.logCost ?? null, result.messages);
+          addDaily(daily, dayOf(at), info.role, item.harness, item.sub ? `${result.model}|sub` : result.model, result.usage, result.logCost ?? null, result.messages);
           if (info.role === 'worker') {
             const run = st.run ||= { models: {} };
             addUsage(run.models[result.model] ||= emptyUsage(), result.usage, result.logCost ?? null);
@@ -643,6 +650,8 @@ export function costOf(entry, harness, model, priceOf) {
 }
 
 const blank = () => ({ tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, unpricedTokens: 0 });
+// A total or a role row also holds the part that came from subagent transcripts. That part is a subset of the row.
+const blankWithSubagents = () => ({ ...blank(), subagents: blank() });
 function fold(target, usage, cost) {
   for (const f of FIELDS) target[f] += usage[f] || 0;
   target.tokens += totalTokens(usage);
@@ -679,15 +688,16 @@ export function spendSummary({ dataDir = DATA_DIR, days = SPEND_DEFAULT_DAYS, no
   const result = [];
   const unconfirmed = new Set();
   for (const day of Object.keys(merged).filter((d) => d >= oldest).sort().reverse()) {
-    const total = blank();
+    const total = blankWithSubagents();
     const roles = {};
     for (const [key, entry] of Object.entries(merged[day])) {
-      const [role, harness, model] = key.split('|');
+      const [role, harness, model, sub] = key.split('|');
       const cost = costOf(entry, harness, model, priceOf);
       if (cost.costUsd > 0 && priceOf(harness, model)?.unconfirmed?.length) unconfirmed.add(`${harness}/${model}`);
       fold(total, entry, cost);
-      const row = roles[role] ||= { role, ...blank(), harnesses: {} };
+      const row = roles[role] ||= { role, ...blankWithSubagents(), harnesses: {} };
       fold(row, entry, cost);
+      if (sub) { fold(total.subagents, entry, cost); fold(row.subagents, entry, cost); }
       fold(row.harnesses[harness] ||= blank(), entry, cost);
     }
     result.push({
@@ -719,6 +729,8 @@ export function formatSpend(summary) {
   for (const day of summary.days) {
     for (const row of day.roles) lines.push(`${day.day}  ${row.role.padEnd(12)} ${short(row.tokens).padStart(8)} tokens  ${cost(row)}`);
     lines.push(`${day.day}  ${'total'.padEnd(12)} ${short(day.total.tokens).padStart(8)} tokens  ${cost(day.total)}`);
+    const sub = day.total.subagents;
+    if (sub?.tokens) lines.push(`${day.day}  ${'of which subagents'.padEnd(12)} ${short(sub.tokens).padStart(8)} tokens  ${cost(sub)}`);
   }
   if (!lines.length) lines.push('No spend recorded yet. The service reads the session logs every 5 minutes.');
   if (summary.unconfirmedPrices?.length) lines.push(`Unconfirmed prices: ${summary.unconfirmedPrices.join(', ')}.`);
