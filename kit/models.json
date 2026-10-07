@@ -11,9 +11,16 @@
     },
     "claude": {
       "defaultModel": "claude-sonnet-5-5",
-      "allowedModels": ["claude-sonnet-5-5", "claude-opus-5-5"],
+      "allowedModels": ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"],
       "allowedEfforts": [],
       "defaultEffort": null,
+      "modelEfforts": {
+        "claude-haiku-5-5": {
+          "allowedEfforts": ["low", "medium", "high", "xhigh", "max"],
+          "defaultEffort": "medium",
+          "launchArgs": ["--effort", "{{effort}}"]
+        }
+      },
       "launchArgs": ["--model", "{{model}}", "--permission-mode", "auto", "--disallowedTools", "AskUserQuestion"],
       "contextTokens": 200000
     },

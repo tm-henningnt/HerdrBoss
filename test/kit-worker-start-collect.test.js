@@ -2601,6 +2601,7 @@ test('an Opus refusal logs silently, and other worker models do not alert the Bo
   for (const [name, kind, model] of [
     ['codex-worker', 'codex', undefined],
     ['claude-sonnet', 'claude', 'claude-sonnet-5-5'],
+    ['claude-haiku', 'claude', 'claude-haiku-5-5'],
   ]) {
     const f = setupFixture(null);
     const dataDir = path.join(f.root, 'temporary-boss-data');

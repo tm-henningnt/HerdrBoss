@@ -765,10 +765,11 @@ function controlBlock(s) {
   }).join('');
   const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
     const cfg = models[rung.kind] ? { ...models[rung.kind], allowedModels: kindModels(rung.kind, d) } : { allowedModels: [rung.model], allowedEfforts: [] };
+    const effortCfg = effortSettings(rung.kind, rung.model);
     return `<div class="succession-row"><span class="num">${i + 1}</span>
       <select data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${Object.keys(models).map((kind) => `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select>
       <select data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${cfg.allowedModels.map((model) => `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>
-      ${cfg.allowedEfforts.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${cfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || cfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">Default effort</span>'}
+      ${effortCfg.allowedEfforts?.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${effortCfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || effortCfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">No effort setting</span>'}
       <div class="succession-actions"><button type="button" class="quiet" data-ladder-up="${i}" aria-label="Move choice ${i + 1} up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="quiet" data-ladder-down="${i}" aria-label="Move choice ${i + 1} down" ${i === d.orchestratorLadder.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="quiet" data-ladder-remove="${i}" aria-label="Remove choice ${i + 1}" ${d.orchestratorLadder.length === 1 ? 'disabled' : ''}>Remove</button></div>
     </div>`;
   }).join('');
@@ -999,6 +1000,10 @@ const nullableServiceSettings = new Set(['watch.maxWorkers']);
 function kindModels(kind, d = policyDraft) {
   const base = models[kind]?.allowedModels || [];
   return [...base, ...(d?.extraModels?.[kind] || []).filter((model) => !base.includes(model))];
+}
+function effortSettings(kind, model) {
+  const cfg = models[kind] || {};
+  return cfg.modelEfforts?.[model] || cfg;
 }
 // The global exclusion list and the list of the harness each disable a model.
 function modelOn(kind, model, d = policyDraft) {
@@ -1361,8 +1366,9 @@ function handoffBlock(s, projectSlug = null) {
       const target = handoffTargets[h.pane] || (eligible.some(([kind]) => kind === h.target?.kind) ? h.target.kind : eligible[0]?.[0]) || '';
       const availableModels = eligible.find(([kind]) => kind === target)?.[1] || [];
       const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
-      const efforts = models[target]?.allowedEfforts || [];
-      const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : models[target]?.defaultEffort;
+      const effortCfg = effortSettings(target, model);
+      const efforts = effortCfg.allowedEfforts || [];
+      const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : effortCfg.defaultEffort;
       const mode = handoffModes[h.pane] || h.defaultMode || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
       const modeOptions = h.defaultMode === 'fresh'
         ? '<option value="fresh" selected>Fresh bootstrap</option>'
@@ -8287,16 +8293,18 @@ document.addEventListener('change', (e) => {
     if (e.target.dataset.ladderKind !== undefined) {
       rung.kind = e.target.value;
       rung.model = models[rung.kind].defaultModel;
-      rung.effort = models[rung.kind].defaultEffort || null;
-    } else if (e.target.dataset.ladderModel !== undefined) rung.model = e.target.value;
-    else rung.effort = e.target.value;
+      rung.effort = effortSettings(rung.kind, rung.model).defaultEffort || null;
+    } else if (e.target.dataset.ladderModel !== undefined) {
+      rung.model = e.target.value;
+      rung.effort = effortSettings(rung.kind, rung.model).defaultEffort || null;
+    } else rung.effort = e.target.value;
     policyDirty = true; saveMessage = ''; lastRender = ''; render(true);
     return;
   }
   if (e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort) {
     const pane = e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort;
     if (e.target.dataset.handoffTarget) { handoffTargets[pane] = e.target.value; delete handoffModels[pane]; delete handoffEfforts[pane]; }
-    else if (e.target.dataset.handoffModel) handoffModels[pane] = e.target.value;
+    else if (e.target.dataset.handoffModel) { handoffModels[pane] = e.target.value; delete handoffEfforts[pane]; }
     else if (e.target.dataset.handoffEffort) handoffEfforts[pane] = e.target.value;
     else handoffModes[pane] = e.target.value;
     delete handoffPlans[pane]; delete handoffMessages[pane];
@@ -9205,7 +9213,7 @@ document.addEventListener('click', async (e) => {
       if (!kind) return;
       const cfg = models[kind];
       const model = kindModels(kind).find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
-      list.push({ kind, model, effort: cfg.defaultEffort || null });
+      list.push({ kind, model, effort: effortSettings(kind, model).defaultEffort || null });
     } else {
       const i = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
       if (e.target.dataset.ladderRemove !== undefined) list.splice(i, 1);

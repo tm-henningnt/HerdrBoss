@@ -279,8 +279,27 @@ export function loadModels(file = MODELS_FILE) {
         throw new Error(`${file}: ${kind}.contextTokensByModel must map model names to positive integers.`);
       }
     }
+    if (Object.hasOwn(cfg, 'modelEfforts')) {
+      const byModel = cfg.modelEfforts;
+      if (!byModel || typeof byModel !== 'object' || Array.isArray(byModel)) throw new Error(`${file}: ${kind}.modelEfforts must map model names to effort settings.`);
+      for (const [model, effort] of Object.entries(byModel)) {
+        if (!cfg.allowedModels?.includes(model) || !effort || typeof effort !== 'object' || Array.isArray(effort)
+          || !Array.isArray(effort.allowedEfforts) || !effort.allowedEfforts.length
+          || new Set(effort.allowedEfforts).size !== effort.allowedEfforts.length
+          || effort.allowedEfforts.some((value) => !['low', 'medium', 'high', 'xhigh', 'max'].includes(value))
+          || !effort.allowedEfforts.includes(effort.defaultEffort)
+          || !Array.isArray(effort.launchArgs) || effort.launchArgs.some((value) => typeof value !== 'string')) {
+          throw new Error(`${file}: ${kind}.modelEfforts.${model} must have unique supported efforts, a default effort, and launchArgs.`);
+        }
+      }
+    }
   }
   return models;
+}
+
+// Resolve effort support for one model. A model-specific entry replaces the kind defaults.
+export function effortSettingsForModel(kindConfig, model) {
+  return kindConfig?.modelEfforts?.[model] || kindConfig || { allowedEfforts: [], defaultEffort: null, launchArgs: [] };
 }
 
 function positiveInteger(value) { return Number.isInteger(value) && value > 0; }

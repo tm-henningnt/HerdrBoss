@@ -352,6 +352,8 @@ The service refreshes the plan after each good quota reading. It skips a write w
 
 A worker pane that reports `Free usage exceeded` puts that model on cooldown for 60 minutes, or until a later retry time that the provider reports. An overload such as `503 service_overloaded` puts that model on a fixed 30-minute cooldown. When you omit `--model`, `worker start` chooses the next available model in the same lane and records the fallback in the run record. An explicit `--model` does not fall back.
 
+Start a Claude Haiku worker with `worker start NAME --kind claude --model claude-haiku-5-5 --effort medium --task TEXT`. The allowed efforts are `low`, `medium`, `high`, `xhigh`, and `max`. Haiku workers use `medium` when you omit `--effort`. Other Claude models do not have an effort setting. Haiku is an extra model. Sonnet stays the default Claude model.
+
 For kind `pi`, `worker start` runs `pi --list-models` once for each process before it starts the pane. The limit is 10 seconds. The command ignores `Warning:` lines. It refuses a `--model` that the listing lacks, and `--force` does not bypass the refusal. The message names the missing model, the provider that lists a model of the same name, and up to five listed models of the chosen provider. If `pi --list-models` fails, times out, or lists no model, the command prints a warning and starts the worker. The command does not detect an upstream outage of a listed model.
 
 At launch, `worker start` reads the pane text of an OpenCode worker. It looks for `Unrecognized flag: FLAG`, `not available in your country`, and `Rate limit exceeded`, in any letter case. The command does not print other pane text.

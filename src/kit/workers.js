@@ -28,6 +28,7 @@ import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
 import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
 import { LOCKFILE_NAMES } from './suite-passes.js';
+import { effortSettingsForModel } from './config.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -798,11 +799,15 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
     opusAllowed = true;
   }
   if (config.allowedModels !== null && !config.allowedModels.includes(model)) throw new Error(`Project ${config.slug} does not allow model ${model}.`);
-  const effort = options.effort ?? policy.defaultEffort;
-  if (effort !== null && !policy.allowedEfforts.includes(effort)) throw new Error(`Effort ${effort} is not allowed for ${kind}.`);
+  const effortPolicy = effortSettingsForModel(policy, model);
+  const effort = options.effort ?? effortPolicy.defaultEffort;
+  if (effort !== null && !effortPolicy.allowedEfforts.includes(effort)) throw new Error(`Effort ${effort} is not allowed for ${kind}.`);
   if (effort === null && options.effort != null) throw new Error(`${kind} does not support a reasoning effort.`);
   const effortSource = options.effort != null ? 'flag' : effort !== null ? 'default' : null;
-  const launchArgs = policy.launchArgs.map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
+  const launchArgs = [
+    ...policy.launchArgs,
+    ...(effortPolicy === policy ? [] : effortPolicy.launchArgs || []),
+  ].map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
   return { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed };
 }
 

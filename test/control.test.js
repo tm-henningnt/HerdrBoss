@@ -1720,6 +1720,20 @@ test('handoff targets use the merged allow-list and the per-harness enabled stat
   assert.throws(() => handoffTarget('pi', { model: 'bad model' }, policy({ extraModels: { pi: ['bad model'] } }), models), /allow-list/);
 });
 
+test('Haiku handoffs use its effort default and Sonnet keeps refusing effort', async () => {
+  const { handoffTarget } = await import('../src/handoff.js');
+  const haiku = handoffTarget('claude', { model: 'claude-haiku-5-5' }, policy(), models);
+  assert.equal(haiku.effort, 'medium');
+  assert.deepEqual(haiku.launchArgs.slice(-2), ['--effort', 'medium']);
+  assert.equal(handoffTarget('claude', { model: 'claude-haiku-5-5', effort: 'high' }, policy(), models).effort, 'high');
+  assert.throws(() => handoffTarget('claude', { model: 'claude-sonnet-5-5', effort: 'medium' }, policy(), models), /allow-list/);
+});
+
+test('the orchestrator ladder accepts effort only for a model that has an effort setting', () => {
+  assert.deepEqual(validatePolicy(policy({ orchestratorLadder: [{ kind: 'claude', model: 'claude-haiku-5-5', effort: 'medium' }] }), models), []);
+  assert.match(validatePolicy(policy({ orchestratorLadder: [{ kind: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }] }), models).join(' '), /Invalid orchestrator choice/);
+});
+
 test('harness routes permit only the compatible provider or unmetered for Codex and Claude', async () => {
   const { harnessProviders } = await import('../src/control.js');
   assert.deepEqual(harnessProviders('codex'), ['codex', null]);
@@ -1746,6 +1760,23 @@ test('saving rejects an incompatible effective legacy route unless the harness h
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6.1-sol': null } } }), models), []);
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'claude-opus-5-5': 'claude' } }), models), [], 'the compatible live route stays valid');
+});
+
+test('Claude Haiku is allowed and its model provider maps to the Claude quota lane', async (t) => {
+  const { providerFor } = await import('../src/control.js');
+  const model = 'claude-haiku-5-5';
+  assert.ok(models.kinds.claude.allowedModels.includes(model));
+  assert.equal(POLICY_DEFAULTS.modelProviders[model], 'claude');
+  const configured = policy({ modelProviders: { [model]: 'claude' } });
+  assert.deepEqual(validatePolicy(configured, models), []);
+  assert.equal(providerFor('claude', model, configured), 'claude');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-haiku-policy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  fs.writeFileSync(file, JSON.stringify({ modelProviders: {} }));
+  const loaded = loadPolicy({ file, models, warn: () => {} });
+  assert.equal(loaded.modelProviders[model], 'claude', 'an older saved map keeps the new default route');
+  assert.equal(providerFor('claude', model, loaded), 'claude');
 });
 
 test('loading treats an incompatible legacy route as unmetered, keeps the raw value, and warns once', async (t) => {

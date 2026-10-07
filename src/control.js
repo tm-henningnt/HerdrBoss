@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { readFactoryShares, FACTORY_SHARE_ERROR } from './fleet-pacing.js';
-import { loadModels } from './kit/config.js';
+import { effortSettingsForModel, loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
 import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
@@ -49,7 +49,7 @@ export const POLICY_DEFAULTS = {
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
   preferredModels: {},
   // A legacy route by model. A route in harnessRoutes for the same harness takes precedence.
-  modelProviders: {},
+  modelProviders: { 'claude-haiku-5-5': 'claude' },
   // Local model strings that the Owner adds to one harness, beside the kit/models.json catalog.
   extraModels: {},
   // Models that one harness does not use. excludedModels still disables a model for every harness.
@@ -141,7 +141,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, handoff: { ...POLICY_DEFAULTS.handoff, ...(isObject(stored.handoff) ? stored.handoff : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, handoff: { ...POLICY_DEFAULTS.handoff, ...(isObject(stored.handoff) ? stored.handoff : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: { ...POLICY_DEFAULTS.modelProviders, ...(isObject(stored.modelProviders) ? stored.modelProviders : {}) }, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   if (!Object.hasOwn(stored, 'autoHandoverForceContextTokens')) {
     const maxContextTokens = 2000000;
     const contextStep = 10000;
@@ -309,7 +309,8 @@ export function validatePolicy(value, models) {
     const seen = new Set();
     for (const [index, rung] of value.orchestratorLadder.entries()) {
       const cfg = models.kinds[rung?.kind];
-      if (!cfg?.allowedModels.includes(rung?.model) || (rung?.effort != null && !cfg.allowedEfforts.includes(rung.effort)) || (!cfg.allowedEfforts.length && rung?.effort != null)) errors.push(`Invalid orchestrator choice at rank ${index + 1}.`);
+      const effortConfig = cfg?.allowedModels.includes(rung?.model) ? effortSettingsForModel(cfg, rung.model) : null;
+      if (!effortConfig || (rung?.effort != null && !effortConfig.allowedEfforts.includes(rung.effort))) errors.push(`Invalid orchestrator choice at rank ${index + 1}.`);
       const key = `${rung?.kind}:${rung?.model}:${rung?.effort || ''}`;
       if (seen.has(key)) errors.push(`Duplicate orchestrator choice at rank ${index + 1}.`);
       seen.add(key);

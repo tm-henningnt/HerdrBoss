@@ -359,6 +359,29 @@ test('Allocation shows the default-off automatic Claude goal command switch', as
   assert.equal(s.policy.goals.autoCommand, true, 'the switch updates the nested policy draft');
 });
 
+test('Allocation shows effort choices only for models with an effort setting', async () => {
+  const app = await views();
+  app.setModels({
+    codex: catalog,
+    claude: {
+      defaultModel: 'claude-sonnet-5-5', defaultEffort: null, allowedEfforts: [],
+      allowedModels: ['claude-sonnet-5-5', 'claude-haiku-5-5'],
+      modelEfforts: { 'claude-haiku-5-5': { allowedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' } },
+    },
+  });
+  const s = fixture();
+  s.policy.orchestratorLadder = [
+    { kind: 'claude', model: 'claude-haiku-5-5', effort: 'medium' },
+    { kind: 'claude', model: 'claude-sonnet-5-5', effort: null },
+  ];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  assert.match(html, /<select data-ladder-effort="0"[^>]*>[\s\S]*<option value="medium" selected>medium<\/option>/);
+  assert.doesNotMatch(html, /data-ladder-effort="1"/);
+  assert.match(html, /No effort setting/);
+});
+
 test('the Boss rules row keeps its input inside the card at a phone width', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });

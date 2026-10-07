@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR } from './config.js';
 import { alertBossForOpus, addGitExclude, deliverPrompt, isAgentPaneBusy, isOpus, normalizeModel, waitForWorkerPane } from './kit/workers.js';
-import { contextTokensFor, loadModels, loadProjectConfig } from './kit/config.js';
+import { contextTokensFor, effortSettingsForModel, loadModels, loadProjectConfig } from './kit/config.js';
 import { loadPolicy, mergeModels, modelEnabled, providerFor, successorQuotaRefusal, weeklyUseByProvider } from './control.js';
 import { codexBrowserArgs, codexShellEnvArgs } from './harness.js';
 import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './kit/opencode-cli.js';
@@ -271,9 +271,11 @@ export function handoffTarget(toKind, { model = null, effort = null, force = fal
   }
   if ((policy.excludedModels || []).includes(targetModel)) throw new Error('Target is disabled by global policy.');
   if (!modelEnabled(toKind, targetModel, policy)) throw new Error(`Target model is disabled for ${toKind}.`);
-  if (effort != null && !cfg.allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
-  const targetEffort = effort || cfg.defaultEffort || null;
-  const launchArgs = cfg.launchArgs.map((arg) => arg.replaceAll('{{model}}', targetModel).replaceAll('{{effort}}', targetEffort || ''));
+  const effortConfig = effortSettingsForModel(cfg, targetModel);
+  if (effort != null && !effortConfig.allowedEfforts.includes(effort)) throw new Error('Target effort is not in the allow-list.');
+  const targetEffort = effort || effortConfig.defaultEffort || null;
+  const launchArgs = [...cfg.launchArgs, ...(effortConfig === cfg ? [] : effortConfig.launchArgs || [])]
+    .map((arg) => arg.replaceAll('{{model}}', targetModel).replaceAll('{{effort}}', targetEffort || ''));
   return { model: targetModel, modelSource, effort: targetEffort, force: !!force, provider: providerFor(toKind, targetModel, policy), launchArgs };
 }
 
