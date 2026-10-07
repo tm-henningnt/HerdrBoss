@@ -83,6 +83,7 @@ function codexPrefixRuleState(text, target) {
 // An scp-style remote has a strict fallback because URL cannot parse its form.
 export function stripRemoteCredentials(remote) {
   const text = String(remote || '').trim();
+  if (/%(3f|23|3b|40)|;/i.test(text)) return '';
   const cleanUrl = (url) => {
     if (url.protocol === 'http:' || url.protocol === 'https:') url.username = '';
     url.password = '';

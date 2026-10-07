@@ -76,6 +76,7 @@ export function remoteProblem(value) {
   if (!isText(value)) return 'shape';
   if (/\s/.test(value)) return 'shape';
   if (value.includes('?') || value.includes('#')) return 'credentials';
+  if (/%(3f|23|3b|40)|;/i.test(value)) return 'credentials';
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
     const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value)?.[1].toLowerCase();
     const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0];

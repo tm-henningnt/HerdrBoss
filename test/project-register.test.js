@@ -600,3 +600,10 @@ test('project register rejects bad usage', (t) => {
   assert.match(slug.stderr, /The project slug must match/);
   assert.ok(!fs.existsSync(f.registerPath), 'a usage error writes nothing');
 });
+
+test('a remote with an encoded delimiter or a path parameter is refused and stripped to nothing', () => {
+  for (const remote of ['https://host/o/n%3Faccess_token=example', 'https://host/o/n%3fx', 'https://host/o/n;token=example', 'https://host/o/n%23x']) {
+    assert.equal(remoteProblem(remote), 'credentials', remote);
+    assert.equal(stripRemoteCredentials(remote), '', remote);
+  }
+});
