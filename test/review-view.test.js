@@ -9,7 +9,7 @@ import { createDocument, find, byKey } from './fake-dom.js';
 const review = await import('../public/review.js');
 const {
   REVIEW_STATES, parseReviewPath, reviewItemFromHash, reviewUrl, progressText, progressBarHtml, packRowHtml, packListHtml,
-  packPageHtml, itemChip, reviewKeyAction, reviewOpenLinkHtml, sectionProgress, reviewErrorText, submitConfirmText, pinProposedVerdict,
+  packPageHtml, itemChip, reviewKeyAction, reviewOpenLinkHtml, sectionProgress, reviewErrorText, submitConfirmText, computeVerdict,
   deliveryText, reviewDoneLineHtml,
 } = review;
 const { mailRowHtml } = await import('../public/mail-rows.js');
@@ -247,7 +247,7 @@ test('the pack page ends with the summary of decisions, the pack note, the verdi
   assert.match(page, /id="review-submit"/);
   assert.match(page, /<textarea id="review-note"[^>]*maxlength="2000"[^>]*>Fix the dark cart\.<\/textarea>/);
   assert.match(page, /name="review-verdict" value="accept-with-changes" checked/, 'the proposed verdict is selected');
-  assert.match(page, /Proposed/);
+  assert.match(page, /Computed/);
   assert.match(page, /value="accept"/);
   assert.match(page, /value="deny"/);
   for (const label of ['Accept pack', 'Accept with changes', 'Deny pack']) assert.match(page, new RegExp(`<b>${label}</b>`));
@@ -507,9 +507,9 @@ test('item answers use a wide sidebar above 900 px and preserve main narrow rule
 // ---------- Review fixes: confirm, error text, fixed proposed verdict ----------
 
 test('the submit confirm names the pack, the version, the verdict, and each count', () => {
-  const text = submitConfirmText(fullPack(), 'accept-with-changes');
-  assert.equal(text, 'Submit the review of Checkout flow redesign, version 2?\n\nVerdict: Accept with changes\n2 accepted, 1 note only, 1 needs live check, 1 denied, 1 open.\n\nThe result goes to the project orchestrator.');
-  assert.match(submitConfirmText(fullPack(), 'accept'), /Verdict: Accept pack\n/);
+  const text = submitConfirmText(fullPack(), 'accept-with-changes', 'Fix it.');
+  assert.equal(text, 'Submit the review of Checkout flow redesign, version 2?\n\nVerdict: Accept with changes\n2 accepted, 1 note only, 1 needs live check, 1 denied, 1 open.\n\nThe result goes to the project lead.');
+  assert.match(submitConfirmText(fullPack(), 'accept', 'Fix it.'), /Verdict: Accept pack\n/);
   assert.match(submitConfirmText(fullPack(), 'deny'), /Verdict: Deny pack\n/);
 });
 
@@ -551,25 +551,55 @@ test('reviewFetch never shows the network-layer text', () => {
   assert.doesNotMatch(body, /The server answered/);
 });
 
-test('the proposed verdict is fixed at the first render of a version, so the selection never moves without a click', () => {
-  const ui = {};
-  const pack = fullPack();
-  pinProposedVerdict(ui, pack);
-  assert.equal(ui.proposed, 'accept-with-changes');
-  // An answer changes the pack state. The pinned proposal and the checked radio stay.
-  const later = fullPack({ derived: { ...fullPack().derived, pack: 'accepted', proposedVerdict: 'accept' } });
-  pinProposedVerdict(ui, later);
-  assert.equal(ui.proposed, 'accept-with-changes');
-  const page = packPageHtml(later, ui, helpers());
-  assert.match(page, /value="accept-with-changes" checked/);
-  assert.doesNotMatch(page, /value="accept" checked/);
-  assert.match(page, /value="accept-with-changes" checked[^]*?Proposed/);
-  // A new version pins the new proposal.
-  pinProposedVerdict(ui, fullPack({ version: 3, derived: { ...later.derived } }));
-  assert.equal(ui.proposed, 'accept');
-  // The Owner's own choice wins over the proposal, and nothing forces the verdict.
-  assert.match(packPageHtml(later, { ...ui, verdict: 'deny' }, helpers()), /value="deny" checked/);
-  assert.equal(pinProposedVerdict({}, fullPack({ derived: { ...fullPack().derived, proposedVerdict: undefined } })).proposed, 'accept-with-changes');
+function acceptedPack(over = {}) {
+  const base = fullPack();
+  const items = base.items.map((entry) => ({ ...entry, state: 'accepted', stale: false, answer: { decision: 'accept', note: '', viewed: true, rev: 1 } }));
+  return fullPack({ items, note: '', derived: { ...base.derived, pack: 'accepted', counts: { items: 6, accepted: 6, denied: 0, live: 0, noteOnly: 0, open: 0 }, proposedVerdict: 'accept' }, ...over });
+}
+
+test('the verdict is computed from the pack and the note text', () => {
+  assert.equal(computeVerdict(acceptedPack(), ''), 'accept');
+  assert.equal(computeVerdict(acceptedPack(), '  '), 'accept');
+  assert.equal(computeVerdict(acceptedPack(), 'Fix the dark cart.'), 'accept-with-changes');
+  assert.equal(computeVerdict(fullPack(), ''), 'accept-with-changes');
+  const withNote = acceptedPack();
+  withNote.items[0].answer.note = 'Larger.';
+  assert.equal(computeVerdict(withNote, ''), 'accept-with-changes');
+  assert.equal(computeVerdict(acceptedPack({ derived: { ...acceptedPack().derived, counts: { items: 6, accepted: 5, denied: 0, live: 1, noteOnly: 0, open: 0 } } }), ''), 'accept-with-changes');
+});
+
+test('the checked verdict follows the computed one until the Owner picks another, and the page marks it', () => {
+  const pack = acceptedPack();
+  const page = packPageHtml(pack, {}, helpers());
+  assert.match(page, /value="accept" checked/);
+  assert.doesNotMatch(page, /value="accept-with-changes" checked/);
+  assert.match(page, /value="accept" checked[^]*?Computed/);
+  assert.doesNotMatch(page, /No change text/);
+  // Note text moves the computed verdict.
+  assert.match(packPageHtml(pack, { note: 'Fix the dark cart.' }, helpers()), /value="accept-with-changes" checked/);
+  // The Owner's own choice wins. An explicit "with changes" with no text is flagged.
+  const explicit = packPageHtml(pack, { verdict: 'accept-with-changes' }, helpers());
+  assert.match(explicit, /value="accept-with-changes" checked/);
+  assert.match(explicit, /No change text/);
+  assert.match(packPageHtml(pack, { verdict: 'deny' }, helpers()), /value="deny" checked/);
+  assert.doesNotMatch(packPageHtml(pack, { verdict: 'deny' }, helpers()), /No change text/);
+});
+
+test('the submit confirm shows the computed verdict and flags an explicit with-changes choice with no text', () => {
+  const pack = acceptedPack();
+  assert.match(submitConfirmText(pack, 'accept', ''), /Verdict: Accept pack\n/);
+  const flagged = submitConfirmText(pack, 'accept-with-changes', '');
+  assert.match(flagged, /Verdict: Accept with changes\n/);
+  assert.match(flagged, /No change text: no item and no pack note holds text\./);
+  assert.doesNotMatch(submitConfirmText(pack, 'accept-with-changes', 'Fix it.'), /No change text/);
+});
+
+test('a submitted result shows the no-change-text flag only when the result carries it', () => {
+  const submitted = acceptedPack({ state: 'submitted', verdict: 'accept-with-changes', closedAt: '2026-10-01T08:00:00.000Z' });
+  assert.match(packPageHtml(submitted, { result: { verdict: 'accept-with-changes', changeText: false } }, helpers()), /No change text/);
+  assert.match(packPageHtml({ ...submitted, resultChangeText: false }, {}, helpers()), /No change text/);
+  assert.doesNotMatch(packPageHtml(submitted, { result: { verdict: 'accept-with-changes' } }, helpers()), /No change text/);
+  assert.doesNotMatch(packPageHtml(submitted, { result: { verdict: 'accept', changeText: false } }, helpers()), /No change text/);
 });
 
 // ---------- Legacy HTML page frame ----------

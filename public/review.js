@@ -43,7 +43,16 @@ const LEGACY_VERDICTS = [
   { key: 'request-changes', label: 'Request changes', done: 'Request changes', tone: 'crit', icon: 'close' },
   { key: 'comment', label: 'Comment', done: 'Comment', tone: 'info', icon: 'note' },
 ];
-const DEFAULT_VERDICT = 'accept-with-changes';
+const NO_CHANGE_TEXT = 'No change text: no item and no pack note holds text.';
+
+// The computed verdict. `accept` needs every item accepted and no note text on any item or on the pack. Note text, a denied
+// item, a needs-live-check item, or an open item gives `accept-with-changes`. `deny` is never computed.
+export function computeVerdict(pack, note = pack?.note) {
+  const counts = pack?.derived?.counts || {};
+  const text = Boolean(String(note ?? '').trim()) || (pack?.items || []).some((item) => String(item.answer?.note ?? '').trim());
+  return !counts.items || text || counts.denied > 0 || counts.live > 0 || counts.open > 0 ? 'accept-with-changes' : 'accept';
+}
+const hasChangeText = (pack, note) => Boolean(String(note ?? '').trim()) || (pack?.items || []).some((item) => String(item.answer?.note ?? '').trim());
 
 const TYPE_LABEL = {
   image: 'Image', 'image-pair': 'Image pair', gallery: 'Gallery', video: 'Video', markdown: 'Text', table: 'Table',
@@ -356,10 +365,11 @@ function summaryHtml(pack, ui, esc) {
 
   let form;
   if (open) {
-    const proposed = ui.proposed ?? pack.derived?.proposedVerdict;
-    const chosen = VERDICTS.some((verdict) => verdict.key === ui.verdict) ? ui.verdict : VERDICTS.some((verdict) => verdict.key === proposed) ? proposed : DEFAULT_VERDICT;
-    const options = VERDICTS.map((verdict) => `<label class="review-verdict-option"><input type="radio" name="review-verdict" value="${verdict.key}"${verdict.key === chosen ? ' checked' : ''} data-review-verdict><span><b>${verdict.label}</b><small>${verdict.hint}</small></span>${verdict.key === proposed ? '<span class="review-proposed">Proposed</span>' : ''}</label>`).join('');
     const note = ui.note ?? pack.note ?? '';
+    const proposed = computeVerdict(pack, note);
+    const chosen = VERDICTS.some((verdict) => verdict.key === ui.verdict) ? ui.verdict : proposed;
+    const flag = chosen === 'accept-with-changes' && !hasChangeText(pack, note) ? `<p class="review-sum-warn" role="status">${NO_CHANGE_TEXT}</p>` : '';
+    const options = VERDICTS.map((verdict) => `<label class="review-verdict-option"><input type="radio" name="review-verdict" value="${verdict.key}"${verdict.key === chosen ? ' checked' : ''} data-review-verdict><span><b>${verdict.label}</b><small>${verdict.hint}</small></span>${verdict.key === proposed ? '<span class="review-proposed">Computed</span>' : ''}</label>`).join('');
     const prior = pack.priorNote && !note ? priorNoteHtml(pack.priorNote, esc) : '';
     form = `<form class="review-submit-form" id="review-submit-form" data-review-submit data-key="review-form">`
       + `<label class="review-field-label" for="review-note">Note for the whole pack</label>`
@@ -367,13 +377,15 @@ function summaryHtml(pack, ui, esc) {
       + `<textarea id="review-note" class="review-note-field" data-review-note maxlength="2000" rows="4" placeholder="What should the project do next?">${esc(note)}</textarea>`
       + syncStatusHtml(ui.noteSync || { kind: '' }, esc)
       + noteConflictHtml(ui.noteConflict, esc)
-      + `<fieldset class="review-verdict"><legend class="review-field-label">Verdict</legend>${options}</fieldset></form>`;
+      + `<fieldset class="review-verdict"><legend class="review-field-label">Verdict</legend>${options}</fieldset>${flag}</form>`;
   } else {
     const verdict = verdictInfo(ui.result?.verdict ?? pack.verdict);
     const chip = pack.state === 'expired' ? chipHtml({ tone: 'open', label: 'Expired', icon: '' }, esc) : verdict ? chipHtml({ tone: verdict.tone, label: verdict.done, icon: verdict.icon }, esc) : '';
     const note = ui.result?.note ?? pack.note;
     const prior = pack.priorNote && !note ? priorNoteHtml(pack.priorNote, esc) : '';
-    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${prior}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
+    const stored = ui.result ?? { verdict: pack.verdict, changeText: pack.resultChangeText };
+    const resultFlag = stored.verdict === 'accept-with-changes' && stored.changeText === false ? `<p class="review-sum-warn">${NO_CHANGE_TEXT}</p>` : '';
+    form = `<div class="review-result"><p>${pack.state === 'expired' ? 'Expired' : 'Submitted'}${pack.closedAt ? ` ${esc(ui.time ? ui.time(pack.closedAt) : pack.closedAt)}` : ''} ${chip}</p>${resultFlag}${note ? `<p class="review-result-note">${esc(note)}</p>` : ''}${prior}${deliveryHtml(pack.delivery ?? ui.delivery, esc)}</div>`;
   }
   return `<section id="review-submit" class="review-summary" aria-labelledby="review-sum-title"><h2 id="review-sum-title">Summary</h2>${warning}${blocks}${form}</section>`;
 }
@@ -617,21 +629,11 @@ export function reviewMessageHtml(title, text, h, { alert = false, retry = false
 
 // ---------- Submit and errors ----------
 
-// Fix the proposed verdict at the first render of a pack version. A later answer changes the pack state, but the
-// selected radio does not move without a click. A new version pins the proposal of that version.
-export function pinProposedVerdict(ui, pack) {
-  if (ui.proposedVersion !== pack.version) {
-    ui.proposedVersion = pack.version;
-    ui.proposed = pack.derived?.proposedVerdict || DEFAULT_VERDICT;
-  }
-  return ui;
-}
-
 // The confirm text of Submit review: the pack, the version, the verdict, and each count.
-export function submitConfirmText(pack, verdict) {
+export function submitConfirmText(pack, verdict, note = pack.note) {
   const counts = pack.derived?.counts || {};
   const label = verdictInfo(verdict)?.label || verdict;
-  return `Submit the review of ${pack.title}, version ${pack.version}?\n\nVerdict: ${label}\n${progressText(counts)}.\n\nThe result goes to the project orchestrator.`;
+  return `Submit the review of ${pack.title}, version ${pack.version}?\n\nVerdict: ${label}\n${verdict === 'accept-with-changes' && !hasChangeText(pack, note) ? `${NO_CHANGE_TEXT}\n` : ''}${progressText(counts)}.\n\nThe result goes to the project lead.`;
 }
 
 // A plain sentence for a failed request. The API sentence stays when the body has one. The network-layer text never shows.

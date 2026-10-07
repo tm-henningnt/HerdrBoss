@@ -19,7 +19,7 @@ const {
 } = await import('../src/review-store.js');
 const {
   VERDICTS, VERDICT_LABEL, RESULT_JSON_MAX, RESULT_MARKDOWN_MAX, PROMPT_MAX, PROMPT_LINE_MAX,
-  proposeVerdict, singleLine, boundResult, resultMarkdown, promptText, plannerPromptText,
+  proposeVerdict, hasChangeText, singleLine, boundResult, resultMarkdown, promptText, plannerPromptText,
 } = await import('../src/review-result.js');
 const {
   readMessages, postReview, postReviewResult, closeSubmittedReview, reviewResultDelivery, deliverQueued, ownerPromptText, MAX_DELIVERY_ATTEMPTS,
@@ -104,16 +104,90 @@ test('the verdict values are accept, accept-with-changes, and deny, with the lab
   assert.deepEqual(VERDICT_LABEL, { accept: 'Accept pack', 'accept-with-changes': 'Accept with changes', deny: 'Deny pack' });
 });
 
-test('the proposed verdict comes from the counts and never forces the choice', () => {
+test('the computed verdict is accept only for all accepted items and no note text', () => {
   const counts = (over) => ({ items: 10, accepted: 0, denied: 0, live: 0, noteOnly: 0, open: 0, ...over });
   assert.equal(proposeVerdict(counts({ accepted: 10 })), 'accept');
-  assert.equal(proposeVerdict(counts({ accepted: 8, noteOnly: 2 })), 'accept');
+  assert.equal(proposeVerdict(counts({ accepted: 10 }), false), 'accept');
+  assert.equal(proposeVerdict(counts({ accepted: 10 }), true), 'accept-with-changes', 'note text');
+  assert.equal(proposeVerdict(counts({ accepted: 8, noteOnly: 2 }), true), 'accept-with-changes');
   assert.equal(proposeVerdict(counts({ accepted: 8, denied: 1, open: 1 })), 'accept-with-changes');
-  assert.equal(proposeVerdict(counts({ accepted: 9, live: 1 })), 'accept-with-changes');
+  assert.equal(proposeVerdict(counts({ accepted: 9, live: 1 })), 'accept-with-changes', 'needs live check counts as open');
   assert.equal(proposeVerdict(counts({ accepted: 9, open: 1 })), 'accept-with-changes');
-  assert.equal(proposeVerdict(counts({ denied: 10 })), 'deny');
-  assert.equal(proposeVerdict(counts({ denied: 4, open: 6 })), 'deny');
+  assert.equal(proposeVerdict(counts({ denied: 10 })), 'accept-with-changes', 'deny is never computed');
   assert.equal(proposeVerdict(counts({ items: 0 })), 'accept-with-changes');
+  assert.equal(hasChangeText([{ answer: { note: '  ' } }, { answer: null }], '  '), false);
+  assert.equal(hasChangeText([{ answer: { note: 'Fix it.' } }], ''), true);
+  assert.equal(hasChangeText([], 'Fix it.'), true);
+});
+
+function acceptAll(dir) {
+  answer(dir, 'cart-themes', { decision: 'accept' });
+  answer(dir, 'pay-button', { choice: 'a' });
+  answer(dir, 'error-copy', { decision: 'accept' });
+  answer(dir, 'release-notes', { note: ' ' });
+  answer(dir, 'live-form', { decision: 'accept' });
+}
+
+test('a submit with no verdict computes it: accept for all accepted with no text', (t) => {
+  const { dir } = setup(t);
+  acceptAll(dir);
+  const { result } = submitPack(where(dir));
+  assert.equal(result.verdict, 'accept');
+  assert.equal(result.computedVerdict, 'accept');
+  assert.equal(result.changeText, false);
+  assert.equal(getResultRecord(where(dir)).verdict, 'accept');
+  assert.match(getResultRecord(where(dir)).markdown, /^# Review result: Checkout flow redesign v1, Accept pack/);
+  assert.doesNotMatch(getResultRecord(where(dir)).markdown, /no change text/i);
+  assert.doesNotMatch(promptText(result), /no change text/);
+});
+
+test('a submit with no verdict computes accept-with-changes for item text, pack text, a denied item, or an open item', (t) => {
+  const itemText = setup(t);
+  acceptAll(itemText.dir);
+  answer(itemText.dir, 'cart-themes', { note: 'Larger please.' });
+  assert.equal(submitPack(where(itemText.dir)).result.verdict, 'accept-with-changes');
+
+  const packText = setup(t);
+  acceptAll(packText.dir);
+  const result = submitPack({ ...where(packText.dir), note: 'Ship after the fix.' }).result;
+  assert.equal(result.verdict, 'accept-with-changes');
+  assert.equal(result.changeText, true);
+
+  const denied = setup(t);
+  acceptAll(denied.dir);
+  answer(denied.dir, 'error-copy', { decision: 'deny' });
+  assert.equal(submitPack(where(denied.dir)).result.verdict, 'accept-with-changes');
+
+  const open = setup(t);
+  acceptAll(open.dir);
+  answer(open.dir, 'live-form', { decision: null, live: 'pending' });
+  assert.equal(submitPack(where(open.dir)).result.verdict, 'accept-with-changes');
+});
+
+test('an explicit with-changes choice with no text is kept and flagged in the result, the Markdown, and the prompts', (t) => {
+  const { dir } = setup(t);
+  acceptAll(dir);
+  const { result } = submitPack({ ...where(dir), verdict: 'accept-with-changes' });
+  assert.equal(result.verdict, 'accept-with-changes');
+  assert.equal(result.computedVerdict, 'accept');
+  assert.equal(result.changeText, false);
+  assert.match(getResultRecord(where(dir)).markdown, /no change text/i);
+  assert.match(promptText(result).split('\n')[0], /Accept with changes \(no change text\)\./);
+  assert.match(plannerPromptText(result).split('\n')[0], /Accept with changes \(no change text\)\./);
+});
+
+test('an explicit accept with note text is kept, and a result from an earlier build shows no flag', (t) => {
+  const { dir } = setup(t);
+  acceptAll(dir);
+  const { result } = submitPack({ ...where(dir), verdict: 'accept', note: 'Fine.' });
+  assert.equal(result.verdict, 'accept');
+  assert.equal(result.computedVerdict, 'accept-with-changes');
+  assert.equal(result.changeText, true);
+  const legacy = { ...result, verdict: 'accept-with-changes' };
+  delete legacy.changeText;
+  delete legacy.computedVerdict;
+  assert.doesNotMatch(promptText(legacy), /no change text/);
+  assert.doesNotMatch(resultMarkdown(legacy), /no change text/i);
 });
 
 // ---------- Result JSON ----------

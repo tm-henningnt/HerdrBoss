@@ -488,6 +488,19 @@ test('a note of an older version is refused with the current version note', asyn
   assert.equal(packState('version-note-pack').note, 'Note for v2.');
 });
 
+test('a submit with no verdict stores the computed verdict', async (t) => {
+  publish('computed-pack');
+  const { base } = await start(t);
+  const item = (name, body) => raw(base, 'PUT', `/api/reviews/s-computed-pack/computed-pack/items/${name}`, { headers: JSON_HEADERS, body: json(body) });
+  assert.equal((await item('cart-themes', { rev: 0, decision: 'deny' })).status, 200);
+  const sent = await raw(base, 'POST', '/api/reviews/s-computed-pack/computed-pack/submit', { headers: JSON_HEADERS, body: json({}) });
+  assert.equal(sent.status, 200, sent.text);
+  const result = JSON.parse(sent.text).result;
+  assert.equal(result.verdict, 'accept-with-changes');
+  assert.equal(result.computedVerdict, 'accept-with-changes');
+  assert.equal(result.changeText, false);
+});
+
 test('a submit stores the result once and a second submit returns 409 with the first result', async (t) => {
   publish('submit-pack');
   const { base } = await start(t);
@@ -497,7 +510,7 @@ test('a submit stores the result once and a second submit returns 409 with the f
 
   assert.equal((await submit({ verdict: 'ship-it' })).status, 400, 'an unknown verdict');
   assert.equal((await submit({ verdict: 'accept', extra: 1 })).status, 400, 'an unknown field');
-  assert.equal((await submit({})).status, 400, 'no verdict');
+  assert.equal((await submit({ verdict: null })).status, 400, 'a null verdict');
   assert.equal(packState('submit-pack').state, 'open', 'a refused submit changes nothing');
 
   const first = await submit({ verdict: 'accept-with-changes', note: 'Fix the dark cart.' });

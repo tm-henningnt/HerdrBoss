@@ -11,7 +11,7 @@ import { openSqliteStore, databaseFile } from './sqlite-store.js';
 import { validatePack } from './review-pack.js';
 import { effectiveAsk, isInfoOnly } from '../public/review-ask.js';
 import { redactSecrets } from './redact.js';
-import { RESULT_SCHEMA, VERDICTS, proposeVerdict, buildResult, boundResult, resultMarkdown } from './review-result.js';
+import { RESULT_SCHEMA, VERDICTS, proposeVerdict, hasChangeText, buildResult, boundResult, resultMarkdown } from './review-result.js';
 
 export { RESULT_SCHEMA };
 export const REVIEW_DIR = 'review-packs';
@@ -469,8 +469,9 @@ export function getPack({ dir, slug, pack, version } = {}) {
   const states = items.map((item) => item.state);
   const packState = groupState(states);
   const files = db.prepare('SELECT path, sha256, bytes, type, stored FROM review_files WHERE slug = ? AND pack = ? AND version = ? ORDER BY path').all(slug, pack, wanted);
-  const submitted = db.prepare('SELECT verdict, submitted_at AS submittedAt, message_id AS messageId FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, wanted) ?? null;
+  const submitted = db.prepare('SELECT verdict, result, submitted_at AS submittedAt, message_id AS messageId FROM review_results WHERE slug = ? AND pack = ? AND version = ?').get(slug, pack, wanted) ?? null;
   const note = readNote(db, slug, pack, wanted);
+  const changeText = hasChangeText(items, note.note);
   return {
     slug,
     pack,
@@ -487,6 +488,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
     verdict: submitted?.verdict ?? null,
+    ...(submitted && parseJson(submitted.result, null)?.changeText === false ? { resultChangeText: false } : {}),
     submittedAt: submitted?.submittedAt ?? null,
     resultMessageId: submitted?.messageId ?? null,
     publishedAt: versionRow.published_at,
@@ -495,7 +497,7 @@ export function getPack({ dir, slug, pack, version } = {}) {
     files,
     items: items.map(({ spec, ...item }) => item),
     removed,
-    derived: { sections, pack: packState, counts: countStates(states), proposedVerdict: proposeVerdict(countStates(states)) },
+    derived: { sections, pack: packState, counts: countStates(states), changeText, proposedVerdict: proposeVerdict(countStates(states), changeText) },
   };
 }
 
@@ -847,7 +849,7 @@ export function putPackNote({ dir, now, slug, pack, note, rev, version } = {}) {
 export function submitPack({ dir, now, slug, pack, verdict, note, messageId = null } = {}) {
   checkName(slug);
   checkName(pack, 'slug', 'The pack ID');
-  if (!VERDICTS.includes(verdict)) throw invalid(`The verdict must be one of ${VERDICTS.join(', ')}.`);
+  if (verdict !== undefined && !VERDICTS.includes(verdict)) throw invalid(`The verdict must be one of ${VERDICTS.join(', ')}.`);
   if (note !== undefined) checkNote(note, true);
   const at = stamp(now);
   return transaction(open(dir), (db) => {
@@ -860,7 +862,7 @@ export function submitPack({ dir, now, slug, pack, verdict, note, messageId = nu
     const bound = boundResult(buildResult(getPack({ dir, slug, pack }), verdict, note ?? current.note, at));
     const { result } = bound;
     db.prepare('INSERT INTO review_results(slug, pack, version, verdict, note, result, markdown, submitted_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(slug, pack, row.current_version, verdict, result.note, bound.json, resultMarkdown(result), at, messageId);
+      .run(slug, pack, row.current_version, result.verdict, result.note, bound.json, resultMarkdown(result), at, messageId);
     // The note belongs to the submitted version. A legacy note of an unknown older version is never part of a result.
     if (!current.legacy || result.note) writeNote(db, slug, pack, row.current_version, result.note, current.noteRev > 0 ? current.noteRev : (result.note ? 1 : 0), at);
     db.prepare("UPDATE review_packs SET state = 'submitted', closed_at = ?, updated_at = ? WHERE slug = ? AND pack = ?").run(at, at, slug, pack);
