@@ -21,13 +21,16 @@ const policy = (patch = {}) => ({ ...structuredClone(POLICY_DEFAULTS), ...patch 
 const fixturePiModels = ['fixturezen/free-a', 'fixturezen/free-b'];
 const fixtureModels = structuredClone(models);
 fixtureModels.kinds.pi.allowedModels.push(...fixturePiModels);
+// The orchestrator panes carry a tier 1 model, so no ranked successor is weaker. The tier rule has its
+// own tests in handoff-auto-cooldown.test.js.
+const WEAKEST_SOURCE = 'opencode/space-bunny-free';
 const snapshot = () => ({
   projects: [{ slug: 'a', workspace: 'w1' }, { slug: 'b', workspace: 'w2' }],
   herdr: {
     workspaces: [{ id: 'w1', label: 'A' }, { id: 'w2', label: 'B' }],
     panes: [
-      { id: 'w1:p1', workspace: 'w1', orch: true, agent: 'claude', status: 'idle', sessionId: 's1' },
-      { id: 'w2:p1', workspace: 'w2', orch: true, agent: 'codex', status: 'working', sessionId: 's2' },
+      { id: 'w1:p1', workspace: 'w1', orch: true, agent: 'claude', status: 'idle', sessionId: 's1', model: WEAKEST_SOURCE },
+      { id: 'w2:p1', workspace: 'w2', orch: true, agent: 'codex', status: 'working', sessionId: 's2', model: WEAKEST_SOURCE },
       { id: 'w2:p2', workspace: 'w2', orch: false, agent: 'pi', status: 'working' },
     ],
   },
@@ -869,7 +872,7 @@ test('handoff target checks use the configured model route', () => {
 const ladderSnapshot = () => {
   const snap = snapshot();
   snap.herdr.workspaces.push({ id: 'w3', label: 'Boss' });
-  snap.herdr.panes.push({ id: 'w3:p1', workspace: 'w3', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 's3' });
+  snap.herdr.panes.push({ id: 'w3:p1', workspace: 'w3', label: 'boss', orch: false, agent: 'claude', status: 'working', sessionId: 's3', model: WEAKEST_SOURCE });
   return snap;
 };
 const ladderTargets = (result) => [result.handoffs.find((item) => item.pane === 'w1:p1').target, result.bossHandoff.target]
@@ -898,26 +901,26 @@ test('successor ladder skips only the exhausted free model, not its whole harnes
 test('successor ladder skips a Pi rung that the last good Pi model result does not list', () => {
   const now = Date.parse('2026-09-24T17:00:00Z');
   const p = policy({ orchestratorLadder: [
-    { kind: 'pi', model: 'fixturezen/free-a', effort: null },
+    { kind: 'pi', model: 'opencode-go/space-bunny-free', effort: null },
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
   ] });
-  const result = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['fixturezen/free-b'] } });
+  const result = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['opencode-go/longcat-2.5-preview-free'] } });
   assert.deepEqual(ladderTargets(result), ['codex:gpt-6-luna', 'codex:gpt-6-luna']);
-  const listed = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['fixturezen/free-a'] } });
-  assert.deepEqual(ladderTargets(listed), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+  const listed = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels: { at: now, models: ['opencode-go/space-bunny-free'] } });
+  assert.deepEqual(ladderTargets(listed), ['pi:opencode-go/space-bunny-free', 'pi:opencode-go/space-bunny-free']);
 });
 
 test('successor ladder skips no Pi rung while the Pi model result is unknown', () => {
   const now = Date.parse('2026-09-24T17:00:00Z');
   const p = policy({ orchestratorLadder: [
-    { kind: 'pi', model: 'fixturezen/free-a', effort: null },
+    { kind: 'pi', model: 'opencode-go/space-bunny-free', effort: null },
     { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
   ] });
   for (const piModels of [null, undefined, {}]) {
     const result = deriveControl(ladderSnapshot(), p, fixtureModels, {}, now, {}, { piModels });
-    assert.deepEqual(ladderTargets(result), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+    assert.deepEqual(ladderTargets(result), ['pi:opencode-go/space-bunny-free', 'pi:opencode-go/space-bunny-free']);
   }
-  assert.deepEqual(ladderTargets(deriveControl(ladderSnapshot(), p, fixtureModels, {}, now)), ['pi:fixturezen/free-a', 'pi:fixturezen/free-a']);
+  assert.deepEqual(ladderTargets(deriveControl(ladderSnapshot(), p, fixtureModels, {}, now)), ['pi:opencode-go/space-bunny-free', 'pi:opencode-go/space-bunny-free']);
 });
 
 test('current orchestrator provider falls back to its preferred model route', () => {
@@ -1476,7 +1479,7 @@ test('ignored quota exhaustion closes the lane and excludes it from dispatch and
   const project = { excludedKinds: [], excludedModels: [] };
   const successor = pickSuccessor(project, 'claude', 'claude', targetPolicy, {
     globalAllowed: { pi: ['opencode-go/deepseek-v4.1-flash'], codex: ['gpt-6-luna'] },
-    risks: {}, exhausted: { opencodego: { resetAt } },
+    risks: {}, exhausted: { opencodego: { resetAt } }, sourceModel: WEAKEST_SOURCE,
   });
   assert.equal(successor.kind, 'codex');
 
@@ -1497,7 +1500,7 @@ test('successor selection skips an actively exhausted free model and keeps avail
   const project = { excludedKinds: [], excludedModels: [] };
   const control = {
     globalAllowed: { pi: ['opencode-go/deepseek-v4.1-flash'], codex: ['gpt-6-luna'] },
-    risks: {}, exhausted: {},
+    risks: {}, exhausted: {}, sourceModel: WEAKEST_SOURCE,
   };
   const now = Date.parse('2026-09-26T12:00:00.000Z');
   const exhausted = { 'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: now + 60000 } };

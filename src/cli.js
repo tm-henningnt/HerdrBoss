@@ -1075,7 +1075,7 @@ async function main() {
         const kitLine = top && kitBehindLine(top);
         if (kitLine) console.error(kitLine);
       } catch {}
-      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto') };
+      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto'), choiceReason: value('--choice-reason', null) };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
       break;
     }

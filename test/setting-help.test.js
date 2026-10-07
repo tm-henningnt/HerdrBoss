@@ -22,6 +22,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'pacingGoals', // quota.goalPercent (goal and goal end)
   'quotaProbe', // the quotaProbe.* controls on Quotas have their own explanations
   'goals', // the goals.autoCommand switch on Allocation
+  'handoff', // the handoff.autoCooldownHours control on Allocation
   'opus', // the opus.* keys are checked one by one below
   'excludedWorkspaces', 'projects', // the workspace switches and project shares on Allocation
 ]);

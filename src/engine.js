@@ -12,7 +12,7 @@ import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
-import { POLICY_DEFAULTS, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
+import { POLICY_DEFAULTS, pickSuccessorDetailed, modelTier, tierAllowsAutoActivation, autoCooldownSkips, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
 import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
@@ -281,48 +281,14 @@ export function inspectWorkerNoReports(panes, runs, observed = {}, now = Date.no
   return { observed: nextObserved, notices };
 }
 
+export { modelTier, tierAllowsAutoActivation };
+
 function handoffCandidates(control) {
   return [...(control.handoffs || []), ...(control.bossHandoff ? [control.bossHandoff] : [])];
 }
 
 function isOpusModel(model) {
   return isOpus(normalizeModel(model));
-}
-
-// The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
-// tier cost the same.
-const MODEL_TIERS = {
-  'opencode-go/deepseek-v4.1-flash': 2,
-  'gpt-6-luna': 3,
-  'claude-sonnet-5-5': 4,
-  'gpt-6.1-sol': 5,
-  'claude-opus-5-5': 5,
-  'gpt-6-astra': 6,
-};
-
-// The free opencode-go models that kit/models.md lists as unmetered. The other opencode-go models
-// use the Go quota, and the kit does not rank them.
-const FREE_OPENCODE_GO_MODELS = new Set([
-  'opencode-go/space-bunny-free',
-  'opencode-go/longcat-2.5-preview-free',
-]);
-
-// The tier of a model, or null when the kit does not rank it.
-export function modelTier(model) {
-  if (typeof model !== 'string' || !model.trim()) return null;
-  // Every opencode model is free, and so are the free opencode-go models.
-  if (model.startsWith('opencode/') || FREE_OPENCODE_GO_MODELS.has(model)) return 1;
-  return MODEL_TIERS[model] ?? null;
-}
-
-// Whether an automatic activation may hand a control pane to a successor model.
-export function tierAllowsAutoActivation(sourceModel, targetModel) {
-  const target = modelTier(targetModel);
-  if (target === null) return { allowed: false, reason: `the kit does not rank ${targetModel}` };
-  const source = modelTier(sourceModel);
-  if (source === null) return { allowed: false, reason: `the kit does not rank the source model ${sourceModel}` };
-  if (target < source) return { allowed: false, reason: `${targetModel} is weaker than the source model ${sourceModel}` };
-  return { allowed: true, reason: '' };
 }
 
 // A published status that holds a project. Case, spacing, and hyphen variants count as one word.
@@ -1254,6 +1220,7 @@ export class Engine extends EventEmitter {
       const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
         piModels: this.memory.piModels, lanes: snap.lanes,
         nightMaxWorkers: nightConfig.maxWorkers,
+        cooldownSkips: this.autoCooldownSkips(policy, now),
       });
       this.communicationControl = control;
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
@@ -2050,7 +2017,9 @@ export class Engine extends EventEmitter {
       const provider = providerFor(last.kind, policy.preferredModels?.[last.kind] ?? this.models.kinds[last.kind]?.defaultModel, policy);
       const window = this.quotas.find((q) => q.provider === provider && !q.error)?.windows?.find((w) => !w.extra && w.usedPercent >= policy.autoHandoverPercent);
       if (!window) return [];
-      return [{ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target: pickSuccessor(p, last.kind, provider, policy, { ...control, ...successorLimits }, now) }];
+      const sourceModel = selectModel(last.kind, null, this.models, policy);
+      const { target, skipped } = pickSuccessorDetailed(p, last.kind, provider, policy, { ...control, ...successorLimits, sourceModel }, now);
+      return [{ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: last.kind, sessionId: null, window, target, skipped }];
     });
     // The Boss is never an automatic source. The Owner prepares a Boss successor by hand.
     for (const h of [...handoffCandidates(control), ...stopped]) {
@@ -2067,7 +2036,9 @@ export class Engine extends EventEmitter {
         const key = `no-target:${h.pane}:${h.window.resetsAt}`;
         if (!this.memory.autoHandoverAttempts[key]) {
           this.memory.autoHandoverAttempts[key] = now;
-          this.log('error', `Automatic handover for ${h.label || h.project} has no eligible alternative provider`, h.boss ? { workspace: h.workspace, pane: h.pane } : { project: h.project });
+          const detail = (h.skipped || []).map((skip) => `${skip.kind} ${skip.model}: ${skip.reason}`).join('; ');
+          this.log('error', `Automatic handover for ${h.label || h.project} has no eligible alternative provider${detail ? ` (${detail})` : ''}`, h.boss ? { workspace: h.workspace, pane: h.pane } : { project: h.project });
+          this.postNoSuccessor(h, detail, now);
         }
         continue;
       }
@@ -2100,13 +2071,28 @@ export class Engine extends EventEmitter {
         const plan = JSON.parse(await this.handoffRunner(process.execPath, args, { timeout: 180000 }));
         const chosen = mode === 'migrate' && !plan.migration?.available ? 'fresh' : mode;
         const prepared = JSON.parse(await this.handoffRunner(process.execPath,
-          [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, ...effort, '--auto'],
+          [CLI_FILE, 'handoff', 'prepare', h.pane, '--to', h.target.kind, '--model', h.target.model, '--mode', chosen, ...effort, '--auto', ...(h.target.reason ? ['--choice-reason', h.target.reason] : [])],
           { timeout: 300000 }));
         this.log('handoff', `Automatically prepared ${h.target.kind} successor for ${h.label || h.project}; awaiting readiness`, h.boss ? { workspace: h.workspace, pane: prepared.newPane } : { project: h.project, pane: prepared.newPane });
       } catch (e) {
         const reason = String(e.stderr || e.message).slice(0, 300);
         this.log('error', `Automatic preparation for ${h.label || h.project} failed: ${reason}`);
       }
+    }
+  }
+
+  // One Mailbox item for the Boss thread when the automatic choice finds no equal or stronger successor.
+  postNoSuccessor(h, detail, now) {
+    if (!this.act) return;
+    const label = h.label || h.project;
+    try {
+      this.messageStore.append({
+        thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: `No automatic successor for ${label}`,
+        text: `Herdr Boss made no automatic successor for ${label} (pane ${h.pane}). ${detail ? `Skipped: ${detail}.` : 'No ladder choice is eligible.'} The source orchestrator keeps control. Prepare a successor by hand with herdr-boss handoff plan ${h.pane} --to KIND, or wait for the cooldown to end.`,
+        action: 'read', replyTo: null, status: 'new',
+      }, { now });
+    } catch (error) {
+      this.log('error', `Mailbox item for the missing successor of ${label} failed: ${String(error?.message || error).slice(0, 200)}`);
     }
   }
 
@@ -2141,6 +2127,13 @@ export class Engine extends EventEmitter {
       : 'it has not started its state read';
     const wait = AUTO_READY_MS - (now - Date.parse(item.promptAt || item.preparedAt));
     return wait > 0 ? `it settled, and the ready signal waits ${Math.ceil(wait / 1000)} more seconds` : 'the ready check runs next tick';
+  }
+
+  // The kinds that the automatic successor choice skips after a failed automatic record.
+  autoCooldownSkips(policy, now) {
+    let records = [];
+    try { records = listHandoffs(); } catch { return []; }
+    return autoCooldownSkips(records, { now, hours: policy.handoff?.autoCooldownHours ?? POLICY_DEFAULTS.handoff.autoCooldownHours, expiryMs: AUTO_READY_EXPIRY_MS });
   }
 
   projectHandoverCooling(project, now) {

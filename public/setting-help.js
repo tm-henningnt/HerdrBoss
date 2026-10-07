@@ -528,6 +528,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value hands over sooner.',
     apply: 'policy',
   }),
+  S('capacity', 'handoff.autoCooldownHours', 'Successor cooldown hours', {
+    what: 'The time that automatic handover skips a harness and model after its automatic successor expired, was cancelled, never became ready, or stayed in preparing. The stored reason of the choice names each skipped kind. A successor that was ready and went unused does not count. A successor of a weaker or unranked model tier than the source is never chosen, whatever this value is.',
+    default: '6', unit: 'Hours', range: '1 to 72',
+    raise: 'A higher value keeps a failed kind out of the choice for longer.',
+    lower: 'A lower value lets a failed kind return sooner.',
+    apply: 'policy',
+  }),
   S('capacity', 'autoHandoverContextTokens', 'Hand over at context tokens', {
     what: 'The context size above which a Claude project lead gets a fresh successor at a task boundary. The successor starts from the project memory file with the same model. Herdr Boss activates it when the project lead pane is not working. It reads the context size only for Claude. It compares a token count with this value, not a percent of the model window. A pane that it sees for the first time waits for its next boundary.',
     default: '300000', unit: 'Tokens', range: '50000 to 2000000',

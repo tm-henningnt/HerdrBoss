@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { POLICY_DEFAULTS } from '../src/control.js';
+import { readMessages } from '../src/messages.js';
 import { alertPromptDue, modelTier, tierAllowsAutoActivation, summaryHolds } from '../src/engine.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -103,6 +104,7 @@ function runScenario(t, scenario) {
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout.trim());
   output.records = JSON.parse(fs.readFileSync(path.join(dir, 'handoffs.json'), 'utf8'));
+  output.messages = readMessages({ dir });
   return output;
 }
 
@@ -118,6 +120,7 @@ const idleOrchestrator = {
 test('Ignore quota prepares a successor for a stopped project orchestrator while a worker runs', { timeout: 30000 }, (t) => {
   const project = runScenario(t, {
     usedPercent: 98,
+    ladder: [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }],
     lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
     herdr: idleOrchestrator,
   });
@@ -148,13 +151,13 @@ test('automatic handover prefers a later non-Opus rung when the first rung is Op
     herdr: idleOrchestrator,
     ladder: [
       { kind: 'claude', model: 'claude-opus-5-5', effort: null },
-      { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash', effort: null },
+      { kind: 'claude', model: 'claude-sonnet-5-5', effort: null },
     ],
-    harnessRoutes: { claude: { 'claude-opus-5-5': null } },
+    harnessRoutes: { claude: { 'claude-opus-5-5': null, 'claude-sonnet-5-5': null } },
   });
 
   assert.deepEqual(result.calls.map(({ args }) => [args[2], args[args.indexOf('--model') + 1]]), [
-    ['plan', 'opencode-go/deepseek-v4.1-flash'], ['prepare', 'opencode-go/deepseek-v4.1-flash'],
+    ['plan', 'claude-sonnet-5-5'], ['prepare', 'claude-sonnet-5-5'],
   ]);
 });
 
@@ -188,6 +191,7 @@ test('automatic handover skips Opus and sends the Boss one approval command per 
 test('automatic handover never prepares or activates the Boss pane', { timeout: 30000 }, (t) => {
   const stopped = runScenario(t, {
     usedPercent: 98,
+    ladder: [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }],
     lastOrchestrators: { 'w-boss': { pane: 'w-boss:p1', kind: 'claude', project: 'Boss', boss: true } },
     herdr: {
       workspaces: [{ id: 'w-boss', label: 'Boss' }],
@@ -198,6 +202,7 @@ test('automatic handover never prepares or activates the Boss pane', { timeout: 
 
   const working = runScenario(t, {
     usedPercent: 98,
+    ladder: [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }],
     herdr: {
       workspaces: [{ id: 'w-boss', label: 'Boss' }],
       panes: [
@@ -215,6 +220,7 @@ test('automatic handover never prepares or activates the Boss pane', { timeout: 
   assert.equal(working.records[0].status, 'prepared');
   // The Owner keeps the recommendation. The automatic path is the only part that skips the Boss.
   assert.equal(working.control.bossHandoff.target.kind, 'codex');
+  assert.equal(working.control.bossHandoff.target.model, 'gpt-6-astra');
 });
 
 test('a Boss record stays out of the automatic path when its pane label changed', { timeout: 30000 }, (t) => {
@@ -264,6 +270,7 @@ test('automatic handover skips a project that a published status or summary hold
   for (const entry of held) {
     const result = runScenario(t, {
       usedPercent: 98,
+      ladder: [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }],
       lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
       herdr: idleOrchestrator,
       published: [{ slug: 'alpha', project: 'Alpha', workspace: 'w-alpha', ...entry }],
@@ -282,6 +289,7 @@ test('automatic handover skips a project that a published status or summary hold
   for (const entry of open) {
     const result = runScenario(t, {
       usedPercent: 98,
+      ladder: [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }],
       lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
       herdr: idleOrchestrator,
       published: [
@@ -309,7 +317,7 @@ test('automatic stopped project handover skips actively exhausted free successor
     usedPercent: 98,
     ladder: [
       { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
-      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+      { kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' },
     ],
     exhaustedFreeModels: {
       'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
@@ -320,7 +328,7 @@ test('automatic stopped project handover skips actively exhausted free successor
   const plan = project.calls.find(({ args }) => args[2] === 'plan');
   assert.ok(plan);
   assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
-  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-astra');
 });
 
 test('automatic proactive project handover skips actively exhausted free successor models', { timeout: 30000 }, (t) => {
@@ -328,7 +336,7 @@ test('automatic proactive project handover skips actively exhausted free success
     usedPercent: 98,
     ladder: [
       { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
-      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+      { kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' },
     ],
     exhaustedFreeModels: {
       'opencode-go/deepseek-v4.1-flash': { model: 'opencode-go/deepseek-v4.1-flash', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
@@ -341,7 +349,7 @@ test('automatic proactive project handover skips actively exhausted free success
   const plan = project.calls.find(({ args }) => args[2] === 'plan');
   assert.ok(plan);
   assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex');
-  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna');
+  assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-astra');
 });
 
 // The automatic source shapes. A Boss pane is never an automatic source, so the Boss shape
@@ -372,12 +380,12 @@ function assertCodexSuccessor(t, common) {
     if (shape === 'proactiveBoss') {
       assert.equal(plan, undefined, shape);
       assert.equal(result.control.bossHandoff.target.kind, 'codex', shape);
-      assert.equal(result.control.bossHandoff.target.model, 'gpt-6-luna', shape);
+      assert.equal(result.control.bossHandoff.target.model, 'gpt-6-astra', shape);
       continue;
     }
     assert.ok(plan, shape);
     assert.equal(plan.args[plan.args.indexOf('--to') + 1], 'codex', shape);
-    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-luna', shape);
+    assert.equal(plan.args[plan.args.indexOf('--model') + 1], 'gpt-6-astra', shape);
     const recommended = [...result.control.handoffs, result.control.bossHandoff].filter((item) => item?.target);
     assert.equal(recommended.some((item) => item.target.kind !== 'codex'), false, shape);
   }
@@ -388,7 +396,7 @@ test('automatic project and Boss handovers skip the exhausted free model only', 
     usedPercent: 98,
     ladder: [
       { kind: 'opencode', model: 'opencode/big-pickle' },
-      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+      { kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' },
     ],
     exhaustedFreeModels: {
       'opencode/big-pickle': { model: 'opencode/big-pickle', retryAt: Date.parse('2026-09-26T12:01:00.000Z') },
@@ -401,10 +409,76 @@ test('automatic project and Boss handovers skip a Pi rung that the last good Pi 
     usedPercent: 98,
     ladder: [
       { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },
-      { kind: 'codex', model: 'gpt-6-luna', effort: 'xhigh' },
+      { kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' },
     ],
     piModels: { at: Date.parse('2026-09-26T11:55:00.000Z'), models: ['opencode-go/mimo-v2.6-flash'] },
   });
+});
+
+// K28: no automatic successor of a weaker tier, and a cooldown after a failed automatic record.
+test('automatic handover makes no weaker successor and posts one Mailbox item that names the reason', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    push: true,
+    ticks: ['2026-09-26T12:00:00.000Z', '2026-09-26T12:01:00.000Z'],
+    ladder: [{ kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash', effort: null }],
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: idleOrchestrator,
+  });
+  assert.deepEqual(result.calls, []);
+  const items = result.messages.filter((message) => message.thread === 'boss' && /No automatic successor for/.test(message.title || ''));
+  assert.equal(items.length, 1, 'one item, also after a second tick');
+  assert.match(items[0].text, /opencode-go\/deepseek-v4\.1-flash is weaker than the source model claude-sonnet-5-5/);
+});
+
+const cooldownLadder = [
+  { kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' },
+  { kind: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' },
+];
+const cooldownRecord = (over) => ({
+  id: 'old-1', project: 'alpha', workspace: 'w-alpha', label: 'orch', sourcePane: 'w-alpha:p1', newPane: 'w-alpha:p9',
+  fromKind: 'claude', toKind: 'codex', model: 'gpt-6-astra', automatic: true, ...over,
+});
+
+test('automatic handover skips a kind whose automatic record expired inside the cooldown and stores the reason', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    ladder: cooldownLadder,
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: idleOrchestrator,
+    handoffs: [cooldownRecord({ status: 'expired', preparedAt: '2026-09-26T08:00:00.000Z', expiredAt: '2026-09-26T09:00:00.000Z', expiredReason: 'successor not ready after 30 minutes' })],
+  });
+  const prepare = result.calls.find(({ args }) => args[2] === 'prepare');
+  assert.equal(prepare.args[prepare.args.indexOf('--model') + 1], 'gpt-6.1-sol');
+  assert.match(prepare.args[prepare.args.indexOf('--choice-reason') + 1], /skipped codex gpt-6-astra: its automatic successor expired 3 hours ago/);
+});
+
+test('the cooldown ends after autoCooldownHours', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    ladder: cooldownLadder,
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    herdr: idleOrchestrator,
+    handoffs: [cooldownRecord({ status: 'expired', preparedAt: '2026-09-26T01:00:00.000Z', expiredAt: '2026-09-26T05:59:00.000Z', expiredReason: 'cancelled' })],
+  });
+  const prepare = result.calls.find(({ args }) => args[2] === 'prepare');
+  assert.equal(prepare.args[prepare.args.indexOf('--model') + 1], 'gpt-6-astra');
+  assert.equal(prepare.args.includes('--choice-reason'), false);
+});
+
+test('a record stuck in preparing with no promptAt counts as expired for the cooldown', { timeout: 30000 }, (t) => {
+  const result = runScenario(t, {
+    usedPercent: 98,
+    ladder: cooldownLadder,
+    lastOrchestrators: { 'w-alpha': { pane: 'w-alpha:p1', kind: 'claude', project: 'alpha' } },
+    // The successor pane exists and works, so the engine neither expires nor promotes the record.
+    herdr: { ...idleOrchestrator, panes: [...idleOrchestrator.panes, { id: 'w-alpha:p9', workspace: 'w-alpha', label: null, orch: false, agent: 'codex', status: 'working' }] },
+    // The stuck record belongs to another project, so it does not block this source by itself.
+    handoffs: [cooldownRecord({ project: 'beta', workspace: 'w-beta', sourcePane: 'w-beta:p1', status: 'preparing', preparedAt: '2026-09-26T10:00:00.000Z' })],
+  });
+  const prepare = result.calls.find(({ args }) => args[2] === 'prepare');
+  assert.equal(prepare.args[prepare.args.indexOf('--model') + 1], 'gpt-6.1-sol');
+  assert.match(prepare.args[prepare.args.indexOf('--choice-reason') + 1], /skipped codex gpt-6-astra: its automatic successor was stuck in preparing/);
 });
 
 // A prepared automatic record, a source that works, and a successor that is ready.

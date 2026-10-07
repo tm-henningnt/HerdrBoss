@@ -19,6 +19,8 @@ const NOW = Date.parse('2026-09-26T12:00:00.000Z');
 const controlWith = (weeklyUse) => ({
   globalAllowed: { codex: ['gpt-6-luna'], claude: ['claude-sonnet-5-5'], pi: [] },
   risks: {}, exhausted: {}, lanes: {}, weeklyUse,
+  // A tier 1 source, so no ranked successor is weaker. The quota tests do not test the tier rule.
+  sourceModel: 'opencode/space-bunny-free',
 });
 
 const WEEKLY_MINUTES = 10080;
@@ -85,6 +87,13 @@ test('the plan output and the record carry the quota reason for the chosen targe
   assert.equal(prepared.successorReason, plan.successorReason, 'the record keeps the reason from the plan');
   const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'handoffs.json'), 'utf8'))[0];
   assert.match(saved.successorReason, /codex weekly quota is at 91%/);
+});
+
+test('an automatic prepare appends the choice reason to the stored successor reason', (t) => {
+  const f = handoffFixture(t);
+  const choice = 'skipped codex gpt-6-astra: its automatic successor expired 3 hours ago';
+  const prepared = JSON.parse(runHandoffCli(f.root, ['handoff', 'prepare', 'ws:p1', '--to', 'pi', '--mode', 'fresh', '--auto', '--choice-reason', choice], f.env));
+  assert.match(prepared.successorReason, /Automatic choice: skipped codex gpt-6-astra: its automatic successor expired 3 hours ago\./);
 });
 
 test('the plan output names a lane without a weekly reading', (t) => {
