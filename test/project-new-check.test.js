@@ -217,6 +217,18 @@ test('workspace and orchestrator items are not required when the flow ran withou
   } finally { f.cleanup(); }
 });
 
+test('project open with --start requires a workspace even when the flow did not start one', () => {
+  const f = fixture();
+  try {
+    flow(f);
+    const check = checkProject('demo', checkOpts(f, { herdr: checkHerdr(), requireWorkspace: true }));
+    assert.equal(item(check, 'workspace').ok, false);
+    assert.equal(item(check, 'workspace').fix, 'workspace');
+    assert.equal(item(check, 'orchestrator').ok, false);
+    assert.equal(item(check, 'orchestrator').fix, 'workspace');
+  } finally { f.cleanup(); }
+});
+
 function markStarted(f) {
   const file = path.join(f.dataDir, 'flows', 'demo.json');
   const state = JSON.parse(fs.readFileSync(file, 'utf8'));

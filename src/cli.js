@@ -175,6 +175,9 @@ const USAGE = `herdr-boss <command>
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
+  project open <slug> [--start] [--force] [--dry-run]  Open a registered project. --start starts its project lead.
+  project park <slug> [--prepare] [--dry-run]  Check and park a project. Park never closes a browser.
+  project archive|unarchive <slug> [--dry-run]  Hide or restore a parked project.
   project paths [--json]  Print the registered paths of other projects.
   project register list|add|edit|sync|import  Read or change the project register, or fill it from its sources.
   project scan DIR [--depth N] [--add] [--dry-run]  List Git repositories and optionally add records.
@@ -580,7 +583,7 @@ async function main() {
     }
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
-    const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    const code = await projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
     return;
   }

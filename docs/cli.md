@@ -387,6 +387,9 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
 herdr-boss project check <slug> [--fix STEP [--start]]
+herdr-boss project open <slug> [--start] [--force] [--dry-run]
+herdr-boss project park <slug> [--prepare] [--dry-run]
+herdr-boss project archive|unarchive <slug> [--dry-run]
 herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
 herdr-boss project paths [--json]
 ```
@@ -431,6 +434,33 @@ The step `harness` does three things for the new project:
 A Codex root or a browser port that cannot be set is a warning in the step detail. The step does not fail. A second run changes nothing. A dry run changes and reserves nothing.
 
 The step changes a file under the home folder only for the live data dir. A temporary data dir is not the live data dir: the same test as `assertTempDataDir`, inverted. For a temporary data dir, the step does not change `~/.codex/config.toml`, does not write a backup, and does not reserve a browser. It prints `skipped: not the live data dir` and the Claude autoMode lines. The other steps write only inside the project folder or the data dir, so they need no such rule. The browser command of the step uses the same data dir as the flow.
+
+### Commands project open and park
+
+Run these commands from a plain terminal, the pane labeled `boss`, or a project lead pane labeled `orch`. A worker pane cannot run them. The command uses only the register of the local factory. Run it on the factory named in the project record.
+
+`project open <slug>` changes a parked project to open. It checks the project and runs each missing fix step once, in this order: `folder`, `kit`, `policy`, `register`, `workspace`, and `harness`. It writes `state: open` and `lastOpenedAt` after the checks pass. It prints the project's next action. A failed step leaves the project parked and records the failed check in `project-audit.jsonl`.
+
+| Flag | Meaning |
+|---|---|
+| `--start` | Create or reuse the Herdr workspace and start the project lead. The command uses the workspace step of `project new`. It uses model quota. |
+| `--force` | Open the project when the default cap of 3 open projects is full. This flag overrides the cap only. |
+| `--dry-run` | Print every check and step. Change no state, take no lock, and write no audit line. |
+
+An archived project must be unarchived before it can open. A project with an active transfer is refused. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
+
+`project park <slug>` changes an open project to parked after all checks pass. It checks workers, input prompts, Git state, locks and leases, published status, project memory, and blocking Owner mailbox items. It refuses a workspace that contains an unrecognized pane. It releases the closed project's browser reservation and closes the saved Herdr workspace by its ID. It never closes a browser. It keeps the repository, status, policy, Mailbox items, review packs, and data files. It clears the pin.
+
+| Flag | Meaning |
+|---|---|
+| `--prepare` | When Git, status, or memory blocks park, ask an idle project lead to commit and push, update memory, and publish status. Wait up to 10 minutes, then run every check again. The command sends no prompt when a worker is active or a pane waits for input. |
+| `--dry-run` | Print every check and change no state, send no prompt, release no browser reservation, close no workspace, take no lock, and write no audit line. |
+
+If a check fails, the project stays open. If browser release or workspace close fails, the project stays open. Run `project park` again after you fix the cause.
+
+`project archive <slug>` changes a parked project to archived. `project unarchive <slug>` changes an archived project to parked. These commands change only the register state. Each command accepts `--dry-run`.
+
+Each non-dry-run open and park attempt writes an audit record. A park that starts closing resources writes a second record when it finishes. Archive and unarchive write one record per state change. Audit records hold the slug, action, caller, result, failed check, and dry-run flag. They hold no repository path or remote.
 
 ### Command project check
 

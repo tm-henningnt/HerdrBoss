@@ -231,11 +231,12 @@ export function withRegisterLock(dataDir, operation) {
 }
 
 // Appends one audit line with mode 0600. A dry run calls this never.
-export function appendAudit(slug, action, dataDir = DATA_DIR) {
+export function appendAudit(slug, action, dataDir = DATA_DIR, fields = {}) {
+  if (fields.dryRun) return;
   try {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const file = path.join(dataDir, 'project-audit.jsonl');
-    const line = `${JSON.stringify({ at: new Date().toISOString(), slug, action, by: 'owner-cli', result: 'done', failedCheck: null, dryRun: false })}\n`;
+    const line = `${JSON.stringify({ at: fields.at ?? new Date().toISOString(), slug, action, by: fields.by ?? 'owner-cli', result: fields.result ?? 'done', failedCheck: fields.failedCheck ?? null, dryRun: false })}\n`;
     const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
     try {
       fs.fchmodSync(fd, 0o600);
