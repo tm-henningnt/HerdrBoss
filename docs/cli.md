@@ -17,7 +17,8 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | Command | Action |
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
-| `herdr-boss tools check [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Do not upgrade a tool. |
+| `herdr-boss tools check [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Post a read Mailbox item for each late or security tool version. Print a note and continue when a Mailbox post fails. Do not upgrade a tool. |
+| `herdr-boss tools bump TOOL [--to VERSION] [--dry-run]` | Verify the published checksum or registry integrity. Create a branch and worktree under the configured worker worktree root. Write and commit the `pins.json` change there. Keep the main checkout unchanged. `--dry-run` prints the diff and creates no worktree or branch. |
 | `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
 | `herdr-boss install` | Install and start the service of the platform. On macOS it writes the launchd agent `no.tallmaker.herdr-boss`. On Linux it writes the systemd user service `herdr-boss.service`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the service of the platform. |
@@ -315,6 +316,28 @@ A late row is a note and keeps exit code 0.
 A security row from a check older than 24 hours is ignored.
 `doctor` prints `note: tool check is stale, run herdr-boss tools check` for that row.
 A fresh security row is an error and sets exit code 4.
+
+When a Mailbox post fails, the command prints one note for that tool.
+It continues with the other tool updates.
+
+Run `herdr-boss tools bump TOOL` to prepare a pin change.
+The command checks the published checksum or package integrity first.
+It refuses a missing checksum, a checksum mismatch, or a tool with no checksum source.
+It waits three days before a Claude, Codex, or OpenCode release unless a security fix is verified.
+
+The command creates a linked worktree at `<worktreeRoot>/<repo>/tools-bump-<tool>-<version>`.
+It uses the project's configured base branch.
+It creates a `tools/` branch for the selected version in that worktree.
+It writes `factory/pins.json` atomically and commits the file in the worktree.
+The commit message ends with `Kit-Impact: none`.
+The main checkout and its pin file stay unchanged.
+The command refuses an existing worktree at the target path.
+If the atomic write or commit fails, it removes the worktree and branch.
+After a successful commit, review the branch through the normal project process.
+Add `--to VERSION` to select a published version.
+Add `--dry-run` to print the diff without creating a worktree or branch.
+When an advisory request fails, the command prints a note that the three-day security exception was not checked.
+It still waits three days unless the release notes show a security fix.
 
 ## Quota reset plan
 

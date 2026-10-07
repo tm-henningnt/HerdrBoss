@@ -155,7 +155,8 @@ const USAGE = `herdr-boss <command>
                               The preview binds 127.0.0.1 unless --host names another address.
   tick [--json]         Collect once and print alerts. Sends nothing, terminates nothing.
   doctor [--json] [--factory-host]  Check onboarding items. Exit 4 when an item needs a fix.
-  tools check [--json]  Read tool versions and save the upstream check.
+  tools check [--json]  Read tool versions, save the check, and post late or security notices.
+  tools bump TOOL [--to VERSION] [--dry-run]  Prepare a checksum-checked factory pin change.
   setup [--resume] [--dry-run] [--pacing paced|unpaced]  Run the first-hour setup. Exit 3 when it waits for you.
   publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.
