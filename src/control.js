@@ -626,6 +626,7 @@ function weeklyScore(candidate, weeklyUse) {
 
 // The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
 // tier cost the same.
+// claude-haiku-5-5 is left out on purpose: it is a cheap worker model, not an automatic successor.
 const MODEL_TIERS = {
   'opencode-go/deepseek-v4.1-flash': 2,
   'gpt-6-luna': 3,
