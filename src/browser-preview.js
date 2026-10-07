@@ -1,5 +1,6 @@
 import { isProbeTab } from './browser-probe.js';
 import { maskUrl, maskBrowserText } from './browser-url-mask.js';
+import { capMeasurement, measureScript } from './browser-measure.js';
 import { forgetAgentBrowserTab, recordAgentBrowserTab, withBrowserCommand } from './browser-activity.js';
 import { browserStatus, forgetBrowserTab, rememberBrowserTab, rememberBrowserTabs, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
@@ -476,6 +477,20 @@ async function browserKeyImpl(project, tabId, key, adapters = {}, modifiers = []
   return { ok: true };
 }
 
+// A page measurement runs one fixed Runtime.evaluate. The selectors travel as JSON data in the expression, so a
+// selector can never inject code, and the script returns geometry and styles only: no page text, cookies, storage,
+// or attributes. The printed result is capped at 20 KB with truncated: true when a cut happened.
+async function browserMeasureImpl(project, tabId, selectors, adapters = {}) {
+  const context = await pageContext(project, tabId, adapters);
+  const results = await pageCommands(context.endpoint, context.viewport, [
+    { method: 'Runtime.evaluate', params: { expression: measureScript(selectors), returnByValue: true } },
+  ], 15000, 'The page did not return measurements within 15 s. It can be loading, busy, or showing a dialog, or an agent can be taking its own screenshot of this browser.', adapters);
+  const raw = results.at(-1);
+  if (raw?.exceptionDetails) throw new Error('The page could not be measured.');
+  if (!raw?.result?.value || typeof raw.result.value !== 'object' || Array.isArray(raw.result.value)) throw new Error('Browser returned no measurements.');
+  return capMeasurement(raw.result.value);
+}
+
 // Keep the activity record for the entire operation, including verification and a queued screenshot.
 export function listBrowserTabs(project, adapters = {}) {
   return withBrowserCommand(project, () => listBrowserTabsImpl(project, adapters), adapters.activity);
@@ -521,4 +536,7 @@ export function browserInsertText(project, tabId, text, adapters = {}) {
 }
 export function browserKey(project, tabId, key, adapters = {}, modifiers = []) {
   return withBrowserCommand(project, () => browserKeyImpl(project, tabId, key, adapters, modifiers), adapters.activity);
+}
+export function browserMeasure(project, tabId, selectors, adapters = {}) {
+  return withBrowserCommand(project, () => browserMeasureImpl(project, tabId, selectors, adapters), adapters.activity);
 }
