@@ -588,6 +588,47 @@ test('worker collect names a leftover process by pid and command name only', (t)
   });
 });
 
+test('worker collect prints one stop-own command for each stoppable worktree process', (t) => {
+  const fixture = setupKitPathFixture('collect-leftover-guidance');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  assert.throws(() => collectWorker('collect-leftover-guidance', { noRecord: true }, {
+    config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 700, ppid: 42, command: 'node', args: 'node --private-arg hidden', cwd: fixture.run.worktree },
+      { pid: 701, ppid: 1, command: 'python', args: 'python --private-arg hidden', cwd: fixture.run.worktree },
+    ],
+  }), (error) => {
+    assert.match(error.message, /herdr-boss worker stop-own 'collect-leftover-guidance' --pid 700/);
+    assert.match(error.message, /herdr-boss worker stop-own 'collect-leftover-guidance' --pid 701/);
+    assert.doesNotMatch(error.message, /--private-arg|hidden/);
+    return true;
+  });
+});
+
+test('worker collect tells the caller to close a pane whose shell PID changed', (t) => {
+  const fixture = setupKitPathFixture('collect-changed-pane-shell');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  const currentShellPid = 777;
+  assert.throws(() => collectWorker('collect-changed-pane-shell', { noRecord: true }, {
+    config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    herdr: (args) => args[0] === 'pane' && args[1] === 'process-info'
+      ? { process_info: { shell_pid: currentShellPid } }
+      : {},
+    listWorktreeProcesses: () => [
+      { pid: currentShellPid, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
+      { pid: currentShellPid + 1, ppid: 1, command: 'node', cwd: fixture.run.worktree },
+    ],
+  }), (error) => {
+    assert.match(error.message, new RegExp(`close the finished pane with herdr pane close '${fixture.run.pane}'`));
+    assert.match(error.message, /then collect again/);
+    assert.match(error.message, new RegExp(`herdr-boss worker stop-own 'collect-changed-pane-shell' --pid ${currentShellPid + 1}`));
+    assert.doesNotMatch(error.message, new RegExp(`worker stop-own 'collect-changed-pane-shell' --pid ${currentShellPid}(?:\\D|$)`));
+    return true;
+  });
+});
+
 test('worker collect --record after merge and pane close writes one main-checkout ledger entry', (t) => {
   const root = temporaryRepo('herdr-kit-v94-');
   const name = 'merged-worker';

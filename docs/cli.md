@@ -1290,6 +1290,8 @@ Codex handover and `project new --start` use the same browser arguments. A worke
 
 `worker start` saves the resolved base commit in the run record. Review the worker, then collect it before you merge its branch. Collection records the run by default. It uses the saved commit so changed paths stay stable after the merge.
 
+Run `herdr-boss worker start --help` or `-h` to print its complete usage and option list. The command prints the same usage when you omit the worker name. Run `herdr-boss worker collect --help` or `-h`, and `herdr-boss worker commit --help` or `-h`, to print those usage lists. Help exits with code 0.
+
 | Option | Meaning |
 |---|---|
 | `--kind KIND` | Required. `codex`, `claude`, `opencode`, or `pi`. |
@@ -1370,7 +1372,7 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 Collection checks paths in both `allowedPaths` and `scopeExtensions`. If `report.json` omits changed paths that are inside the approved scope, collection prints `report.json omits N changed path(s); recorded the diff paths`. It uses the Git diff paths in the ledger. It still refuses a changed path outside the approved scope. Use `--allow PATH` to approve a path for one collect only. Repeat `--allow` for each path. Use `worker scope add` to save an approval in the run record. The string `"none"` in the report's `issue` field becomes null, and collection prints a warning.
 
-Collection ignores the caller's own process tree when it checks worktree processes. If the caller shell has its current directory in the worktree, collection prints `cd <main checkout>` and continues. A separate background shell with its current directory in the worktree blocks collection. The error names its PID and command and says to change directory or stop it. A process that still runs in the worktree also blocks collection. That error names each process by PID and command name only.
+Collection ignores the caller's own process tree when it checks worktree processes. If the caller shell has its current directory in the worktree, collection prints `cd <main checkout>` and continues. A separate background shell with its current directory in the worktree blocks collection. A process that still runs in the worktree also blocks collection. The error prints only each process name and PID. It gives a `herdr-boss worker stop-own NAME --pid PID` command for each process that this command can stop. If the worker pane has a different shell PID from the run record, close the finished pane with `herdr pane close PANE`, then collect again.
 
 The command completes every check before it writes the ledger and closes the run. It uses the ledger and run folder in the main checkout, including when you run it from a worker worktree. If the recording flags are missing, it prints the missing flag list and says to use `--no-record` for a dry read.
 

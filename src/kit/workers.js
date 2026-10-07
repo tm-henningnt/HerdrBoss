@@ -2119,6 +2119,37 @@ export function deriveModelOutcome(options, reportJson = {}) {
 // Stop one process of a worker. The caller runs in the worker pane. The target must be a descendant
 // of the worker pane shell, or have its current directory inside the worker worktree. Nothing else is
 // stopped. The command prints only the pid and the command name.
+function stopOwnRefusal(pid, name, run, processes, callerPid, callerPpid) {
+  const target = Number(pid);
+  if (!Number.isSafeInteger(target) || target <= 1) return 'worker stop-own needs --pid PID with a process id greater than 1.';
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const targetProcess = byPid.get(target);
+  const callerPids = new Set(callerProcessTree(processes, callerPid, callerPpid).map((item) => Number(item.pid)));
+  if (callerPids.has(target)) return `worker stop-own refuses pid ${target}: it is the caller or one of its parents.`;
+  const shellPid = Number(run.shellPid);
+  if (Number.isSafeInteger(shellPid) && shellPid > 1 && target === shellPid) {
+    return `worker stop-own refuses pid ${target}: it is the worker pane shell.`;
+  }
+  let current = targetProcess;
+  const seen = new Set();
+  let inShellTree = false;
+  while (current && !seen.has(Number(current.pid))) {
+    if (Number(current.pid) === shellPid && Number.isSafeInteger(shellPid) && shellPid > 1) {
+      inShellTree = true;
+      break;
+    }
+    seen.add(Number(current.pid));
+    current = byPid.get(Number(current.ppid));
+  }
+  if (!targetProcess || (!inShellTree && !isInWorktree(targetProcess, path.resolve(run.worktree)))) {
+    return `worker stop-own refuses pid ${target}: it is not in the process tree or worktree of worker ${name}.`;
+  }
+  if (/^app-server/.test(targetProcess.command || 'unknown')) {
+    return `worker stop-own refuses pid ${target}: the Codex app-server is shared. Do not stop it.`;
+  }
+  return null;
+}
+
 export function stopOwnWorker(name, { pid = null } = {}, {
   config,
   output = console.log,
@@ -2131,29 +2162,11 @@ export function stopOwnWorker(name, { pid = null } = {}, {
   const target = Number(pid);
   if (!Number.isSafeInteger(target) || target <= 1) throw new Error('worker stop-own needs --pid PID with a process id greater than 1.');
   const processes = listProcesses();
+  const refusal = stopOwnRefusal(pid, name, run, processes, callerPid, callerPpid);
+  if (refusal) throw new Error(refusal);
   const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
   const targetProcess = byPid.get(target);
-  const callerPids = new Set(callerProcessTree(processes, callerPid, callerPpid).map((item) => Number(item.pid)));
-  if (callerPids.has(target)) throw new Error(`worker stop-own refuses pid ${target}: it is the caller or one of its parents.`);
-  const shellPid = Number(run.shellPid);
-  if (Number.isSafeInteger(shellPid) && shellPid > 1 && target === shellPid) {
-    throw new Error(`worker stop-own refuses pid ${target}: it is the worker pane shell.`);
-  }
-  const inShellTree = (() => {
-    let current = targetProcess;
-    const seen = new Set();
-    while (current && !seen.has(Number(current.pid))) {
-      if (Number(current.pid) === shellPid && Number.isSafeInteger(shellPid) && shellPid > 1) return true;
-      seen.add(Number(current.pid));
-      current = byPid.get(Number(current.ppid));
-    }
-    return false;
-  })();
-  if (!targetProcess || (!inShellTree && !isInWorktree(targetProcess, path.resolve(run.worktree)))) {
-    throw new Error(`worker stop-own refuses pid ${target}: it is not in the process tree or worktree of worker ${name}.`);
-  }
   const command = targetProcess.command || 'unknown';
-  if (/^app-server/.test(command)) throw new Error(`worker stop-own refuses pid ${target}: the Codex app-server is shared. Do not stop it.`);
   try { kill(target, 'SIGTERM'); }
   catch (error) { throw new Error(`worker stop-own could not stop pid ${target} (${error.code || error.message}).`); }
   output(`${target} ${command}`);
@@ -2220,7 +2233,7 @@ export function commitWorker(name, { message = null } = {}, { config, output = c
 // One shell argument for a copyable example. The value always gets single quotes, so a path with a space or a metacharacter stays one token.
 const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
 
-export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid } = {}) {
+export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid, herdr = null } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
   try {
@@ -2247,10 +2260,20 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       .find((item) => isShellProcess(item) && isInWorktree(item, root));
     const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid, callerPid, callerPpid });
     const backgroundShell = leftovers.find(isShellProcess);
-    if (backgroundShell) {
-      throw new Error(`your own background shell (pid ${backgroundShell.pid}, command ${backgroundShell.command}) has its cwd in the worktree. Change directory or stop it.`);
+    const hasShellBlocker = leftovers.some(isShellProcess);
+    const currentPaneShellPid = hasShellBlocker && run.pane ? workerPaneShellPid(run.pane, herdr) : null;
+    const currentPaneShellBlocker = currentPaneShellPid == null ? null : leftovers.find((item) => isShellProcess(item) && Number(item.pid) === currentPaneShellPid);
+    const stopCommands = leftovers
+      .filter((process) => process !== currentPaneShellBlocker && stopOwnRefusal(process.pid, name, run, processList, callerPid, callerPpid) === null)
+      .map((process) => `herdr-boss worker stop-own ${shellQuote(name)} --pid ${process.pid}`);
+    const stopSteps = stopCommands.length ? ` Next step for each stoppable process:\n${stopCommands.map((command) => `- ${command}`).join('\n')}` : '';
+    if (currentPaneShellBlocker && currentPaneShellPid !== Number(run.shellPid)) {
+      throw new Error(`Worker pane ${run.pane} now has shell PID ${currentPaneShellPid}; the run recorded shell PID ${run.shellPid}. Next step: close the finished pane with herdr pane close ${shellQuote(run.pane)}, then collect again with herdr-boss worker collect ${shellQuote(name)}.${stopSteps}`);
     }
-    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid})`).join('; ')}. Stop them before collection.`);
+    if (backgroundShell) {
+      throw new Error(`your own background shell (pid ${backgroundShell.pid}, command ${backgroundShell.command}) has its cwd in the worktree. Change directory or stop it.${stopSteps}`);
+    }
+    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid})`).join('; ')}. Stop them before collection.${stopSteps}`);
     if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
     if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
     const baseRef = run.baseCommit || run.base;
