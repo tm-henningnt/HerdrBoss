@@ -87,7 +87,7 @@ On Linux the master key is a file. A backup of the volume that holds both the st
 
 - Directory: `~/.config/herdr-boss/secrets/`, mode 0700.
 - One file per secret: `NAME.sealed`, mode 0600. The file holds one value, encrypted with AES-256-GCM. The secret name is bound as additional authenticated data, so a renamed file does not open under another name. Each write uses a new random 96-bit nonce.
-- Previous value: `NAME.sealed.prev`, mode 0600, same format and same name binding. A write-back (section 3) moves the old `NAME.sealed` to this file before it writes the new value. The next verified swap deletes it.
+- Previous value: `NAME.sealed.prev`, mode 0600, same format and same name binding. A write-back (section 3) moves the old `NAME.sealed` to this file before it writes the new value. Keep it until a later verified swap deletes it.
 - Metadata file: `index.json` in the same directory, mode 0600. It holds names and metadata only: provider, label, tool, quota window, last used, expiry, and the hash of the sealed value, and the hash of the entry that the last swap wrote.
 - Master key: a random 32-byte key. The key location depends on the platform, as described below.
 - The server reads the metadata and gives it to the dashboard. The server never gives a value to the dashboard, an API route, a log line, or a Fleet summary.
@@ -139,7 +139,7 @@ A command never takes a secret as an argument.
   9. Roll back both tools from the sealed backups when one verification fails. Verify again after the rollback.
   10. Post one Mailbox item on a failure. The item names the label and the failed tool. It holds no value.
 - A refusal in step 1 to 4 changes nothing and releases the lock. A rollback is not a refusal.
-- The journal exists only while a swap is open. Delete it when the swap ends with a verified result: the new login, or the old login restored. Delete the backups after a verified swap. After a failed swap, keep the backups until the next verified swap or until `secret remove` of the label. If the rollback does not verify, keep the journal also.
+- The journal exists only while a swap is open. Delete it when the swap ends with a verified result: the new login, or the old login restored. Delete the sealed live-entry backups after a verified swap. Keep `NAME.sealed.prev` until a later verified swap. After a failed swap, keep the sealed live-entry backups until the next verified swap or until `secret remove` of the label. If the rollback does not verify, keep the journal also.
 - On the next start of the service and on the next `account use`, the command reads the journal if one exists. It completes the swap or rolls it back. A kill between two renames therefore leaves no mixed state.
 - The verification calls use quota. Each swap costs two small calls.
 - The command prints the label, the result of each step, and the exit code. Exit code 0 means both tools use the new login. Exit code 1 means the swap failed and the old login is restored, or a refusal in step 3 or 4. Exit code 3 means the command refused because a process runs. Slice 3 and slice 4 define the exit codes of a refusal in an agent pane and of a held lock.
