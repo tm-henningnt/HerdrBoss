@@ -29,13 +29,14 @@ test('release status runs through the real CLI entry and prints no initializatio
   assert.equal(result.status, 0, `${result.stderr}${result.stdout}`);
 });
 
-test('release request and release publish reach their own usage refusal through the real CLI entry', () => {
-  for (const sub of ['request', 'publish']) {
+test('release request, cancel, and publish reach their own usage refusal through the real CLI entry', () => {
+  for (const sub of ['request', 'cancel', 'publish']) {
     const result = runRelease([sub]);
     const text = `${result.stderr}${result.stdout}`;
     assert.doesNotMatch(text, /before initialization/, sub);
     assert.notEqual(result.status, 0, `${sub} without arguments must refuse`);
     assert.match(text, /release/i, sub);
+    if (sub === 'cancel') assert.match(text, /release cancel REPO TAG \[--reason TEXT\]/);
   }
 });
 

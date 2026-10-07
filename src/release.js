@@ -15,6 +15,7 @@ import { getResultRecord } from './review-store.js';
 
 const AUDIT_FILE = path.join('releases', 'audit.jsonl');
 const MAX_SCAN_BYTES = 20 * 1024 * 1024;
+const MAX_CANCEL_REASON = 500;
 const APPROVED = /^\s*(approved|approve|accepted|accept|yes)\b/i;
 const REJECTED = /^\s*(rejected|reject|denied|deny|no)\b/i;
 
@@ -119,11 +120,22 @@ const scanFindings = (notes, assets) => [
 ];
 
 const records = (dir) => openMessageStore({ dir }).all();
-// A request is settled when the project published or denied it. An Owner answer through the dashboard
-// sets closedAt only, so that close still counts as an answered, open request.
-const settled = (record) => record.closedBy === 'project' || record.closeNote === 'published' || record.closeNote === 'denied by the Owner';
+// An Owner answer through the dashboard sets closedAt only, so that close still counts as an open request.
+const settled = (record) => record.closedBy === 'project' || record.closeNote === 'published' || record.closeNote === 'denied by the Owner' || record.closeNote === 'superseded';
 const isRelease = (record) => record.kind === 'report' && record.release && record.action === 'approve';
 const sameTarget = (record, repo, tag) => record.release.repo === repo && record.release.tag === tag;
+
+function readNotes(notesFile) {
+  if (!notesFile) return '';
+  try { return fs.readFileSync(notesFile, 'utf8'); } catch { throw new Error(`Cannot read notes file: ${notesFile}`); }
+}
+
+function sameReleaseAssets(stored, current) {
+  if (!Array.isArray(stored) || stored.length !== current.length) return false;
+  const shape = (assets) => assets.map(({ name, size, sha256 }) => ({ name, size, sha256 }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return JSON.stringify(shape(stored)) === JSON.stringify(shape(current));
+}
 
 // The Owner answers an approve item with a message that has replyTo set. The newest answer counts.
 function ownerAnswer(all, approval) {
@@ -171,15 +183,29 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   if (!entry) throw new Error(REFUSALS['repo-not-allowed']);
 
   const open = records(dir).find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
-  if (open) return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
 
   const hosts = knownHosts ?? knownHostsFromSessions();
-  const release = readRelease(run, repo, tag);
-  if (!release.draft) throw new Error(REFUSALS['not-draft']);
-  let notes = '';
-  if (notesFile) {
-    try { notes = fs.readFileSync(notesFile, 'utf8'); } catch { throw new Error(`Cannot read notes file: ${notesFile}`); }
+  let release;
+  let currentAssets = null;
+  try {
+    release = readRelease(run, repo, tag);
+    if (open) currentAssets = inspectAssets(run, repo, tag, release, hosts);
+  } catch (error) {
+    if (open) return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
+    throw error;
   }
+  if (open) {
+    const notes = readNotes(notesFile);
+    const changelog = notes || release.body || '';
+    const notesSourceMatches = typeof open.release.notesFromFile === 'boolean'
+      && open.release.notesFromFile === Boolean(notesFile);
+    const notesDiffer = notesSourceMatches && typeof open.release.notesSha256 === 'string'
+      && open.release.notesSha256 !== crypto.createHash('sha256').update(changelog).digest('hex');
+    const assetsDiffer = !sameReleaseAssets(open.release.assets, currentAssets);
+    return { id: open.id, repo, tag, alreadyOpen: true, stale: notesDiffer || assetsDiffer, scanOk: null };
+  }
+  if (!release.draft) throw new Error(REFUSALS['not-draft']);
+  const notes = readNotes(notesFile);
   const assets = inspectAssets(run, repo, tag, release, hosts);
   const findings = scanFindings(scanRelease(`${notes}\n${release.body}`, { knownHosts: hosts, file: 'notes' }), assets);
   const text = cardText({ repo, tag, release, notes, assets, findings, latest, coverage: packCoverage({ dir, slug: entry.project, pack }) });
@@ -187,15 +213,21 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   const record = openMessageStore({ dir }).append({
     thread: entry.project, from: 'orch', to: 'owner', kind: 'report', title: `Release approval: ${repo} ${tag}`, text, action: 'approve',
     status: 'new', requesterPane,
-    release: { repo, tag, latest, commit: release.commit, assets: assets.map(({ name, size, sha256 }) => ({ name, size, sha256 })) },
+    release: {
+      repo, tag, latest, commit: release.commit, notesFromFile: Boolean(notesFile),
+      notesSha256: crypto.createHash('sha256').update(notes || release.body || '').digest('hex'),
+      assets: assets.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
+    },
   }, { now });
   return { id: record.id, repo, tag, alreadyOpen: false, scanOk: findings.length === 0 };
 }
 
-function writeAudit({ dir, approvalId, who, repo, tag, now }) {
+function writeAudit({ dir, approvalId, who, repo, tag, now, action = 'publish', reason = undefined }) {
   const file = path.join(dir, AUDIT_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), approvalId, who, repo, tag, action: 'publish' })}\n`, { mode: 0o600 });
+  const entry = { at: new Date(now).toISOString(), approvalId, who, repo, tag, action };
+  if (reason !== undefined) entry.reason = reason;
+  fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
 }
 
@@ -206,6 +238,29 @@ function closeItem(id, note, { dir, now }) {
     if (item && !settled(item)) Object.assign(item, { closedAt: item.closedAt || at, closedBy: 'project', closeNote: note, readAt: item.readAt || at });
     return { records: all, result: item ?? null };
   }, { now });
+}
+
+// Settle a request when its requester needs to replace it. The caller is checked again here so the
+// command cannot cancel another orchestrator's request.
+export function cancelRelease({ repo, tag, reason = '', dir = DATA_DIR, now = Date.now(), who = null, role = null }) {
+  if (!repo || !tag) throw new Error('Usage: release cancel REPO TAG [--reason TEXT]');
+  if (!['boss', 'orch'].includes(role) || !who) {
+    return { ok: false, reason: 'Only the requesting orchestrator pane or the Boss can cancel this release request.' };
+  }
+  const all = records(dir);
+  const approval = all.find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
+  if (!approval) return { ok: false, reason: `No open release request exists for ${repo} ${tag}.` };
+  if (role !== 'boss' && approval.requesterPane !== who) {
+    return { ok: false, reason: 'Only the requesting orchestrator pane or the Boss can cancel this release request.' };
+  }
+  if (ownerAnswer(all, approval)?.verdict === 'accept') {
+    return { ok: false, reason: 'The Owner has answered Approve. Run release publish or wait for an Owner denial to settle this request.' };
+  }
+  const boundedReason = redactSecrets(String(reason).trim()).slice(0, MAX_CANCEL_REASON);
+  openMessageStore({ dir }).update(approval.id, { supersededReason: boundedReason }, { now });
+  closeItem(approval.id, 'superseded', { dir, now });
+  writeAudit({ dir, approvalId: approval.id, who, repo, tag, now, action: 'cancel', reason: boundedReason });
+  return { ok: true, approvalId: approval.id, repo, tag };
 }
 
 // Publish a release. Every check must pass before gh release edit runs.
@@ -289,7 +344,7 @@ export function watchReleaseAnswers(store, options = {}) {
   });
 }
 
-const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release publish REPO TAG --approval ID | release status [REPO]';
+const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release cancel REPO TAG [--reason TEXT] | release publish REPO TAG --approval ID | release status [REPO]';
 
 function parseArgs(args, valueFlags, boolFlags = []) {
   const flags = {};
@@ -308,23 +363,36 @@ function parseArgs(args, valueFlags, boolFlags = []) {
 }
 
 // The handler of `herdr-boss release ...`. It returns the exit code: 0 done, 1 refused, 3 waiting for the Owner.
-export async function releaseCommand(args, { env = process.env, dataDir = DATA_DIR, config = {}, run = null, out = console.log, err = console.error } = {}) {
+export async function releaseCommand(args, { env = process.env, dataDir = DATA_DIR, config = {}, run = null, herdr = null, out = console.log, err = console.error } = {}) {
   const [action, ...rest] = args;
-  if (!['request', 'publish', 'status'].includes(action)) throw new Error(USAGE);
-  if (!run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
+  if (!['request', 'cancel', 'publish', 'status'].includes(action)) throw new Error(USAGE);
   try {
     if (action === 'status') {
+      if (!run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
       const { positional } = parseArgs(rest, []);
       if (positional.length > 1) throw new Error(USAGE);
       out(JSON.stringify(releaseStatus({ repo: positional[0] ?? null, run, dir: dataDir, config }), null, 2));
       return 0;
     }
+    if (action === 'cancel') {
+      const { flags, positional } = parseArgs(rest, ['--reason']);
+      if (positional.length !== 2) throw new Error(USAGE);
+      const [{ verifyMessageCaller }, { createHerdrRunner }] = await Promise.all([import('./messages.js'), import('./kit/workers.js')]);
+      const caller = verifyMessageCaller(env, herdr ?? createHerdrRunner(), 'release cancel');
+      const [repo, tag] = positional;
+      const result = cancelRelease({ repo, tag, reason: flags['--reason'] ?? '', dir: dataDir, now: Date.now(), who: caller.paneId, role: caller.role });
+      if (result.ok) { out(`Cancelled release request ${result.approvalId} for ${repo} ${tag}.`); return 0; }
+      err(`Refused: ${result.reason}`);
+      return 1;
+    }
+    if (!run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
     if (action === 'request') {
       const { flags, positional } = parseArgs(rest, ['--notes', '--pack'], ['--not-latest']);
       if (positional.length !== 2) throw new Error(USAGE);
       const [repo, tag] = positional;
       const result = requestRelease({ repo, tag, notesFile: flags['--notes'] ?? null, pack: flags['--pack'] ?? null, latest: !flags['--not-latest'], run, dir: dataDir, config, requesterPane: env.HERDR_PANE_ID ?? null });
-      out(result.alreadyOpen ? `An open request exists for ${repo} ${tag}: ${result.id}` : `Posted approval ${result.id} for ${repo} ${tag}.`);
+      if (result.stale) out(`The open request ${result.id} shows older notes; run release cancel ${repo} ${tag}, then request again.`);
+      else out(result.alreadyOpen ? `An open request exists for ${repo} ${tag}: ${result.id}` : `Posted approval ${result.id} for ${repo} ${tag}.`);
       if (result.scanOk === false) out('The secret scan failed. The card shows the classes. Publish will refuse until the draft is clean and a new request exists.');
       return 0;
     }

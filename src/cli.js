@@ -267,6 +267,7 @@ const USAGE = `herdr-boss <command>
   models                Show allowed worker models.
   say [--reply-to ID] [--action answer|approve|decide|read] [--image FILE] TEXT  Reply to the Owner from the boss pane or an orch pane.
   release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]  Post a release approval for the Owner.
+  release cancel REPO TAG [--reason TEXT]  Settle an obsolete open release request.
   release publish REPO TAG --approval ID  Publish the draft after the Owner approved it. Exit 3 waits for the Owner.
   release status [REPO]  Print the drafts, the open requests, and the last published release.
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.

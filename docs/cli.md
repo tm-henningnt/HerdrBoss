@@ -739,10 +739,11 @@ The setting `releases.repos` in `config.json` lists the repositories that the co
 | Command | Action |
 |---|---|
 | `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. Print the approval ID. |
+| `herdr-boss release cancel REPO TAG [--reason TEXT]` | Settle an open request as superseded. Only the pane that requested it or the Boss pane can run this command. |
 | `herdr-boss release publish REPO TAG --approval ID` | Check the approval, then run `gh release edit TAG --repo REPO --draft=false --latest`. |
 | `herdr-boss release status [REPO]` | Print JSON with the drafts and the last published release of each listed repository, and the open requests. |
 
-The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID.
+The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID when the release data still matches. The command compares notes when the request has a notes hash. It compares the asset names, sizes, and SHA-256 values. If the data changed, the command says that the request is stale. Run `release cancel` before you request again.
 
 The request reads the notes from `--notes FILE` when you give it. The scan finds tokens, private keys, inline license blobs, private paths, and hosts of the browser sessions of this machine. A public verification key is allowed. A finding shows only its class. When the scan fails, the item shows the failure and `release publish` refuses.
 
@@ -756,14 +757,16 @@ The request reads the notes from `--notes FILE` when you give it. The scan finds
 
 After `gh release edit`, the command reads the release again. It checks that the release is published with the assets of the card. Then it writes one line to `releases/audit.jsonl` in the data directory (time, approval ID, pane, repository, tag) and closes the item with the note `published`. The command never deletes a release or a tag, and never edits the assets of a published release. `--not-latest` on the request makes the card, and the publish, use `--latest=false`.
 
-When the Owner answers the item, Herdr Boss sends one notice to the pane that ran `release request`. For Approve, the notice names the publish command. For Reject, Herdr Boss closes the item, and the notice says that a new request is needed. Nobody polls. After any change to the draft, run `release request` again.
+`release cancel` closes the Mailbox card with the note `superseded`. It stores up to 500 characters of the reason, if you give one, and writes one line to the release audit file. It refuses a request that the Owner approved. Run `release publish` for an approved request. An Owner denial settles the request.
+
+When the Owner answers the item, Herdr Boss sends one notice to the pane that ran `release request`. For Approve, the notice names the publish command. For Reject, Herdr Boss closes the item, and the notice says that a new request is needed. Nobody polls. After any change to the draft, run `release request` again. Cancel the old request first if the command says that it is stale.
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Done. The request is posted or open, the status printed, or the release published. |
-| 1 | Refused. The message names the reason: the repository is not listed, the Owner rejected it, the draft changed, the scan failed, the release is not a draft, or a `gh` command failed. |
+| 1 | Refused. The message names the reason: the repository is not listed, the Owner rejected it, the draft changed, the scan failed, the release is not a draft, a request cannot be cancelled, or a `gh` command failed. |
 | 3 | `release publish` waits for the Owner. The item has no answer yet. |
 
 Example:
@@ -771,6 +774,7 @@ Example:
 ```sh
 herdr-boss release request example-org/example-app v1.0.0 --notes notes.md --pack landing
 herdr-boss release status example-org/example-app
+herdr-boss release cancel example-org/example-app v1.0.0 --reason "Updated notes"
 herdr-boss release publish example-org/example-app v1.0.0 --approval m-example
 ```
 
