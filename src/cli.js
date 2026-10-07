@@ -516,6 +516,10 @@ async function verifyQuotaMutationCaller() {
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
+  if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    process.stdout.write(USAGE);
+    return;
+  }
   // Onboarding must run before loadConfig(), which creates and migrates data files.
   if (cmd === 'doctor' || cmd === 'setup') {
     const command = cmd === 'doctor' ? (await import('./doctor.js')).doctorCommand : (await import('./setup.js')).setupCommand;
