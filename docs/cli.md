@@ -650,14 +650,14 @@ herdr-boss release publish example-org/example-app v1.0.0 --approval m-example
 
 ## Owner messages
 
-The Owner sends messages from the Organization page. The Boss and the orchestrators reply with these commands. The default store is `messages.jsonl` in the data directory. Set `store.messages` to `sqlite` in `config.json` to use `herdr-boss.db`.
+The Owner sends messages from the Organization page. The Boss and the project leads reply with these commands. The default store is `messages.jsonl` in the data directory. Set `store.messages` to `sqlite` in `config.json` to use `herdr-boss.db`.
 
 | Command | Action |
 |---|---|
-| `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] [--image FILE] "TEXT"` | Write a reply for the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
+| `herdr-boss say [--reply-to ID] [--action answer\|approve\|decide\|read] [--image FILE] "TEXT"` | Send a message to the Owner. Run it from the pane labeled `boss` or from a pane labeled `orch`. |
 | `herdr-boss messages [THREAD]` | Print the records of one thread as JSON, oldest first. Without `THREAD`, print the records of all threads. `THREAD` is `boss` or a project slug. |
-| `herdr-boss messages relay ID... --by boss` | Mark queued Owner messages as relayed by the Boss. Only the pane labeled `boss` can run this command. Herdr Boss never sends a relayed message. |
-| `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the `boss` thread. Only the pane labeled `boss` can post. |
+| `herdr-boss messages relay ID... --by boss` | Mark queued Owner chat messages as relayed by the Boss. Only the pane labeled `boss` can run this command. Herdr Boss never sends a relayed message. |
+| `herdr-boss mail post --to owner [--title TEXT] [--action read\|decide\|approve\|answer] FILE` | Post a Markdown report for the Owner in the Mailbox. Only the pane labeled `boss` can post. |
 | `herdr-boss mail close ID... --note TEXT` | Close open Mailbox items as answered through the Boss. Only the pane labeled `boss` can run this command. It sends no message. |
 | `herdr-boss store import messages` | Import `messages.jsonl` into an empty SQLite message table. Keep the JSONL file. Print the number of imported records. |
 | `herdr-boss store export messages` | Write the SQLite message records to `messages.jsonl`. Print the number of exported records. |
@@ -668,11 +668,11 @@ The Owner sends messages from the Organization page. The Boss and the orchestrat
 2. `herdr pane get` must return the same pane ID and workspace.
 3. The pane label must be exactly `boss` or `orch`. `mail post`, `mail close`, and `messages relay` also require the `boss` label.
 
-A worker pane cannot use `say`. The command tells the worker to ask its orchestrator.
+A worker pane cannot use `say`. The command tells the worker to ask the project lead.
 
-The Boss writes to the `boss` thread. An orchestrator writes to the thread of the project that uses its workspace. Herdr Boss finds that project in `state.json`. `--reply-to` must name a message in the same thread.
+The Boss writes to the `boss` thread. A project lead writes to the thread assigned to its workspace. Herdr Boss finds that project in `state.json`. `--reply-to` must name a message in the same thread. A reply follows the channel of that message.
 
-Each reply and report is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information. Omit `--action` for information.
+An action of `answer`, `approve`, or `decide` puts the item in both the Mailbox and Chat. A report with action `read` goes to the Mailbox. A `say` message stays in Chat unless it asks the Owner to answer, approve, or decide. Omit `--action` for a plain message.
 
 | Value | Meaning |
 |---|---|
@@ -683,15 +683,17 @@ Each reply and report is an item in the Owner mailbox. Set `--action decide`, `-
 
 The Mailbox shows action items under **Needs you**. It shows information under **Updates**. The escalation rules make Owner actions rare. The Owner answer comes back as an `[owner] Answer to ID (TITLE): ANSWER` prompt. The quoted question follows the answer.
 
+The command output names the destination. For example, `say` prints `Message ID sent in chat.` An action prints `Message ID posted as a Mailbox item (decide).` A reply to an item prints `Message ID sent as an answer to ID.` `mail post` names the Mailbox item. `mail close` names the Mailbox. `messages relay` names the chat message.
+
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
 ## Agent messages
 
 | Command | Action |
 |---|---|
-| `herdr-boss tell TARGET TEXT [--file FILE] [--kind nudge\|reminder\|reply] [--reply-to ID]` | Store an agent message and send it to a pane, agent, or project's orchestrator. |
+| `herdr-boss tell TARGET TEXT [--file FILE] [--kind nudge\|reminder\|reply] [--reply-to ID]` | Store an agent message and send it to a pane, agent, or project lead. |
 
-`TARGET` can be a pane ID, an agent name, or a project slug. A project slug sends the message to that project's orchestrator pane.
+`TARGET` can be a pane ID, an agent name, or a project slug. A project slug sends the message to that project's lead pane.
 
 The command stores the message before it sends the prompt. The stored text masks secrets. The prompt keeps the text that you gave the command. A failed prompt keeps the message with status `failed`. The command warns if it cannot save the metadata delivery status.
 

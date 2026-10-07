@@ -475,7 +475,7 @@ test('messageChannel gives every kind and action one channel', () => {
   const report = (extra) => ({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: 'Handback', text: 'x', action: null, ...extra });
   // A report is mail.
   assert.equal(messageChannel(report()), 'mail');
-  assert.equal(messageChannel(report({ action: 'approve' })), 'mail', 'a report is mail whatever its action');
+  assert.equal(messageChannel(report({ action: 'approve' })), 'both', 'a needs-you report is in Mailbox and Chat');
   // A reply with an action for the Owner is in both channels.
   for (const action of ['answer', 'approve', 'decide']) assert.equal(messageChannel(reply({ action })), 'both', `${action} shows in Chat and in Needs you`);
   // Every other reply is a chat message.
@@ -494,7 +494,7 @@ test('messageChannel gives every kind and action one channel', () => {
 
 const reviewFields = (extra = {}) => ({ slug: 'alpha', pack: 'checkout-redesign', title: 'Checkout flow redesign', version: 1, text: '31 items in 4 sections.', role: 'orch', ...extra });
 
-test('postReview appends a decide item on the mail channel that links to the pack', (t) => {
+test('postReview appends a decide item on both channels that links to the pack', (t) => {
   const dir = freshDir(t);
   const record = postReview(reviewFields(), { dir, now });
   assert.equal(record.kind, 'review');
@@ -507,7 +507,7 @@ test('postReview appends a decide item on the mail channel that links to the pac
   assert.match(record.text, /^31 items in 4 sections\.\n\n\[Open review\]\(\/reviews\/alpha\/checkout-redesign\)$/);
   assert.deepEqual(record.review, { slug: 'alpha', pack: 'checkout-redesign', version: 1 });
   assert.equal(isMailboxItem(record), true);
-  assert.equal(messageChannel(record), 'mail');
+  assert.equal(messageChannel(record), 'both');
   assert.equal(isMailRecord(record), true);
   const stored = readMessages({ dir });
   assert.equal(stored.length, 1);

@@ -301,7 +301,7 @@ function messageFlags(args, known, usage, repeat = []) {
 }
 
 async function messageCommand(cmd, args) {
-  const { sayMessage, postReport, readMessages, listThread, relayOwnerMessages, closeMailboxItems, validThread, verifyMessageCaller, readControl, REPORT_MAX_BYTES } = await import('./messages.js');
+  const { sayMessage, postReport, placeText, readMessages, listThread, relayOwnerMessages, closeMailboxItems, validThread, verifyMessageCaller, readControl, REPORT_MAX_BYTES } = await import('./messages.js');
   if (cmd === 'messages') {
     if (args[0] === 'relay') {
       const usage = 'Usage: messages relay ID... --by boss';
@@ -312,7 +312,7 @@ async function messageCommand(cmd, args) {
       if (caller.role !== 'boss') throw new Error('Only the pane labeled boss can run herdr-boss messages relay.');
       const result = relayOwnerMessages(positional, { by: caller.role });
       if (result.error) throw new Error(result.error);
-      console.log(`Relayed ${result.relayed} queued Owner message${result.relayed === 1 ? '' : 's'}.`);
+      console.log(`Relayed ${result.relayed} queued chat message${result.relayed === 1 ? '' : 's'}.`);
       return;
     }
     if (args.length > 1 || (args.length === 1 && !validThread(args[0]))) throw new Error('Usage: messages [THREAD]. THREAD is boss or a project slug.');
@@ -367,7 +367,8 @@ async function messageCommand(cmd, args) {
     if ((flags['--image'] || []).length > 3) throw new Error('say accepts at most 3 pictures.');
     if (positional.length !== 1) throw new Error(`${usage}. Quote the text as one argument.`);
     const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null, images: flags['--image'] || [] }, { herdr: createHerdrRunner() });
-    console.log(`Message ${record.id} is in the ${record.thread} thread for the Owner.`);
+    const destination = record.replyTo ? `sent as an answer to ${record.replyTo}` : placeText(record);
+    console.log(`Message ${record.id} ${destination}.`);
     return;
   }
   if (args[0] === 'close') {
@@ -378,7 +379,7 @@ async function messageCommand(cmd, args) {
     if (caller.role !== 'boss') throw new Error('Only the pane labeled boss can run herdr-boss mail close.');
     const result = closeMailboxItems(positional, flags['--note'], { by: caller.role });
     if (result.error) throw new Error(result.error);
-    console.log(`Closed ${result.closed} Owner mailbox item${result.closed === 1 ? '' : 's'} as answered through the Boss.`);
+    console.log(`Closed ${result.closed} Mailbox item${result.closed === 1 ? '' : 's'} as answered through the Boss.`);
     return;
   }
   const usage = 'Usage: mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE';
@@ -386,7 +387,7 @@ async function messageCommand(cmd, args) {
   const { flags, positional } = messageFlags(args.slice(1), ['--to', '--title', '--action'], usage);
   if (positional.length !== 1) throw new Error(usage);
   const record = postReport(positional[0], { to: flags['--to'] ?? null, title: flags['--title'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
-  console.log(`Report ${record.id} is in the boss thread for the Owner.`);
+  console.log(`Report ${record.id} ${placeText(record)}.`);
 }
 
 function quotaOptionValue(args, index, option) {

@@ -44,6 +44,7 @@ export function appendMessage(fields, { dir = DATA_DIR, now = Date.now() } = {})
 }
 
 export function updateMessage(id, patch, { dir = DATA_DIR, now = Date.now() } = {}) {
+  // A stored message kind is immutable; an older record without a kind may get its first value.
   return openMessageStore({ dir }).update(id, patch, { now });
 }
 
@@ -125,13 +126,34 @@ const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record)
 // An information item is done when it is closed, closed by the Boss, or read. Old read items have no closedAt.
 const isDone = (record) => !!record.closedAt || record.closedBy === 'boss' || (!needsOwnerAction(record) && !!record.readAt);
 
-// The channel rule. A report and a review pack item are mail. A reply with an action for the Owner is in both channels. Every other record is a chat message.
-export function messageChannel(record) {
-  if (!record) return 'chat';
-  if (record.kind === 'agent') return 'agent';
-  if (record.kind === 'report' || record.kind === 'review') return 'mail';
-  if (record.kind === 'reply' && NEEDS_YOU_ACTIONS.has(mailboxAction(record))) return 'both';
-  return 'chat';
+const MESSAGE_CHANNEL_RULES = [
+  { kind: 'agent', action: '*', channel: 'agent' },
+  { kind: '*', action: 'needs-you', mailboxItem: true, channel: 'both' },
+  { kind: '*', action: 'reply-to', channel: 'parent' },
+  { kind: 'report', action: '*', channel: 'mail' },
+  { kind: 'review', action: '*', channel: 'mail' },
+  { kind: '*', action: '*', channel: 'chat' },
+];
+
+// One ordered table decides each channel. A reply follows its parent only inside the same thread.
+export function messageChannel(record, byId = new Map()) {
+  const resolve = (current, seen) => {
+    if (!current) return 'chat';
+    for (const rule of MESSAGE_CHANNEL_RULES) {
+      if (rule.kind !== '*' && rule.kind !== current.kind) continue;
+      if (rule.mailboxItem && !isMailboxItem(current)) continue;
+      if (rule.action === 'needs-you' && !NEEDS_YOU_ACTIONS.has(mailboxAction(current))) continue;
+      if (rule.action === 'reply-to') {
+        if (!current.replyTo || typeof byId?.get !== 'function') continue;
+        const parent = byId.get(current.replyTo);
+        if (!parent || parent.thread !== current.thread || seen.has(parent.id)) continue;
+        return resolve(parent, new Set([...seen, current.id]));
+      }
+      return rule.channel;
+    }
+    return 'chat';
+  };
+  return resolve(record, new Set());
 }
 
 // An Owner answer to a mail item belongs to the Mailbox thread of that item. The record has replyTo set, and its parent is a record of the same thread on the mail channel (isMailRecord).
@@ -141,7 +163,7 @@ export const messagesById = (records) => new Map(records.map((record) => [record
 export function isMailAnswer(record, byId) {
   if (!record || record.from !== 'owner' || !record.replyTo) return false;
   const parent = byId.get(record.replyTo);
-  return !!parent && parent.thread === record.thread && isMailRecord(parent);
+  return !!parent && parent.thread === record.thread && isMailRecord(parent, byId);
 }
 
 // The records that the Chat shows. A Mailbox answer stays in the Mailbox.
@@ -182,13 +204,22 @@ export function withMailAnswers(page, records) {
   const answers = new Map();
   for (const record of records) if (isMailAnswer(record, byId) && !answers.has(record.replyTo)) answers.set(record.replyTo, record);
   return page.map((record) => {
-    const answer = isMailRecord(record) && answers.get(record.id);
+    const answer = isMailRecord(record, byId) && answers.get(record.id);
     return answer ? { ...record, answer: { id: answer.id, text: answer.text, at: answer.at } } : record;
   });
 }
 
 // The Mailbox lists only mail records. A plain chat reply never shows in Updates.
-export const isMailRecord = (record) => isMailboxItem(record) && messageChannel(record) !== 'chat';
+export const isMailRecord = (record, byId = new Map()) => isMailboxItem(record) && messageChannel(record, byId) !== 'chat';
+
+// Name the place where the CLI put a record.
+export function placeText(record) {
+  if (!isMailboxItem(record)) return 'sent in chat';
+  const action = mailboxAction(record);
+  if (NEEDS_YOU_ACTIONS.has(action)) return `posted as a Mailbox item (${action})`;
+  if (record.kind === 'report' || record.kind === 'review') return 'posted as a Mailbox item (read)';
+  return 'sent in chat';
+}
 
 // The choices are the Markdown list items under a heading named Choices, up to the first other line.
 export function parseChoices(text) {
@@ -209,12 +240,13 @@ export function parseChoices(text) {
 
 // The three numbers of the top bar. chatUnread counts the chat records to the Owner, mailUnread the unread mail records, and needsAction the open action items.
 export function mailboxCounts(records) {
-  const items = records.filter(isMailRecord);
+  const byId = messagesById(records);
+  const items = records.filter((record) => isMailRecord(record, byId));
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
   const updates = items.filter((item) => !needsOwnerAction(item) && !isDone(item)).length;
-  const chatUnread = records.filter((record) => record.kind !== 'agent' && record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail').length;
-  const mailUnread = items.filter((item) => messageChannel(item) === 'mail' && !item.readAt).length;
+  const chatUnread = records.filter((record) => record.kind !== 'agent' && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail').length;
+  const mailUnread = items.filter((item) => messageChannel(item, byId) === 'mail' && !item.readAt).length;
   return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
 }
 
@@ -297,20 +329,21 @@ export function messagesWithReplyState(records, allRecords = records) {
 export function mailboxView(records) {
   const answers = new Map();
   const owners = new Map();
+  const byId = messagesById(records);
   const replies = replyTimes(records);
   const conversations = new Map(groupMessagesByConversation(records).flatMap((group) => group.records.map((record) => [record.id, group.id])));
   for (const record of records) {
     if (record.from === 'owner') owners.set(record.id, record);
     if (record.from === 'owner' && record.replyTo) answers.set(record.replyTo, record);
   }
-  const items = records.filter(isMailRecord).reverse().map((record) => {
+  const items = records.filter((record) => isMailRecord(record, byId)).reverse().map((record) => {
     const answer = answers.get(record.id);
     return {
       ...record,
       closeSuggestion: closeSuggested(record, records),
       ...(!record.closedAt && isDone(record) && record.closedBy !== 'boss' ? { closedAt: record.readAt } : {}),
       action: mailboxAction(record),
-      channel: messageChannel(record),
+      channel: messageChannel(record, byId),
       choices: parseChoices(record.text),
       conversationId: conversations.get(record.id) ?? record.id,
       ownerMessage: owners.has(record.replyTo) ? deliveryView(owners.get(record.replyTo), replies) : null,
