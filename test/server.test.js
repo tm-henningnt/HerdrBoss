@@ -2216,7 +2216,7 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.doesNotMatch(nav, /href="\/chat"/);
   assert.match(html, /<a class="top-icon" data-top-icon="chat" data-empty="true" href="\/chat" aria-label="Chat">/);
   // The list reads the chat API and shows a badge with the total unread count.
-  assert.match(app, /fetch\('\/api\/chats'\)/);
+  assert.match(app, /readApiUrl\('\/api\/chats'/);
   // Enter sends. Shift+Enter makes a new line.
   assert.match(app, /if \(e\.key !== 'Enter' \|\| e\.shiftKey\) return;/);
   assert.match(app, /async function chatSend\(retry = null\)/);

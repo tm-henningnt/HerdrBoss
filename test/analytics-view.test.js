@@ -326,7 +326,8 @@ test('the Analytics page leads with questions and charts, each with a Details ta
   assert.match(app, /function vizCard\(/);
   assert.match(app, /<details class="viz-details" data-viz-detail=/);
   assert.match(app, /<summary>Details<\/summary>/);
-  assert.match(app, /if \(location\.pathname === '\/analytics'\) urls\.push\('\/api\/quota-plan\/codex'\)/);
+  assert.match(app, /quotaPlan: \{ url: '\/api\/quota-plan\/codex'/);
+  assert.match(fs.readFileSync(new URL('../public/store.js', import.meta.url), 'utf8'), /analytics: pageReads\(\[[^\]]*'quotaPlan'\]\)/);
   assert.match(app, /API-price equivalent/);
   // The page keeps its DOM on refresh, so a chart keeps its sideways scroll and the search keeps its focus.
   assert.ok((await import('../public/routes.js')).KEYED_ROUTES.includes('analytics'));
