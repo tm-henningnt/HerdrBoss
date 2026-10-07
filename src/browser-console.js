@@ -4,6 +4,29 @@ export const CONSOLE_LEVELS = Object.freeze(['error', 'warn', 'info', 'log', 'de
 export const CONSOLE_LIMITS = Object.freeze({ last: 100, textChars: 500, inputChars: 20_000, sourceChars: 2_000, waitMs: 10_000, setupMs: 3_000 });
 
 const USAGE = 'Use --tab ID, --level error|warn|info|log|debug, --last N, --wait-ms N, and --json to read console messages.';
+const CONSOLE_SECRET_NAME = /pass(word)?|passwd|pwd|secret|session|sid|auth|credential|cookie|api[_-]?key|access[_-]?key/i;
+
+function maskConsoleSecrets(value) {
+  const headersMasked = value.replace(/(\b(?:set-cookie|cookie|authorization)\s*:\s*)[^\r\n]*/gi, '$1[masked]');
+  return headersMasked.replace(/(^|[^A-Za-z0-9_-])(["']?)([A-Za-z0-9_-]+)\2(\s*[=:]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;)}\]]+)/gm, (match, prefix, quote, name, separator) => (
+    CONSOLE_SECRET_NAME.test(name) ? `${prefix}${quote}${name}${quote}${separator}[masked]` : match
+  ));
+}
+
+function maskConsoleOpaqueStrings(value) {
+  return value
+    .replace(/(?<![A-Fa-f0-9])[A-Fa-f0-9]{32,}(?![A-Fa-f0-9])/g, '[masked]')
+    .replace(/(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_=-]{24,}(?![A-Za-z0-9+/_=-]))(?=[A-Za-z0-9+/_=-]*[A-Za-z])(?=[A-Za-z0-9+/_=-]*\d)[A-Za-z0-9+/_=-]{24,}(?![A-Za-z0-9+/_=-])/g, '[masked]')
+    .replace(/(?<![A-Za-z0-9])[A-Za-z0-9]{20,}(?![A-Za-z0-9])/g, (run) => (
+      /[A-Za-z]/.test(run) && /\d/.test(run) ? '[masked]' : run
+    ));
+}
+
+function maskConsoleText(value, options, sourcePath = false) {
+  const safeText = maskConsoleSecrets(maskBrowserText(value, options));
+  if (sourcePath) return safeText.split('/').map(maskConsoleOpaqueStrings).join('/');
+  return maskConsoleOpaqueStrings(safeText);
+}
 
 function boundedInteger(value, min, max, flag) {
   if (!/^-?\d+$/.test(value || '')) throw new Error(USAGE);
@@ -112,7 +135,7 @@ function sourceText(value, lineNumber, knownHosts) {
       }
     }
   }
-  const safePath = maskBrowserText(path, { knownHosts })
+  const safePath = maskConsoleText(path, { knownHosts }, true)
     .replace(/[\r\n\t]/g, ' ')
     .slice(0, 300);
   const line = Number.isFinite(lineNumber) && lineNumber >= 0 ? Math.floor(lineNumber) + 1 : null;
@@ -122,7 +145,7 @@ function sourceText(value, lineNumber, knownHosts) {
 export function formatConsoleEvent(event, { levels = CONSOLE_LEVELS, knownHosts = [] } = {}) {
   const details = eventDetails(event);
   if (!details || !levels.includes(details.level)) return null;
-  const maskedText = maskBrowserText(details.text.slice(0, CONSOLE_LIMITS.inputChars), { maskHosts: true, knownHosts });
+  const maskedText = maskConsoleText(details.text.slice(0, CONSOLE_LIMITS.inputChars), { maskHosts: true, knownHosts });
   const text = Array.from(maskedText).slice(0, CONSOLE_LIMITS.textChars).join('');
   return {
     level: details.level,

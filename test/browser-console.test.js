@@ -120,6 +120,35 @@ test('browserConsole masks bearer values and URL queries and caps message text',
   assert.ok(!result[0].source.includes('fake-source-value'));
 });
 
+test('browserConsole masks credentials and long opaque strings in text and source paths', async () => {
+  const hex = '0123456789abcdef'.repeat(3);
+  const base64 = 'AbC123_-'.repeat(7);
+  const text = [
+    'Cookie: sid=abc123def456; theme=dark',
+    'Set-Cookie: session=one; HttpOnly',
+    'Authorization: Basic dXNlcjpwYXNz',
+    'password=hunter2 secret: foo',
+    '{"credential": "private"}',
+    hex,
+    base64,
+    'plain words 42',
+  ].join('\n');
+  const connection = fakeConnection([logEntry({ text, url: '/tok_ABCDEFGH0123456789ABCDEFGH0123/f.js' })]);
+  const result = await browserConsole('alpha', 'tab-1', { levels: ['log'], last: 20, waitMs: 0 }, adaptersFor('tab-1', connection));
+
+  assert.equal(result.length, 1);
+  assert.equal(/Cookie: \[masked\]/.test(result[0].text), true);
+  assert.equal(/Set-Cookie: \[masked\]/.test(result[0].text), true);
+  assert.equal(/Authorization: \[masked\]/.test(result[0].text), true);
+  assert.equal(/password=\[masked\] secret: \[masked\]/.test(result[0].text), true);
+  assert.equal(/"credential": \[masked\]/.test(result[0].text), true);
+  assert.equal(/plain words 42/.test(result[0].text), true);
+  for (const sensitiveValue of ['abc123def456', 'one', 'dXNlcjpwYXNz', 'hunter2', 'foo', 'private', hex, base64]) {
+    assert.equal(result[0].text.includes(sensitiveValue), false);
+  }
+  assert.ok(result[0].source === '/[masked]/f.js:2', 'source path should mask opaque text and keep the file name and line number');
+});
+
 test('browserConsole prints primitive arguments and only the first stack frame', async () => {
   const connection = fakeConnection([{
     method: 'Runtime.consoleAPICalled',
@@ -187,4 +216,22 @@ test('browserConsole hides raw connection failure text', async () => {
     assert.ok(!error.message.includes('do-not-print'));
     return true;
   });
+});
+
+test('browserConsole hides target-list failures after one ownership check', async () => {
+  let ownershipChecks = 0;
+  const adapters = {
+    ...adaptersFor('tab-1', fakeConnection()),
+    verifySession: async () => {
+      ownershipChecks += 1;
+      return { port: 9222 };
+    },
+    listTargets: async () => { throw new Error('target fetch failed'); },
+  };
+
+  await assert.rejects(
+    browserConsole('alpha', 'tab-1', { levels: ['error'], last: 20, waitMs: 0 }, adapters),
+    { message: 'Could not connect to the browser page.' },
+  );
+  assert.equal(ownershipChecks, 1);
 });

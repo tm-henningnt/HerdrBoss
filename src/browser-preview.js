@@ -141,7 +141,10 @@ async function pageContext(project, tabId, adapters = {}) {
 
 async function consolePageContext(project, tabId, adapters = {}) {
   const session = await (adapters.verifySession || verifiedSession)(project);
-  const pages = (await (adapters.listTargets || targets)(session)).filter((page) => !isProbeTab(page.id));
+  let targetPages;
+  try { targetPages = await (adapters.listTargets || targets)(session); }
+  catch { throw new Error('Could not connect to the browser page.'); }
+  const pages = targetPages.filter((page) => !isProbeTab(page.id));
   if (!pages.length) throw new Error('No browser page is open.');
   if (!tabId && pages.length > 1) throw new Error('Several pages are open. Run browser tabs and specify --tab ID.');
   const target = tabId ? pages.find((page) => page.id === tabId) : pages[0];
