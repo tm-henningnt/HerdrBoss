@@ -44,9 +44,7 @@ If the link does not open, the preview or the service is not running. Add a note
 3. Write a note for the whole pack in the note field. The note belongs to this version. A new version starts with an empty note. The note of an older version shows read-only with its version number.
 4. Check the computed verdict. The page selects **Accept pack** when you accepted every item and wrote no note text. The page selects **Accept with changes** when any item or the pack note has text, or when any item is denied, open, or needs a live check. Choose another verdict if you want. **Deny pack** is never computed.
 5. Select **Submit review**.
-6. Confirm the verdict in the dialog. The dialog shows the verdict that the page sends.
-
-When you choose **Accept with changes** and no item and no pack note has text, the page shows `No change text`. The dialog, the stored result, and the message to the project lead show the same flag.
+6. Confirm the verdict in the dialog. The dialog shows the verdict that the page sends. If you choose **Accept with changes** and no note has text, the dialog, the stored result, and the message to the project lead show `No change text`.
 
 You should see the summary become read-only with your verdict. The result shows **Delivered** when the agent has received it. If items are open, the page asks `N items are still open`. Select **Answer them first** or **Submit anyway**.
 
