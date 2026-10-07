@@ -173,16 +173,26 @@ test('doctor adds Docker checks only on an explicit factory host request', async
 });
 
 test('doctor prints a warning for an outside factory project without failing the checks', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-factory-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-factory-'));
+  const dataDir = path.join(root, 'data');
+  const workRoot = path.join(root, 'work');
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(path.join(workRoot, 'trusted'), { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.symlinkSync(outside, path.join(workRoot, 'linked'), 'dir');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dataDir, 'project-repos.json'), JSON.stringify([
-    { slug: 'trusted', repo: '/home/factory/work/trusted' },
-    { slug: 'outside', repo: '/home/factory/projects/outside' },
+    { slug: 'herdrboss', repo: '/home/factory/herdr-boss' },
+    { slug: 'trusted', repo: path.join(workRoot, 'trusted') },
+    { slug: 'outside', repo: path.join(workRoot, 'linked') },
   ]));
-  const options = { home: HOME, env: { HOME: '/home/factory', HERDR_BOSS_DIR: dataDir }, factory: true, runner: fake() };
+  const options = { home: HOME, env: { HOME: '/home/factory', HERDR_BOSS_DIR: dataDir }, factoryProjectGroup: workRoot, factory: true, runner: fake() };
   const lines = [];
   assert.equal(await doctorCommand([], { ...options, output: (line) => lines.push(line) }), 0);
   assert.ok(lines.includes('warning: project outside is outside the work volume and is not trusted.'));
+  assert.equal(lines.some((line) => /project trusted is outside/.test(line)), false);
+  assert.equal(lines.some((line) => /project herdrboss is outside/.test(line)), false);
 
   const json = [];
   assert.equal(await doctorCommand(['--json'], { ...options, output: (line) => json.push(line) }), 0);

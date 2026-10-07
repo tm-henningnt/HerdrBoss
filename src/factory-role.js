@@ -10,9 +10,18 @@ export const FACTORY_SEED = '/opt/herdr-boss-seed';
 export const FACTORY_PROJECT_GROUP = `${FACTORY_HOME}/work`;
 export const FACTORY_GIT_IDENTITY = Object.freeze({ 'user.name': 'Herdr Factory', 'user.email': 'factory@localhost.invalid' });
 
-export function isTrustedFactoryProjectPath(value) {
-  if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')) return false;
-  const relative = path.relative(FACTORY_PROJECT_GROUP, path.resolve(value));
+export function isTrustedFactoryProjectPath(value, { workRoot = FACTORY_PROJECT_GROUP, resolveSymlinks = true } = {}) {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')
+    || typeof workRoot !== 'string' || !path.isAbsolute(workRoot)) return false;
+  let root = path.resolve(workRoot);
+  let project = path.resolve(value);
+  if (resolveSymlinks) {
+    try {
+      root = fs.realpathSync(workRoot);
+      project = fs.realpathSync(value);
+    } catch { return false; }
+  }
+  const relative = path.relative(root, project);
   return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
 }
 

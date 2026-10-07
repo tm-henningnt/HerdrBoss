@@ -302,6 +302,9 @@ test('factory boss start skips an outside project and warns while it starts trus
   try {
     assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
     assert.match(f.output.join(''), /project outside is outside the work volume and is not trusted/i);
+    const pathsCall = f.dockerCalls.find(({ args }) => args.includes('project') && args.includes('paths') && args.includes('--json'));
+    assert.ok(pathsCall);
+    assert.equal(pathsCall.args[pathsCall.args.indexOf('--workdir') + 1], '/home/factory/herdr-boss');
     const harnessState = f.dockerCalls.find(({ args }) => args.some((value) => typeof value === 'string' && value.includes('prepareHarnessHome')));
     assert.ok(harnessState);
     const roots = JSON.parse(harnessState.args.at(-1));
@@ -462,6 +465,20 @@ test('factory boss start returns the live Boss state without checking login or m
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('auth') && args.at(-1) === 'status'), false);
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('kit') && args.includes('install')), false);
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('workspace') && args.includes('create')), false);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start reports a typed but unsubmitted prompt as not delivered', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'idle' }],
+    paneText: '❯ [herdr-boss] You are the Boss of this factory. Read the factory guide.',
+    resumePromptProbe: { promptMarkerPresent: false, promptTyped: true },
+  });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /prompt not delivered.*typed but not submitted/i);
+    assert.equal(f.dockerCalls.some(hasBossPromptScript), false);
+    assert.doesNotMatch(f.output.join(''), /Boss is idle/);
   } finally { f.cleanup(); }
 });
 

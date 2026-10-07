@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { guardCause } from '../src/denials.js';
+import { unregisterProjectRepo } from '../src/harness.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'src', 'cli.js');
@@ -101,6 +102,33 @@ function harnessSyncFixture(t) {
 function writeClaudeAutoMode(f, autoMode, settings = {}) {
   writeFile(path.join(f.home, '.claude', 'settings.json'), JSON.stringify({ ...settings, autoMode }));
 }
+
+test('unregister keeps null and non-object registry rows unchanged', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.dataDir, 'project-repos.json');
+  const before = `${JSON.stringify([{ slug: 'remove', repo: '/tmp/remove' }, null, 'keep', 17], null, 2)}\n`;
+  writeFile(file, before);
+
+  assert.doesNotThrow(() => unregisterProjectRepo('remove', { dataDir: f.dataDir }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), [null, 'keep', 17]);
+});
+
+test('unregister keeps a leftover temp file and writes an exclusive timestamp and pid backup', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.dataDir, 'project-repos.json');
+  const before = `${JSON.stringify([{ slug: 'remove', repo: '/tmp/remove' }, { slug: 'keep', repo: '/tmp/keep' }], null, 2)}\n`;
+  const leftover = `${file}.${process.pid}.tmp`;
+  writeFile(file, before);
+  fs.writeFileSync(leftover, 'leftover temp');
+
+  const result = unregisterProjectRepo('remove', { dataDir: f.dataDir });
+  assert.equal(result.removed, true);
+  assert.match(path.basename(result.backup), /^project-repos\.json\.\d+-\d+(?:-\d+)?\.bak$/);
+  assert.equal(fs.readFileSync(result.backup, 'utf8'), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), [{ slug: 'keep', repo: '/tmp/keep' }]);
+  assert.equal(fs.readFileSync(leftover, 'utf8'), 'leftover temp');
+  assert.deepEqual(fs.readdirSync(f.dataDir).filter((name) => name.endsWith('.tmp')), [path.basename(leftover)]);
+});
 
 test('the harness templates use only the known placeholders and name no real path, user, or owner', () => {
   const files = fs.readdirSync(TEMPLATES).sort();

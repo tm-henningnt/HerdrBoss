@@ -6,9 +6,10 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseCodexRoots, readProjectRepos } from './harness.js';
+import { parseCodexRoots } from './harness.js';
+import { listProjectPaths } from './project-paths.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
-import { FACTORY_HOME, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
+import { FACTORY_HOME, FACTORY_PROJECT_GROUP, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
@@ -293,7 +294,7 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
   return run;
 }
 
-export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, factory = env.HOME === FACTORY_HOME && isFactoryRole(env), stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
+export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, factory = env.HOME === FACTORY_HOME && isFactoryRole(env), factoryProjectGroup = FACTORY_PROJECT_GROUP, stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('The doctor timeout must be a positive number.');
   const items = [];
   let platform = 'linux';
@@ -320,7 +321,9 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
   }
   const ok = items.every((item) => item.status === 'green');
   const warnings = factory
-    ? readProjectRepos(env.HERDR_BOSS_DIR).filter((project) => !isTrustedFactoryProjectPath(project.repo)).map(factoryProjectWarning)
+    ? listProjectPaths({ dataDir: env.HERDR_BOSS_DIR, cwd: path.join(FACTORY_HOME, 'herdr-boss') })
+      .filter((project) => !isTrustedFactoryProjectPath(project.path, { workRoot: factoryProjectGroup }))
+      .map(factoryProjectWarning)
     : [];
   return { schema: 'herdr-boss.doctor/1', ok, exitCode: ok ? 0 : 4, items, warnings };
 }

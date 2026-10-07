@@ -95,6 +95,8 @@ H15: Join the Fleet page. Run connect again when the read credential is missing 
 
 You want a container with its own Herdr Boss service on the host.
 
+Factory start cannot resolve project symlinks inside the container because it runs on the host.
+
 What you do:
 
 1. Register the host. Run `herdr-boss factory host add <host> --from-file -`. Type the fields `address`, `user`, and `keyFile` as JSON on the input. The address stays out of the shell history.
@@ -126,7 +128,7 @@ The factory Boss starts projects with `herdr-boss project new <slug>`. In a fact
 
 The Boss start skips each registered project outside `/home/factory/work`. It prints a warning. It does not trust the project or install kit files there. `herdr-boss doctor` prints the warning inside the factory. Run `herdr-boss project unregister <slug>` to remove only the registry row. The command writes a backup first. It does not delete project files, worktrees, or branches.
 
-The start command checks the pane for `You are the Boss of this factory.`. It sends the role prompt to an idle Claude pane when the marker is missing and the pane shows an empty input prompt. It prints `prompt delivered` when the marker appears. It exits with `prompt not delivered` when the marker does not appear. A pane that already has the marker gets no second prompt.
+The start command checks the pane for `You are the Boss of this factory.`. It sends the role prompt to an idle Claude pane when the marker is missing and the pane shows an empty input prompt. It prints `prompt delivered` when the marker appears. It exits with `prompt not delivered` when the marker does not appear. A pane that already has the marker gets no second prompt. A typed prompt that was not submitted reports `prompt not delivered` and names that state.
 
 If you do not see it: the command exits with code 3 and adds one Mailbox item when a login is missing. Sign in, then run `factory boss start <name> --resume`.
 

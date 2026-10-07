@@ -135,8 +135,9 @@ function isEmptyClaudePrompt(text) {
   return visible === '❯' || agentReadyVisible('claude', visible);
 }
 
-function promptNotDeliveredError(pane, text, host) {
-  return new Error(`The factory Boss could not start: prompt not delivered in pane ${pane}. Inspect the pane before you retry.\n` +
+function promptNotDeliveredError(pane, text, host, state = '') {
+  const stateText = state ? ` (${state})` : '';
+  return new Error(`The factory Boss could not start: prompt not delivered${stateText} in pane ${pane}. Inspect the pane before you retry.\n` +
     `Pane text:\n${text === null ? '(capture unavailable)' : maskBossDiagnostic(text, host) || '(empty)'}`);
 }
 
@@ -319,14 +320,15 @@ function kitCommand(name, cwd, command) {
 
 async function readFactoryRoots(docker, name, { onWarning = () => {} } = {}) {
   const raw = await dockerCall(docker, ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
-    `hf-${name}`, 'herdr-boss', 'project', 'paths', '--json']);
+    '--workdir', BOSS_ROOT, `hf-${name}`, 'herdr-boss', 'project', 'paths', '--json']);
   let projects;
   try { projects = JSON.parse(raw); } catch { throw new Error('The factory project paths are invalid.'); }
   if (!Array.isArray(projects)) throw new Error('The factory project paths are invalid.');
   const roots = [BOSS_ROOT];
   for (const project of projects) {
     if (typeof project?.path !== 'string') continue;
-    if (!isTrustedFactoryProjectPath(project.path)) {
+    // The host cannot resolve this path inside the container. Factory doctor checks its real target.
+    if (!isTrustedFactoryProjectPath(project.path, { resolveSymlinks: false })) {
       onWarning(factoryProjectWarning(project));
       continue;
     }
@@ -550,8 +552,12 @@ export async function factoryBossStart(args, io) {
   if (existing.live) {
     const text = await readBossPane(docker, name, paneId(existing.pane));
     if (startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
-    if (resume && existing.pane?.agent === harness && existing.state === 'idle') {
-      resumeExisting = await hasTypedUnsentBossPrompt(docker, name, existing);
+    if (existing.pane?.agent === harness && existing.state === 'idle') {
+      const typedUnsentPrompt = await hasTypedUnsentBossPrompt(docker, name, existing);
+      if (typedUnsentPrompt && !resume) {
+        throw promptNotDeliveredError(paneId(existing.pane), text, diagnosticHost, 'typed but not submitted');
+      }
+      resumeExisting = resume && typedUnsentPrompt;
     }
     if (!resumeExisting && text?.includes(BOSS_PROMPT_MARKER)) {
       io.stdout.write(`Boss is ${existing.state} in pane ${paneId(existing.pane)}.\n`);
