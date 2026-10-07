@@ -1,12 +1,11 @@
-import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { maskLine } from './factory-host.js';
 import { redactSecrets } from './redact.js';
 import { assertOwned, managedFactory, transportFor, inspect } from './factory-core.js';
 import { assertName } from './factory-store.js';
-import { ensureFactoryGitIdentity, FACTORY_PROJECT_GROUP } from './factory-role.js';
+import { ensureFactoryGitIdentity, FACTORY_PROJECT_GROUP, factoryProjectWarning, isTrustedFactoryProjectPath } from './factory-role.js';
 import { verifyHarnessLogin, openCodeCredentialCount, openCodeMissingLine } from './factory-wizard.js';
-import { waitForAgentReady } from './kit/workers.js';
+import { agentReadyVisible, waitForAgentReady } from './kit/workers.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const BOSS_ROOT = '/home/factory/herdr-boss';
@@ -16,6 +15,8 @@ const LOGIN_TIMEOUT_MS = 30 * 60_000;
 const BOSS_PROMPT_MARKER = 'You are the Boss of this factory.';
 const BOSS_PROMPT_RETRY_LIMIT = 3;
 const BOSS_PROMPT_RETRY_WAIT_MS = 20_000;
+const BOSS_PROMPT_MARKER_WAIT_MS = 20_000;
+const BOSS_PROMPT_MARKER_POLL_MS = 250;
 
 export const BOSS_START_CALL_PLAN = Object.freeze([
   'harness-login',
@@ -41,7 +42,7 @@ import { loadModels } from '/home/factory/herdr-boss/src/kit/config.js';
 import { handoffTarget, successorAgentArgs } from '/home/factory/herdr-boss/src/handoff.js';
 import { runBossPromptReadiness } from '/home/factory/herdr-boss/src/factory-boss.js';
 
-const [harness, pane, workspace, prompt, resumeExistingArg] = process.argv.slice(1);
+const [harness, pane, workspace, prompt, resumeExistingArg, forcePromptArg] = process.argv.slice(1);
 const herdr = createHerdrRunner();
 const policy = loadPolicy({ warn: () => {} });
 const target = handoffTarget(harness, {}, policy, loadModels());
@@ -71,6 +72,7 @@ const result = runBossPromptReadiness({
   deliverPrompt: () => deliverPrompt('boss', prompt, promptMarker, { ...readyOptions, kind: harness }),
   resumeExisting,
   promptMarker,
+  forcePrompt: forcePromptArg === 'true',
 });
 console.log(JSON.stringify(result));
 `;
@@ -108,19 +110,35 @@ function maskBossDiagnostic(value, host = {}) {
 }
 
 async function readBossPane(docker, name, pane) {
+  let emptyCapture = null;
   for (const source of [['--source', 'detection'], []]) {
     try {
       const result = await herdrCall(docker, name, ['pane', 'read', pane, ...source, '--lines', '120', '--format', 'text']);
-      return typeof result === 'string' ? result : result?.text ?? result?.output ?? '';
+      const captured = typeof result === 'string' ? result : result?.text ?? result?.output ?? '';
+      const text = typeof captured === 'string' ? captured : String(captured ?? '');
+      if (typeof text === 'string' && text.trim()) return text;
+      emptyCapture = text;
     } catch { /* Try the plain read next. */ }
   }
-  return null;
+  return emptyCapture;
 }
 
 function bossStartError(pane, text, stderr, host, dialog = startupDialog(text) ?? 'unknown') {
   return new Error(`The factory Boss could not start: ${dialog} dialog in pane ${pane}. Inspect this pane before you retry.\n` +
     `Pane text:\n${text === null ? '(capture unavailable)' : maskBossDiagnostic(text, host) || '(empty)'}\n` +
     `Prompt script stderr:\n${maskBossDiagnostic(stderr, host) || '(empty)'}`);
+}
+
+function isEmptyClaudePrompt(text) {
+  const visible = stripVTControlCharacters(String(text ?? '')).trim();
+  if (!visible || visible.includes(BOSS_PROMPT_MARKER) || startupDialog(visible)) return false;
+  return visible === '❯' || agentReadyVisible('claude', visible);
+}
+
+function promptNotDeliveredError(pane, text, host, state = '') {
+  const stateText = state ? ` (${state})` : '';
+  return new Error(`The factory Boss could not start: prompt not delivered${stateText} in pane ${pane}. Inspect the pane before you retry.\n` +
+    `Pane text:\n${text === null ? '(capture unavailable)' : maskBossDiagnostic(text, host) || '(empty)'}`);
 }
 
 export function runBossPromptReadiness({
@@ -132,6 +150,7 @@ export function runBossPromptReadiness({
   deliverPrompt,
   resumeExisting = false,
   promptMarker,
+  forcePrompt = false,
   enterAttempts = 0,
 }) {
   const ready = (timeoutMs) => {
@@ -154,16 +173,19 @@ export function runBossPromptReadiness({
   let text = readTextSafe();
   if (startupDialog(text)) return { outcome: 'dialog', enterAttempts };
   const promptAlreadyPresent = text.includes(promptMarker);
-  if (!ready(BOSS_PROMPT_RETRY_WAIT_MS) && !(resumeExisting && promptAlreadyPresent)) {
+  const isInitiallyReady = forcePrompt ? false : ready(BOSS_PROMPT_RETRY_WAIT_MS);
+  if (!isInitiallyReady && !(resumeExisting && promptAlreadyPresent) && !forcePrompt) {
     return { outcome: 'not-ready', enterAttempts };
   }
-  if (!promptAlreadyPresent && deliverPrompt) {
+  if (!promptAlreadyPresent && deliverPrompt && (isInitiallyReady || forcePrompt)) {
     try {
       if (deliverPrompt() === 'submitted') enterAttempts = 1;
     } catch {
       // The readiness check below decides whether the prompt was submitted.
       enterAttempts = 1;
+      if (forcePrompt) return { outcome: 'prompt-not-delivered', enterAttempts };
     }
+    if (forcePrompt) return { outcome: 'prompt-delivered', enterAttempts };
   }
 
   let isAgentReady = ready(BOSS_PROMPT_RETRY_WAIT_MS);
@@ -291,28 +313,28 @@ async function hasTypedUnsentBossPrompt(docker, name, state) {
   } catch { return false; }
 }
 
-function safeProjectPath(value) {
-  if (!path.isAbsolute(value) || value.includes('\0')) return false;
-  const relative = path.relative(WORK_ROOT, path.resolve(value));
-  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
-}
-
 function kitCommand(name, cwd, command) {
   return ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
     '--workdir', cwd, `hf-${name}`, 'herdr-boss', ...command];
 }
 
-async function readFactoryRoots(docker, name) {
+async function readFactoryRoots(docker, name, { onWarning = () => {} } = {}) {
   const raw = await dockerCall(docker, ['exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
-    `hf-${name}`, 'herdr-boss', 'project', 'paths', '--json']);
+    '--workdir', BOSS_ROOT, `hf-${name}`, 'herdr-boss', 'project', 'paths', '--json']);
   let projects;
   try { projects = JSON.parse(raw); } catch { throw new Error('The factory project paths are invalid.'); }
   if (!Array.isArray(projects)) throw new Error('The factory project paths are invalid.');
-  const roots = [...new Set([BOSS_ROOT, ...projects.map((project) => project?.path).filter((value) => typeof value === 'string')])];
-  for (const cwd of roots) {
-    if (cwd !== BOSS_ROOT && !safeProjectPath(cwd)) throw new Error('A project path is outside the factory work volume.');
+  const roots = [BOSS_ROOT];
+  for (const project of projects) {
+    if (typeof project?.path !== 'string') continue;
+    // The host cannot resolve this path inside the container. Factory doctor checks its real target.
+    if (!isTrustedFactoryProjectPath(project.path, { resolveSymlinks: false })) {
+      onWarning(factoryProjectWarning(project));
+      continue;
+    }
+    roots.push(project.path);
   }
-  return roots;
+  return [...new Set(roots)];
 }
 
 // The Boss and its projects live in the factory checkout and under the work volume root.
@@ -388,20 +410,41 @@ async function ensureBossPane(docker, name, state) {
   return { workspaceId: id, paneId: paneName };
 }
 
-async function startBossPrompt(docker, name, harness, { workspaceId: workspace, paneId: pane }, { resumeExisting = false, diagnosticHost } = {}) {
+async function waitForBossPromptMarker(docker, name, pane, text) {
+  let visible = text;
+  let elapsed = 0;
+  while (typeof visible === 'string' && !visible.includes(BOSS_PROMPT_MARKER) && elapsed < BOSS_PROMPT_MARKER_WAIT_MS) {
+    pause(BOSS_PROMPT_MARKER_POLL_MS);
+    elapsed += BOSS_PROMPT_MARKER_POLL_MS;
+    visible = await readBossPane(docker, name, pane);
+  }
+  return visible;
+}
+
+async function startBossPrompt(docker, name, harness, { workspaceId: workspace, paneId: pane }, { resumeExisting = false, forcePrompt = false, diagnosticHost } = {}) {
   const result = await docker.run([
     'exec', '--user', 'factory', '--env', 'HOME=/home/factory', '--env', `HERDR_BOSS_DIR=${DATA_ROOT}`,
     '--env', 'HERDR_ENV=1', '--env', `HERDR_PANE_ID=${pane}`, '--env', `HERDR_WORKSPACE_ID=${workspace}`,
     '--env', 'USER=factory', '--workdir', BOSS_ROOT, `hf-${name}`, 'node', '--input-type=module', '-e', BOSS_PROMPT_SCRIPT,
-    harness, pane, workspace, BOSS_PROMPT, String(resumeExisting),
+    harness, pane, workspace, BOSS_PROMPT, String(resumeExisting), String(forcePrompt),
   ], { timeout: 300_000 });
-  const text = await readBossPane(docker, name, pane);
+  let text = await readBossPane(docker, name, pane);
   const dialog = startupDialog(text);
-  if (result.code !== 0 || dialog) throw bossStartError(pane, text, result.stderr, diagnosticHost, dialog ?? 'unknown');
+  if (dialog) throw bossStartError(pane, text, result.stderr, diagnosticHost, dialog);
+  if (result.code !== 0) {
+    if (forcePrompt && isEmptyClaudePrompt(text)) throw promptNotDeliveredError(pane, text, diagnosticHost);
+    throw bossStartError(pane, text, result.stderr, diagnosticHost, 'unknown');
+  }
   let outcome;
   try { outcome = JSON.parse(result.stdout); }
   catch { throw bossStartError(pane, text, result.stderr, diagnosticHost); }
-  if (!['ready', 'unsent'].includes(outcome?.outcome)) throw bossStartError(pane, text, result.stderr, diagnosticHost);
+  if (outcome?.outcome === 'prompt-not-delivered') throw promptNotDeliveredError(pane, text, diagnosticHost);
+  if (!['ready', 'unsent', 'prompt-delivered'].includes(outcome?.outcome)) {
+    if (forcePrompt && isEmptyClaudePrompt(text)) throw promptNotDeliveredError(pane, text, diagnosticHost);
+    throw bossStartError(pane, text, result.stderr, diagnosticHost);
+  }
+  text = await waitForBossPromptMarker(docker, name, pane, text);
+  if (!text?.includes(BOSS_PROMPT_MARKER)) throw promptNotDeliveredError(pane, text, diagnosticHost);
   return outcome;
 }
 
@@ -505,15 +548,28 @@ export async function factoryBossStart(args, io) {
   const { docker, diagnosticHost } = await inspectFactory(name, io);
   const existing = await probeBoss(docker, name);
   let resumeExisting = false;
+  let repairExistingPrompt = false;
   if (existing.live) {
-    if (['blocked', 'unknown', 'idle'].includes(existing.state)) {
-      const text = await readBossPane(docker, name, paneId(existing.pane));
-      if (startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
+    const text = await readBossPane(docker, name, paneId(existing.pane));
+    if (startupDialog(text)) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost);
+    if (existing.pane?.agent === harness && existing.state === 'idle') {
+      const typedUnsentPrompt = await hasTypedUnsentBossPrompt(docker, name, existing);
+      if (typedUnsentPrompt && !resume) {
+        throw promptNotDeliveredError(paneId(existing.pane), text, diagnosticHost, 'typed but not submitted');
+      }
+      resumeExisting = resume && typedUnsentPrompt;
     }
-    if (resume && existing.pane?.agent === harness && existing.state === 'idle') {
-      resumeExisting = await hasTypedUnsentBossPrompt(docker, name, existing);
+    if (!resumeExisting && text?.includes(BOSS_PROMPT_MARKER)) {
+      io.stdout.write(`Boss is ${existing.state} in pane ${paneId(existing.pane)}.\n`);
+      return 0;
+    }
+    if (!resumeExisting && harness === 'claude' && existing.pane?.agent === 'claude'
+      && ['idle', 'unknown', 'done'].includes(existing.state) && isEmptyClaudePrompt(text)) {
+      resumeExisting = true;
+      repairExistingPrompt = true;
     }
     if (!resumeExisting) {
+      if (existing.state === 'unknown' && !text?.trim()) throw bossStartError(paneId(existing.pane), text, '', diagnosticHost, 'unknown');
       io.stdout.write(`Boss is ${existing.state} in pane ${paneId(existing.pane)}.\n`);
       return 0;
     }
@@ -525,12 +581,16 @@ export async function factoryBossStart(args, io) {
     io.stdout.write(`Factory ${name}: ${harness} login is required. A Mailbox item names the Owner command.\n`);
     return 3;
   }
-  const roots = await readFactoryRoots(docker, name);
+  const roots = await readFactoryRoots(docker, name, { onWarning: (warning) => io.stdout.write(`Warning: ${warning}\n`) });
   await prepareFactoryHarness(docker, name, harness, trustRoots(roots));
   await ensureFactoryGitIdentity(docker, name);
   await installFactoryKits(docker, name, roots);
   const bossPane = await ensureBossPane(docker, name, existing);
-  const result = await startBossPrompt(docker, name, harness, bossPane, { resumeExisting, diagnosticHost });
+  const result = await startBossPrompt(docker, name, harness, bossPane, { resumeExisting, forcePrompt: repairExistingPrompt, diagnosticHost });
+  if (result?.outcome === 'prompt-delivered') {
+    io.stdout.write(`Factory ${name}: prompt delivered in pane ${bossPane.paneId}.\n`);
+    return 0;
+  }
   if (result?.outcome === 'ready') {
     io.stdout.write(`Started the ${harness} Boss in pane ${bossPane.paneId}.\n`);
     return 0;

@@ -34,6 +34,7 @@ function fixture({
   promptOutcome = 'ready',
   executeHarnessState = false,
   paneText = '',
+  detectionPaneText = paneText,
   promptStderr = 'private prompt error',
   containerHostname = 'fixture-node',
   paneReadCode = 0,
@@ -74,6 +75,9 @@ function fixture({
   let currentResumePromptProbe = resumePromptProbe;
   let workspaces = workspaceRows;
   let panes = paneRows;
+  let currentPaneText = paneText;
+  let currentDetectionPaneText = detectionPaneText;
+  let promptDeliveries = 0;
   const docker = { async run(args, options) {
       dockerCalls.push({ args, options });
       if (args[0] === 'container' && args[1] === 'inspect') return { code: 0, stdout: JSON.stringify([container]), stderr: '' };
@@ -118,7 +122,10 @@ function fixture({
         return { code: 0, stdout: JSON.stringify({ workspaces }), stderr: '' };
       }
       if (args.includes('pane') && args.includes('list')) return { code: 0, stdout: JSON.stringify({ panes }), stderr: '' };
-      if (args.includes('pane') && args.includes('read')) return { code: args.includes('--source') ? detectionReadCode : paneReadCode, stdout: JSON.stringify({ text: paneText }), stderr: '' };
+      if (args.includes('pane') && args.includes('read')) return {
+        code: args.includes('--source') ? detectionReadCode : paneReadCode,
+        stdout: JSON.stringify({ text: args.includes('--source') ? currentDetectionPaneText : currentPaneText }), stderr: '',
+      };
       if (script.includes('inspectBossPromptText') && script.includes('readAgentText')) {
         return { code: 0, stdout: JSON.stringify(currentResumePromptProbe), stderr: '' };
       }
@@ -142,15 +149,25 @@ function fixture({
       }
       if (script.includes('openMessageStore')) return { code: 0, stdout: '', stderr: '' };
       if (script.includes('deliverPrompt')) {
+        promptDeliveries += 1;
         if (promptCode !== 0) return { code: promptCode, stdout: '', stderr: promptStderr };
+        const forcePrompt = args.at(-1) === 'true';
         const pane = panes.find((item) => item.label === 'boss');
         if (pane) Object.assign(pane, {
           agent: 'claude',
           agent_status: promptOutcome === 'unsent' ? 'idle' : 'working',
-          ...(promptOutcome === 'unsent' ? { pending_prompt: args.at(-2), prompt_marker_present: false } : {}),
+          ...(promptOutcome === 'unsent' ? { pending_prompt: args.at(-3), prompt_marker_present: false } : {}),
         });
-        if (promptOutcome === 'unsent') currentResumePromptProbe = { promptMarkerPresent: false, promptTyped: true };
-        return { code: 0, stdout: JSON.stringify({ outcome: promptOutcome }), stderr: '' };
+        if (promptOutcome === 'unsent') {
+          currentResumePromptProbe = { promptMarkerPresent: false, promptTyped: true };
+          currentPaneText = `${currentPaneText}\nYou are the Boss of this factory.`.trim();
+          currentDetectionPaneText = currentPaneText;
+        }
+        if (promptOutcome === 'ready') {
+          currentPaneText = `${currentPaneText}\n[herdr-boss] You are the Boss of this factory.`.trim();
+          currentDetectionPaneText = currentPaneText;
+        }
+        return { code: 0, stdout: JSON.stringify({ outcome: forcePrompt ? 'prompt-delivered' : promptOutcome }), stderr: '' };
       }
       return { code: 0, stdout: '', stderr: '' };
     } };
@@ -161,7 +178,7 @@ function fixture({
     stdout: { write: (text) => output.push(text) },
     stderr: { write: (text) => output.push(text) },
   };
-  return { root, io, output, dockerCalls, git, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, io, output, dockerCalls, git, get promptDeliveries() { return promptDeliveries; }, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function hasBossPromptScript({ args }) {
@@ -275,6 +292,29 @@ test('factory boss start trusts the factory work folder for a fresh Claude home'
     const kitChecks = f.dockerCalls.filter(({ args }) => args.includes('check') && args.includes('agents'));
     const kitWorkdirs = kitChecks.map(({ args }) => args[args.indexOf('--workdir') + 1]);
     assert.equal(kitWorkdirs.includes('/home/factory/work'), false);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start skips an outside project and warns while it starts trusted projects', async () => {
+  const inside = { slug: 'inside', path: '/home/factory/work/inside' };
+  const outside = { slug: 'outside', path: '/home/factory/projects/outside' };
+  const f = fixture({ projectPaths: [inside, outside] });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.match(f.output.join(''), /project outside is outside the work volume and is not trusted/i);
+    const pathsCall = f.dockerCalls.find(({ args }) => args.includes('project') && args.includes('paths') && args.includes('--json'));
+    assert.ok(pathsCall);
+    assert.equal(pathsCall.args[pathsCall.args.indexOf('--workdir') + 1], '/home/factory/herdr-boss');
+    const harnessState = f.dockerCalls.find(({ args }) => args.some((value) => typeof value === 'string' && value.includes('prepareHarnessHome')));
+    assert.ok(harnessState);
+    const roots = JSON.parse(harnessState.args.at(-1));
+    assert.ok(roots.includes(inside.path));
+    assert.ok(!roots.includes(outside.path));
+    const kitWorkdirs = f.dockerCalls
+      .filter(({ args }) => args.includes('check') && args.includes('agents'))
+      .map(({ args }) => args[args.indexOf('--workdir') + 1]);
+    assert.ok(kitWorkdirs.includes(inside.path));
+    assert.ok(!kitWorkdirs.includes(outside.path));
   } finally { f.cleanup(); }
 });
 
@@ -405,12 +445,12 @@ test('factory boss start exposes and follows the five-step call plan inside the 
     assert.ok(f.dockerCalls.indexOf(createWorkspace) < f.dockerCalls.indexOf(prompt));
     assert.ok(prompt.args.includes('HERDR_BOSS_DIR=/home/factory/.herdr-boss'));
     const promptScript = prompt.args[prompt.args.indexOf('-e') + 1];
-    assert.ok(prompt.args.at(-2).includes('herdr-boss project new'));
+    assert.ok(prompt.args.at(-3).includes('herdr-boss project new'));
     assert.ok(promptScript.includes('/home/factory/herdr-boss/src/handoff.js'));
     assert.match(promptScript, /runBossPromptReadiness/);
     assert.doesNotMatch(promptScript, /enterAttempts < 3/);
     assert.doesNotMatch(promptScript, /waitForAgentReady/);
-    assert.ok(prompt.args.at(-2).includes('Keep projects, messages, and handover state in this factory.'));
+    assert.ok(prompt.args.at(-3).includes('Keep projects, messages, and handover state in this factory.'));
   } finally { f.cleanup(); }
 });
 
@@ -425,6 +465,75 @@ test('factory boss start returns the live Boss state without checking login or m
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('auth') && args.at(-1) === 'status'), false);
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('kit') && args.includes('install')), false);
     assert.equal(f.dockerCalls.some(({ args }) => args.includes('workspace') && args.includes('create')), false);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start reports a typed but unsubmitted prompt as not delivered', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'idle' }],
+    paneText: '❯ [herdr-boss] You are the Boss of this factory. Read the factory guide.',
+    resumePromptProbe: { promptMarkerPresent: false, promptTyped: true },
+  });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /prompt not delivered.*typed but not submitted/i);
+    assert.equal(f.dockerCalls.some(hasBossPromptScript), false);
+    assert.doesNotMatch(f.output.join(''), /Boss is idle/);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start delivers the role prompt to a clean empty Claude prompt', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'idle' }],
+    paneText: '────\n❯\n────\n? for shortcuts',
+  });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.equal(f.promptDeliveries, 1);
+    assert.equal(f.dockerCalls.find(hasBossPromptScript).args.at(-1), 'true');
+    assert.match(f.output.join(''), /prompt delivered/i);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start does not deliver the role prompt a second time when its marker is present', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'idle' }],
+    paneText: '[herdr-boss] You are the Boss of this factory.',
+  });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.equal(f.promptDeliveries, 0);
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start fails with prompt not delivered when delivery fails on an empty Claude prompt', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'idle' }],
+    paneText: '────\n❯\n────\n? for shortcuts',
+    promptCode: 1,
+  });
+  try {
+    await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /prompt not delivered/i);
+    assert.equal(f.promptDeliveries, 1);
+    assert.equal(f.dockerCalls.find(hasBossPromptScript).args.at(-1), 'true');
+  } finally { f.cleanup(); }
+});
+
+test('factory boss start retries an empty detection capture when a clean Claude prompt is visible', async () => {
+  const f = fixture({
+    workspaceRows: [{ workspace_id: 'ws-existing', label: 'Boss' }],
+    paneRows: [{ pane_id: 'ws-existing:p1', workspace_id: 'ws-existing', label: 'boss', agent: 'claude', agent_status: 'unknown' }],
+    detectionPaneText: '',
+    paneText: '────\n❯\n────\n? for shortcuts',
+  });
+  try {
+    assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0);
+    assert.equal(f.promptDeliveries, 1);
+    assert.equal(f.dockerCalls.find(hasBossPromptScript).args.at(-1), 'true');
+    assert.match(f.output.join(''), /prompt delivered/i);
   } finally { f.cleanup(); }
 });
 
@@ -672,9 +781,9 @@ test('Boss start names a dialog that only the plain pane read shows', async () =
   finally { f.cleanup(); }
 });
 
-test('Boss start trusts a ready outcome when no pane read works and shows no dialog', async () => {
+test('Boss start fails when no pane read can confirm the role prompt marker', async () => {
   const f = fixture({ paneReadCode: 1, promptOutcome: 'ready' });
-  try { assert.equal(await factoryCommand(['boss', 'start', 'demo'], f.io), 0); }
+  try { await assert.rejects(factoryCommand(['boss', 'start', 'demo'], f.io), /prompt not delivered/i); }
   finally { f.cleanup(); }
 });
 
@@ -733,7 +842,7 @@ test('resume retries an unsent prompt in the existing Boss pane without creating
     assert.equal(await factoryCommand(['boss', 'start', 'demo', '--resume'], f.io), 3);
     const promptStarts = f.dockerCalls.filter(hasBossPromptScript);
     assert.equal(promptStarts.length, 2);
-    assert.equal(promptStarts[1].args.at(-1), 'true');
+    assert.equal(promptStarts[1].args.at(-2), 'true');
     assert.equal(f.dockerCalls.filter(({ args }) => args.includes('workspace') && args.includes('create')).length, 1);
     assert.equal(f.dockerCalls.filter(({ args }) => args.includes('tab') && args.includes('create')).length, tabCreatesAfterFirstStart);
     assert.match(promptStarts[1].args[promptStarts[1].args.indexOf('-e') + 1], /resumeExisting/);

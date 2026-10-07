@@ -3,10 +3,13 @@
 import { verifyMessageCaller } from './messages.js';
 import { FIXABLE_STEPS, factoryRole, runProjectNew, runProjectStep } from './project-new.js';
 import { checkProject, formatCheck } from './project-new-check.js';
+import { SLUG } from './projects.js';
+import { unregisterProjectRepo } from './harness.js';
 
 export const PROJECT_NEW_USAGE = 'Usage: project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]';
 export const PROJECT_CHECK_USAGE = 'Usage: project check <slug> [--fix STEP [--start]]';
-export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}`;
+export const PROJECT_UNREGISTER_USAGE = 'Usage: project unregister <slug>';
+export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}\n${PROJECT_UNREGISTER_USAGE}`;
 export const EXIT_NOT_BUILT = 2;
 export const EXIT_WAITING = 3;
 export const EXIT_MISSING = 4;
@@ -70,6 +73,15 @@ export function verifyProjectCaller(env, herdr) {
   }
 }
 
+function unregisterCommand(args, { dataDir, log }) {
+  if (args.length !== 1 || !SLUG.test(args[0])) throw new Error(PROJECT_UNREGISTER_USAGE);
+  const [slug] = args;
+  const result = unregisterProjectRepo(slug, { dataDir });
+  if (!result.removed) throw new Error(`Unknown project slug: ${slug}.`);
+  log(`Project ${slug} unregistered. Registry backup written.`);
+  return 0;
+}
+
 const LABEL = { done: 'done', skipped: 'skipped', planned: '', 'not-built': 'not built yet', failed: 'failed', pending: 'pending', waiting: 'waiting' };
 
 function stepLine(step) {
@@ -128,6 +140,7 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
 // Run `project new` or `project check`. Returns the exit code. A usage error or a refusal throws.
 export function projectCommand(args, { env = process.env, herdr, dataDir, log = console.log, hooks, flowOptions = {} } = {}) {
   const [action, ...rest] = args;
+  if (action === 'unregister') return unregisterCommand(rest, { dataDir, log });
   if (action === 'check') return checkCommand(rest, { herdr, dataDir, log, hooks, env, flowOptions });
   if (action !== 'new') throw new Error(PROJECT_USAGE);
   // The caller check runs first: a worker pane must not reach any other step.

@@ -1,6 +1,7 @@
 // Harness settings that Herdr Boss orchestration needs. See docs/harness-setup.md.
 // Never print a setting value that is not a path: the settings files can hold keys.
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +44,43 @@ const LAUNCH_LABELS = {
 
 function homeDir() { return os.homedir(); }
 function registryFile(dataDir = DATA_DIR) { return path.join(dataDir, 'project-repos.json'); }
+function temporaryFile(file, contents) {
+  const temporary = `${file}.${Date.now()}-${process.pid}-${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(temporary, 0o600);
+    return temporary;
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+function backupRegistry(file, contents) {
+  const stamp = Date.now();
+  let backup;
+  for (let suffix = 0; backup === undefined; suffix += 1) {
+    const candidate = `${file}.${stamp}-${process.pid}${suffix ? `-${suffix}` : ''}.bak`;
+    try {
+      const descriptor = fs.openSync(candidate, 'wx', 0o600);
+      fs.closeSync(descriptor);
+      backup = candidate;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+
+  const temporary = `${backup}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, backup);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    try { fs.unlinkSync(backup); } catch {}
+    throw error;
+  }
+  return backup;
+}
 function codexConfigFile(home) { return path.join(home, '.codex', 'config.toml'); }
 function codexRulesFile(home) { return path.join(home, '.codex', 'rules', 'herdr.rules'); }
 // The state of the exact stop-own rule in a rules file: 'allow', 'forbidden', 'conflict', or null.
@@ -95,6 +133,32 @@ export function readProjectRepos(dataDir = DATA_DIR) {
     const rows = JSON.parse(fs.readFileSync(registryFile(dataDir), 'utf8'));
     return Array.isArray(rows) ? rows.filter((row) => row && typeof row.slug === 'string' && typeof row.repo === 'string' && row.repo) : [];
   } catch { return []; }
+}
+
+export function unregisterProjectRepo(slug, { dataDir = DATA_DIR } = {}) {
+  const file = registryFile(dataDir);
+  let rows;
+  let contents;
+  try {
+    contents = fs.readFileSync(file, 'utf8');
+    rows = JSON.parse(contents);
+  } catch { return { removed: false, backup: null }; }
+  if (!Array.isArray(rows) || !rows.some((row) => row && row.slug === slug)) return { removed: false, backup: null };
+
+  const backup = backupRegistry(file, contents);
+
+  let temporary;
+  try {
+    const kept = rows.filter((row) => row?.slug !== slug);
+    temporary = temporaryFile(file, `${JSON.stringify(kept, null, 2)}\n`);
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    if (temporary) {
+      try { fs.unlinkSync(temporary); } catch {}
+    }
+    throw error;
+  }
+  return { removed: true, backup };
 }
 
 // The first record for a slug is the project registration. A later publish keeps it.
