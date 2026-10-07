@@ -78,6 +78,37 @@ function knownFlags(flags, allowed) {
   if (unknown.length) fail(`Unknown option: --${unknown[0]}.`);
 }
 
+function worktreeKeepReason(worktree) {
+  if (!worktree) return 'the worker worktree is not registered';
+  if (worktree.restoreError) return 'the generated kit file could not be restored';
+  if (worktree.archiveError) return 'the report archive failed';
+  if (!worktree.exists) return 'the worker worktree is missing';
+  if (!worktree.merged) return `branch ${worktree.branch ?? '(detached)'} is not merged into ${worktree.baseBranch ?? 'the base branch'}`;
+  if (!worktree.clean) return 'the worktree has another dirty path';
+  if (worktree.livePane) return 'a live pane uses the worktree';
+  if (worktree.processScanError) return 'the process scan failed';
+  if (worktree.processBlocked) return 'a process uses the worktree';
+  if (worktree.isPrimary) return 'it is the primary checkout';
+  if (worktree.detached) return 'the worktree is detached';
+  if (worktree.prunable) return 'Git marks the worktree as prunable';
+  return 'the worktree did not pass the safe prune checks';
+}
+
+function isExpectedWorkerWorktree(config, name, worktree) {
+  if (typeof worktree !== 'string' || worktree.trim() === '') return false;
+  const expected = path.resolve(config.worktreePath(name));
+  const candidate = path.resolve(worktree);
+  const relative = path.relative(path.dirname(expected), candidate);
+  const singleChild = relative !== '' && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    && !relative.includes(path.sep);
+  return singleChild && candidate === expected;
+}
+
+function outputAfterCollect(output, line) {
+  try { output(line); } catch { /* Collection is already recorded. */ }
+}
+
 export { installedKitRevision };
 
 // The digest lines of a kit update, oldest change first. The digest names the impact and the
@@ -104,7 +135,7 @@ function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null
 function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
   herdr ??= command === 'wait' ? createWaitHerdr(createHerdrRunner) : createHerdrRunner();
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
@@ -378,7 +409,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       const acceptScope = flags.acceptscope == null ? undefined : flags.acceptscope.split(',').map((item) => item.trim()).filter(Boolean);
       if (acceptScope && !acceptScope.length) fail('--accept-scope needs at least one repository-relative path.');
       const serviceConfig = injectedServiceConfig ?? loadConfig();
-      return collectWorker(positional[0], {
+      const summary = collectWorker(positional[0], {
         record: flags.record,
         noRecord: flags.norecord,
         allow: flags.allow ?? [],
@@ -393,7 +424,39 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         rework: flags.rework == null ? 0 : Number(flags.rework),
         modelResult: flags.modelresult || null,
         modelReason: flags.modelreason || null,
-      }, { config, output, schedulePaneCloseFn });
+      }, { config, output, schedulePaneCloseFn, herdr, listWorktreeProcesses });
+      if (!flags.norecord) {
+        try {
+          if (serviceConfig.worktrees?.pruneAtCollect === false) {
+            outputAfterCollect(output, `Worker ${summary.name}: kept worktree because worktrees.pruneAtCollect is off.`);
+          } else if (!isExpectedWorkerWorktree(config, summary.name, summary.worktree)) {
+            outputAfterCollect(output, `Worker ${summary.name}: kept worktree because it is outside the worktree folder.`);
+          } else {
+            const candidates = pruneWorktrees(config, {
+              apply: true,
+              worktreePath: summary.worktree,
+              herdr,
+              output,
+              ...(listProcesses ? { listProcesses } : {}),
+            });
+            const worktree = candidates.find((item) => path.resolve(item.path) === path.resolve(summary.worktree));
+            if (!fs.existsSync(summary.worktree)) {
+              outputAfterCollect(output, `Worker ${summary.name}: removed merged worktree and branch ${summary.branch}.`);
+            } else {
+              outputAfterCollect(output, `Worker ${summary.name}: kept worktree because ${worktreeKeepReason(worktree)}.`);
+            }
+          }
+        } catch (error) {
+          let worktreeExists = true;
+          try { worktreeExists = fs.existsSync(summary.worktree); } catch {}
+          if (!worktreeExists) {
+            outputAfterCollect(output, `Worker ${summary.name}: removed merged worktree and branch ${summary.branch}.`);
+          } else {
+            outputAfterCollect(output, `Worker ${summary.name}: kept worktree because pruning failed: ${error.message}`);
+          }
+        }
+      }
+      return summary;
     }
     if (action === 'commit') {
       const normalized = rest.map((token) => token === '-m' ? '--message' : token);

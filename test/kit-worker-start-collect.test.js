@@ -2096,6 +2096,117 @@ function cleanWorkerRun(t, fixture, run) {
   });
 }
 
+function prepareCollectPruneFixture(t, name, { merge = true } = {}) {
+  const f = setupFixture(null);
+  const run = startWorker(name, { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+  });
+  cleanWorkerRun(t, f, run);
+  fs.mkdirSync(path.join(run.worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(run.worktree, 'src', 'change.js'), 'export const changed = true;\n');
+  git(run.worktree, 'add', 'src/change.js');
+  git(run.worktree, 'commit', '-m', 'worker change');
+  if (merge) git(f.root, 'merge', '--ff-only', run.branch);
+  writeWorkerReport(run, { changedPaths: ['src/change.js'] });
+  return { f, run };
+}
+
+function collectWithPruning(f, run, { pruneAtCollect = true, panes = [], processes = [], outputFn = null } = {}) {
+  const output = [];
+  const herdr = (args) => args[0] === 'pane' && args[1] === 'list' ? { panes } : f.herdr(args);
+  const summary = runKitCommand('worker', ['collect', run.name, '--outcome', 'done', '--gate-passed'], {
+    config: f.config,
+    env: f.env,
+    herdr,
+    serviceConfig: { workers: { paneCloseDelayMinutes: 2 }, worktrees: { pruneAtCollect } },
+    listProcesses: () => processes,
+    listWorktreeProcesses: () => [],
+    schedulePaneCloseFn: () => {},
+    output: outputFn ?? ((line) => output.push(line)),
+  });
+  return { summary, output };
+}
+
+test('worker collect removes a merged worktree after it archives the reports', (t) => {
+  const { f, run } = prepareCollectPruneFixture(t, 'collect-prune-merged');
+  const { summary, output } = collectWithPruning(f, run);
+
+  assert.equal(summary.name, run.name);
+  assert.equal(fs.existsSync(run.worktree), false);
+  assert.equal(git(f.root, 'branch', '--list', run.branch), '');
+  const archive = path.join(f.root, '.orchestration', 'reports', run.name);
+  assert.equal(fs.readFileSync(path.join(archive, 'report.md'), 'utf8'), 'Report.\n');
+  assert.ok(output.includes(`Worker ${run.name}: removed merged worktree and branch ${run.branch}.`));
+});
+
+test('worker collect keeps worktrees that are unmerged, disabled, live, or in use', (t) => {
+  const cases = [
+    { name: 'collect-prune-unmerged', merge: false, expected: /branch collect-prune-unmerged is not merged into the base branch/ },
+    { name: 'collect-prune-disabled', merge: true, pruneAtCollect: false, expected: /worktrees\.pruneAtCollect is off/ },
+    { name: 'collect-prune-live', merge: true, panes: (run) => [{ cwd: run.worktree, status: 'working' }], expected: /a live pane uses the worktree/ },
+    { name: 'collect-prune-busy', merge: true, processes: (run) => [{ pid: 1234, ppid: 42, command: 'node', cwd: run.worktree }], expected: /a process uses the worktree/ },
+  ];
+  for (const item of cases) {
+    const { f, run } = prepareCollectPruneFixture(t, item.name, { merge: item.merge });
+    const { output } = collectWithPruning(f, run, {
+      pruneAtCollect: item.pruneAtCollect ?? true,
+      panes: typeof item.panes === 'function' ? item.panes(run) : [],
+      processes: typeof item.processes === 'function' ? item.processes(run) : [],
+    });
+    assert.equal(fs.existsSync(run.worktree), true, item.name);
+    assert.ok(output.some((line) => line.startsWith(`Worker ${item.name}: kept worktree because `) && item.expected.test(line)), item.name);
+  }
+});
+
+test('worker collect will not prune a different registered worktree from its run record', (t) => {
+  const { f, run } = prepareCollectPruneFixture(t, 'collect-prune-misdirected');
+  const otherName = 'collect-prune-other';
+  const otherBranch = otherName;
+  const otherWorktree = f.config.worktreePath(otherName);
+  fs.mkdirSync(path.dirname(otherWorktree), { recursive: true });
+  git(f.root, 'worktree', 'add', '-b', otherBranch, otherWorktree, 'main');
+  t.after(() => fs.rmSync(otherWorktree, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(otherWorktree, '.worker'), { recursive: true });
+  const otherRun = { ...run, branch: otherBranch, worktree: otherWorktree };
+  writeWorkerReport(otherRun, { changedPaths: [] });
+  const record = JSON.parse(fs.readFileSync(run.recordFile, 'utf8'));
+  record.branch = otherBranch;
+  record.worktree = otherWorktree;
+  record.baseCommit = git(f.root, 'rev-parse', 'HEAD');
+  fs.writeFileSync(run.recordFile, JSON.stringify(record));
+  const output = [];
+
+  const summary = runKitCommand('worker', ['collect', run.name, '--outcome', 'done', '--gate-passed'], {
+    config: f.config,
+    env: f.env,
+    herdr: (args) => args[0] === 'pane' && args[1] === 'list' ? { panes: [] } : f.herdr(args),
+    serviceConfig: { workers: { paneCloseDelayMinutes: 2 }, worktrees: { pruneAtCollect: true } },
+    listProcesses: () => [],
+    listWorktreeProcesses: () => [],
+    schedulePaneCloseFn: () => {},
+    output: (line) => output.push(line),
+  });
+
+  assert.equal(summary.name, run.name);
+  assert.equal(fs.existsSync(otherWorktree), true);
+  assert.equal(fs.existsSync(run.worktree), true);
+  assert.ok(output.includes(`Worker ${run.name}: kept worktree because it is outside the worktree folder.`));
+});
+
+test('worker collect survives a failure while reporting the prune result after recording', (t) => {
+  const { f, run } = prepareCollectPruneFixture(t, 'collect-prune-output-error');
+  const summaryLine = `Worker ${run.name}: removed merged worktree and branch ${run.branch}.`;
+  const { summary } = collectWithPruning(f, run, {
+    outputFn: (line) => {
+      if (line === summaryLine) throw new Error('summary output failed');
+    },
+  });
+
+  assert.equal(summary.name, run.name);
+  assert.equal(fs.existsSync(run.worktree), false);
+  assert.equal(fs.existsSync(f.config.ledgerPath), true);
+});
+
 test('worker collect records by default when the orchestrator gives the review result', (t) => {
   const f = setupFixture(null);
   const run = startWorker('collect-default', { kind: 'codex', task: 'x', taskId: 'T1', allow: ['src/'] }, {

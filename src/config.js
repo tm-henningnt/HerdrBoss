@@ -157,6 +157,8 @@ const DEFAULTS = {
   },
   browser: { idleCloseMinutes: 20 },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
+  // Remove a clean worker worktree and its merged branch after collection.
+  worktrees: { pruneAtCollect: true },
   analytics: { actionsMinutes: true },
   // Install the Claude usage helper in the factory image home. The factory reads this key at each container start.
   factories: { claudeUsageHelper: true },
@@ -203,6 +205,7 @@ const SERVICE_SETTINGS = [
   ['Workers', 'workers.paneCloseDelayMinutes'],
   ['Workers', 'workers.uncollectedNoticeMinutes'],
   ['Workers', 'workers.leaseGraceMinutes'],
+  ['Workers', 'worktrees.pruneAtCollect'],
   ['Workers', 'watch.maxWorkers'],
   ['Workers', 'watch.maxWorkersByLane'],
   ['Watch', 'watch.quietHours'],
@@ -468,6 +471,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'push',
   'analytics.actionsMinutes',
   'factories.claudeUsageHelper',
+  'worktrees.pruneAtCollect',
 ]);
 const MAX_ALLOWED_HOSTS = 50;
 // One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.

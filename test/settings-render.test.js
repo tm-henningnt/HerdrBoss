@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { POLICY_DEFAULTS } from '../src/control.js';
-import { serviceSettingsView } from '../src/config.js';
+import { serviceSettingsView, validateServiceSettings } from '../src/config.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -91,6 +91,32 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   await app.saveServiceSettings('Paths', button);
   assert.deepEqual(sent.changes, { worktreeRoot: '/tmp/worker trees', projectRoot: '~/projects' });
   assert.equal(button.disabled, false);
+});
+
+test('Settings renders and saves the collect-time worktree pruning switch', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  const setting = s.serviceSettings.find((item) => item.setting === 'worktrees.pruneAtCollect');
+  assert.deepEqual(setting && { value: setting.value, source: setting.source }, { value: true, source: 'default' });
+  const html = app.settingsView(s);
+  assert.match(html, /type="checkbox" data-service-setting="worktrees\.pruneAtCollect" data-service-group="Workers" aria-label="worktrees\.pruneAtCollect" checked/);
+  assert.equal((html.match(/data-setting-help="worktrees\.pruneAtCollect"/g) || []).length, 1);
+
+  const toggle = { type: 'checkbox', dataset: { serviceSetting: 'worktrees.pruneAtCollect' }, checked: false };
+  app.context.document = {
+    querySelectorAll: () => [toggle],
+    querySelector: () => ({ textContent: '' }),
+  };
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ settings: [] }) };
+  };
+  await app.saveServiceSettings('Workers', { disabled: false });
+  assert.deepEqual(sent.changes, { 'worktrees.pruneAtCollect': false });
+  assert.deepEqual(validateServiceSettings({ 'worktrees.pruneAtCollect': true }), { 'worktrees.pruneAtCollect': true });
+  assert.throws(() => validateServiceSettings({ 'worktrees.pruneAtCollect': 'false' }), /must be true or false/);
 });
 
 test('Settings shows and saves release repository rows with all three fields', async () => {

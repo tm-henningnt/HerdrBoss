@@ -101,6 +101,7 @@ test('worker and browser maintenance settings have editable rows and help text',
     'workers.paneCloseDelayMinutes': { range: '0 to 60', default: '2' },
     'workers.uncollectedNoticeMinutes': { range: '1 to 1440', default: '30' },
     'browser.idleCloseMinutes': { range: '0 to 1440', default: '20' },
+    'worktrees.pruneAtCollect': { range: 'On or off', default: 'On' },
   };
   for (const [setting, values] of Object.entries(expected)) {
     const help = SETTING_HELP[setting];
@@ -108,7 +109,8 @@ test('worker and browser maintenance settings have editable rows and help text',
     assert.equal(help.group, 'service');
     assert.equal(help.range, values.range);
     assert.equal(help.default, values.default);
-    assert.match(app, new RegExp(`['"]${setting.replaceAll('.', '\\.')}['"]\\s*:\\s*\\[`));
+    if (setting === 'worktrees.pruneAtCollect') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'worktrees\.pruneAtCollect'/);
+    else assert.match(app, new RegExp(`['"]${setting.replaceAll('.', '\\.')}['"]\\s*:\\s*\\[`));
   }
 });
 

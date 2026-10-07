@@ -3,7 +3,56 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHerdrRunner, listCwdProcesses } from './workers.js';
 import { archiveWorkerReports } from './worker-archive.js';
+import { projectKit } from './agents-check.js';
 export { archiveWorkerReports } from './worker-archive.js';
+
+const GENERATED_KIT_FILE = 'docs/orchestration/herdr-boss.md';
+
+function isWorkerUntrackedPath(relative) {
+  return relative === '.worker' || relative.startsWith('.worker/')
+    || relative === '.orchestration' || relative.startsWith('.orchestration/')
+    || relative === 'opencode.json';
+}
+
+function generatedKitVersions(config) {
+  const versions = new Set([projectKit().text]);
+  const commits = git(config.root, ['log', '--format=%H', '--diff-filter=AM', config.baseBranch, '--', GENERATED_KIT_FILE])
+    .split(/\r?\n/).filter(Boolean);
+  for (const commit of commits) versions.add(git(config.root, ['show', `${commit}:${GENERATED_KIT_FILE}`]));
+  return versions;
+}
+
+function worktreeDirt(root, isGeneratedKitContent) {
+  const records = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).split('\0').filter(Boolean);
+  const dirtyPaths = [];
+  const untrackedPaths = [];
+  let generatedKitDirty = false;
+  for (const record of records) {
+    const status = record.slice(0, 2);
+    const relative = record.slice(3);
+    if (relative === GENERATED_KIT_FILE) {
+      let content = null;
+      if (status[0] === ' ') {
+        try {
+          const file = path.join(root, GENERATED_KIT_FILE);
+          if (fs.lstatSync(file).isFile()) content = fs.readFileSync(file, 'utf8');
+        } catch {}
+      }
+      if (content !== null && isGeneratedKitContent(content)) {
+        generatedKitDirty = true;
+        continue;
+      }
+      dirtyPaths.push(relative);
+      continue;
+    }
+    if (status === '??' && isWorkerUntrackedPath(relative)) {
+      untrackedPaths.push(relative);
+      continue;
+    }
+    dirtyPaths.push(relative || '(unreadable path)');
+  }
+  return { clean: dirtyPaths.length === 0, dirtyPaths, generatedKitDirty, untrackedPaths };
+}
 
 function git(root, args, options = {}) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', ...options });
@@ -56,10 +105,15 @@ function isAncestor(repoRoot, ancestor, descendant) {
 export function classifyWorktrees(config, { panes = [], now = Date.now() } = {}) {
   const list = parseWorktrees(git(config.root, ['worktree', 'list', '--porcelain']));
   const projectRoot = pathKey(config.root);
+  let generatedKitContentVersions;
+  const isGeneratedKitContent = (content) => {
+    generatedKitContentVersions ??= generatedKitVersions(config);
+    return generatedKitContentVersions.has(content);
+  };
   return list.map((worktree) => {
     const exists = fs.existsSync(worktree.path);
-    let clean = false;
-    if (exists) clean = git(worktree.path, ['status', '--porcelain=v1', '--untracked-files=all']).trim() === '';
+    const dirt = exists ? worktreeDirt(worktree.path, isGeneratedKitContent) : { clean: false, dirtyPaths: [], generatedKitDirty: false, untrackedPaths: [] };
+    const { clean } = dirt;
     const merged = !!worktree.head && isAncestor(config.root, worktree.head, config.baseBranch);
     let stat;
     try { stat = fs.statSync(worktree.path); } catch { stat = null; }
@@ -78,6 +132,9 @@ export function classifyWorktrees(config, { panes = [], now = Date.now() } = {})
       exists,
       merged,
       clean,
+      dirtyPaths: dirt.dirtyPaths,
+      generatedKitDirty: dirt.generatedKitDirty,
+      untrackedPaths: dirt.untrackedPaths,
       livePane,
       isPrimary,
       ageMs,
@@ -101,7 +158,10 @@ function workerNameOf(worktreePath, mainRoot) {
   return base.startsWith(legacy) ? base.slice(legacy.length) : base;
 }
 
-export function pruneWorktrees(config, { apply = false, archive = true, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses } = {}) {
+export function pruneWorktrees(config, { apply = false, archive = true, worktreePath = null, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses, checkoutKitFile = (root, file) => git(root, ['checkout', '--', file]) } = {}) {
+  if (worktreePath !== null && (typeof worktreePath !== 'string' || worktreePath.trim() === '')) {
+    throw new Error('worktreePath must be null or a non-empty path.');
+  }
   const panesResponse = herdr(['pane', 'list']);
   const panes = Array.isArray(panesResponse) ? panesResponse : panesResponse.panes ?? [];
   let processes = [];
@@ -113,7 +173,7 @@ export function pruneWorktrees(config, { apply = false, archive = true, herdr = 
     processScanError = error.message || String(error);
     output(`Process scan failed: ${processScanError}; no worktrees can be removed.`);
   }
-  const classified = classifyWorktrees(config, { panes, now });
+  const classified = classifyWorktrees(config, { panes, now }).filter((worktree) => worktreePath === null || path.resolve(worktree.path) === path.resolve(worktreePath));
   const worktrees = classified.map((worktree) => {
     const matches = processScanError ? [] : processes.filter((process) => {
       if (!process.cwd || !cwdIsInWorktree(process.cwd, worktree.path)) return false;
@@ -133,6 +193,7 @@ export function pruneWorktrees(config, { apply = false, archive = true, herdr = 
     const cleanState = worktree.exists ? (worktree.clean ? 'clean' : 'dirty') : 'missing';
     const state = [worktree.merged ? 'merged' : 'unmerged', cleanState, worktree.livePane ? 'live pane' : 'no live pane', worktree.processBlocked ? 'process in worktree' : (worktree.processScanError ? 'process scan failed' : 'no blocking process'), worktree.removable ? 'eligible' : (worktree.isPrimary ? 'primary' : 'keep')].join(', ');
     output(`${worktree.path} [${worktree.branch ?? 'detached'}] ${state}, age ${worktree.age}`);
+    if (!apply && worktree.removable && worktree.generatedKitDirty) output(`${worktree.path}: would restore the generated kit file`);
     for (const process of worktree.processes) {
       output(`  Process: ${process.command} (pid ${process.pid}, ppid ${process.ppid ?? 'unknown'}, cwd ${process.cwd})`);
     }
@@ -140,15 +201,29 @@ export function pruneWorktrees(config, { apply = false, archive = true, herdr = 
   if (apply) {
     const mainRoot = parseWorktrees(git(config.root, ['worktree', 'list', '--porcelain']))[0]?.path ?? config.root;
     for (const worktree of worktrees.filter((item) => item.removable)) {
+      if (worktree.generatedKitDirty) {
+        try {
+          checkoutKitFile(worktree.path, GENERATED_KIT_FILE);
+          output(`Restored the generated kit file in ${worktree.path}.`);
+        } catch (error) {
+          worktree.restoreError = error.message;
+          output(`Restore of the generated kit file failed: ${error.message}; worktree kept.`);
+          continue;
+        }
+      }
       if (archive) {
         const name = workerNameOf(worktree.path, mainRoot);
         try {
           const target = archiveWorkerReports(worktree.path, name, mainRoot, { output, now });
           if (target) output(`archived reports of ${name} to ${target}`);
         } catch (error) {
+          worktree.archiveError = error.message;
           output(`Archive of ${name} failed: ${error.message}; worktree kept. Fix the error or run with --no-archive.`);
           continue;
         }
+      }
+      if (worktree.untrackedPaths.length) {
+        git(worktree.path, ['clean', '-fd', '--', ...worktree.untrackedPaths]);
       }
       git(config.root, ['worktree', 'remove', worktree.path]);
       git(config.root, ['branch', '-d', worktree.branch]);

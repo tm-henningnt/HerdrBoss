@@ -712,6 +712,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value closes the pane sooner. Zero closes it on the next service tick.',
     apply: 'service',
   }),
+  S('service', 'worktrees.pruneAtCollect', 'Prune merged worktree at collect', {
+    what: 'When on, worker collect archives the reports. It removes a worker worktree and branch only when the branch is merged. The generated kit file must not be staged. It must match the current kit or a version in the base branch history. The worktree must have no other dirty path, live pane, or blocking process.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on removes safe, merged worktrees after collection.',
+    lower: 'Turning it off keeps worktrees for herdr-boss worktree prune.',
+    apply: 'service',
+  }),
   S('service', 'workers.uncollectedNoticeMinutes', 'Uncollected worker notice minutes', {
     what: 'The time that a worker can stay done without collection before the service tells its project lead.',
     default: '30', unit: 'Minutes', range: '1 to 1440',
