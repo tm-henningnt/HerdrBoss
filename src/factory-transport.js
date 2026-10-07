@@ -17,11 +17,13 @@ export function createDockerTransport(host, { spawn = nodeSpawn, env = process.e
     throw new Error('The Docker context name is invalid.');
   }
   if (host?.transport !== 'local' && !context) throw new Error('The host has no Docker context.');
-  // The local host uses the OrbStack context by argument. No DOCKER_HOST or DOCKER_CONTEXT value from the caller reaches Docker.
+  // The local host uses the OrbStack context. No DOCKER_HOST or DOCKER_CONTEXT value from the caller reaches Docker.
+  // The selected context goes both by argument and by DOCKER_CONTEXT: a buildx remote builder runs an inner docker call that reads only the variable.
   const selected = context || (host?.runtime === 'orbstack' ? 'orbstack' : undefined);
   const childEnv = { ...env };
   delete childEnv.DOCKER_HOST;
   delete childEnv.DOCKER_CONTEXT;
+  if (selected) childEnv.DOCKER_CONTEXT = selected;
   return {
     async run(args, { timeout = context ? 15_000 : 30_000, input, inputFile, outputFile, interactive = false } = {}) {
       return new Promise((resolve, reject) => {
