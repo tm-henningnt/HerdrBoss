@@ -894,13 +894,13 @@ The importer reads each page in one pass with fixed limits: 20000 tags for each 
 
 ### Result
 
-The Owner answer comes back as an `[owner]` prompt with the verdict, the counts, the denied items with their notes, and a fetch command. The prompt has at most 1500 characters. The command in the prompt is `herdr-boss review result PACK --version N --format json|md`.
+The Owner answer comes back as an `[owner]` prompt with the verdict, the flag `(no change text)` when it applies, the counts, the denied items with their notes, and a fetch command. The prompt has at most 1500 characters. The command in the prompt is `herdr-boss review result PACK --version N --format json|md`.
 
 When a planner pane published the pack, the prompt goes to that pane and not to the orch pane. It lists the pack note, each choice with its label and note, each denied item, each item with a note, and each skipped item. It has at most 4000 characters and ends with `… N more` when it is cut. It has no fetch command, because a planner pane cannot run `review result`. The message follows the rules of every result message: one message for each pack and version, the same retries, and no secret. When the session has ended, the message goes to the orch pane. While the session is active and its pane is absent, the message waits.
 
 The result JSON has `session` and `round` when the manifest has them. It also has `openItems`, a list of the IDs of each unanswered, Ask later, or changed item. A choice has `choiceLabel`. A skipped item has `state: "open"` and `skipped: true`. The Markdown result and the message to the planner list the open item IDs too.
 
-`review result` prints the stored Markdown summary. The summary starts with the counts. It lists the denied items and the items that need a live check first, with the Owner's notes quoted. `--format json` prints the result object with the schema `herdr-boss.review-result/1`. The verdict is `accept`, `accept-with-changes`, or `deny`. Exit code 3 means that the pack, the version, or the result does not exist. The Owner has then not submitted that version.
+`review result` prints the stored Markdown summary. The summary starts with the counts. It lists the denied items and the items that need a live check first, with the Owner's notes quoted. `--format json` prints the result object with the schema `herdr-boss.review-result/1`. The verdict is `accept`, `accept-with-changes`, or `deny`. The service computes it: `accept` needs every item accepted and no note text. The JSON also holds `computedVerdict` and `changeText`. When the verdict is `accept-with-changes` and `changeText` is `false`, the Markdown shows the flag `no change text`. Exit code 3 means that the pack, the version, or the result does not exist. The Owner has then not submitted that version.
 
 The command changes no task. Read the result, record an Owner decision in `docs/orchestration/memory.md`, and publish the project status.
 

@@ -47,19 +47,26 @@ const quote = (text, indent = '') => multiLine(text).split('\n').map((line) => `
 // The note text of a result item. A note that a changed item keeps from the earlier version is marked as such.
 const noteText = (item) => `${item.note}${item.noteStale ? ' (note from the earlier version)' : ''}`;
 
-// The verdict that the summary screen proposes from the counts. The Owner can choose another one.
-export function proposeVerdict(counts = {}) {
-  const { items = 0, accepted = 0, denied = 0, live = 0, noteOnly = 0, open = 0 } = counts;
-  if (!items) return 'accept-with-changes';
-  if (denied > 0) return accepted + noteOnly + live === 0 ? 'deny' : 'accept-with-changes';
-  if (live > 0 || open > 0) return 'accept-with-changes';
+// Whether any item or the pack holds note text.
+export const hasChangeText = (items = [], packNote = '') => Boolean(String(packNote ?? '').trim()) || items.some((item) => String(item?.answer?.note ?? item?.note ?? '').trim());
+
+// The computed verdict. `accept` needs every item accepted and no note text. Note text, a denied item, a needs-live-check item,
+// or an open item gives `accept-with-changes`. `deny` is never computed: the Owner chooses it.
+export function proposeVerdict(counts = {}, changeText = false) {
+  const { items = 0, denied = 0, live = 0, open = 0 } = counts;
+  if (!items || changeText || denied > 0 || live > 0 || open > 0) return 'accept-with-changes';
   return 'accept';
 }
+
+// The flag of a result: the verdict is "with changes" and no item and no pack note holds text.
+export const noChangeText = (result) => result?.verdict === 'accept-with-changes' && result.changeText === false;
 
 // ---------- JSON ----------
 
 // The result of a pack at one version. It holds ids, states, and the Owner's notes. It holds no file content and no image.
 export function buildResult(pack, verdict, note, at) {
+  const changeText = hasChangeText(pack.items, note);
+  const computedVerdict = proposeVerdict(pack.derived.counts, changeText);
   const specs = new Map(pack.manifest.sections.flatMap((section) => section.items).map((entry) => [entry.id, entry]));
   const items = pack.items.map((item) => {
     const out = { id: item.id, title: item.title, section: item.section, hash: item.hash, state: item.state };
@@ -99,7 +106,9 @@ export function buildResult(pack, verdict, note, at) {
     version: pack.version,
     ...(pack.manifest.session ? { session: pack.manifest.session, ...(pack.manifest.round ? { round: pack.manifest.round } : {}) } : {}),
     submittedAt: at,
-    verdict,
+    verdict: verdict ?? computedVerdict,
+    computedVerdict,
+    changeText,
     note,
     counts: pack.derived.counts,
     sections: pack.derived.sections.map((section) => ({ id: section.id, state: section.state })),
@@ -171,6 +180,7 @@ export function resultMarkdown(result, titles = new Map()) {
     return title ? `**${item.id}** (${singleLine(title, 120)})` : `**${item.id}**`;
   };
   const lines = [`# Review result: ${singleLine(result.title ?? result.pack, 120)} v${result.version}, ${verdictLabel(result.verdict)}`, ''];
+  if (noChangeText(result)) lines.push('> Flag: no change text. The verdict is Accept with changes, and no item and no pack note holds text.', '');
   lines.push(`${countLine(result.counts)} Submitted ${result.submittedAt}.`, '');
   if (result.session) lines.push(`Session ${singleLine(result.session, 64)}${result.round ? `, round ${result.round}` : ''}.`, '');
   if (result.note) lines.push('## Pack note', '', quote(result.note), '');
@@ -209,7 +219,7 @@ export function resultMarkdown(result, titles = new Map()) {
 export function promptText(result) {
   const counts = result.counts ?? {};
   const one = (value, max) => singleLine(redactSecrets(String(value ?? '')), max);
-  const header = cutText(`[owner] Review of ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}: ${verdictLabel(result.verdict)}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, notes: ${counts.noteOnly ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
+  const header = cutText(`[owner] Review of ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}: ${verdictLabel(result.verdict)}${noChangeText(result) ? ' (no change text)' : ''}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, notes: ${counts.noteOnly ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
   const footer = `Fetch the full result: herdr-boss review result ${result.pack} --version ${result.version} --format json|md`;
   const itemLine = (label, item) => cutText(`${label}: ${one(item.id, PROMPT_ID_MAX)}${item.note ? `: ${one(noteText(item), PROMPT_LINE_MAX)}` : ''}`, PROMPT_LINE_MAX);
   const candidates = [
@@ -237,7 +247,7 @@ export function plannerPromptText(result) {
   const counts = result.counts ?? {};
   const one = (value, max) => singleLine(redactSecrets(String(value ?? '')), max);
   const tag = result.session ? (result.round ? `, round ${result.round} (session ${one(result.session, 64)})` : `, session ${one(result.session, 64)}`) : '';
-  const header = cutText(`[owner] Review result for ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}${tag}: ${verdictLabel(result.verdict)}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
+  const header = cutText(`[owner] Review result for ${one(result.title ?? result.pack, PROMPT_TITLE_MAX)} v${result.version}${tag}: ${verdictLabel(result.verdict)}${noChangeText(result) ? ' (no change text)' : ''}. Denied: ${counts.denied ?? 0}, needs live check: ${counts.live ?? 0}, accepted: ${counts.accepted ?? 0}, open: ${counts.open ?? 0}.`, PROMPT_LINE_MAX);
   const items = result.items ?? [];
   const noteOf = (item) => (item.note ? ` Note: ${one(noteText(item), PROMPT_LINE_MAX)}` : '');
   const sections = [];

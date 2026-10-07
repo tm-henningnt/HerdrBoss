@@ -245,7 +245,7 @@ export function createReviewApi({ dataDir, store = reviewStore, mail = mailbox, 
   async function submit(req, slug, pack) {
     const body = await readJson(req, SUBMIT_BODY_LIMIT);
     onlyFields(body, ['verdict', 'note']);
-    if (!VERDICTS.includes(body.verdict)) throw new HttpError(400, `The verdict must be one of ${VERDICTS.join(', ')}.`);
+    if (body.verdict !== undefined && !VERDICTS.includes(body.verdict)) throw new HttpError(400, `The verdict must be one of ${VERDICTS.join(', ')}.`);
     const limit = limiter.hit(`${slug}/${pack}`);
     if (!limit.ok) throw new HttpError(429, `A pack takes at most ${SUBMIT_LIMIT} submits a minute. Wait ${limit.retryAfter} seconds.`, { retryAfter: limit.retryAfter });
     const saved = store.submitPack({ ...where(slug, pack), now: now(), verdict: body.verdict, note: body.note });

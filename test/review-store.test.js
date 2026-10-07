@@ -364,7 +364,12 @@ test('item, section, and pack states follow the answers', (t) => {
   answer(dir, 'live-form', { decision: 'accept' });
   assert.equal(sectionState('errors'), 'accepted');
   assert.equal(derived().pack, 'accepted');
+  assert.equal(derived().proposedVerdict, 'accept-with-changes', 'the note of release-notes has text');
+  assert.equal(derived().changeText, true);
+  answer(dir, 'release-notes', { note: '' });
+  assert.equal(derived().changeText, false);
   assert.equal(derived().proposedVerdict, 'accept');
+  answer(dir, 'release-notes', { note: 'Read it. No change.' });
   assert.deepEqual(derived().counts, { items: 5, accepted: 4, denied: 0, live: 0, noteOnly: 1, open: 0, changed: 0 });
 
   answer(dir, 'error-copy', { decision: 'deny' });

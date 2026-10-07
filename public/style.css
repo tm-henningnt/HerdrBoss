@@ -2469,6 +2469,7 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .review-result-note { white-space: pre-wrap; overflow-wrap: anywhere; }
 .review-result .review-chip { max-width: none; }
 .review-head-line .review-chip { max-width: none; }
+.review-verdict + .review-sum-warn { margin: 12px 0 0; }
 .review-sum-warn { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--text); font-size: 14px; font-weight: 600; }
 .review-sum-block li small.review-sum-stale { color: var(--warn); font-weight: 600; }
 .review-delivery { align-items: flex-start; font-size: 13.5px; }
