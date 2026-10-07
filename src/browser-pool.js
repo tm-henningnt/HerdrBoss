@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn as spawnProcess } from 'node:child_process';
-import { DATA_DIR, readRootSettings, resolveRootPath } from './config.js';
+import { DATA_DIR, readRootSettings, resolveRootPath, visibleBrowsersAllowed } from './config.js';
 import { collectProcesses, collectBrowserClients } from './collect.js';
 import { codeSignCloneDir, listCloneNames, readProcesses, removeCodeSignClone } from './clone-sweep.js';
 import { PROJECT_BROWSER_POOL_NAME, acquireLeaseFor, dropLeases, projectBrowserPool, readLeases } from './leases.js';
@@ -53,6 +53,23 @@ export function validWindowSize(width, height) {
 export function listBrowserSessions() {
   try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); }
   catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+}
+
+function requireVisiblePermission(headless) {
+  if (headless === false && !visibleBrowsersAllowed()) {
+    throw new Error('Visible project browsers are off. Turn on browser.allowVisible in Settings before using --visible.');
+  }
+}
+
+// Keep the saved launch mode headless without closing a browser that Herdr Boss did not start.
+export function markBrowserHeadless(project) {
+  if (!SLUG.test(project)) throw new Error('project must be a slug.');
+  const sessions = listBrowserSessions();
+  if (!sessions[project]) throw new Error('No project browser is registered.');
+  sessions[project].headless = true;
+  sessions[project].headlessPolicyVersion = 1;
+  save(sessions);
+  return sessions[project];
 }
 
 function stripPathParameters(pathname) {
@@ -454,6 +471,7 @@ export async function closeBrowser(project, options = {}) {
 
 export async function restartBrowser(project, headless, options = {}) {
   if (typeof headless !== 'boolean') throw new Error('Choose visible or headless mode.');
+  requireVisiblePermission(headless);
   const d = deps(options);
   const externalClients = async () => {
     const session = listBrowserSessions()[project];
@@ -526,17 +544,24 @@ export async function requestBrowser(project, options = {}) {
   if (headless !== null && typeof headless !== 'boolean') throw new Error('headless must be boolean when supplied.');
   const sessions = listBrowserSessions();
   const existing = sessions[project];
+  const legacyModePending = !!existing && existing.headlessPolicyVersion !== 1 && headless === null;
+  const useHeadless = headless ?? (legacyModePending ? true : existing?.headless) ?? true;
+  requireVisiblePermission(useHeadless);
   if (existing?.closedAt) {
     delete existing.closedAt;
     save(sessions);
   }
-  const useHeadless = headless ?? !!existing?.headless;
   if (existing) {
     const status = await browserStatus(existing, d);
     if (status.reachable && !status.profileVerified) throw new Error(`Port ${existing.port} belongs to a different process. Inspect it before reuse.`);
     // A verified browser that does not respond is returned as it is. Launching a second Chrome on the same profile would fail.
     if (status.profileVerified) {
-      if (launch && status.headless !== useHeadless) throw new Error(`Browser for ${project} is running ${status.headless ? 'headless' : 'visibly'}. Close it before relaunching ${useHeadless ? 'headless' : 'visibly'} with the same profile.`);
+      if (launch && status.headless !== useHeadless && !legacyModePending) throw new Error(`Browser for ${project} is running ${status.headless ? 'headless' : 'visibly'}. Close it before relaunching ${useHeadless ? 'headless' : 'visibly'} with the same profile.`);
+      if (headless !== null) {
+        existing.headless = useHeadless;
+        existing.headlessPolicyVersion = 1;
+        save(sessions);
+      }
       keepBrowserLease(project, existing.port);
       return status;
     }
@@ -548,7 +573,7 @@ export async function requestBrowser(project, options = {}) {
   const profile = path.join(PROFILE_ROOT, project);
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const windowSize = existing?.windowSize || DEFAULT_SIZE;
-  const session = { project, port, profile, headless: useHeadless, windowSize, pid: null, codeSignClone: null, bookmarks: existing?.bookmarks || [], startPage: existing?.startPage ?? null, restoreTabs: existing?.restoreTabs || [], createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
+  const session = { project, port, profile, headless: useHeadless, headlessPolicyVersion: 1, windowSize, pid: null, codeSignClone: null, bookmarks: existing?.bookmarks || [], startPage: existing?.startPage ?? null, restoreTabs: existing?.restoreTabs || [], createdAt: existing?.createdAt || new Date().toISOString(), launchedAt: null };
   sessions[project] = session;
   save(sessions);
   let cloneDir = null;

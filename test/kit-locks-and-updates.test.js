@@ -334,6 +334,32 @@ test('the kit rules name waitingOn, the Mailbox id, and blockedBy', () => {
   for (const rule of rules) assert.ok(text.includes(rule), `kit/templates/project-kit.md: ${rule}`);
 });
 
+test('workers and project leads use only the shared project browser', () => {
+  const paths = [
+    'kit/templates/worker-brief.md',
+    'kit/templates/project-kit.md',
+    'kit/skills/herdr-orchestrator/reference/herdr-control.md',
+    'kit/browser-service.md',
+    'kit/models.md',
+  ];
+  for (const file of paths) {
+    const text = fs.readFileSync(path.resolve(file), 'utf8');
+    assert.match(text, /Never launch your own Chrome, agent-browser, Playwright, or chrome-devtools/);
+    assert.match(text, /Attach to the project browser with `herdr-boss browser` and its CDP port/);
+    assert.doesNotMatch(text, /(?:playwright-cli|agent-browser).*also permitted/i);
+  }
+  const harness = fs.readFileSync(path.resolve('kit/templates/harness/codex-herdr.rules'), 'utf8');
+  assert.doesNotMatch(harness, /prefix_rule\(pattern=\["playwright-cli"\], decision="allow"\)/);
+  assert.doesNotMatch(fs.readFileSync(path.resolve('kit/templates/project-kit.md'), 'utf8'), /Give tasks that launch their own Chromium/);
+  const changes = fs.readFileSync(path.resolve('kit/CHANGES.md'), 'utf8');
+  assert.match(changes, /project browser.*headless|headless.*project browser/i);
+});
+
+test('harness setup does not claim playwright-cli has an allow rule', () => {
+  const text = fs.readFileSync(path.resolve('docs/harness-setup.md'), 'utf8');
+  assert.doesNotMatch(text, /`herdr\.rules` lets[\s\S]*?`playwright-cli` run outside the sandbox/);
+});
+
 test('a worker report can carry an optional tool suggestion', () => {
   const base = { issue: null, branch: 'b', worktree: '/w', changedPaths: [], commands: ['npm test: pass'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false };
   const opts = { evidenceTiers: ['unit'] };

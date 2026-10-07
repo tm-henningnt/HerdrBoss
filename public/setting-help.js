@@ -768,6 +768,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value closes an unused browser sooner. Zero turns this rule off.',
     apply: 'service',
   }),
+  S('service', 'browser.allowVisible', 'Allow visible project browsers', {
+    what: 'Allows Herdr Boss to start a project browser with a visible window. It is off by default. New project browsers stay headless while this switch is off.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on allows `browser request --visible` and `browser restart --visible`.',
+    lower: 'Turning it off refuses visible browser launches and restarts.',
+    apply: 'service',
+  }),
   S('service', 'chromePath', 'Chrome path', {
     what: 'The Chrome executable that Herdr Boss starts for a project browser. A running browser keeps its executable until it restarts.',
     default: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',

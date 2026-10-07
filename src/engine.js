@@ -18,7 +18,8 @@ import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailabl
 import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd, WATCH_SNAPSHOT_ID, watchSnapshotText } from './watch-routines.js';
-import { listBrowserSessions, cdpResponds, browserProcessCheck, closeBrowser, rememberBrowserTabs } from './browser-pool.js';
+import { listBrowserSessions, cdpResponds, browserProcessCheck, browserOwner, closeBrowser, markBrowserHeadless, rememberBrowserTabs, restartBrowser } from './browser-pool.js';
+import { browserSafetyNotices, browserSafetyNoticeDelta, browserSafetyAlert, migrateVisibleBrowserSession } from './browser-safety.js';
 import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { agentBrowserTabIds, browserCommandActivity } from './browser-activity.js';
 import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
@@ -513,11 +514,10 @@ export function browserReadyAlert(b, workspace) {
 // The notice to the project orchestrator for a browser that failed two CDP probes in a row.
 // The key holds the time of the change, so a browser that recovers and fails again sends one new notice.
 export function browserUnresponsiveAlert(b, workspace) {
-  const mode = b.headless ? 'headless' : 'visible';
   return {
     key: `browser:managed-unresponsive:${b.project}:${b.port}:${b.probeSince || ''}`, severity: 'warn', once: true, immediate: true, noDesktop: true, scope: workspace || 'user',
     title: `${b.project} browser is not responding`,
-    text: `Your project browser is not responding. Run herdr-boss browser restart ${b.project} --${mode}, then continue.`,
+    text: `Your project browser is not responding. Run herdr-boss browser restart ${b.project} --headless, then continue.`,
   };
 }
 
@@ -640,6 +640,8 @@ export class Engine extends EventEmitter {
       // A test engine never probes a real browser port unless a test injects a probe.
       probeBrowser: process.env.NODE_TEST_CONTEXT ? async () => ({ ok: true }) : probeBrowser,
       closeBrowser,
+      restartBrowser,
+      markBrowserHeadless,
       probeTcp: tcpListening,
       probePort: tcpListeningAsync,
       codeSignCloneDir,
@@ -928,6 +930,32 @@ export class Engine extends EventEmitter {
       }
       if (this.quotaError && !(this.quotas && now - this.quotasAt < QUOTA_CACHE_MS)) errors.push(this.quotaError);
       const browserSessions = Object.values(listBrowserSessions());
+      const browserHeadlessMigrations = this.memory.browserHeadlessMigrations ||= {};
+      const restartedForHeadless = new Set();
+      if (this.act) for (const session of browserSessions) {
+        if (session.headless !== false || session.headlessPolicyVersion === 1) continue;
+        const migrationId = `${session.project}:${session.port}:${session.pid || 'none'}:${session.launchedAt || session.createdAt || ''}`;
+        if (browserHeadlessMigrations[migrationId]) continue;
+        try {
+          const migration = await migrateVisibleBrowserSession(session, browserOwner(procs, session), {
+            restart: (project) => this.collectors.restartBrowser(project, true),
+            setHeadlessPreference: (project) => this.collectors.markBrowserHeadless(project),
+            now,
+          });
+          if (!migration) continue;
+          browserHeadlessMigrations[migrationId] = migration;
+          session.headless = true;
+          session.headlessMigration = migration;
+          if (migration.action === 'restarted') restartedForHeadless.add(session.project);
+          this.log('browser-headless-migration', `Migrated the ${session.project} project browser to headless mode.`, {
+            project: session.project, action: migration.action, keptRunning: migration.keptRunning,
+          });
+        } catch (error) {
+          const failure = maskBrowserText(String(error?.message || error)).slice(0, 160) || 'restart failed';
+          browserHeadlessMigrations[migrationId] = { project: session.project, at: new Date(now).toISOString(), action: 'failed', failure };
+          errors.push(`browser headless migration ${session.project}: ${failure}`);
+        }
+      }
       const browsers = findBrowsers(procs, herdr?.panes || [], knownBrowsers(this.cfg.sharedBrowsers, browserSessions));
       // Probe only a browser whose process matches its port and profile. The probes run in parallel, so a hung browser delays the tick by at most 2 seconds.
       // A browser that started less than 120 seconds ago gets no probe, as in the offline check below.
@@ -979,7 +1007,10 @@ export class Engine extends EventEmitter {
         const { restoreTabs, ...publicSession } = b;
         const responsive = matched ? await this.collectors.cdpResponds(b.port) : false;
         const closed = !!b.closedAt && !matched;
-        return maskDeep({ ...publicSession, processState: processesKnown ? matched ? 'running' : 'missing' : 'unknown', processPid: browser?.pid ?? null, externalClients: clientCount,
+        const migrationId = `${b.project}:${b.port}:${b.pid || 'none'}:${b.launchedAt || b.createdAt || ''}`;
+        return maskDeep({ ...publicSession, headless: browser?.headless ?? !!b.headless,
+          headlessMigration: browserHeadlessMigrations[migrationId] || b.headlessMigration || null,
+          processState: processesKnown ? matched ? 'running' : 'missing' : 'unknown', processPid: browser?.pid ?? null, externalClients: clientCount,
           responsive, closed, notResponding: !closed && probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures });
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
@@ -1153,6 +1184,8 @@ export class Engine extends EventEmitter {
         herdr,
         browsers,
         managedBrowsers,
+        browserSafetyNotices: [],
+        browserHeadlessMigrations: this.memory.browserHeadlessMigrations || {},
         resourceLeases,
         locks: [],
         lockStats: null,
@@ -1404,6 +1437,21 @@ export class Engine extends EventEmitter {
           text: `The recorded browser for ${b.project} on port ${b.port} is offline. Request it again with herdr-boss browser request ${b.project} before browser work.`,
         });
       }
+      const detectedBrowserSafety = processesKnown ? browserSafetyNotices({
+        processes: procs, panes: herdr?.panes || [], projects: control.projects, sessions: browserSessions,
+        allowVisible: this.cfg.browser?.allowVisible === true,
+      }).filter((item) => !(item.kind === 'visible-project-browser' && restartedForHeadless.has(item.project))) : [];
+      const previousBrowserSafety = this.memory.browserSafetyNotices ||= {};
+      const browserSafetyDelta = processesKnown
+        ? browserSafetyNoticeDelta(detectedBrowserSafety, previousBrowserSafety)
+        : { active: previousBrowserSafety, added: [], removed: [] };
+      this.memory.browserSafetyNotices = browserSafetyDelta.active;
+      snap.browserSafetyNotices = detectedBrowserSafety;
+      snap.browserHeadlessMigrations = browserHeadlessMigrations;
+      for (const item of browserSafetyDelta.added) {
+        if (this.act) this.log('browser-safety', item.text, { project: item.project, warning: item.kind });
+      }
+      for (const item of detectedBrowserSafety) evaluation.alerts.push(browserSafetyAlert(item));
       // Record one safe diagnostic row for each health notice during the first week. Keep its start across service restarts.
       const healthNotices = this.act ? evaluation.alerts.filter((alert) => /^browser:managed-(?:unresponsive|down):/.test(alert.key)) : [];
       const healthMarks = this.memory.browserHealthNotices ||= {};

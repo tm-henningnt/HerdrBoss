@@ -18,10 +18,10 @@ const app = fs.readFileSync(path.join(repo, 'public/app.js'), 'utf8');
 
 const b = { project: 'alpha', port: 9223, headless: true, probeSince: '2026-09-30T10:00:00.000Z' };
 
-test('the notice tells the orchestrator the exact command in the current mode', () => {
+test('the notice gives a headless recovery command for either browser mode', () => {
   const headless = browserUnresponsiveAlert(b, 'w1');
   assert.equal(headless.text, 'Your project browser is not responding. Run herdr-boss browser restart alpha --headless, then continue.');
-  assert.equal(browserUnresponsiveAlert({ ...b, headless: false }, 'w1').text, 'Your project browser is not responding. Run herdr-boss browser restart alpha --visible, then continue.');
+  assert.equal(browserUnresponsiveAlert({ ...b, headless: false }, 'w1').text, 'Your project browser is not responding. Run herdr-boss browser restart alpha --headless, then continue.');
   assert.equal(headless.scope, 'w1');
   assert.equal(headless.once, true);
   assert.equal(headless.severity, 'warn');
@@ -73,7 +73,7 @@ function load(names, context = {}) {
   return ctx.fns;
 }
 
-test('the card shows Not responding, the reason, and a Restart button in the current mode', () => {
+test('the card shows Not responding, the reason, and a headless Restart by default', () => {
   const { browserNotRespondingBlock, browserState } = load(['browserNotRespondingBlock', 'browserState']);
   const card = { port: 9223, profileVerified: true, responsive: true, notResponding: true, headless: true, probeReason: 'getTargets failed' };
   assert.equal(browserState(card), 'ready', 'a responsive debugging endpoint clears the visible failure state');
@@ -89,7 +89,8 @@ test('the card shows Not responding, the reason, and a Restart button in the cur
   assert.match(html, /path parameters/i);
   assert.match(html, /sign-in hosts/i);
   assert.match(html, /skips login and callback pages/i);
-  assert.match(browserNotRespondingBlock('alpha', { ...card, headless: false }), /data-browser-mode="visible"/);
+  assert.match(browserNotRespondingBlock('alpha', { ...card, headless: false }), /data-browser-mode="headless"/);
+  assert.match(browserNotRespondingBlock('alpha', card, true), /data-browser-mode="visible"/);
 });
 
 test('the card escapes the reason', () => {
@@ -105,16 +106,21 @@ test('the Restart button uses the existing route and restores tabs by default', 
   assert.match(handler, /const restorePage = document\.querySelector/);
 });
 
-test('the card block shows only for a verified browser that Herdr Boss started', () => {
+test('the card shows recovery only for verified browsers and gates visible mode on the Owner setting', () => {
   const card = app.slice(app.indexOf('function browserResources('), app.indexOf('\n}\n', app.indexOf('function browserResources(')));
-  assert.match(card, /b\?\.profileVerified && b\.notResponding && !b\.responsive \? browserNotRespondingBlock\(p\.slug, b\)/);
+  assert.match(card, /b\?\.profileVerified && b\.notResponding && !b\.responsive \? browserNotRespondingBlock\(p\.slug, b, allowVisible\)/);
+  assert.match(card, /const allowVisible = s\.serviceSettings\?\.find\(\(item\) => item\.setting === 'browser\.allowVisible'\)\?\.value === true/);
+  assert.ok(card.includes('data-browser-request="${esc(p.slug)}" data-browser-mode="headless"'));
+  assert.match(card, /\$\{allowVisible \? `<button type="button" data-browser-request="\$\{esc\(p\.slug\)\}" data-browser-mode="visible">Open visible<\/button>` : ''\}/);
   assert.match(card, /const b = sessions\.find\(\(x\) => x\.project === p\.slug\)/);
 });
 
 test('the Browsers help describes the state and the restart rule', () => {
   // The help text is the Markdown file docs/help/browsers.md. The Help panel and the Docs section show it.
   const help = fs.readFileSync(path.join(repo, 'docs/help/browsers.md'), 'utf8');
-  assert.match(help, /\*\*not responding\*\*[\s\S]*two checks in a row failed[\s\S]*\*\*Restart\*\*[\s\S]*never restarts a browser by itself/);
+  assert.match(help, /\*\*not responding\*\*[\s\S]*two checks in a row failed[\s\S]*\*\*Restart\*\*[\s\S]*migrates an old visible browser only when the recorded process ID shows that it started the browser[\s\S]*never stops a browser that it did not start/);
+  assert.match(help, /Restart uses headless mode when visible mode is disabled[\s\S]*Visible mode needs the Owner's setting/);
+  assert.match(help, /warns once in the dashboard and bulletin[\s\S]*worker or project lead starts Chrome outside `herdr-boss browser`[\s\S]*names the project and the fix command/i);
   assert.match(help, /drops query strings and fragments[\s\S]*page that needs them reopens at its path[\s\S]*skips login and callback pages/);
   assert.match(help, /drops path parameters[\s\S]*sign-in hosts/);
   assert.doesNotMatch(app, /not responding<\/b>/);

@@ -199,7 +199,7 @@ For a visual check of a served page, use the project browser. Every worker kind 
 6. Run `herdr-boss browser tab close <project> --tab <id>`.
 7. Stop the server. Release a leased port with `herdr-boss lease release serve-ports <port>`.
 
-Do not launch your own Chromium, Playwright, or Puppeteer from a `codex` worker.
+Never launch your own Chrome, agent-browser, Playwright, or chrome-devtools from a worker. Attach to the project browser with `herdr-boss browser` and its CDP port.
 
 Run each `herdr-boss browser` command as a plain command: no environment prefix such as `HERDR_ENV=1`, no wrapper, and no full path. The Codex allow rule matches only the plain command, and a sandboxed browser command fails with `spawn EPERM`.
 

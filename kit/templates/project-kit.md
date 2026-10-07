@@ -18,9 +18,9 @@ These are the shared operating rules for the orchestrator of this project.
 - Run `herdr-boss kit-path` to find the shared kit repository. Use its path for the files below.
 - Read `kit/skills/herdr-orchestrator/SKILL.md` there.
 - Read `kit/models.md` before selecting a worker kind or model.
-- Give tasks that launch their own Chromium (Playwright, performance replays, galleries) to `claude`, `opencode`, or `pi` workers, not to `codex`. The Codex sandbox cannot launch Chromium.
 - A `codex` worker can use the `herdr-boss browser` commands (`tab new`, `navigate`, `screenshot`, `click`, `key`, `text`) on its project browser. Herdr Boss runs that browser outside the sandbox. Use these commands for a visual check of a served page.
-- Keep `herdr-boss browser` a thin helper for visual checks. Do not use it as a Playwright or agent-browser replacement, or for general page automation or scripting.
+- Never launch your own Chrome, agent-browser, Playwright, or chrome-devtools from a worker or project lead. Attach to the project browser with `herdr-boss browser` and its CDP port.
+- Keep `herdr-boss browser` a thin helper for visual checks. A driver may do other page work only when it attaches to the project's CDP port. Do not use a driver to launch Chrome.
 - Store a host in a local config or a bookmark without a scheme. A worker gets names and indexes only from `herdr-boss browser bookmarks list`. Never paste a tenant host into a report or a transcript.
 - `herdr-boss browser bookmarks SLUG open INDEX --new-tab` prints JSON with the new tab `id`, a masked `title`, and a masked `url`. It closes the new tab and exits non-zero when the open fails.
 - Pass each worker `toolSuggestion` to the Boss in one line. The Boss decides the change.

@@ -102,6 +102,7 @@ test('worker and browser maintenance settings have editable rows and help text',
     'workers.paneCloseDelayMinutes': { range: '0 to 60', default: '2' },
     'workers.uncollectedNoticeMinutes': { range: '1 to 1440', default: '30' },
     'browser.idleCloseMinutes': { range: '0 to 1440', default: '20' },
+    'browser.allowVisible': { range: 'On or off', default: 'Off' },
     'worktrees.pruneAtCollect': { range: 'On or off', default: 'On' },
   };
   for (const [setting, values] of Object.entries(expected)) {
@@ -111,8 +112,11 @@ test('worker and browser maintenance settings have editable rows and help text',
     assert.equal(help.range, values.range);
     assert.equal(help.default, values.default);
     if (setting === 'worktrees.pruneAtCollect') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'worktrees\.pruneAtCollect'/);
+    else if (setting === 'browser.allowVisible') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'browser\.allowVisible'/);
     else assert.match(app, new RegExp(`['"]${setting.replaceAll('.', '\\.')}['"]\\s*:\\s*\\[`));
   }
+  assert.match(SETTING_HELP['browser.allowVisible']?.what || '', /visible.*project browser/i);
+  assert.match(SETTING_HELP['browser.allowVisible']?.what || '', /off by default/i);
 });
 
 test('every explanation has all fields, a known group, and an apply mode', () => {

@@ -273,3 +273,7 @@ Summary: `browser bookmarks SLUG open INDEX --new-tab` prints JSON with the new 
 ## 7188ba9cda66
 Impact: required
 Summary: Require `herdr-boss release publish` after the Owner accepts the release approval item in the Mailbox.
+
+## 1f61910804c3
+Impact: useful
+Summary: Keep project browsers headless by default and require every worker and project lead to attach to the shared browser.
