@@ -8,6 +8,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCodexRoots } from './harness.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
+import { DATA_DIR } from './config.js';
+import { toolsDoctorUpdates } from './tools-check.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
@@ -321,10 +323,21 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
   return { schema: 'herdr-boss.doctor/1', ok, exitCode: ok ? 0 : 4, items };
 }
 
-export async function doctorCommand(args, { output = console.log, ...options } = {}) {
+export async function doctorCommand(args, { output = console.log, dataDir = DATA_DIR, ...options } = {}) {
   if (args.some((arg) => !['--json', '--factory-host'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Usage: doctor [--json] [--factory-host]');
   const report = await runDoctor({ ...options, factoryHost: args.includes('--factory-host') });
+  const toolUpdates = toolsDoctorUpdates({ dataDir });
+  if (toolUpdates) {
+    report.toolUpdates = toolUpdates;
+    if (toolUpdates.some((item) => item.risk === 'security')) {
+      report.ok = false;
+      report.exitCode = 4;
+    }
+  }
   if (args.includes('--json')) output(JSON.stringify(report, null, 2));
-  else for (const item of report.items) output(`${item.status}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+  else {
+    for (const item of report.items) output(`${item.status}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+    for (const item of toolUpdates ?? []) output(item.line);
+  }
   return report.exitCode;
 }

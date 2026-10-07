@@ -25,4 +25,12 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
 
+## Check tool versions
+
+Run `herdr-boss tools check` to compare versions on this Mac and in the factory pins with public upstream releases. Add `--now` for a manual check. This command never upgrades a tool.
+
+The check saves `tools-state.json` in the Herdr Boss data directory. `HERDR_BOSS_DIR` selects the directory. The default is `~/.herdr-boss`. The file has mode `0600` and contains no login or token data. Factory values come from the pin file. The command does not query running factories.
+
+The check reports `late` when the first release after the tracked version is more than 14 days old. It reports `security` when a release note names a security issue or a CVE, a public advisory affects the tracked version, or the Debian security version is newer. It reports `unknown` when an upstream request fails. It keeps the last known latest version after a failed request. Run `herdr-boss doctor` to see one line for each late or security release. A late release is a note. A security release makes `doctor` exit 4.
+
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

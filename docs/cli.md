@@ -17,6 +17,7 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | Command | Action |
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
+| `herdr-boss tools check [--now] [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Do not upgrade a tool. |
 | `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
 | `herdr-boss install` | Install and start the service of the platform. On macOS it writes the launchd agent `no.tallmaker.herdr-boss`. On Linux it writes the systemd user service `herdr-boss.service`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the service of the platform. |
@@ -242,6 +243,14 @@ Command startup and report output add time to these limits.
 On macOS and Linux, a timeout stops the process group of that probe.
 This includes helpers that stay in the same group.
 The CLI flushes the report and exits with its result code.
+
+## Tool versions
+
+Run `herdr-boss tools check` to compare the installed Mac versions and factory pins with upstream releases. Add `--now` to request a manual check. Add `--json` to print the saved state as JSON.
+
+The command saves `tools-state.json` in the data directory. `HERDR_BOSS_DIR` selects this directory. The default is `~/.herdr-boss`. The file has mode `0600`. It contains version data and no login or token data. The command reads the factory pin file. It does not query a running factory. A failed upstream request sets that row to `unknown` and keeps its last known latest version.
+
+The age is the number of days since the first release after the tracked version. `late` means the age is more than 14 days. `security` means a release note names security or a CVE, a public advisory affects the tracked version, or the Debian security version is newer. `doctor` prints one line for each late or security row. A late row is a note and keeps exit code 0. A security row is an error and sets exit code 4.
 
 Add `--factory-host` only on a host that runs factories.
 This option adds `docker` and `docker-contexts` under the `tools` step.

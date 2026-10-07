@@ -26,7 +26,8 @@ for (const name of ['mkdirSync', 'writeFileSync', 'appendFileSync', 'renameSync'
 for (const name of ['mkdir', 'writeFile', 'appendFile', 'rename', 'unlink', 'rm', 'chmod', 'chown']) fsp[name] = write;
 const originalRead = fs.readFileSync;
 fs.readFileSync = (file, ...args) => {
-  if (String(file).startsWith(process.env.HERDR_BOSS_DIR) || String(file).startsWith(process.env.HOME + '/.config/herdr-boss')) throw new Error('doctor read private data');
+  const allowedToolsState = process.env.HERDR_BOSS_DIR + '/tools-state.json';
+  if ((String(file).startsWith(process.env.HERDR_BOSS_DIR) && String(file) !== allowedToolsState) || String(file).startsWith(process.env.HOME + '/.config/herdr-boss')) throw new Error('doctor read private data');
   return originalRead(file, ...args);
 };
 os.platform = () => 'darwin';
@@ -153,4 +154,31 @@ test('a failed sudo service probe says gui/0 and instructs the user to rerun wit
   const service = JSON.parse(result.stdout).items.find((item) => item.id === 'service');
   assert.match(service.fix, /without sudo/);
   assert.match(service.fix, /gui\/0/);
+});
+
+test('doctor prints late tools as notes and security releases as failures', (t) => {
+  const late = fixture(t);
+  fs.mkdirSync(late.data);
+  fs.writeFileSync(path.join(late.data, 'tools-state.json'), JSON.stringify({
+    schemaVersion: 1,
+    checkedAt: '2026-10-07T00:00:00.000Z',
+    tools: [{ id: 'opencode', name: 'OpenCode', trackedVersion: '1.18.34', latest: '1.18.35', ageDays: 17, risk: 'late' }],
+  }));
+  const lateResult = late.run(['doctor'], 'green');
+  assert.equal(lateResult.status, 0, lateResult.stderr);
+  assert.match(lateResult.stdout, /note: OpenCode update: installed 1\.18\.34, latest 1\.18\.35, 17 days\./);
+
+  const security = fixture(t);
+  fs.mkdirSync(security.data);
+  fs.writeFileSync(path.join(security.data, 'tools-state.json'), JSON.stringify({
+    schemaVersion: 1,
+    checkedAt: '2026-10-07T00:00:00.000Z',
+    tools: [{ id: 'gh', name: 'GitHub CLI', trackedVersion: '2.101.0', latest: '2.102.0', ageDays: 2, risk: 'security' }],
+  }));
+  const securityResult = security.run(['doctor', '--json'], 'green');
+  assert.equal(securityResult.status, 4, securityResult.stderr);
+  const report = JSON.parse(securityResult.stdout);
+  assert.equal(report.ok, false);
+  assert.equal(report.exitCode, 4);
+  assert.equal(report.toolUpdates[0].line, 'error: GitHub CLI update: installed 2.101.0, latest 2.102.0, 2 days.');
 });
