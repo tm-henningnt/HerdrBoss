@@ -238,7 +238,8 @@ const USAGE = `herdr-boss <command>
   lease list [POOL]     Print the pool items and their leases as JSON.
   push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
   suite [--wait SECONDS] [--keep NAME]... [--no-notify] -- <command...>  Run a full test suite inside the full-suite lock, without tokens in its environment.
-  worktree prune        List safe worktree removals; --apply removes them and archives worker reports.
+  worktree prune        List safe worktree removals; --apply removes them and archives worker reports. --clean-build lists or removes rebuildable output in kept worktrees.
+  worktree disk         Print sizes for this project's worktrees and the free disk space.
   ledger ...            Append or check delegated-run records.
   check ...             Validate worker handoffs and scope.
   check agents [FILE]   Check the AGENTS.md stub, the kit file, and stale orchestration text.

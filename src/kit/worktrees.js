@@ -7,6 +7,8 @@ import { projectKit } from './agents-check.js';
 export { archiveWorkerReports } from './worker-archive.js';
 
 const GENERATED_KIT_FILE = 'docs/orchestration/herdr-boss.md';
+const REBUILDABLE_DIRS = ['dist', '.vite', 'test-results'];
+const SCREENSHOT_AGE_MS = 86400_000;
 
 function isWorkerUntrackedPath(relative) {
   return relative === '.worker' || relative.startsWith('.worker/')
@@ -158,7 +160,160 @@ function workerNameOf(worktreePath, mainRoot) {
   return base.startsWith(legacy) ? base.slice(legacy.length) : base;
 }
 
-export function pruneWorktrees(config, { apply = false, archive = true, worktreePath = null, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses, checkoutKitFile = (root, file) => git(root, ['checkout', '--', file]) } = {}) {
+function formatBytes(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+function duBytes(directory) {
+  const result = execFileSync('du', ['-sk', directory], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const kibibytes = Number.parseInt(result.trim().split(/\s+/, 1)[0], 10);
+  if (!Number.isSafeInteger(kibibytes) || kibibytes < 0) throw new Error('du returned an invalid size.');
+  return kibibytes * 1024;
+}
+
+function freeBytes(stat) {
+  const bytes = Number(stat?.bavail) * Number(stat?.bsize);
+  if (!Number.isFinite(bytes) || bytes < 0) throw new Error('Could not read free disk space.');
+  return bytes;
+}
+
+function existingPath(directory) {
+  let current = path.resolve(directory);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+export function worktreeDisk(config, { json = false, du = duBytes, freeSpaceReader = (file) => fs.statfsSync(file), output = console.log } = {}) {
+  const records = parseWorktrees(git(config.root, ['worktree', 'list', '--porcelain']));
+  const worktrees = records.filter(({ path: item }) => fs.existsSync(item)).map(({ path: item }) => ({
+    path: item,
+    bytes: du(item),
+  })).sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path));
+  const totalBytes = worktrees.reduce((total, item) => total + item.bytes, 0);
+  const diskPath = config.worktreeRoot || config.root;
+  const free = freeBytes(freeSpaceReader(existingPath(diskPath)));
+  const report = { project: config.slug, worktrees, totalBytes, freeBytes: free };
+  if (json) output(JSON.stringify(report, null, 2));
+  else {
+    for (const item of worktrees) output(`${config.slug} ${item.path}: ${formatBytes(item.bytes)}`);
+    output(`Total: ${formatBytes(totalBytes)}`);
+    output(`Free space: ${formatBytes(free)}`);
+  }
+  return report;
+}
+
+function trackedPaths(root) {
+  const index = git(root, ['ls-files', '-z'], { encoding: 'buffer', maxBuffer: 256 * 1024 * 1024 }).toString('utf8');
+  const head = git(root, ['ls-tree', '-rz', '--name-only', 'HEAD'], { encoding: 'buffer', maxBuffer: 256 * 1024 * 1024 }).toString('utf8');
+  return new Set([index, head].flatMap((text) => text.split('\0').filter(Boolean)));
+}
+
+function buildOutputFiles(root, now, tracked) {
+  const files = [];
+  const addTreeFiles = (directory) => {
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return; throw error; }
+    for (const entry of entries) {
+      const file = path.join(directory, entry.name);
+      let stat;
+      try { stat = fs.lstatSync(file); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) addTreeFiles(file);
+      else if (stat.isFile()) {
+        const relative = path.relative(root, file).split(path.sep).join('/');
+        if (!tracked.has(relative)) files.push({ file, relative, bytes: allocatedBytes(stat) });
+      }
+    }
+  };
+  for (const name of REBUILDABLE_DIRS) {
+    const directory = path.join(root, name);
+    try {
+      const stat = fs.lstatSync(directory);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) addTreeFiles(directory);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const workerDir = path.join(root, '.worker');
+  try {
+    const workerStat = fs.lstatSync(workerDir);
+    if (!workerStat.isDirectory() || workerStat.isSymbolicLink()) return files;
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const tmp = path.join(workerDir, 'tmp');
+  try {
+    const tmpStat = fs.lstatSync(tmp);
+    if (tmpStat.isDirectory() && !tmpStat.isSymbolicLink()) {
+      const visit = (directory) => {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+          const file = path.join(directory, entry.name);
+          let stat;
+          try { stat = fs.lstatSync(file); }
+          catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+          if (stat.isSymbolicLink()) continue;
+          if (stat.isDirectory()) visit(file);
+          else if (stat.isFile() && /\.(?:png|jpe?g|gif|webp|bmp|tiff?)$/i.test(entry.name)
+            && now - stat.mtimeMs >= SCREENSHOT_AGE_MS) {
+            const relative = path.relative(root, file).split(path.sep).join('/');
+            if (!tracked.has(relative)) files.push({ file, relative, bytes: allocatedBytes(stat) });
+          }
+        }
+      };
+      visit(tmp);
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return files;
+}
+
+function allocatedBytes(stat) {
+  const blocks = Number(stat.blocks) * 512;
+  return Number.isFinite(blocks) && blocks >= 0 ? blocks : stat.size;
+}
+
+function removeEmptyBuildDirectories(root) {
+  const removeIfEmpty = (directory) => {
+    let stat;
+    try { stat = fs.lstatSync(directory); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) removeIfEmpty(path.join(directory, entry.name));
+    }
+    if (!fs.readdirSync(directory).length) fs.rmdirSync(directory);
+  };
+  for (const name of REBUILDABLE_DIRS) removeIfEmpty(path.join(root, name));
+}
+
+function cleanBuildOutputs(worktree, { apply, now, output }) {
+  const root = fs.realpathSync(worktree.path);
+  const tracked = trackedPaths(root);
+  const files = buildOutputFiles(root, now, tracked);
+  let freedBytes = 0;
+  for (const item of files) {
+    output(`${apply ? 'Deleting' : 'Would delete'} ${item.relative} (${formatBytes(item.bytes)}).`);
+    if (!apply) { freedBytes += item.bytes; continue; }
+    try {
+      fs.unlinkSync(item.file);
+      freedBytes += item.bytes;
+    } catch (error) {
+      if (error.code !== 'ENOENT') output(`Could not delete ${item.relative}: ${error.message}`);
+    }
+  }
+  if (apply) removeEmptyBuildDirectories(root);
+  return freedBytes;
+}
+
+function processInWorktree(processes, worktree) {
+  return processes.some((process) => process.cwd && cwdIsInWorktree(process.cwd, worktree));
+}
+
+export function pruneWorktrees(config, { apply = false, archive = true, cleanBuild = false, worktreePath = null, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses, checkoutKitFile = (root, file) => git(root, ['checkout', '--', file]) } = {}) {
   if (worktreePath !== null && (typeof worktreePath !== 'string' || worktreePath.trim() === '')) {
     throw new Error('worktreePath must be null or a non-empty path.');
   }
@@ -229,6 +384,24 @@ export function pruneWorktrees(config, { apply = false, archive = true, worktree
       git(config.root, ['branch', '-d', worktree.branch]);
       output(`Removed ${worktree.path} and branch ${worktree.branch}.`);
     }
+  }
+  if (cleanBuild) {
+    let freedBytes = 0;
+    if (processScanError) output('Skipped build cleanup because the process scan failed.');
+    else for (const worktree of worktrees) {
+      if (!worktree.exists || worktree.isPrimary || !fs.existsSync(worktree.path)) continue;
+      if (!apply && worktree.removable) continue;
+      if (worktree.livePane) {
+        output(`Skipped build cleanup in ${worktree.path}: a live pane uses the worktree.`);
+        continue;
+      }
+      if (processInWorktree(processes, worktree.path)) {
+        output(`Skipped build cleanup in ${worktree.path}: a running process uses the worktree.`);
+        continue;
+      }
+      freedBytes += cleanBuildOutputs(worktree, { apply, now, output });
+    }
+    output(`${apply ? 'Total freed' : 'Total that would be freed'}: ${formatBytes(freedBytes)}.`);
   }
   if (!worktrees.length) output('No worktrees found.');
   return worktrees;

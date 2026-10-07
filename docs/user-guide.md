@@ -27,4 +27,14 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
 
+## Disk use
+
+Run `herdr-boss worktree disk` from a project repository to see the size of each worktree, the total, and free space. Add `--json` for a JSON report.
+
+Run `herdr-boss worktree prune --clean-build` to list rebuildable output in worktrees that the prune keeps. Add `--apply` to delete it. The command skips tracked files, `node_modules`, the primary checkout, and worktrees with a live pane or running process. It removes only `dist`, `.vite`, `test-results`, and screenshots older than one day from `.worker/tmp`.
+
+The Doctor disk line reports free space at the Herdr Boss data folder and the configured worktree root. It uses the lower value when they are on different file systems. It gives a note below 15 GB. It gives an error below 5 GiB.
+
+When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
+
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

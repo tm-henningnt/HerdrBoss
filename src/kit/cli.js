@@ -9,7 +9,7 @@ import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedR
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
 import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
-import { pruneWorktrees } from './worktrees.js';
+import { pruneWorktrees, worktreeDisk } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
 import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRequiredBehind, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
@@ -30,7 +30,8 @@ const USAGE = `Kit commands:
   lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list
   push [git push arguments]
   suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] [--no-notify] -- <command...> | suite --list-passes
-  worktree prune [--apply] [--no-archive]
+  worktree prune [--apply] [--no-archive] [--clean-build]
+  worktree disk [--json]
   ledger append --entry FILE | ledger check [--runs]
   check --report FILE | --run FILE | --worktree DIR --allow PATH...
   check agents [FILE]
@@ -180,7 +181,7 @@ function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null
 function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
-function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, du, freeSpaceReader, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (Object.hasOwn(WORKER_COMMAND_USAGE, action)) {
@@ -558,11 +559,27 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
 
   if (command === 'worktree') {
     const [action, ...rest] = argv;
-    if (action !== 'prune') fail('Usage: worktree prune [--apply] [--no-archive]');
-    const { positional, flags } = parseArgs(rest, { boolean: ['--apply', '--no-archive'] });
-    knownFlags(flags, ['apply', 'noarchive']);
-    if (positional.length) fail('Usage: worktree prune [--apply] [--no-archive]');
-    return pruneWorktrees(config, { apply: flags.apply, archive: !flags.noarchive, herdr, output });
+    if (action === 'disk') {
+      const usage = 'Usage: worktree disk [--json]';
+      if (rest.some((item) => item.startsWith('--') && item !== '--json')) fail(usage);
+      const { positional, flags } = parseArgs(rest, { boolean: ['--json'] });
+      knownFlags(flags, ['json']);
+      if (positional.length) fail(usage);
+      return worktreeDisk(config, { json: flags.json, du, freeSpaceReader, output });
+    }
+    if (action !== 'prune') fail('Usage: worktree prune [--apply] [--no-archive] [--clean-build] | worktree disk [--json]');
+    const usage = 'Usage: worktree prune [--apply] [--no-archive] [--clean-build]';
+    const { positional, flags } = parseArgs(rest, { boolean: ['--apply', '--no-archive', '--clean-build'] });
+    knownFlags(flags, ['apply', 'noarchive', 'cleanbuild']);
+    if (positional.length) fail(usage);
+    return pruneWorktrees(config, {
+      apply: flags.apply,
+      archive: !flags.noarchive,
+      cleanBuild: flags.cleanbuild,
+      herdr,
+      ...(listProcesses ? { listProcesses } : {}),
+      output,
+    });
   }
 
   if (command === 'ledger') {

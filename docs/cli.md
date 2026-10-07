@@ -192,8 +192,13 @@ The other tool commands can also update their own state.
 The command does not prevent those tool updates.
 
 You should see one line for each item.
-Each line starts with `green:` or `red:`.
-A red line gives the fix.
+Most lines start with `green:` or `red:`.
+A `red:` line gives the fix.
+The disk line prints free space for the Herdr Boss data folder and worker worktree root.
+It uses the lower free-space value when the folders are on different file systems.
+It starts with `note:` below 15 GB and `error:` below 5 GiB.
+The note does not change the exit code.
+The existing doctor check returns exit code 4 below 5 GiB.
 Do the fix, then run the command again.
 Only you sign in and add the Claude settings lines.
 Keep passwords, keys, and tokens out of chat.
@@ -201,6 +206,7 @@ Keep passwords, keys, and tokens out of chat.
 Add `--json` for an agent.
 The result has `schema: "herdr-boss.doctor/1"`, `ok`, `exitCode`, and `items`.
 Each item has `id`, `stepId`, `name`, `status`, `message`, and `fix`.
+The disk item also has `severity` and `freeBytes` when the space check succeeds.
 The status is `green` or `red`.
 The fix is `null` for a green item.
 The exit code is 0 when all items are green.
@@ -1265,6 +1271,8 @@ After a final start failure, startup closes the failed pane only when it can con
 
 `worker start` puts a new worktree in `<worktreeRoot>/<repo>/<name>`. The service default is `~/Projects/.herdr-wt`. It creates the parent folders when they are missing. Set `worktreeRoot` and `worktreeName` in `.herdr-boss.json` to use another place for one project. The dry-run plan shows the worktree path.
 
+When the main checkout has `node_modules` and a detected root lock file, `worker start` compares the lock file hashes in the main checkout and new worktree. On macOS, equal hashes let it clone `node_modules` with `cp -cR`. It prints `Dependencies: clone was used.` A changed lock file or a failed clone runs the configured setup command, or `npm ci` when no install command is configured. It prints `Dependencies: install was used.` The clone reads from the main checkout and writes only to the new worktree. A project without `node_modules` keeps its current setup behavior.
+
 Put task input files in `.orchestration/state/inputs/<worker name>/` in the main checkout. `worker start` copies regular files from that folder into `.worker/inputs/` and keeps their relative paths. It lists the copied paths in the brief. The folder can be empty or missing. Input files and `--copy` files share a 200 MB total limit.
 
 A read-only worker with `--base BRANCH` also copies the diff of `BRANCH` against the project base branch, and the changed file list, into `.worker/inputs/`. `--review-worktree PATH` needs `--read-only`. It copies the tracked uncommitted changes of that worktree, from `HEAD`, and its `git status`. The copy refuses the whole review when a tracked changed path is a dotenv, credential, key, token, secret, or OpenCode config file. The refusal names the path. The paths `.worker/` and `.orchestration/` stay in the review scope and do not refuse the copy. The copied status can list an untracked file name. The copy never includes the content of an untracked file. The brief tells the worker to read those copies and not another worktree. Give `--base` or `--review-worktree`, not both.
@@ -1506,6 +1514,10 @@ Collection records the run before it prunes. Collect removes a worktree only whe
 
 `worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It blocks all removals when it cannot scan processes. It does not remove worktrees with other dirty project paths, unmerged branches, primary checkouts, live panes, or uninspectable state.
 
+Use `worktree prune --clean-build` to list rebuildable output in worktrees that the prune keeps. The list gives the path and size of each file and the total size. It includes files under `dist`, `.vite`, and `test-results`, plus screenshots older than one day under `.worker/tmp`. It never deletes tracked files or `node_modules`. It skips a worktree with a live pane or a running process. Add `--apply` to delete the listed files. The command then prints the total size deleted. It does not clean the primary checkout.
+
+Use `worktree disk` to print the size of each existing worktree in the current project, sorted from largest to smallest. The report includes the total size and free space at the configured worktree root. Add `--json` for a JSON report. The command reads worktree sizes with `du` and changes no files.
+
 The generated file `docs/orchestration/herdr-boss.md` may be dirty after a kit update. The file must not have a staged change. Its content must match the current kit output or a version in the base branch history. A hand edit or staged change keeps the worktree. When this file is the only dirty project file, and the only other dirty paths are the untracked worker files `.worker/`, `opencode.json`, and `.orchestration/`, the prune treats the worktree as clean. A dry run says `would restore the generated kit file`. With `--apply`, the command restores that file from the index, archives the reports, and removes the worktree. Any other dirty project path keeps the worktree.
 
 A worktree has a live pane only when the current pane list contains a pane in that worktree and its agent is not `done`. A parked pane stays live, including when its agent is `done`. A pane with an unknown agent state stays live. A done pane still needs to pass the process checks before removal.
@@ -1593,7 +1605,8 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 | `kit install [--no-hook]` | Install the kit in the Git top level of the current directory. The command writes the kit file, the `AGENTS.md` stub, and the Claude `SessionStart` hook. It prints `wrote FILE` for each file that it changed and `unchanged FILE` for the other files. `--no-hook` does not change `.claude/settings.json`. |
 | `kit update [--quiet]` | Install the kit as `kit install` does, print the kit changes since the installed kit revision, and print the current kit file. `--quiet` prints the digest and the summary line only, and prints nothing when the kit is current and no file changes. |
 | `kit block` | Print the marked `AGENTS.md` stub with the current hash. Use `kit install` for a new installation. |
-| `worktree prune [--apply] [--no-archive]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. Before it removes a worktree, `--apply` archives the worker reports. `--no-archive` skips the archive. |
+| `worktree prune [--apply] [--no-archive] [--clean-build]` | List worktrees that pass the safe checks and show processes in removal candidates. `--apply` removes only worktrees with no blocking process. Before it removes a worktree, `--apply` archives the worker reports. `--no-archive` skips the archive. `--clean-build` lists or removes rebuildable output in kept worktrees. |
+| `worktree disk [--json]` | Print sizes for each existing worktree in the current project, sorted largest first, the total size, and free space at the configured worktree root. The command changes no files. |
 | `gh issue create\|comment\|edit ... --body-file FILE` | Run a GitHub issue command. An inline `--body` is refused. |
 | `gh label create NAME --color RRGGBB [--description TEXT]` | Create a GitHub label. |
 | `gh label edit NAME [--color RRGGBB] [--description TEXT] [--new-name NAME]` | Change a GitHub label. The command needs at least one option. |
