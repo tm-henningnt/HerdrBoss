@@ -31,6 +31,10 @@ The main menu has one host, the `nav` element `#primary-nav` in `public/index.ht
 
 Use `public/store.js` as the one place for shared API reads. It owns the cache, event stream, and refresh timers. `PAGE_READS` names the shared reads for each route. The store keeps one event stream for state, message, and review changes. It keeps the last successful value when an optional read fails. It reuses a request that is already running. It starts one refresh timer for each resource on the active route. Use `readUrl` for a page read with a changing URL. Keep a page read in the page when it has a separate life cycle, such as the live Browser preview.
 
+## Shared rows, chips, and tokens
+
+Use `public/components.js` for shared list rows and status chips. Use `public/theme.css` as the one place for color, spacing, type, border, and focus tokens.
+
 ## Address rules
 
 `matchRoute(pathname)` gives the route of an address. An address that no route names opens the Overview. `/projects/<slug>` gives the route `projects` and the slug. `/docs/...` gives `docs`. `/reviews/...` gives `reviews`. `/fleet/add-host` gives `add-host`.

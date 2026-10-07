@@ -32,6 +32,7 @@ import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, move
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
+import { listRowHtml, statusChipHtml } from './components.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -1988,7 +1989,13 @@ function fleetBlock(s) {
   return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${allocationSummary(s, { link: false })}${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table overview-projects"><thead><tr><th>Project</th><th>Project lead</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const detail = `/projects/${p.slug}`;
-    return `<tr><td data-label="Project"><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td data-label="Project lead">${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono" data-label="Workers">${p.running} / ${p.slots}</td><td data-label="Policy">${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td data-label="Published status">${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}${staleStatusTag(s, published)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
+    return listRowHtml([
+      { label: 'Project', render: (escapeText) => `<a href="${escapeText(detail)}"><strong>${escapeText(p.label)}</strong></a><small>${escapeText(p.workspace)}</small>` },
+      { label: 'Project lead', render: (escapeText) => p.orch ? statusChipHtml({ state: p.orch.status, label: `${p.orch.kind} · ${p.orch.status}` }, escapeText) : '<span class="text-crit">Missing</span>' },
+      { label: 'Workers', className: 'mono', render: (escapeText) => `${escapeText(p.running)} / ${escapeText(p.slots)}` },
+      { label: 'Policy', render: (escapeText) => escapeText(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`) },
+      { label: 'Published status', render: (escapeText) => published ? `${escapeText(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}${staleStatusTag(s, published)}</small>` : '<span class="muted">Not published</span>' },
+    ], esc);
   }).join('')}</tbody></table></div></section>`;
 }
 
