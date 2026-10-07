@@ -1,5 +1,8 @@
 import './helpers/test-env.js';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { runDoctor, doctorCommand } from '../src/doctor.js';
 
@@ -167,6 +170,23 @@ test('doctor adds Docker checks only on an explicit factory host request', async
   assert.equal(await doctorCommand(['--json', '--factory-host'], { home: HOME, runner, output: (line) => lines.push(line) }), 0);
   assert.deepEqual(JSON.parse(lines[0]).items.map((item) => item.id), IDS.concat(['docker', 'docker-contexts']));
   assert.equal(requests.filter((request) => request.command === 'docker').length, 2);
+});
+
+test('doctor prints a warning for an outside factory project without failing the checks', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-factory-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dataDir, 'project-repos.json'), JSON.stringify([
+    { slug: 'trusted', repo: '/home/factory/work/trusted' },
+    { slug: 'outside', repo: '/home/factory/projects/outside' },
+  ]));
+  const options = { home: HOME, env: { HOME: '/home/factory', HERDR_BOSS_DIR: dataDir }, factory: true, runner: fake() };
+  const lines = [];
+  assert.equal(await doctorCommand([], { ...options, output: (line) => lines.push(line) }), 0);
+  assert.ok(lines.includes('warning: project outside is outside the work volume and is not trusted.'));
+
+  const json = [];
+  assert.equal(await doctorCommand(['--json'], { ...options, output: (line) => json.push(line) }), 0);
+  assert.deepEqual(JSON.parse(json[0]).warnings, ['project outside is outside the work volume and is not trusted.']);
 });
 
 test('doctor rejects unknown and repeated flags before it reads anything', async () => {

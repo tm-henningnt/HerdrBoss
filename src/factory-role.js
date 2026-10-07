@@ -1,6 +1,7 @@
 // The factory role: the process runs as the factory user inside a factory container.
 // The image holds the seed checkout of Herdr Boss at /opt/herdr-boss-seed. A Mac install has neither the home nor the seed.
 import fs from 'node:fs';
+import path from 'node:path';
 import { prepareHarnessHome } from './factory-harness-state.js';
 
 export const FACTORY_HOME = '/home/factory';
@@ -8,6 +9,17 @@ export const FACTORY_SEED = '/opt/herdr-boss-seed';
 // The work volume of the factory. `project new` uses it when no --group or --path is given.
 export const FACTORY_PROJECT_GROUP = `${FACTORY_HOME}/work`;
 export const FACTORY_GIT_IDENTITY = Object.freeze({ 'user.name': 'Herdr Factory', 'user.email': 'factory@localhost.invalid' });
+
+export function isTrustedFactoryProjectPath(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')) return false;
+  const relative = path.relative(FACTORY_PROJECT_GROUP, path.resolve(value));
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+export function factoryProjectWarning(project) {
+  const slug = typeof project?.slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(project.slug) ? project.slug : 'unknown';
+  return `project ${slug} is outside the work volume and is not trusted.`;
+}
 
 // Set the Git identity of the factory user once. An identity that exists stays as it is.
 export async function ensureFactoryGitIdentity(docker, name) {

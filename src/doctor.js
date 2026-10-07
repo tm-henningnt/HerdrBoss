@@ -6,8 +6,9 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseCodexRoots } from './harness.js';
+import { parseCodexRoots, readProjectRepos } from './harness.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
+import { FACTORY_HOME, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
@@ -292,7 +293,7 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
   return run;
 }
 
-export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
+export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, factory = env.HOME === FACTORY_HOME && isFactoryRole(env), stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('The doctor timeout must be a positive number.');
   const items = [];
   let platform = 'linux';
@@ -318,13 +319,19 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
     items.push({ id: check.id, stepId: check.stepId, name: check.name, status: good ? 'green' : 'red', message: good ? `${check.name} is good.` : `${check.name} ${timedOut ? 'check timed out' : 'needs a fix'}.`, fix: good ? null : fix });
   }
   const ok = items.every((item) => item.status === 'green');
-  return { schema: 'herdr-boss.doctor/1', ok, exitCode: ok ? 0 : 4, items };
+  const warnings = factory
+    ? readProjectRepos(env.HERDR_BOSS_DIR).filter((project) => !isTrustedFactoryProjectPath(project.repo)).map(factoryProjectWarning)
+    : [];
+  return { schema: 'herdr-boss.doctor/1', ok, exitCode: ok ? 0 : 4, items, warnings };
 }
 
 export async function doctorCommand(args, { output = console.log, ...options } = {}) {
   if (args.some((arg) => !['--json', '--factory-host'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Usage: doctor [--json] [--factory-host]');
   const report = await runDoctor({ ...options, factoryHost: args.includes('--factory-host') });
   if (args.includes('--json')) output(JSON.stringify(report, null, 2));
-  else for (const item of report.items) output(`${item.status}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+  else {
+    for (const item of report.items) output(`${item.status}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+    for (const warning of report.warnings) output(`warning: ${warning}`);
+  }
   return report.exitCode;
 }

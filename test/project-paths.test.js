@@ -16,8 +16,10 @@ function fixture() {
   const dataDir = path.join(root, 'data');
   fs.mkdirSync(dataDir);
   const env = { PATH: process.env.PATH, HOME: root, HERDR_BOSS_DIR: dataDir };
-  const cli = (cwd, ...args) => spawnSync(process.execPath, [CLI, 'project', 'paths', ...args], { cwd, env, encoding: 'utf8' });
-  return { root, dataDir, env, cli, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  const run = (cwd, ...args) => spawnSync(process.execPath, [CLI, 'project', ...args], { cwd, env, encoding: 'utf8' });
+  const cli = (cwd, ...args) => run(cwd, 'paths', ...args);
+  const project = (...args) => run(root, ...args);
+  return { root, dataDir, env, cli, project, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function git(cwd, ...args) {
@@ -122,5 +124,51 @@ test('project paths rejects unsupported arguments and appears in help', () => {
     const help = spawnSync(process.execPath, [CLI], { cwd: f.root, env: f.env, encoding: 'utf8' });
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /project paths \[--json\]/);
+    assert.match(help.stdout, /project unregister <slug>/);
+  } finally { f.cleanup(); }
+});
+
+test('project unregister backs up the registry and removes only the selected row', () => {
+  const f = fixture();
+  try {
+    const keep = { slug: 'keep', repo: path.join(f.root, 'keep-project'), remote: 'none' };
+    const remove = { slug: 'remove', repo: path.join(f.root, 'remove-project'), remote: 'none' };
+    const unrelated = { legacy: true };
+    initGitRepo(keep.repo);
+    initGitRepo(remove.repo);
+    const worktree = path.join(f.root, 'remove-worktree');
+    git(remove.repo, 'worktree', 'add', '-q', '-b', 'registered-worktree', worktree);
+    const registry = path.join(f.dataDir, 'project-repos.json');
+    const original = `${JSON.stringify([keep, remove, unrelated], null, 2)}\n`;
+    fs.writeFileSync(registry, original, { mode: 0o600 });
+
+    const result = f.project('unregister', 'remove');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Project remove unregistered/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(registry, 'utf8')), [keep, unrelated]);
+    const backups = fs.readdirSync(f.dataDir).filter((name) => name.startsWith('project-repos.json.') && name.endsWith('.bak'));
+    assert.equal(backups.length, 1);
+    assert.equal(fs.readFileSync(path.join(f.dataDir, backups[0]), 'utf8'), original);
+    assert.equal(fs.readFileSync(path.join(remove.repo, 'README.md'), 'utf8'), 'fixture\n');
+    assert.ok(fs.existsSync(path.join(worktree, 'README.md')));
+    assert.match(git(remove.repo, 'branch', '--list'), /registered-worktree/);
+    assert.ok(git(remove.repo, 'worktree', 'list', '--porcelain').includes(worktree));
+    assert.ok(fs.existsSync(path.join(keep.repo, 'README.md')));
+  } finally { f.cleanup(); }
+});
+
+test('project unregister refuses an unknown slug without changing the registry', () => {
+  const f = fixture();
+  try {
+    const rows = [{ slug: 'known', repo: path.join(f.root, 'known-project'), remote: 'none' }];
+    const registry = path.join(f.dataDir, 'project-repos.json');
+    const original = `${JSON.stringify(rows, null, 2)}\n`;
+    fs.writeFileSync(registry, original, { mode: 0o600 });
+
+    const result = f.project('unregister', 'missing');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown project slug: missing/);
+    assert.equal(fs.readFileSync(registry, 'utf8'), original);
+    assert.deepEqual(fs.readdirSync(f.dataDir), ['project-repos.json']);
   } finally { f.cleanup(); }
 });

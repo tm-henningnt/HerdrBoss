@@ -27,4 +27,10 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
 
+## Manage factory project registrations
+
+Run `herdr-boss project unregister <slug>` to remove a project from the registry. The command saves a registry backup first. It removes only the registry row. It leaves the project files, worktrees, and branches in place. It reports an error for an unknown slug.
+
+A factory Boss skips a registered project outside the factory work volume. It does not trust that project or install kit files there. The start command prints a warning. `herdr-boss doctor` prints the same warning inside a factory. Use `project unregister <slug>` to remove the stale registration.
+
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

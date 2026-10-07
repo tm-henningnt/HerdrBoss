@@ -209,6 +209,8 @@ An incorrect option exits with code 1.
 
 On Linux, the `pacing` step replaces the CodexBar usage reading with four checks of the factory usage readers: `codex-usage` (`codex login status` shows a login), `codex-version` (`codex --version` shows a version), `claude-usage-file` (the newest file in `claude-rate-limits/` in the data folder is not older than 3 hours), and `claude-version` (`claude --version` shows a version). The checks of `claude-usage-file` read only the modification time of the files, never their content. A red line gives a plain fix, for example `Start a Claude session in the factory`. The check for CodexBar stays in the `tools` step. On Linux, its fix says that CodexBar is not needed.
 
+Inside a factory, `doctor` also prints one `warning:` line for each registered project outside the work volume. The warning says that the project is not trusted. It does not change the doctor result or exit code. The JSON report lists these lines in `warnings`.
+
 The shared step IDs stay the same as the onboarding table.
 Each check also has its own item ID.
 
@@ -389,6 +391,7 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
 herdr-boss project check <slug> [--fix STEP [--start]]
 herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
 herdr-boss project paths [--json]
+herdr-boss project unregister <slug>
 ```
 
 `project new` calls `runProjectNew` and prints one line for each step, the project path, and the next action. It never prints a token.
@@ -601,6 +604,10 @@ The state file is `flows/<slug>.json` in the data folder, with mode 0600. The co
 Run `project paths` to print one line with the slug and path of each registered project. The text form separates each `slug=path` entry with a space. Use `--json` when a path can contain spaces. The command sorts the projects by slug. It leaves out the current project when you run it from its checkout or a linked worktree. It reads only the project registry. It does not open a project repository.
 
 Use `project paths --json` to print an array of objects. Each object has `slug` and `path` fields. The command exits 0 and prints an empty line when no other project is registered. The JSON form prints an empty array in this case.
+
+### Command project unregister
+
+Run `project unregister <slug>` to remove one project from the registry. The command writes a backup of `project-repos.json` first. It removes only the registry row. It does not delete project files, worktrees, or branches. An unknown slug exits with an error.
 
 ## Release approval
 
@@ -1984,7 +1991,9 @@ Run `herdr-boss factory login NAME opencode` in an Owner terminal. The command r
 
 For Claude, the command sets `hasCompletedOnboarding` and `hasTrustDialogAccepted` for the Boss folder, the work folder, and each registered project folder in `~/.claude.json`. It adds the `dark` theme only when no theme is set. For Codex, it sets each folder's `trust_level` to `trusted` in `~/.codex/config.toml`. It also sets `notice.hide_full_access_warning` to `true`. The command merges these values into the existing files as the factory user. It keeps other keys and writes with mode `0600`. It does not read or change credential files. A state file that cannot be merged makes the command fail. Use TOML tables for the Codex project and notice settings; inline tables are not supported.
 
-Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default harness. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the harness with the factory Boss prompt and checks for a ready prompt. The prompt tells the Boss to write its run notes to `~/work/boss-notes/memory.md` and not to `docs/orchestration/memory.md` in the repository. `--resume` continues when the idle Boss pane has an agent for the selected harness. The full Boss prompt must be typed but unsent. The transcript must have no Boss prompt marker. The command also sets the Git identity of the factory user: `user.name` is `Herdr Factory` and `user.email` is `factory@localhost.invalid`. It sets each value only when the value is missing. `factory login` sets the same values after it prepares the first-run state. The first commit of `project new` needs this identity. A live Boss without a startup dialog prints its state and exits 0. In that case the command sets no identity. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
+Run `herdr-boss factory boss start NAME` to start the Boss session in a factory. Claude is the default agent app. The command checks the chosen login and prepares its first-run state before it starts the Boss. It installs the Herdr Boss kit when needed. It checks Herdr and creates or reuses the Boss workspace and pane. It starts the agent app with the factory Boss prompt and checks the pane for the prompt marker, `You are the Boss of this factory.` The prompt tells the Boss to write its run notes to `~/work/boss-notes/memory.md` and not to `docs/orchestration/memory.md` in the repository. `--resume` continues when the idle Boss pane has an agent for the selected agent app. A live pane with the marker gets no second prompt. When an idle Claude pane shows an empty input prompt and no marker, the command sends the role prompt and waits for the marker. It prints `prompt delivered` when the marker appears. It exits with `prompt not delivered` when the marker does not appear. An unknown pane without a usable capture does not count as a successful start. The command also sets the Git identity of the factory user: `user.name` is `Herdr Factory` and `user.email` is `factory@localhost.invalid`. It sets each value only when the value is missing. `factory login` sets the same values after it prepares the first-run state. The first commit of `project new` needs this identity. `--dry-run` prints the call plan and changes nothing. If login is missing, the command exits 3 and posts one Mailbox item with the `factory login` command. Do not send a code or token to a pane or a Mailbox answer. An unsent Boss prompt also exits 3 and posts one Mailbox item with the resume command.
+
+The command skips each registered project outside `/home/factory/work`. It prints a warning. It does not trust the project or install kit files in that path. Run `herdr-boss project unregister <slug>` to remove only its registry row. The command writes a backup first. It does not delete project files, worktrees, or branches.
 
 The command reads the Boss pane with `herdr pane read --source detection`. If that read fails, it reads the pane again without `--source`. If both reads fail, the command cannot check for a dialog. It then trusts the result of the prompt script: it fails only when the script reports no ready or unsent prompt.
 

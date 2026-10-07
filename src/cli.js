@@ -176,6 +176,7 @@ const USAGE = `herdr-boss <command>
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   project paths [--json]  Print the registered paths of other projects.
+  project unregister <slug>  Back up the registry and remove one row. Keep project files.
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
   hub promote [--force]                   Take the head office role with the next epoch and tell every factory. See docs/cli.md.
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.

@@ -97,6 +97,32 @@ export function readProjectRepos(dataDir = DATA_DIR) {
   } catch { return []; }
 }
 
+export function unregisterProjectRepo(slug, { dataDir = DATA_DIR } = {}) {
+  const file = registryFile(dataDir);
+  let rows;
+  try { rows = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { removed: false, backup: null }; }
+  if (!Array.isArray(rows) || !rows.some((row) => row && row.slug === slug)) return { removed: false, backup: null };
+
+  const base = `${file}.${Date.now()}.bak`;
+  let backup = base;
+  let suffix = 1;
+  while (fs.existsSync(backup)) backup = `${base}.${suffix++}`;
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(backup, 0o600);
+
+  const temporary = `${file}.${process.pid}.tmp`;
+  try {
+    const kept = rows.filter((row) => row.slug !== slug);
+    fs.writeFileSync(temporary, `${JSON.stringify(kept, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+  return { removed: true, backup };
+}
+
 // The first record for a slug is the project registration. A later publish keeps it.
 export function recordProjectRepo(slug, repo, remote, { dataDir = DATA_DIR } = {}) {
   if (!repo || !fs.existsSync(repo)) return { recorded: false, isNew: false };
