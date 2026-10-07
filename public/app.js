@@ -1283,7 +1283,7 @@ function settingsView(s) {
     'log.maxMegabytes': [1, 1000],
     'log.keepFiles': [1, 2],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'worktrees.pruneAtCollect']);
   // The group names are the keys of the service settings. The page shows the plain words.
   const settingsGroupLabels = { Quota: 'Usage limit', 'Quota plan': 'Usage limit plan' };
   const serviceRows = settingsGroups.map((group) => {

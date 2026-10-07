@@ -604,6 +604,239 @@ test('worktree apply removes a clean merged worker tree in a temporary repo', ()
   assert.ok(output.some((line) => line.includes(`Removed ${safe}`)));
 });
 
+function generatedKitWorktree(name = 'generated-kit', {
+  ignoreWorkerFiles = false,
+  baseKit = 'base generated kit\n',
+  worktreeKit = projectKit().text,
+  historicalKitVersions = [],
+} = {}) {
+  const root = temporaryRepo();
+  const generated = path.join(root, 'docs', 'orchestration', 'herdr-boss.md');
+  fs.mkdirSync(path.dirname(generated), { recursive: true });
+  for (const [index, version] of historicalKitVersions.entries()) {
+    fs.writeFileSync(generated, version);
+    git(root, 'add', 'docs/orchestration/herdr-boss.md');
+    git(root, 'commit', '-m', `generated kit history ${index + 1}`);
+  }
+  fs.writeFileSync(generated, baseKit);
+  git(root, 'add', 'docs/orchestration/herdr-boss.md');
+  if (ignoreWorkerFiles) {
+    fs.writeFileSync(path.join(root, '.gitignore'), '.worker/\n.orchestration/\nopencode.json\n');
+    git(root, 'add', '.gitignore');
+  }
+  git(root, 'commit', '-m', 'add generated kit');
+  const worktree = path.join(path.dirname(root), `${path.basename(root)}-wt-${name}`);
+  git(root, 'worktree', 'add', '-b', name, worktree, 'main');
+  fs.writeFileSync(path.join(worktree, 'docs', 'orchestration', 'herdr-boss.md'), worktreeKit);
+  fs.mkdirSync(path.join(worktree, '.worker'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.md'), 'worker report\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'report.json'), '{"issue":null}\n');
+  fs.writeFileSync(path.join(worktree, '.worker', 'brief.md'), 'worker brief\n');
+  fs.writeFileSync(path.join(worktree, 'opencode.json'), '{"model":"sample"}\n');
+  fs.mkdirSync(path.join(worktree, '.orchestration'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.orchestration', 'local.md'), 'worker input\n');
+  return { root, worktree, generated, config: loadProjectConfig({ cwd: root }) };
+}
+
+test('worktree prune treats generated kit and worker files as clean, restores and archives on apply', (t) => {
+  const { root, worktree, generated, config } = generatedKitWorktree();
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const dryRun = [];
+  const candidate = pruneWorktrees(config, {
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    output: (line) => dryRun.push(line),
+  }).find((item) => item.path === worktree);
+
+  assert.equal(candidate.merged, true);
+  assert.equal(candidate.clean, true);
+  assert.equal(candidate.removable, true);
+  assert.equal(candidate.generatedKitDirty, true);
+  assert.ok(dryRun.includes(`${worktree}: would restore the generated kit file`));
+  assert.equal(fs.existsSync(worktree), true, 'a dry run keeps the worktree');
+  assert.equal(fs.readFileSync(generated, 'utf8'), 'base generated kit\n', 'a dry run does not change the main checkout');
+
+  const applied = [];
+  pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    output: (line) => applied.push(line),
+  });
+  assert.equal(fs.existsSync(worktree), false);
+  assert.ok(applied.some((line) => line.includes('Restored the generated kit file')));
+  const archive = path.join(root, '.orchestration', 'reports', 'generated-kit');
+  assert.equal(fs.readFileSync(path.join(archive, 'report.md'), 'utf8'), 'worker report\n');
+  assert.equal(fs.readFileSync(path.join(archive, 'report.json'), 'utf8'), '{"issue":null}\n');
+  assert.equal(fs.readFileSync(path.join(archive, 'brief.md'), 'utf8'), 'worker brief\n');
+  assert.throws(() => git(root, 'show-ref', '--verify', 'refs/heads/generated-kit'));
+});
+
+test('worktree prune removes ignored worker files from its allowed paths', (t) => {
+  const { root, worktree, config } = generatedKitWorktree('generated-kit-ignored', { ignoreWorkerFiles: true });
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const output = [];
+  const candidate = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    output: (line) => output.push(line),
+  }).find((item) => item.path === worktree);
+
+  assert.equal(candidate.removable, true);
+  assert.equal(fs.existsSync(worktree), false);
+  assert.ok(output.some((line) => line.includes(`Removed ${worktree}`)));
+  const archive = path.join(root, '.orchestration', 'reports', 'generated-kit-ignored');
+  assert.equal(fs.readFileSync(path.join(archive, 'report.md'), 'utf8'), 'worker report\n');
+});
+
+test('worktree prune keeps staged, hand-edited, and symlinked generated kit changes', (t) => {
+  for (const { name, staged, symlink } of [
+    { name: 'generated-kit-staged-edit', staged: true },
+    { name: 'generated-kit-hand-edit', staged: false },
+    { name: 'generated-kit-symlink-edit', staged: false, symlink: true },
+  ]) {
+    const { root, worktree, generated, config } = generatedKitWorktree(name);
+    t.after(() => {
+      fs.rmSync(worktree, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const file = path.join(worktree, 'docs', 'orchestration', 'herdr-boss.md');
+    let expectedContent = `private hand edit ${name}\n`;
+    if (symlink) {
+      const target = path.join(worktree, '.worker', 'kit-copy.md');
+      expectedContent = projectKit().text;
+      fs.writeFileSync(target, expectedContent);
+      fs.rmSync(file);
+      fs.symlinkSync(target, file);
+    } else {
+      fs.writeFileSync(file, expectedContent);
+    }
+    if (staged) git(worktree, 'add', 'docs/orchestration/herdr-boss.md');
+    const output = [];
+    const candidate = pruneWorktrees(config, {
+      apply: true,
+      herdr: () => ({ panes: [] }),
+      listProcesses: () => [],
+      output: (line) => output.push(line),
+    }).find((item) => item.path === worktree);
+
+    assert.equal(candidate.clean, false, name);
+    assert.equal(candidate.removable, false, name);
+    assert.ok(candidate.dirtyPaths.includes('docs/orchestration/herdr-boss.md'), name);
+    assert.equal(fs.existsSync(worktree), true, name);
+    assert.equal(fs.readFileSync(file, 'utf8'), expectedContent, name);
+    assert.equal(fs.readFileSync(generated, 'utf8'), 'base generated kit\n', name);
+    assert.equal(output.some((line) => /Restored the generated kit file/.test(line)), false, name);
+  }
+});
+
+test('worktree prune restores a generated kit version from base history', (t) => {
+  const oldVersion = 'historical generated kit version\n';
+  const currentVersion = projectKit().text;
+  const { root, worktree, generated, config } = generatedKitWorktree('generated-kit-old', {
+    historicalKitVersions: [oldVersion],
+    baseKit: currentVersion,
+    worktreeKit: oldVersion,
+  });
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  let restored;
+  const applied = [];
+  const candidate = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    checkoutKitFile: (cwd, file) => {
+      git(cwd, 'checkout', '--', file);
+      restored = fs.readFileSync(path.join(cwd, file), 'utf8');
+    },
+    output: (line) => applied.push(line),
+  }).find((item) => item.path === worktree);
+
+  assert.equal(candidate.generatedKitDirty, true);
+  assert.equal(restored, currentVersion);
+  assert.equal(fs.existsSync(worktree), false);
+  assert.ok(applied.some((line) => line.includes('Restored the generated kit file')));
+  assert.equal(fs.readFileSync(generated, 'utf8'), currentVersion);
+});
+
+test('worktree prune keeps a generated kit worktree when checkout fails', (t) => {
+  const oldVersion = 'historical generated kit version\n';
+  const { root, worktree, config } = generatedKitWorktree('generated-kit-checkout-fail', {
+    historicalKitVersions: [oldVersion],
+    baseKit: projectKit().text,
+    worktreeKit: oldVersion,
+  });
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const output = [];
+  const result = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    checkoutKitFile: () => { throw new Error('simulated checkout failure'); },
+    output: (line) => output.push(line),
+  });
+  const candidate = result.find((item) => item.path === worktree);
+
+  assert.equal(candidate.restoreError, 'simulated checkout failure');
+  assert.equal(fs.existsSync(worktree), true);
+  assert.equal(fs.readFileSync(path.join(worktree, 'docs', 'orchestration', 'herdr-boss.md'), 'utf8'), oldVersion);
+  assert.ok(output.some((line) => /Restore of the generated kit file failed: simulated checkout failure; worktree kept\./.test(line)));
+});
+
+test('worktree prune rejects a non-null empty target path', (t) => {
+  const { root, worktree, config } = generatedKitWorktree('generated-kit-empty-target');
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  for (const worktreePath of ['', false, 0]) {
+    assert.throws(() => pruneWorktrees(config, {
+      worktreePath,
+      herdr: () => ({ panes: [] }),
+      listProcesses: () => [],
+      output: () => {},
+    }), /worktreePath must be null or a non-empty path/);
+  }
+});
+
+test('worktree prune keeps generated kit changes when another project path is dirty', (t) => {
+  const { root, worktree, generated, config } = generatedKitWorktree('generated-kit-extra-dirty');
+  t.after(() => {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(worktree, 'local-change.txt'), 'keep this project change\n');
+  const output = [];
+  const candidate = pruneWorktrees(config, {
+    apply: true,
+    herdr: () => ({ panes: [] }),
+    listProcesses: () => [],
+    output: (line) => output.push(line),
+  }).find((item) => item.path === worktree);
+
+  assert.equal(candidate.merged, true);
+  assert.equal(candidate.clean, false);
+  assert.equal(candidate.removable, false);
+  assert.match(output.find((line) => line.startsWith(`${worktree} `)), /merged, dirty/);
+  assert.equal(fs.existsSync(worktree), true);
+  assert.equal(fs.readFileSync(path.join(worktree, 'docs', 'orchestration', 'herdr-boss.md'), 'utf8'), projectKit().text, 'prune does not restore one path from a dirty worktree');
+  assert.equal(fs.existsSync(path.join(root, '.orchestration', 'reports')), false);
+});
+
 test('worktree prune ignores done agents but keeps parked and unknown existing panes live', (t) => {
   const root = temporaryRepo();
   const worktree = path.join(path.dirname(root), `${path.basename(root)}-wt-done`);
