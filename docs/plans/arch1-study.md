@@ -23,7 +23,7 @@ flowchart LR
   Engine --> Store[JSON files and SQLite]
   Engine --> Server[src/server.js]
   Server --> APIs[HTTP APIs]
-  Server --> SSE[/api/events]
+  Server --> SSE["/api/events"]
   APIs --> Browser[public/app.js]
   SSE --> Browser
   Browser --> Views[public feature modules]

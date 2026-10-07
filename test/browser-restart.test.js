@@ -83,7 +83,7 @@ test('no-restore retains the saved addresses and creates no replacement tabs', a
 test('a hung browser restores the locally saved tab URLs', async () => {
   const f = fixture('restore-hung', { hung: true });
   pool.rememberBrowserTabs('restore-hung', [{ id: 'old', url: 'https://sample.example.com/saved?choice=2' }]);
-  const result = await pool.restartBrowser('restore-hung', false, f.options);
+  const result = await pool.restartBrowser('restore-hung', true, f.options);
   assert.equal(result.restoredPage, true);
   assert.equal(result.restoredTabs, 1);
   assert.deepEqual(f.restored, ['https://sample.example.com/saved']);
