@@ -16,13 +16,18 @@ const lane = (used, expected, p = policy(), extra = {}) => laneStatus([weekly(us
 
 test('the policy defaults hold the pace tolerance and the minimum use', () => {
   assert.equal(POLICY_DEFAULTS.paceTolerancePoints, 5);
+  assert.equal(POLICY_DEFAULTS.paceHaikuTolerancePoints, 15);
   assert.equal(POLICY_DEFAULTS.paceMinUsePercent, 30);
   assert.ok(!('paceTolerancePoints' in POLICY_DEFAULTS.machine), 'the keys are machine-independent');
 });
 
 test('validatePolicy checks the pace ranges', () => {
   assert.deepEqual(validatePolicy(policy(), models), []);
-  for (const [key, ok, bad] of [['paceTolerancePoints', [0, 50], [-1, 51]], ['paceMinUsePercent', [0, 100], [-1, 101]]]) {
+  for (const [key, ok, bad] of [
+    ['paceTolerancePoints', [0, 50], [-1, 51]],
+    ['paceHaikuTolerancePoints', [0, 100], [-1, 101]],
+    ['paceMinUsePercent', [0, 100], [-1, 101]],
+  ]) {
     for (const value of ok) assert.deepEqual(validatePolicy(policy({ [key]: value }), models), [], `${key} ${value}`);
     for (const value of [...bad, 1.5, '5', null]) assert.match(validatePolicy(policy({ [key]: value }), models).join(' '), new RegExp(`${key} must be an integer`), `${key} ${value}`);
   }
@@ -85,10 +90,31 @@ test('worker start accepts a 1 point gap and refuses a lane clearly ahead', () =
     const snap = { projects: [], herdr: { workspaces: [], panes: [] }, quotas: [q] };
     const control = deriveControl(snap, p, models, {}, now);
     const lanes = laneStatus([q], p, now);
-    return { avoidProviders: Object.keys(lanes).filter((k) => control.pressures[k] || control.risks[k]), lanes };
+    return { avoidProviders: Object.keys(lanes).filter((k) => control.pressures[k] || control.risks[k]), lanes, policy: p };
   };
   assert.deepEqual(providerGate('claude', rulesFor(17, 16), { now }), {});
-  const refused = providerGate('claude', rulesFor(36, 30), { now }).error;
+  const refused = providerGate('claude', rulesFor(36, 30), { now, model: 'claude-sonnet-5-5' }).error;
   assert.match(refused, /claude ahead of pace: 36% used against 30% expected/);
   assert.match(refused, /tolerance 5 points/);
+});
+
+test('Haiku starts use the separate tolerance and name it when refused', () => {
+  const rulesFor = (used, expected, settings = {}) => {
+    const q = { provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: used, expectedPercent: expected, willLast: true, windowMinutes: 10080, resetsAt: '2026-10-01T18:59:00Z' }] };
+    const p = policy(settings);
+    const snap = { projects: [], herdr: { workspaces: [], panes: [] }, quotas: [q] };
+    const control = deriveControl(snap, p, models, {}, now);
+    const lanes = laneStatus([q], p, now);
+    return { avoidProviders: Object.keys(lanes).filter((k) => control.pressures[k] || control.risks[k]), lanes, policy: p };
+  };
+  assert.deepEqual(providerGate('claude', rulesFor(44, 30), { now, model: 'claude-haiku-5-5' }), {}, '14 points ahead is allowed');
+  assert.deepEqual(providerGate('claude', rulesFor(45, 30), { now, model: 'claude-haiku-5-5' }), {}, 'the full tolerance is allowed');
+  const refused = providerGate('claude', rulesFor(46, 30), { now, model: 'claude-haiku-5-5' }).error;
+  assert.match(refused, /claude-haiku-5-5/);
+  assert.match(refused, /16 points ahead/);
+  assert.match(refused, /15 points/);
+  assert.match(refused, /paceHaikuTolerancePoints/);
+  const widerGeneralTolerance = providerGate('claude', rulesFor(46, 30, { paceTolerancePoints: 20 }), { now, model: 'claude-haiku-5-5' }).error;
+  assert.match(widerGeneralTolerance, /16 points ahead/);
+  assert.match(widerGeneralTolerance, /paceHaikuTolerancePoints is 15 points/);
 });

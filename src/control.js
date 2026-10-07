@@ -21,6 +21,8 @@ export const POLICY_DEFAULTS = {
   reservePercent: 15,
   // A lane is ahead of pace only when its use is more than paceTolerancePoints above the expected use and at least paceMinUsePercent.
   paceTolerancePoints: 5,
+  // Haiku can start with a larger lead, up to this separate worker-start limit.
+  paceHaikuTolerancePoints: 15,
   paceMinUsePercent: 30,
   // Prefer a model of a lane that is far below its pace when no model is given. It never overrides --kind or --model.
   paceRouting: true,
@@ -264,7 +266,7 @@ export function validatePolicy(value, models) {
   { const goalError = goalTextError(value.defaultOrchestratorGoal); if (goalError) errors.push(`defaultOrchestratorGoal ${goalError}`); }
   if (typeof value.bossRules !== 'string') errors.push('bossRules must be a string.');
   else if (value.bossRules.length > BOSS_RULES_MAX) errors.push(`bossRules must be at most ${BOSS_RULES_MAX} characters.`);
-  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceMinUsePercent', 100]]) {
+  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceHaikuTolerancePoints', 100], ['paceMinUsePercent', 100]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
@@ -833,6 +835,7 @@ export function adjustedExpectedPercent(policy, provider, window, now = Date.now
 
 // The pace tolerance in percentage points and the use below which no window is ahead of pace. Old policy files have neither key.
 export const paceTolerancePoints = (policy) => Number.isFinite(policy?.paceTolerancePoints) ? policy.paceTolerancePoints : POLICY_DEFAULTS.paceTolerancePoints;
+export const paceHaikuTolerancePoints = (policy) => Number.isFinite(policy?.paceHaikuTolerancePoints) ? policy.paceHaikuTolerancePoints : POLICY_DEFAULTS.paceHaikuTolerancePoints;
 export const paceMinUsePercent = (policy) => Number.isFinite(policy?.paceMinUsePercent) ? policy.paceMinUsePercent : POLICY_DEFAULTS.paceMinUsePercent;
 
 // A live window below the minimum use is never ahead of pace. A window that will not last to reset is ahead of pace

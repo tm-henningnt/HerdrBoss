@@ -73,7 +73,7 @@ test('Engine applies the configured night worker cap to global control and prese
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
     watch: { maxWorkers: 3, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null } },
   }));
-  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, projects: {
+  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, paceHaikuTolerancePoints: 12, projects: {
     alpha: { share: 60, mode: 'active' }, beta: { share: 40, mode: 'paused' },
   } }));
   fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: true, since: '2026-09-26T20:00:00.000Z', until: '2099-09-27T05:30:00.000Z' }));
@@ -85,6 +85,7 @@ test('Engine applies the configured night worker cap to global control and prese
   fs.mkdirSync(runs, { recursive: true });
   fs.writeFileSync(path.join(runs, 'free-worker.json'), JSON.stringify({ pane: 'w1:p2', kind: 'opencode', model: 'opencode/free', provider: null }));
   fs.writeFileSync(path.join(runs, 'metered-worker.json'), JSON.stringify({ pane: 'w2:p2', kind: 'pi', model: 'opencode-go/model', provider: 'opencodego' }));
+  fs.writeFileSync(path.join(runs, 'haiku-worker.json'), JSON.stringify({ pane: 'w2:p3', kind: 'claude', model: 'claude-haiku-5-5' }));
   fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo }]));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
@@ -104,6 +105,7 @@ const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
       { id: 'w1:p1', workspace: 'w1', agent: 'codex', status: 'working' },
       { id: 'w1:p2', workspace: 'w1', agent: 'opencode', name: 'free-worker', status: 'working' },
       { id: 'w2:p2', workspace: 'w2', agent: 'pi', name: 'metered-worker', status: 'working' },
+      { id: 'w2:p3', workspace: 'w2', agent: 'claude', name: 'haiku-worker', status: 'working' },
     ],
   }),
   collectMachine: async () => null,
@@ -120,6 +122,7 @@ fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: false }
 now += 1000;
 const day = await engine.tick();
 process.stdout.write(JSON.stringify({
+  haikuTolerance: activeRules.policy.paceHaikuTolerancePoints,
   activeCap: active.control.maxWorkers,
   activeSlots: Object.values(active.control.projects).reduce((sum, project) => sum + project.baseSlots, 0),
   borrowedSlots: active.control.projects.alpha.borrowed,
@@ -138,7 +141,8 @@ process.stdout.write(JSON.stringify({
   assert.equal(result.activeSlots, 3, 'project shares distribute the night global cap');
   assert.equal(result.borrowedSlots, 1, 'night cap preserves idle project slot lending');
   assert.equal(result.effectiveSlots, 3);
-  assert.deepEqual(result.activeLaneCounts, { codex: 1, unmetered: 1, opencodego: 1 });
+  assert.equal(result.haikuTolerance, 12, 'the worker rules include the saved Haiku tolerance');
+  assert.deepEqual(result.activeLaneCounts, { codex: 1, unmetered: 1, opencodego: 1, claude: 1 });
   assert.deepEqual(result.activeNight, {
     active: true, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null },
   });

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendDelegatedRun, compareChangedPaths, gitLog, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
-import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
+import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, paceHaikuTolerancePoints, paceMinUsePercent, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
 import { parsePiModels } from '../collect.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
@@ -531,8 +531,22 @@ function unmeteredAlternatives(rules, project, allowedModels) {
   return entries.length ? `Unmetered alternatives for ${project}: ${entries.join('; ')}.` : '';
 }
 
+function haikuPaceLead(lane, policy) {
+  let usedPercent;
+  let points;
+  if (lane?.state === 'pace') {
+    usedPercent = lane.usedPercent;
+    points = lane.overPercent;
+  } else if (lane?.state === 'open' && lane.onPace) {
+    usedPercent = lane.onPace.usedPercent;
+    points = usedPercent - lane.onPace.expectedPercent;
+  }
+  if (!Number.isFinite(usedPercent) || usedPercent < paceMinUsePercent(policy) || !Number.isFinite(points) || points <= 0) return null;
+  return points;
+}
+
 // Decide whether a worker on this provider may start. Returns { error } or { warning } or {}.
-export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null, factoryShare } = {}) {
+export function providerGate(provider, rules, { force = false, now = Date.now(), project = null, allowedModels = null, factoryShare, model = null } = {}) {
   if (!provider) return {};
   const lane = rules.lanes?.[provider];
   if (factoryShare !== undefined && (factoryShare === 0 || Math.max(lane?.factoryShareUsedPercent ?? 0, lane?.usedPercent ?? 0, lane?.reading?.usedPercent ?? 0) >= factoryShare)) {
@@ -545,6 +559,17 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
     if (force) return { warning: `Warning: --force overrides the quota guard: ${describeLane(provider, lane, now)}.` };
     return { error: `${provider} trickle used for today: ${usedToday.toFixed(1)}% of about ${lane.allowancePercent.toFixed(1)}%/day; the next allowance starts at 00:00 UTC.` };
   }
+  const isHaiku = provider === 'claude' && String(model || '').toLowerCase() === 'claude-haiku-5-5';
+  const paceLead = isHaiku ? haikuPaceLead(lane, rules.policy) : null;
+  const haikuTolerance = paceHaikuTolerancePoints(rules.policy);
+  if (isHaiku && Number.isFinite(paceLead) && paceLead > haikuTolerance) {
+    const roundedLead = Math.round(paceLead * 100) / 100;
+    const points = String(roundedLead > haikuTolerance ? roundedLead : paceLead);
+    const reason = `Claude model ${model} is ${points} points ahead of pace; paceHaikuTolerancePoints is ${haikuTolerance} points. Use --force only for an authorized override.`;
+    if (force) return { warning: `Warning: --force overrides the quota guard: ${reason}` };
+    return { error: reason };
+  }
+  if (isHaiku && Number.isFinite(paceLead) && rules.avoidProviders?.includes(provider)) return {};
   if (!rules.avoidProviders?.includes(provider)) return {};
   const detail = lane ? describeLane(provider, lane, now) : `${provider} is ahead of quota pace or near exhaustion`;
   const alternatives = unmeteredAlternatives(rules, project, allowedModels);
@@ -1581,7 +1606,7 @@ function startWorkerOnce(name, options, {
     try { factoryShare = readFactoryShares(bossDir)[provider]; }
     catch { throw new Error(`Factory share check failed. ${FACTORY_SHARE_ERROR}`); }
   }
-  const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels, factoryShare });
+  const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels, factoryShare, model });
   if (gate.error) throw new Error(gate.error);
   if (gate.warning) output(gate.warning);
   if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);
