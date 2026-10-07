@@ -53,8 +53,8 @@ RUN set -eu; \
     tar -C /usr/local --strip-components=1 -Jx --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/share/doc' --exclude='*/share/man' -f node-v${NODE_VERSION}-linux-${NA}.tar.xz; \
     install -m 0755 herdr-linux-${HA} /usr/local/bin/herdr; \
     tar -C /usr/local --strip-components=1 -zx --wildcards '*/bin/gh' -f gh_${GH_VERSION}_linux_${GA}.tar.gz; \
-    tar -xzf ${CB}.tar.gz codexbar; \
-    install -m 0755 codexbar /usr/local/bin/codexbar; \
+    tar -xzf ${CB}.tar.gz CodexBarCLI; \
+    install -m 0755 CodexBarCLI /usr/local/bin/codexbar; \
     cd /; rm -rf /tmp/dl /tmp/checksums.txt
 RUN npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force

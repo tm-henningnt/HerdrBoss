@@ -31,7 +31,9 @@ test('the image build and the host build args name the CodexBar pin for both arc
   const dockerfile = fs.readFileSync(path.join(root, 'factory/Dockerfile'), 'utf8');
   assert.match(dockerfile, /ARG CODEXBAR_VERSION/);
   assert.match(dockerfile, /CB=CodexBarCLI-v\$\{CODEXBAR_VERSION\}-linux-\$\{HA\}/);
-  assert.match(dockerfile, /install -m 0755 codexbar \/usr\/local\/bin\/codexbar/);
+  // The release holds CodexBarCLI as a regular file and codexbar as a link to it: extract the file.
+  assert.match(dockerfile, /tar -xzf \$\{CB\}\.tar\.gz CodexBarCLI;/);
+  assert.match(dockerfile, /install -m 0755 CodexBarCLI \/usr\/local\/bin\/codexbar/);
   const build = fs.readFileSync(path.join(root, 'factory/build.sh'), 'utf8');
   assert.match(build, /CODEXBAR_VERSION=\$\(pin codexbar\)/);
   const source = fs.readFileSync(path.join(root, 'src/factory-build.js'), 'utf8');
