@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
+import { loadProjectConfig } from './kit/config.js';
 import { postToolUpdate } from './messages.js';
 
 export const TOOLS_STATE_FILE = 'tools-state.json';
@@ -27,6 +28,7 @@ const TOOL_DEFINITIONS = [
   { id: 'base-image', name: 'Base image', whereRuns: ['factory build'], pinKey: 'base', source: { kind: 'docker', repository: 'library/debian', tag: 'trixie-slim' } },
   { id: 'buildkit', name: 'BuildKit', whereRuns: ['factory build'], pinKey: 'buildkit', source: { kind: 'github', repo: 'moby/buildkit', dockerRepository: 'moby/buildkit', dockerTag: 'buildx-stable-1' } },
 ];
+const TOOL_REGISTRY = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.id, tool]));
 
 function versionParts(value) {
   if (typeof value !== 'string') return null;
@@ -504,7 +506,7 @@ export function toolsDoctorUpdates({ dataDir = DATA_DIR } = {}) {
   return updates;
 }
 
-export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fetch: injectedFetch = null, installed: installedVersions = null, now = () => new Date(), mailbox = postToolUpdate } = {}) {
+export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fetch: injectedFetch = null, installed: installedVersions = null, now = () => new Date(), mailbox = postToolUpdate, output = console.log } = {}) {
   const fetch = injectedFetch ?? defaultFetch;
   return async function checkTools() {
     const checkTime = now();
@@ -525,7 +527,11 @@ export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fet
     saveState(dataDir, state);
     for (const tool of tools) {
       if (tool.risk !== 'security' && !(tool.risk === 'late' && Number.isInteger(tool.ageDays) && tool.ageDays > 14)) continue;
-      await mailbox(tool, { dir: dataDir, now: checkTime.getTime() });
+      try {
+        await mailbox(tool, { dir: dataDir, now: checkTime.getTime() });
+      } catch {
+        output(`note: could not post ${tool.name} ${tool.latest} to the Mailbox; continuing.`);
+      }
     }
     return state;
   };
@@ -586,7 +592,7 @@ async function checkedGithubVersion(definition, requested, pins, fetch) {
 }
 
 async function checkArtifactHashes(definition, version, fetch) {
-  const source = SHA256_ARTIFACTS[definition.id];
+  const source = Object.hasOwn(SHA256_ARTIFACTS, definition.id) ? SHA256_ARTIFACTS[definition.id] : null;
   if (!source) throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
   const hashes = {};
   for (const file of source.files(version)) {
@@ -669,15 +675,35 @@ function atomicWrite(file, contents) {
   }
 }
 
-function gitRunner(injected) {
-  return injected ?? ((args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+function runGit(injected, args, cwd) {
+  if (injected) return injected(args, { cwd });
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+function removeBumpWorktree(git, root, worktreePath, branch, cwd) {
+  let failed = false;
+  try { runGit(git, ['-C', root, 'worktree', 'remove', '--force', worktreePath], cwd); } catch { failed = true; }
+  try { runGit(git, ['-C', root, 'branch', '-D', branch], cwd); } catch { failed = true; }
+  if (failed) throw new Error('Herdr Boss could not remove the temporary bump worktree and branch.');
+}
+
+function pathExists(target) {
+  try { fs.lstatSync(target); return true; }
+  catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function bumpBranchPart(version) {
+  return version.replaceAll('+', '_').replace(/\.{2,}/g, '.').replace(/\.+$/, '');
 }
 
 function bumpUsage() {
   return 'Usage: tools bump TOOL [--to VERSION] [--dry-run]';
 }
 
-async function bumpNpm(definition, requested, pins, fetch, now) {
+async function bumpNpm(definition, requested, pins, fetch, now, output) {
   const metadata = await requestJson(fetch, `https://registry.npmjs.org/${definition.source.package.replace('/', '%2f')}`);
   const target = requested ?? metadata?.['dist-tags']?.[definition.source.tag];
   const version = metadata?.versions?.[target];
@@ -689,7 +715,12 @@ async function bumpNpm(definition, requested, pins, fetch, now) {
   if (['claude', 'codex', 'opencode'].includes(definition.id)) {
     const releases = await githubReleases(definition.source.repo, fetch);
     const notes = releases.find((release) => release.version === target) ?? null;
-    const advisories = await githubAdvisories(definition.source.repo, fetch).catch(() => []);
+    let advisories = [];
+    try {
+      advisories = await githubAdvisories(definition.source.repo, fetch);
+    } catch {
+      output(`note: the security advisory check failed for ${definition.name} ${target}. The three-day security exception was not checked.`);
+    }
     const pinned = simplePinVersion(pinValue(definition, pins));
     security = isSecurityRelease(notes) || advisories.some((advisory) => (advisory.vulnerabilities ?? []).some((vulnerability) => versionInRange(pinned, vulnerability?.vulnerable_version_range)));
     publishedAt ??= notes?.publishedAt;
@@ -716,10 +747,10 @@ async function bumpDocker(definition, requested, pins, fetch) {
   return { version, digest, releaseNotesUrl: definition.source.repo ? `https://github.com/${definition.source.repo}/releases` : null };
 }
 
-async function bumpDetails(definition, requested, pins, fetch, now) {
-  if (definition.source.kind === 'npm') return { kind: 'npm', ...(await bumpNpm(definition, requested, pins, fetch, now)) };
+async function bumpDetails(definition, requested, pins, fetch, now, output) {
+  if (definition.source.kind === 'npm') return { kind: 'npm', ...(await bumpNpm(definition, requested, pins, fetch, now, output)) };
   if (definition.id === 'base-image' || definition.id === 'buildkit') return { kind: 'docker', ...(await bumpDocker(definition, requested, pins, fetch)) };
-  if (!SHA256_ARTIFACTS[definition.id]) throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
+  if (!Object.hasOwn(SHA256_ARTIFACTS, definition.id)) throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
   const release = await checkedGithubVersion(definition, requested, pins, fetch);
   const hashes = await checkArtifactHashes(definition, release.version, fetch);
   return { kind: 'sha256', version: release.version, hashes, releaseNotesUrl: `https://github.com/${definition.source.repo}/releases/tag/v${release.version}` };
@@ -762,22 +793,26 @@ async function runToolsBump(args, options = {}) {
       flags['--dry-run'] = true;
     } else if (arg === '--to') {
       if (flags['--to'] || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error(bumpUsage());
-      flags['--to'] = args[index + 1].replace(/^v(?=\d)/, '');
+      flags['--to'] = args[index + 1];
       index += 1;
     } else if (arg.startsWith('--')) throw new Error(bumpUsage());
     else positional.push(arg);
   }
   if (positional.length !== 1 || !/^[a-z][a-z0-9-]*$/.test(positional[0])) throw new Error(bumpUsage());
-  const definition = TOOL_DEFINITIONS.find((tool) => tool.id === positional[0]);
+  if (flags['--to'] && !/^\d+\.\d+\.\d+([-+][\w.]+)?$/.test(flags['--to'])) throw new Error(bumpUsage());
+  if (!Object.hasOwn(TOOL_REGISTRY, positional[0])) throw new Error(`Tool ${positional[0]} has no factory pin to bump.`);
+  const definition = TOOL_REGISTRY[positional[0]];
   if (!definition?.pinKey) throw new Error(`Tool ${positional[0]} has no factory pin to bump.`);
   if (definition.id === 'herdr' || definition.id === 'chromium') throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
-  const pinsFile = options.pinsFile ?? PINS_FILE;
+  const root = path.resolve(options.root ?? ROOT);
+  const pinsFile = options.pinsFile ?? path.join(root, 'factory', 'pins.json');
   const before = fs.readFileSync(pinsFile, 'utf8');
   const pins = readPins(pinsFile);
   const fetch = options.fetch ?? defaultFetch;
   const now = options.now ? options.now() : new Date();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('The tools bump time is invalid.');
-  const details = await bumpDetails(definition, flags['--to'], pins, fetch, now);
+  const output = options.output ?? console.log;
+  const details = await bumpDetails(definition, flags['--to'], pins, fetch, now, output);
   const currentVersion = definition.id === 'buildkit' ? pins.buildkit?.version
     : definition.id === 'base-image' ? null : pins[definition.pinKey];
   if (currentVersion && compareVersions(details.version, currentVersion) < 0) {
@@ -786,18 +821,37 @@ async function runToolsBump(args, options = {}) {
   const nextPins = applyBump(pins, definition, details);
   const after = `${JSON.stringify(nextPins, null, 2)}\n`;
   const diff = formatDiff('factory/pins.json', before, after);
-  const output = options.output ?? console.log;
   if (!diff) {
     output('The factory pin is already current.');
     return 0;
   }
   if (!flags['--dry-run']) {
-    const git = gitRunner(options.git);
-    const status = git(['status', '--porcelain']);
+    const project = options.projectConfig ?? loadProjectConfig({ cwd: root });
+    const worktreeName = `tools-bump-${definition.id}-${details.version}`;
+    const worktreePath = project.worktreePath(worktreeName);
+    if (pathExists(worktreePath)) throw new Error(`The tools bump worktree already exists: ${worktreePath}.`);
+    const worktreeParent = path.dirname(worktreePath);
+    const git = options.git ?? null;
+    const status = runGit(git, ['status', '--porcelain'], root);
     if (String(status ?? '').trim()) throw new Error('The working tree is not clean. Herdr Boss did not change the factory pin.');
-    const branchPart = details.version.replace(/[^A-Za-z0-9._-]/g, '_');
-    git(['switch', '-c', `tools/${definition.id}-${branchPart}`]);
-    atomicWrite(pinsFile, after);
+    const branch = `tools/${definition.id}-${bumpBranchPart(details.version)}`;
+    let created = false;
+    try {
+      fs.mkdirSync(worktreeParent, { recursive: true });
+      runGit(git, ['-C', root, 'worktree', 'add', '-b', branch, worktreePath, project.baseBranch ?? 'main'], worktreeParent);
+      created = true;
+      atomicWrite(path.join(worktreePath, 'factory', 'pins.json'), after);
+      runGit(git, ['add', '--', 'factory/pins.json'], worktreePath);
+      runGit(git, ['commit', '-m', `chore: bump ${definition.id} to ${details.version}`, '-m', 'Kit-Impact: none'], worktreePath);
+    } catch (error) {
+      if (created) {
+        try { removeBumpWorktree(git, root, worktreePath, branch, worktreeParent); }
+        catch { error.message += ' Herdr Boss could not remove the temporary bump worktree and branch.'; }
+      }
+      throw error;
+    }
+    output(`Worktree: ${worktreePath}`);
+    output(`Branch: ${branch}`);
   }
   output(diff);
   if (details.releaseNotesUrl) output(`Release notes: ${details.releaseNotesUrl}`);

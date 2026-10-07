@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createToolsCheck, toolsCommand } from '../src/tools-check.js';
@@ -13,17 +14,53 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const dataDir = path.join(root, 'data');
   fs.mkdirSync(dataDir);
-  const pinsFile = path.join(root, 'pins.json');
+  const repoRoot = path.join(root, 'repo');
+  fs.mkdirSync(path.join(repoRoot, 'factory'), { recursive: true });
+  const pinsFile = path.join(repoRoot, 'factory', 'pins.json');
   const source = fileURLToPath(new URL('../factory/pins.json', import.meta.url));
   fs.copyFileSync(source, pinsFile);
-  return { root, dataDir, pinsFile };
+  return { root, repoRoot, dataDir, pinsFile };
+}
+
+const CHECKOUT_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+
+function initGit(root) {
+  const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-b', 'main']);
+  run(['config', 'user.name', 'Herdr Boss Fixture']);
+  run(['config', 'user.email', 'fixture@example.invalid']);
+  run(['add', 'factory/pins.json']);
+  run(['commit', '-m', 'fixture baseline']);
+}
+
+function bumpProject(root, worktreeRoot) {
+  return {
+    baseBranch: 'main',
+    worktreePath: (name) => path.join(worktreeRoot, path.basename(root), name),
+  };
+}
+
+function fixtureGit(root, calls, afterCommand = () => {}) {
+  return (args, context = {}) => {
+    const cwd = context.cwd ?? process.cwd();
+    const command = args[0] === '-C' ? args.slice(2) : args;
+    const mutation = ['add', 'checkout', 'commit', 'switch'].includes(command[0])
+      || (command[0] === 'branch' && ['-D', '-d', '-m', '-M', '-c', '-C'].includes(command[1]))
+      || (command[0] === 'worktree' && ['add', 'move', 'prune', 'remove', 'repair', 'lock', 'unlock'].includes(command[1]));
+    if ([CHECKOUT_ROOT, path.resolve(root)].includes(path.resolve(cwd))) assert.equal(mutation, false, 'git must not mutate the served checkout');
+    calls.push({ args, cwd: path.resolve(cwd) });
+    if (args[0] === 'status' && !Object.hasOwn(context, 'cwd')) return '';
+    const output = execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    afterCommand(args, cwd);
+    return output;
+  };
 }
 
 function response(body) {
   return { ok: true, status: 200, json: async () => body, text: async () => body };
 }
 
-function npmFetch({ integrity = 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', publishedAt = '2026-09-20T00:00:00.000Z', releaseBody = 'Maintenance release.' } = {}) {
+function npmFetch({ integrity = 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', publishedAt = '2026-09-20T00:00:00.000Z', releaseBody = 'Maintenance release.', failAdvisories = false } = {}) {
   const calls = [];
   const fetch = async (url) => {
     calls.push(String(url));
@@ -39,7 +76,10 @@ function npmFetch({ integrity = 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       });
     }
     assert.equal(target.hostname, 'api.github.com');
-    if (target.pathname.endsWith('/security-advisories')) return response([]);
+    if (target.pathname.endsWith('/security-advisories')) {
+      if (failAdvisories) throw new Error('private failure detail');
+      return response([]);
+    }
     return response([{ tag_name: 'v0.160.1', name: 'v0.160.1', body: releaseBody, published_at: publishedAt, draft: false, prerelease: false, assets: [] }]);
   };
   fetch.calls = calls;
@@ -75,20 +115,27 @@ test('tools bump dry-run prints a diff and does not write or create a branch', a
   assert.match(output.join('\n'), /sha512-/);
 });
 
-test('tools bump stores the npm registry integrity with the pin and writes atomically', async (t) => {
-  const { pinsFile } = fixture(t);
+test('tools bump commits pins in a separate worktree and leaves the served checkout untouched', async (t) => {
+  const { root, repoRoot, pinsFile } = fixture(t);
+  initGit(repoRoot);
+  const worktreeRoot = path.join(root, 'worker-trees');
+  const projectConfig = bumpProject(repoRoot, worktreeRoot);
+  const worktreePath = projectConfig.worktreePath('tools-bump-codex-0.160.1');
+  const mainBefore = fs.readFileSync(pinsFile, 'utf8');
   const fetch = npmFetch();
   const gitCalls = [];
   const output = [];
 
   await toolsCommand(['bump', 'codex', '--to', '0.160.1'], {
+    root: repoRoot,
     pinsFile,
+    projectConfig,
     fetch,
-    git: cleanGit(gitCalls),
+    git: fixtureGit(repoRoot, gitCalls),
     output: (line) => output.push(line),
   });
 
-  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  const pins = JSON.parse(fs.readFileSync(path.join(worktreePath, 'factory', 'pins.json'), 'utf8'));
   assert.equal(pins.schema, 2);
   assert.equal(pins.codex, '0.160.1');
   assert.deepEqual(pins.integrity.codex, {
@@ -98,9 +145,100 @@ test('tools bump stores the npm registry integrity with the pin and writes atomi
   });
   assert.equal(pins.digestMark.base, 'published');
   assert.ok(Object.values(pins.sha256Mark).every((mark) => mark === 'published'));
-  assert.equal(fs.readdirSync(path.dirname(pinsFile)).some((name) => name.endsWith('.tmp')), false);
-  assert.deepEqual(gitCalls.map((args) => args.slice(0, 2)), [['status', '--porcelain'], ['switch', '-c']]);
+  assert.equal(fs.readFileSync(pinsFile, 'utf8'), mainBefore, 'the main checkout pin file stays unchanged');
+  assert.equal(execFileSync('git', ['-C', repoRoot, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), 'main');
+  assert.match(execFileSync('git', ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }), /^tools\/codex-0\.160\.1\n$/);
+  assert.match(execFileSync('git', ['-C', worktreePath, 'show', '-s', '--format=%B', 'HEAD'], { encoding: 'utf8' }), /\nKit-Impact: none\n+$/);
+  assert.equal(fs.readdirSync(path.join(worktreePath, 'factory')).some((name) => name.endsWith('.tmp')), false);
+  assert.ok(gitCalls.every(({ cwd }) => path.resolve(cwd) !== CHECKOUT_ROOT), 'all Git commands run outside the served checkout');
+  assert.ok(gitCalls.some(({ args }) => args.includes('worktree') && args.includes('add')));
+  assert.ok(gitCalls.some(({ args }) => args.includes('commit')));
   assert.match(output.join('\n'), /^--- a\/factory\/pins\.json/m);
+  assert.ok(output.includes(`Worktree: ${worktreePath}`));
+  assert.ok(output.includes('Branch: tools/codex-0.160.1'));
+});
+
+test('tools bump removes its worktree and branch when the atomic pin write fails', async (t) => {
+  const { root, repoRoot, pinsFile } = fixture(t);
+  initGit(repoRoot);
+  const worktreeRoot = path.join(root, 'worker-trees');
+  const projectConfig = bumpProject(repoRoot, worktreeRoot);
+  const worktreePath = projectConfig.worktreePath('tools-bump-codex-0.160.1');
+  const gitCalls = [];
+  const makePinsDirectory = (args) => {
+    if (args[0] !== '-C' || args[2] !== 'worktree' || args[3] !== 'add') return;
+    const target = args[6];
+    fs.rmSync(path.join(target, 'factory', 'pins.json'));
+    fs.mkdirSync(path.join(target, 'factory', 'pins.json'));
+  };
+
+  await assert.rejects(toolsCommand(['bump', 'codex', '--to', '0.160.1'], {
+    root: repoRoot,
+    pinsFile,
+    projectConfig,
+    fetch: npmFetch(),
+    git: fixtureGit(repoRoot, gitCalls, makePinsDirectory),
+    output: () => {},
+  }));
+
+  assert.equal(fs.existsSync(worktreePath), false);
+  assert.notEqual(execFileSync('git', ['-C', repoRoot, 'branch', '--list', 'tools/codex-0.160.1'], { encoding: 'utf8' }).trim(), 'tools/codex-0.160.1');
+  assert.ok(gitCalls.some(({ args }) => args.includes('remove') && args.includes('--force')));
+  assert.ok(gitCalls.some(({ args }) => args.includes('branch') && args.includes('-D')));
+});
+
+test('tools bump validates the requested version before an upstream lookup', async (t) => {
+  const { pinsFile } = fixture(t);
+  let requests = 0;
+  await assert.rejects(toolsCommand(['bump', 'codex', '--to', '0.160'], {
+    pinsFile,
+    fetch: async () => { requests += 1; return response({}); },
+    git: cleanGit(),
+    output: () => {},
+  }), /Usage: tools bump/);
+  await assert.rejects(toolsCommand(['bump', 'constructor', '--to', '0.160.1'], {
+    pinsFile,
+    fetch: async () => { requests += 1; return response({}); },
+    git: cleanGit(),
+    output: () => {},
+  }), /no factory pin to bump/i);
+  assert.equal(requests, 0);
+});
+
+test('tools bump refuses an existing target worktree', async (t) => {
+  const { root, repoRoot, pinsFile } = fixture(t);
+  initGit(repoRoot);
+  const worktreeRoot = path.join(root, 'worker-trees');
+  const projectConfig = bumpProject(repoRoot, worktreeRoot);
+  const worktreePath = projectConfig.worktreePath('tools-bump-codex-0.160.1');
+  fs.mkdirSync(worktreePath, { recursive: true });
+  const gitCalls = [];
+
+  await assert.rejects(toolsCommand(['bump', 'codex', '--to', '0.160.1'], {
+    root: repoRoot,
+    pinsFile,
+    projectConfig,
+    fetch: npmFetch(),
+    git: fixtureGit(repoRoot, gitCalls),
+    output: () => {},
+  }), /worktree already exists/i);
+
+  assert.deepEqual(gitCalls, []);
+  assert.equal(fs.existsSync(worktreePath), true);
+  assert.equal(fs.readFileSync(pinsFile, 'utf8'), fs.readFileSync(fileURLToPath(new URL('../factory/pins.json', import.meta.url)), 'utf8'));
+});
+
+test('tools bump notes a failed advisory check and keeps the three-day wait', async (t) => {
+  const { pinsFile } = fixture(t);
+  const output = [];
+  await assert.rejects(toolsCommand(['bump', 'codex', '--to', '0.160.1', '--dry-run'], {
+    pinsFile,
+    fetch: npmFetch({ publishedAt: '2026-10-06T12:00:00.000Z', failAdvisories: true }),
+    now: () => new Date('2026-10-07T00:00:00.000Z'),
+    output: (line) => output.push(line),
+  }), /less than 3 days old/i);
+  assert.equal(output.length, 1);
+  assert.match(output[0], /security exception was not checked/i);
 });
 
 test('tools bump refuses when the published registry integrity is missing', async (t) => {
@@ -149,7 +287,7 @@ test('tools bump compares a downloaded artifact with its published checksum', as
     return { ok: true, status: 200, arrayBuffer: async () => Buffer.from('different artifact') };
   };
 
-  await assert.rejects(toolsCommand(['bump', 's6-overlay', '--to', '3.2.3.3'], {
+  await assert.rejects(toolsCommand(['bump', 's6-overlay'], {
     pinsFile,
     fetch,
     git: cleanGit(),
@@ -171,7 +309,7 @@ test('tools bump refuses when a published artifact checksum is missing', async (
     assert.fail('the command tried to download an artifact without a published checksum');
   };
 
-  await assert.rejects(toolsCommand(['bump', 's6-overlay', '--to', '3.2.3.3'], {
+  await assert.rejects(toolsCommand(['bump', 's6-overlay'], {
     pinsFile,
     fetch,
     git: cleanGit(),
@@ -245,9 +383,13 @@ test('tool Mailbox posts use stable per-tool-version keys and read actions', () 
   };
   const security = { id: 'gh', name: 'GitHub CLI', latest: '2.102.0', pinned: '2.101.0', risk: 'security', ageDays: 17 };
   const first = postToolUpdate(security, { messageStore, now: Date.parse('2026-10-07T00:00:00.000Z') });
+  first.status = 'read';
+  first.readAt = '2026-10-07T00:00:30.000Z';
   const duplicate = postToolUpdate(security, { messageStore, now: Date.parse('2026-10-07T00:01:00.000Z') });
 
   assert.equal(first.id, duplicate.id);
+  assert.equal(duplicate.status, 'read');
+  assert.equal(duplicate.readAt, '2026-10-07T00:00:30.000Z');
   assert.equal(records.length, 1);
   assert.equal(first.kind, 'report');
   assert.equal(first.action, 'read');

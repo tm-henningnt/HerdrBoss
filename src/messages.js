@@ -706,7 +706,7 @@ function writeOwnerReport(fields, { dir = DATA_DIR, now = Date.now(), key = null
   return store.mutate((records) => {
     const index = records.findIndex((record) => record.to === 'owner' && record.kind === 'report' && record.key === key && !record.closedAt);
     if (index >= 0) {
-      const updated = { ...records[index], ...report, key, id: records[index].id, at: records[index].at };
+      const updated = { ...records[index], text: report.text };
       records[index] = updated;
       return { records, result: updated };
     }

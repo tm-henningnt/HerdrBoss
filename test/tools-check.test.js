@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createToolsCheck, TOOLS_STATE_FILE, toolsCommand } from '../src/tools-check.js';
+import { readMessages, updateMessage } from '../src/messages.js';
 
 const CHECKED_AT = new Date('2026-10-07T00:00:00.000Z');
 
@@ -234,6 +235,51 @@ test('a failed advisory request does not discard good release data', async (t) =
   assert.equal(gh.latest, '2.102.0');
   assert.equal(gh.risk, 'security');
   assert.equal(gh.error, undefined);
+});
+
+test('a read tool update stays read after a second tools check', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.gh = '2.101.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+  const check = createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed: {}, now: () => CHECKED_AT });
+  await check();
+
+  const item = readMessages({ dir: dataDir }).find((record) => record.key === 'tools:gh:2.102.0');
+  assert.ok(item);
+  const readAt = '2026-10-07T00:01:00.000Z';
+  updateMessage(item.id, { status: 'read', readAt }, { dir: dataDir, now: Date.parse(readAt) });
+
+  await check();
+
+  const updated = readMessages({ dir: dataDir }).find((record) => record.id === item.id);
+  assert.equal(updated.status, 'read');
+  assert.equal(updated.readAt, readAt);
+});
+
+test('a Mailbox failure adds one note and does not stop later tool updates', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const attempts = [];
+  const notes = [];
+  const state = await createToolsCheck({
+    dataDir,
+    pinsFile,
+    fetch: fixtureFetch(),
+    installed: {},
+    now: () => CHECKED_AT,
+    output: (line) => notes.push(line),
+    mailbox: async (tool) => {
+      attempts.push(tool.id);
+      if (attempts.length === 1) throw new Error('private failure detail');
+    },
+  })();
+
+  const expected = state.tools.filter((tool) => tool.risk === 'security' || (tool.risk === 'late' && Number.isInteger(tool.ageDays) && tool.ageDays > 14));
+  assert.ok(attempts.length > 1);
+  assert.equal(attempts.length, expected.length);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /^note: could not post .* to the Mailbox; continuing\.$/);
+  assert.doesNotMatch(notes[0], /private failure detail/i);
 });
 
 test('the default GitHub request uses fetch without the gh login', async (t) => {
