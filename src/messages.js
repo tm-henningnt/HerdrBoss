@@ -732,6 +732,18 @@ export function postToolUpdate(tool, { dir = DATA_DIR, now = Date.now(), message
   return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:${tool.id}:${tool.latest}`, messageStore });
 }
 
+export function postToolPromotionFailure(tool, version, factory, { dir = DATA_DIR, now = Date.now(), messageStore = null } = {}) {
+  if (!/^[a-z][a-z0-9-]*$/.test(tool || '') || typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:+~-]{0,255}$/.test(version)
+    || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(factory || '')) {
+    throw new Error('The tool promotion failure is incomplete.');
+  }
+  const title = `Update failed: ${tool} ${version}`;
+  const text = `The ${tool} ${version} update failed on factory ${factory}. The rollout stopped.\n\nOther factories still use the previous image. Fix the canary, then run \`herdr-boss tools promote ${tool}\` to resume.`;
+  refuseSecret(title, 'title');
+  refuseSecret(text, 'report');
+  return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:promote:${tool}:${version}`, messageStore });
+}
+
 // ---------- Review pack items ----------
 
 const REVIEW_TITLE_PREFIX = 'Review: ';
