@@ -72,6 +72,18 @@ const answer = (dir, id, text, offset = 1000) => openMessageStore({ dir }).appen
 });
 const item = (dir, id) => openMessageStore({ dir }).all().find((record) => record.id === id);
 const publish = (dir, run, id, extra = {}) => release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config, who: 'wA:p1', ...extra });
+const releaseCaller = (paneId, label, workspaceId = paneId.split(':')[0]) => ({
+  env: { HERDR_ENV: '1', HERDR_PANE_ID: paneId, HERDR_WORKSPACE_ID: workspaceId },
+  herdr: (args) => ({ pane: { pane_id: args[2], workspace_id: workspaceId, label } }),
+});
+async function cancel(dir, run, paneId = 'wA:p1', label = 'orch', extra = []) {
+  const lines = [];
+  const caller = releaseCaller(paneId, label);
+  const code = await release.releaseCommand(['cancel', REPO, TAG, ...extra], {
+    ...caller, dataDir: dir, config, run, out: (line) => lines.push(line), err: (line) => lines.push(line),
+  });
+  return { code, lines };
+}
 
 test('request posts one Mailbox item the Owner can answer, with all card fields', () => {
   const dir = newDir();
@@ -101,6 +113,181 @@ test('a second request for the same repository and tag returns the open item', (
   assert.equal(second.id, first.id);
   assert.equal(second.alreadyOpen, true);
   assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 1);
+});
+
+test('an open request made with a notes file is not stale when repeated without that file', () => {
+  const dir = newDir();
+  const notesFile = path.join(dir, 'notes.md');
+  fs.writeFileSync(notesFile, 'Notes file text');
+  const run = fakeGh();
+  const first = request(dir, run, { notesFile });
+  assert.equal(item(dir, first.id).release.notesFromFile, true);
+  const second = request(dir, run);
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.stale, false);
+});
+
+test('an unreadable draft leaves the existing request open without a stale result', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const unreadable = (args) => args[1] === 'view'
+    ? { status: 1, error: null, stdout: '', stderr: 'release is unavailable' }
+    : run(args);
+  let second;
+  assert.doesNotThrow(() => { second = request(dir, unreadable); });
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.stale, undefined);
+});
+
+test('unreadable assets leave the existing request open without a stale result', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const unreadable = (args) => args[1] === 'download'
+    ? { status: 1, error: null, stdout: '', stderr: 'asset is unavailable' }
+    : run(args);
+  let second;
+  assert.doesNotThrow(() => { second = request(dir, unreadable); });
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.stale, undefined);
+});
+
+test('an open request is stale when the changelog text changes', () => {
+  const dir = newDir();
+  const notesFile = path.join(dir, 'notes.md');
+  fs.writeFileSync(notesFile, 'First notes');
+  const run = fakeGh();
+  const first = request(dir, run, { notesFile });
+  assert.equal(item(dir, first.id).release.notesSha256, sha('First notes'));
+  fs.writeFileSync(notesFile, 'Updated notes');
+  const second = request(dir, run, { notesFile });
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.stale, true);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 1);
+});
+
+test('an open request is stale when an asset checksum changes', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  run.state.files['app.tar.gz'] = 'updated archive bytes';
+  const second = request(dir, run);
+  assert.equal(second.id, first.id);
+  assert.equal(second.stale, true);
+});
+
+test('an older request without a notes hash has no notes mismatch', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const store = openMessageStore({ dir });
+  const record = item(dir, first.id);
+  delete record.release.notesSha256;
+  store.update(first.id, { release: record.release });
+  const second = request(dir, run);
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(second.stale, false);
+});
+
+test('the release command explains how to supersede a stale request', async () => {
+  const dir = newDir();
+  const notesFile = path.join(dir, 'notes.md');
+  fs.writeFileSync(notesFile, 'First notes');
+  const run = fakeGh();
+  const first = request(dir, run, { notesFile });
+  fs.writeFileSync(notesFile, 'Updated notes');
+  const lines = [];
+  const result = await release.releaseCommand(['request', REPO, TAG, '--notes', notesFile], {
+    dataDir: dir, config, run, env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => lines.push(line), err: (line) => lines.push(line),
+  });
+  assert.equal(result, 0);
+  assert.deepEqual(lines, [`The open request ${first.id} shows older notes; run release cancel ${REPO} ${TAG}, then request again.`]);
+});
+
+test('the requester can cancel a manually closed request, with a bounded reason and one audit line', async () => {
+  const { closeMailboxItem } = await import('../src/messages.js');
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  closeMailboxItem(first.id, { dir });
+  const reason = 'Updated release notes';
+  const result = await cancel(dir, run, 'wA:p1', 'orch', ['--reason', reason]);
+  assert.equal(result.code, 0);
+  assert.match(result.lines[0], /cancelled/i);
+  const record = item(dir, first.id);
+  assert.equal(record.closeNote, 'superseded');
+  assert.equal(record.supersededReason, reason);
+  assert.equal(record.closedBy, 'project');
+  assert.ok(record.closedAt);
+  assert.ok(record.readAt);
+  assert.equal(release.releaseStatus({ run, dir, config }).openRequests.length, 0);
+  const audit = fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(audit.length, 1);
+  assert.deepEqual({ approvalId: audit[0].approvalId, who: audit[0].who, repo: audit[0].repo, tag: audit[0].tag, action: audit[0].action, reason: audit[0].reason }, {
+    approvalId: first.id, who: 'wA:p1', repo: REPO, tag: TAG, action: 'cancel', reason,
+  });
+  const next = request(dir, run);
+  assert.equal(next.alreadyOpen, false);
+  assert.notEqual(next.id, first.id);
+});
+
+test('the Boss pane can cancel a release request', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const result = await cancel(dir, run, 'wB:p1', 'boss');
+  assert.equal(result.code, 0);
+  assert.equal(item(dir, first.id).closeNote, 'superseded');
+  const line = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.equal(line.who, 'wB:p1');
+});
+
+test('another orchestrator cannot cancel a release request', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const result = await cancel(dir, run, 'wA:p2', 'orch');
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /Only the requesting orchestrator pane or the Boss can cancel/);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('an Owner approval blocks cancellation and names the publish path', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  const result = await cancel(dir, run);
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /release publish.*Owner denial/i);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('cancel without an open request exits non-zero with a plain message', async () => {
+  const dir = newDir();
+  const result = await cancel(dir, fakeGh());
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /No open release request/);
+  assert.doesNotMatch(result.lines.join('\n'), /TypeError|ReferenceError|at release/i);
+});
+
+test('cancel truncates a stored reason to 500 characters', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  const longReason = 'x'.repeat(600);
+  assert.equal((await cancel(dir, run, 'wA:p1', 'orch', ['--reason', longReason])).code, 0);
+  assert.equal(item(dir, first.id).supersededReason.length, 500);
+  const line = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.equal(line.reason.length, 500);
 });
 
 test('request refuses a release that is not a draft', () => {

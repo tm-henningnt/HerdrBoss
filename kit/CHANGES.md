@@ -277,3 +277,7 @@ Summary: Require `herdr-boss release publish` after the Owner accepts the releas
 ## 1f61910804c3
 Impact: useful
 Summary: Keep project browsers headless by default and require every worker and project lead to attach to the shared browser.
+
+## c9f04df63114
+Impact: useful
+Summary: Add `herdr-boss release cancel REPO TAG [--reason TEXT]` to settle an obsolete open release request; the orchestrator skill names it.

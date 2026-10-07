@@ -69,7 +69,7 @@ Read each file in the skill folder when its step comes:
 - Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
-- Run your pushes and deployments under project rules; neither needs approval. Publish releases only with `herdr-boss release publish` after Owner approval in the Mailbox.
+- Run your pushes and deployments under project rules; neither needs approval. Publish releases only with `herdr-boss release publish` after Owner approval in the Mailbox. Run `herdr-boss release cancel` to settle an obsolete open request before you request again.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. The lane guard holds a queued short-lane job while 5-minute load exceeds 231% of the cores. Set it in Settings, Locks (`locks.guard`).
