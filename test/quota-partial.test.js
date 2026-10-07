@@ -366,6 +366,8 @@ function runHandover(t, quotas) {
   const now = Date.parse('2026-09-28T01:00:00.000Z');
   const policy = structuredClone(POLICY_DEFAULTS);
   policy.autoHandover = true;
+  // A stronger successor than the Claude source, so the tier rule leaves the choice open.
+  policy.orchestratorLadder = [{ kind: 'codex', model: 'gpt-6-astra', effort: 'xhigh' }];
   fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
   fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify({ paneSince: {}, pushes: {}, notified: {}, lastOrchestrators: {} }));
   fs.writeFileSync(path.join(dir, 'handoffs.json'), '[]');

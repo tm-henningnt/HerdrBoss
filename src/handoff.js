@@ -509,6 +509,8 @@ export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitFor
     item = { ...plan, id: name, newPane, ...(newTab ? { newTab } : {}), migratedId, ...(goal ? { ownerGoal: goal } : {}), ...captured,
       ...(context ? { sourceContext: context } : {}), ...(migrationFallbackReason ? { migrationFallbackReason, requestedMode } : {}),
       status: 'preparing', preparedAt: new Date().toISOString(), automatic: options.auto === true };
+    // The automatic choice names the kinds that it skipped, so the stored reason explains the choice.
+    if (options.auto === true && options.choiceReason) item.successorReason = [item.successorReason, `Automatic choice: ${options.choiceReason}.`].filter(Boolean).join(' ');
     // Re-read before the append, so a concurrent write to another record is not lost.
     records = listHandoffs();
     records.push(item);

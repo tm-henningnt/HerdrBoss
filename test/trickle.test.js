@@ -171,7 +171,7 @@ test('automatic handover selects a trickle lane only while it is under its daily
     projects: [{ slug: 'sample', workspace: 'w1' }],
     herdr: {
       workspaces: [{ id: 'w1', label: 'Sample' }],
-      panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, agent: 'claude', status: 'working', sessionId: 's1' }],
+      panes: [{ id: 'w1:p1', workspace: 'w1', orch: true, agent: 'claude', status: 'working', sessionId: 's1', model: 'opencode/space-bunny-free' }],
     },
     quotas: [{ provider: 'claude', windows: [{ key: 'primary', label: 'Weekly', usedPercent: 90,
       expectedPercent: 30, windowMinutes: 10080, willLast: false, etaSeconds: 60,

@@ -35,6 +35,8 @@ export const POLICY_DEFAULTS = {
   // pane map, and the open items. The Owner edits the text in Settings. An empty text omits the section.
   bossRules: 'The Boss decides kit changes and reports between projects. Read the Herdr Boss kit file and the [herdr-boss] notices. Use subagents for reviews, long reads, and code surveys, and keep the main thread for decisions. Send no prompt to a pane of another project; the Boss relays it. Do not take the machine-wide full-suite lock with a bare lock acquire, and push with herdr-boss push. Never print a secret to a pane or a report. Decide implementation, product, and design details yourself. Report to the Boss when work is merged and live, or when you are blocked.',
   goals: { autoCommand: false },
+  // How long the automatic successor choice skips a kind (harness and model) after its automatic record expired, was cancelled, was stuck, or never got readyAt.
+  handoff: { autoCooldownHours: 6 },
   // After backoffAfterTimeouts Claude quota probe timeouts in a row, probe every backoffMinutes.
   quotaProbe: { backoffAfterTimeouts: 2, backoffMinutes: 20 },
   orchestratorLadder: [
@@ -139,7 +141,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, handoff: { ...POLICY_DEFAULTS.handoff, ...(isObject(stored.handoff) ? stored.handoff : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   if (!Object.hasOwn(stored, 'autoHandoverForceContextTokens')) {
     const maxContextTokens = 2000000;
     const contextStep = 10000;
@@ -207,6 +209,8 @@ export function validatePolicy(value, models) {
   if (typeof value.autoHandover !== 'boolean') errors.push('autoHandover must be boolean.');
   if (!isObject(value.goals)) errors.push('goals must be an object.');
   else if (typeof value.goals.autoCommand !== 'boolean') errors.push('goals.autoCommand must be boolean.');
+  if (!isObject(value.handoff)) errors.push('handoff must be an object.');
+  else if (!Number.isInteger(value.handoff.autoCooldownHours) || value.handoff.autoCooldownHours < 1 || value.handoff.autoCooldownHours > 72) errors.push('handoff.autoCooldownHours must be an integer from 1 to 72.');
   if (!isObject(value.quotaProbe)) errors.push('quotaProbe must be an object.');
   else {
     for (const [key, min, max] of [['backoffAfterTimeouts', 1, 10], ['backoffMinutes', 1, 1440]]) {
@@ -617,12 +621,92 @@ function weeklyScore(candidate, weeklyUse) {
   return Number.isFinite(used) ? used : 0;
 }
 
+// The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
+// tier cost the same.
+const MODEL_TIERS = {
+  'opencode-go/deepseek-v4.1-flash': 2,
+  'gpt-6-luna': 3,
+  'claude-sonnet-5-5': 4,
+  'gpt-6.1-sol': 5,
+  'claude-opus-5-5': 5,
+  'gpt-6-astra': 6,
+};
+
+// The free opencode-go models that kit/models.md lists as unmetered. The other opencode-go models
+// use the Go quota, and the kit does not rank them.
+const FREE_OPENCODE_GO_MODELS = new Set([
+  'opencode-go/space-bunny-free',
+  'opencode-go/longcat-2.5-preview-free',
+]);
+
+// The tier of a model, or null when the kit does not rank it.
+export function modelTier(model) {
+  if (typeof model !== 'string' || !model.trim()) return null;
+  // Every opencode model is free, and so are the free opencode-go models.
+  if (model.startsWith('opencode/') || FREE_OPENCODE_GO_MODELS.has(model)) return 1;
+  return MODEL_TIERS[model] ?? null;
+}
+
+// Whether an automatic activation may hand a control pane to a successor model.
+export function tierAllowsAutoActivation(sourceModel, targetModel) {
+  const target = modelTier(targetModel);
+  if (target === null) return { allowed: false, reason: `the kit does not rank ${targetModel}` };
+  const source = modelTier(sourceModel);
+  if (source === null) return { allowed: false, reason: `the kit does not rank the source model ${sourceModel}` };
+  if (target < source) return { allowed: false, reason: `${targetModel} is weaker than the source model ${sourceModel}` };
+  return { allowed: true, reason: '' };
+}
+
+const SUPERSEDED_REASON = /was activated for the same orchestrator/;
+
+// The kinds that the automatic choice skips for a while. A record counts when it is automatic and its
+// kind and model did not give a working successor: it expired or was cancelled with no readyAt within the last `hours`,
+// it is prepared with no readyAt after the expiry, or it is still preparing with no promptAt after the
+// expiry (a stuck record). One entry for each kind and model, with the newest reason.
+export function autoCooldownSkips(records, { now = Date.now(), hours = POLICY_DEFAULTS.handoff.autoCooldownHours, expiryMs = 30 * 60 * 1000 } = {}) {
+  const windowMs = hours * 3600000;
+  const ago = (at) => {
+    const minutes = Math.max(1, Math.round((now - at) / 60000));
+    return minutes < 120 ? `${minutes} minutes ago` : `${Math.round(minutes / 60)} hours ago`;
+  };
+  const found = new Map();
+  for (const item of records || []) {
+    if (!item?.automatic || !item.toKind || !item.model) continue;
+    let at = null, why = null;
+    if (item.status === 'expired') {
+      // A ready record that went unused, and a record that an activated successor replaced, are not failures.
+      if (item.readyAt || SUPERSEDED_REASON.test(String(item.expiredReason || ''))) continue;
+      at = Date.parse(item.expiredAt);
+      why = item.expiredReason === 'cancelled' ? 'its automatic successor was cancelled' : 'its automatic successor expired';
+    } else if (item.status === 'prepared' && !item.readyAt) {
+      at = Date.parse(item.preparedAt);
+      if (Number.isFinite(at) && now - at >= expiryMs) why = 'its automatic successor never became ready';
+    } else if (item.status === 'preparing' && !item.promptAt) {
+      at = Date.parse(item.preparedAt);
+      if (Number.isFinite(at) && now - at >= expiryMs) why = 'its automatic successor was stuck in preparing';
+    }
+    if (!why || !Number.isFinite(at) || now - at > windowMs) continue;
+    const key = `${item.toKind}\n${item.model}`;
+    if (found.has(key) && found.get(key).at >= at) continue;
+    found.set(key, { at, kind: item.toKind, model: item.model, reason: `${why} ${ago(at)}` });
+  }
+  return [...found.values()].map(({ at, ...skip }) => skip);
+}
+
 // The eligible rung with the lowest weekly use, or the first eligible Opus rung when no non-Opus choice
 // can start. A rung is skipped when its model is exhausted or the last good Pi result does not list it,
 // and when the weekly quota refuses the lane. A provider that weekly use cannot compare keeps the order
 // of the ladder, because a stable sort keeps the first rung of a tie.
 export function pickSuccessor(project, currentKind, currentProvider, policy, control, now = Date.now()) {
+  return pickSuccessorDetailed(project, currentKind, currentProvider, policy, control, now).target;
+}
+
+// The same choice with the rungs that the tier rule or the cooldown skipped. control.sourceModel is the
+// model of the source orchestrator: a rung of a weaker or unranked tier is skipped, and an unranked source gives no target. control.cooldownSkips comes from
+// autoCooldownSkips(). The chosen target carries `reason` when a skipped kind is worth naming.
+export function pickSuccessorDetailed(project, currentKind, currentProvider, policy, control, now = Date.now()) {
   const weeklyUse = control.weeklyUse || {};
+  const skipped = [];
   let opus = null;
   const eligible = [];
   for (const rung of policy.orchestratorLadder || []) {
@@ -636,6 +720,11 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
         (rung.kind === 'pi' && unavailablePiModels([rung.model], control.piModels).length) ||
         (provider && (control.risks[provider] || control.exhausted?.[provider])) || trickleAtLimit ||
         successorQuotaRefusal(provider, weeklyUse)) continue;
+    const cooling = (control.cooldownSkips || []).find((skip) => skip.kind === rung.kind && skip.model === rung.model);
+    if (cooling) { skipped.push({ kind: rung.kind, model: rung.model, reason: cooling.reason }); continue; }
+    // The activation gate refuses an unranked source or target, so an unknown tier is never equal or stronger.
+    const tier = tierAllowsAutoActivation(control.sourceModel, rung.model);
+    if (!tier.allowed) { skipped.push({ kind: rung.kind, model: rung.model, reason: tier.reason }); continue; }
     const candidate = { ...rung, provider: provider || 'unmetered', weeklyUsePercent: weeklyUse[provider] ?? null };
     if (/(^|[-/])opus($|[-.\d]|\[)/i.test(String(rung.model))) {
       opus ||= candidate;
@@ -644,7 +733,9 @@ export function pickSuccessor(project, currentKind, currentProvider, policy, con
     eligible.push(candidate);
   }
   const [best] = eligible.sort((a, b) => weeklyScore(a, weeklyUse) - weeklyScore(b, weeklyUse));
-  return best || opus || null;
+  const target = best || opus || null;
+  if (target && skipped.length) target.reason = skipped.map((skip) => `skipped ${skip.kind} ${skip.model}: ${skip.reason}`).join('; ');
+  return { target, skipped };
 }
 
 export function workspaceProjects(snap, policy = POLICY_DEFAULTS) {
@@ -1182,7 +1273,7 @@ function displayUnmeteredModel(model) {
 }
 
 export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Date.now(), exhaustedFreeModels = {}, {
-  piModels = null, lanes = {}, nightMaxWorkers = null,
+  piModels = null, lanes = {}, nightMaxWorkers = null, cooldownSkips = [],
 } = {}) {
   const models = mergeModels(baseModels, policy);
   const workspaces = workspaceProjects(snap, policy);
@@ -1238,8 +1329,9 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = providerFor(p.orch.kind, policy.preferredModels?.[p.orch.kind] ?? currentKindConfig?.defaultModel, policy);
     const window = risks[currentProvider];
     if (!window) continue;
-    const preferred = pickSuccessor(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse }, now);
-    handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred });
+    const sourceModel = selectModel(p.orch.kind, panes.find((pane) => pane.id === p.orch.pane)?.model, models, policy);
+    const { target: preferred, skipped } = pickSuccessorDetailed(p, p.orch.kind, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse, sourceModel, cooldownSkips }, now);
+    handoffs.push({ project: p.slug, workspace: p.workspace, pane: p.orch.pane, fromKind: p.orch.kind, sessionId: p.orch.sessionId, provider: currentProvider, window, target: preferred, skipped });
   }
   let bossHandoff = null;
   const bossPane = panes.find((pane) => pane.label === 'boss');
@@ -1248,13 +1340,14 @@ export function deriveControl(snap, policy, baseModels, paneSince = {}, now = Da
     const currentProvider = kindConfig && providerFor(bossPane.agent, policy.preferredModels?.[bossPane.agent] ?? kindConfig.defaultModel, policy);
     const window = risks[currentProvider] || null;
     const bossProject = { excludedKinds: [], excludedModels: [] };
-    const target = kindConfig ? pickSuccessor(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse }, now) : null;
+    const sourceModel = kindConfig ? selectModel(bossPane.agent, bossPane.model, models, policy) : null;
+    const { target = null, skipped = [] } = kindConfig ? pickSuccessorDetailed(bossProject, bossPane.agent, currentProvider, policy, { globalAllowed, risks, exhausted, exhaustedFreeModels, piModels, lanes, weeklyUse, sourceModel, cooldownSkips }, now) : {};
     bossHandoff = {
       project: 'Boss', label: 'Boss', boss: true, workspace: bossPane.workspace, pane: bossPane.id,
       fromKind: bossPane.agent || null, sessionId: bossPane.agent ? bossPane.sessionId || (bossPane.agent_session?.kind === 'id' ? bossPane.agent_session.value : null) : null,
-      provider: currentProvider, window, target,
+      provider: currentProvider, window, target, skipped,
       ...(!bossPane.agent ? { defaultMode: 'fresh' } : {}),
     };
   }
-  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers, globalAllowed, risks, exhausted, pressures, weeklyUse, handoffs, bossHandoff };
+  return { projects: result, workspaces, runningWorkers: working.length, maxWorkers, globalAllowed, risks, exhausted, pressures, weeklyUse, cooldownSkips, handoffs, bossHandoff };
 }
