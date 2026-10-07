@@ -44,6 +44,51 @@ const USAGE = `Kit commands:
   models [--kind KIND]
 `;
 
+export const WORKER_COMMAND_USAGE = Object.freeze({
+  start: `Usage: worker start <name> --kind KIND (--task TEXT | --task-file FILE) [options]
+Options:
+  --kind KIND               Required worker kind: claude, codex, opencode, or pi.
+  --task TEXT               Required task text. Use this or --task-file.
+  --task-file FILE          Read the task text from a file. Use this or --task.
+  --task-id ID              Published project task ID.
+  --issue N                 Alias for a numeric --task-id.
+  --model MODEL             Select an allowed model.
+  --effort EFFORT           Set the reasoning effort.
+  --allow PATH              Allow a repository path. Repeat this option.
+  --copy PATH               Copy a task input file. Repeat this option.
+  --lease POOL              Lease one resource pool. Repeat this option.
+  --base BRANCH             Set the base branch.
+  --review-worktree PATH    Copy another worktree for a read-only review.
+  --orch PANE               Set the verified project lead pane.
+  --no-worktree             Use the current checkout.
+  --dry-run                 Print the start plan without changing state.
+  --force                   Override allowed quota, capacity, or pause refusals.
+  --force-swap              Override the swap refusal.
+  --read-only               Allow changes only in the worker folder.
+  --planner                 Create a planner session for the worker pane.
+  -h, --help                Print this usage and exit.`,
+  collect: `Usage: worker collect <name> [options]
+Options:
+  --record                  Record the run in the ledger (default).
+  --no-record               Read the report without writing a ledger entry.
+  --allow PATH              Allow one path for this collection. Repeat this option.
+  --outcome VALUE           Set done, partial, or failed.
+  --gate-passed             Record that the independent gate passed.
+  --gate-failed             Record that the independent gate failed.
+  --keep-pane               Keep the worker pane open.
+  --defects COUNT           Record the number of defects found.
+  --rework COUNT            Record the number of repair rounds.
+  --model-result VALUE      Set first-time, rework, or failed.
+  --model-reason TEXT       Explain the model result.
+  --accept-scope FILES      Accept comma-separated out-of-scope files.
+  --reason TEXT             Give the reason for --accept-scope.
+  -h, --help                Print this usage and exit.`,
+  commit: `Usage: worker commit <name> -m MESSAGE
+Options:
+  -m MESSAGE, --message MESSAGE   Set the commit message.
+  -h, --help                      Print this usage and exit.`,
+});
+
 function fail(message, code = 2) {
   const error = new Error(message);
   error.exitCode = code;
@@ -136,6 +181,19 @@ function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.i
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
 function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+  if (command === 'worker') {
+    const [action, ...rest] = argv;
+    if (Object.hasOwn(WORKER_COMMAND_USAGE, action)) {
+      if (rest.length === 1 && ['--help', '-h'].includes(rest[0])) {
+        output(WORKER_COMMAND_USAGE[action]);
+        return { help: true };
+      }
+      if (action === 'start' && rest.length === 0) {
+        output(WORKER_COMMAND_USAGE.start);
+        return { help: true };
+      }
+    }
+  }
   herdr ??= command === 'wait' ? createWaitHerdr(createHerdrRunner) : createHerdrRunner();
   if (command === 'models') {
     const modelConfig = mergeModels(loadModels(), rulesPolicy(rulesFile));
@@ -359,7 +417,11 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const [action, ...rest] = argv;
     if (action === 'start') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--no-worktree', '--dry-run', '--force', '--force-swap', '--read-only', '--planner'], repeat: ['--allow', '--copy', '--lease'] });
-      if (positional.length !== 1) fail('Usage: worker start <name> --kind <kind> --task TEXT [options]');
+      if (positional.length === 0) {
+        output(WORKER_COMMAND_USAGE.start);
+        return { help: true };
+      }
+      if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.start);
       knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'reviewworktree', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly', 'planner']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
@@ -401,7 +463,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     }
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'], repeat: ['--allow'] });
-      if (positional.length !== 1) fail('Usage: worker collect <name> [options]');
+      if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.collect);
       knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'reason']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
       if (flags.reason != null && flags.acceptscope == null) fail('--reason needs --accept-scope FILE[,FILE].');
@@ -462,7 +524,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       const normalized = rest.map((token) => token === '-m' ? '--message' : token);
       const { positional, flags } = parseArgs(normalized);
       knownFlags(flags, ['message']);
-      if (positional.length !== 1) fail('Usage: worker commit <name> -m MESSAGE');
+      if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.commit);
       return commitWorker(positional[0], { message: flags.message }, { config, output });
     }
     if (action === 'stop-own') {
