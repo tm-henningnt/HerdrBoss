@@ -57,6 +57,7 @@ td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .ok-t{color:var(--ok)}.bad-t{color:var(--crit)}
 .note{font-size:11.5px;color:var(--muted);margin-top:6px}
 .nav{display:flex;gap:14px;margin-bottom:12px;font-size:13px;color:var(--muted);flex-wrap:wrap}
+tr.grp td{background:var(--panel2);padding:5px 8px}tr.grp .arrow{color:var(--muted)}tr.sel td{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .nav b{color:var(--accent);border-bottom:2px solid var(--accent)}
 @media (max-width:1300px){.f1280{width:auto;min-width:0}}
 </style></head>
@@ -238,4 +239,277 @@ td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
   <div class="note">Accept runs <span class="mono">project open harbor-docs --start</span>. Deny waits 24 hours before the next proposal.</div>
  </div>
 </div></div>
+<span class="label" id="parked-desk-light">Parked list expanded, desktop 1280 px, light</span>
+<div class="frames">
+<div class="frame f1280 light">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip ok">open 2 of cap 3</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="toolbar"><span class="field" style="min-width:260px">Search projects…</span><span class="field">Group: all ▾</span><span class="field">State: parked ▾</span><span class="field">Sort: last activity ▾</span><span class="sp"></span><span class="small"><b>2 selected</b></span><span class="btn">Open</span><span class="btn dis">Park</span><span class="btn">Archive</span></div>
+ </div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="small muted">Acme 6 · Harbor 4 · Orchard 3 · Area: tools 12 · 22 more groups</span><span class="sp"></span><span class="chip warn">1 proposal: Open harbor-docs? 3 ready issues</span></div>
+ <div class="panel" style="margin-top:-2px">
+  <div class="head"><h2>Parked, grouped</h2><span class="small muted">Group fold, then last activity, newest first. The page remembers each fold.</span><span class="sp"></span><span class="small muted">Showing 8 of 47</span></div>
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Ready issues / next</th><th>Last activity</th><th></th></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Acme (client)</b> <span class="small muted">6 parked</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>acme-admin</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>Fix the export filter</td><td class="muted">9 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>acme-docs</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>—</td><td class="muted">34 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Harbor (client)</b> <span class="small muted">4 parked</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>harbor-docs</b><div class="small muted">Harbor (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>3 ready issues</td><td class="muted">41 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>harbor-app</b><div class="small muted">Harbor (client)</div></td><td>win1</td><td><span class="chip ">normal</span></td><td>Wait for the Owner: sign-off</td><td class="muted">58 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Area: tools</b> <span class="small muted">12 parked</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>kite-sdk</b><div class="small muted">Area: tools</div></td><td>win2</td><td><span class="chip ">normal</span></td><td>Fix the CI cache</td><td class="muted">19 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>pixel-lint</b><div class="small muted">Area: tools</div></td><td>mac</td><td><span class="chip ">low</span></td><td>—</td><td class="muted">66 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▸</span> <b>Orchard (client)</b> <span class="small muted">3 parked</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▸</span> <b>Lumen (client)</b> <span class="small muted">2 parked</span></td></tr>
+  </table>
+  <div class="note">Open creates the workspace and starts a fresh project lead. 22 more groups are collapsed. An archived project has no Open button.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="parked-desk-dark">Parked list expanded, desktop 1280 px, dark</span>
+<div class="frames">
+<div class="frame f1280 dark">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip ok">open 2 of cap 3</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="toolbar"><span class="field" style="min-width:260px">Search projects…</span><span class="field">Group: all ▾</span><span class="field">State: parked ▾</span><span class="field">Sort: last activity ▾</span><span class="sp"></span><span class="small"><b>2 selected</b></span><span class="btn">Open</span><span class="btn dis">Park</span><span class="btn">Archive</span></div>
+ </div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="small muted">Acme 6 · Harbor 4 · Orchard 3 · Area: tools 12 · 22 more groups</span><span class="sp"></span><span class="chip warn">1 proposal: Open harbor-docs? 3 ready issues</span></div>
+ <div class="panel" style="margin-top:-2px">
+  <div class="head"><h2>Parked, grouped</h2><span class="small muted">Group fold, then last activity, newest first. The page remembers each fold.</span><span class="sp"></span><span class="small muted">Showing 8 of 47</span></div>
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Ready issues / next</th><th>Last activity</th><th></th></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Acme (client)</b> <span class="small muted">6 parked</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>acme-admin</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>Fix the export filter</td><td class="muted">9 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>acme-docs</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>—</td><td class="muted">34 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Harbor (client)</b> <span class="small muted">4 parked</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>harbor-docs</b><div class="small muted">Harbor (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>3 ready issues</td><td class="muted">41 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>harbor-app</b><div class="small muted">Harbor (client)</div></td><td>win1</td><td><span class="chip ">normal</span></td><td>Wait for the Owner: sign-off</td><td class="muted">58 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▾</span> <b>Area: tools</b> <span class="small muted">12 parked</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>kite-sdk</b><div class="small muted">Area: tools</div></td><td>win2</td><td><span class="chip ">normal</span></td><td>Fix the CI cache</td><td class="muted">19 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>pixel-lint</b><div class="small muted">Area: tools</div></td><td>mac</td><td><span class="chip ">low</span></td><td>—</td><td class="muted">66 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▸</span> <b>Orchard (client)</b> <span class="small muted">3 parked</span></td></tr>
+   <tr class="grp"><td colspan="8"><span class="arrow">▸</span> <b>Lumen (client)</b> <span class="small muted">2 parked</span></td></tr>
+  </table>
+  <div class="note">Open creates the workspace and starts a fresh project lead. 22 more groups are collapsed. An archived project has no Open button.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="parked-phone">Parked list expanded, phone 393 px (light, dark)</span>
+<div class="frames">
+<div class="frame f393 light">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip ok">2 / 3 open</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="toolbar" style="margin-bottom:10px"><span class="field" style="flex:1">Search…</span><span class="btn sm">Filter</span></div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="sp"></span><span class="chip warn">1 proposal</span></div>
+ <div class="head"><h2>Acme (client) · 6</h2><span class="sp"></span><span class="small muted">▾</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><b>acme-admin</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Acme (client) · mac</div><div class="small" style="margin-top:4px">Next: Fix the export filter</div><div class="small muted">Active 9 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="pcard"><div class="top"><span class="cb"></span><b>acme-docs</b><span class="sp"></span><span class="chip">low</span></div><div class="small muted">Acme (client) · mac</div><div class="small muted">Active 34 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="head"><h2>Harbor (client) · 4</h2><span class="sp"></span><span class="small muted">▾</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><b>harbor-docs</b><span class="sp"></span><span class="chip">low</span></div><div class="small muted">Harbor (client) · mac</div><div class="small" style="margin-top:4px">3 ready issues</div><div class="small muted">Active 41 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="head"><h2>Area: tools · 12</h2><span class="sp"></span><span class="small muted">▸</span></div>
+ <div class="head"><h2>Orchard (client) · 3</h2><span class="sp"></span><span class="small muted">▸</span></div>
+ <div class="fold"><span class="arrow">▸</span><b>Archived (6)</b></div>
+ <div class="bottombar"><span class="small"><b>2 selected</b></span><span class="sp"></span><span class="btn sm">Open</span><span class="btn sm">Archive</span></div>
+</div>
+<div class="frame f393 dark">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip ok">2 / 3 open</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="toolbar" style="margin-bottom:10px"><span class="field" style="flex:1">Search…</span><span class="btn sm">Filter</span></div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="sp"></span><span class="chip warn">1 proposal</span></div>
+ <div class="head"><h2>Acme (client) · 6</h2><span class="sp"></span><span class="small muted">▾</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><b>acme-admin</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Acme (client) · mac</div><div class="small" style="margin-top:4px">Next: Fix the export filter</div><div class="small muted">Active 9 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="pcard"><div class="top"><span class="cb"></span><b>acme-docs</b><span class="sp"></span><span class="chip">low</span></div><div class="small muted">Acme (client) · mac</div><div class="small muted">Active 34 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="head"><h2>Harbor (client) · 4</h2><span class="sp"></span><span class="small muted">▾</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><b>harbor-docs</b><span class="sp"></span><span class="chip">low</span></div><div class="small muted">Harbor (client) · mac</div><div class="small" style="margin-top:4px">3 ready issues</div><div class="small muted">Active 41 days ago</div><div style="margin-top:6px"><span class="btn sm">Open</span></div></div>
+ <div class="head"><h2>Area: tools · 12</h2><span class="sp"></span><span class="small muted">▸</span></div>
+ <div class="head"><h2>Orchard (client) · 3</h2><span class="sp"></span><span class="small muted">▸</span></div>
+ <div class="fold"><span class="arrow">▸</span><b>Archived (6)</b></div>
+ <div class="bottombar"><span class="small"><b>2 selected</b></span><span class="sp"></span><span class="btn sm">Open</span><span class="btn sm">Archive</span></div>
+</div>
+</div>
+<span class="label" id="cap-desk-light">Cap reached: Open refuses, desktop 1280 px, light</span>
+<div class="frames">
+<div class="frame f1280 light">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip crit">open 3 of cap 3 · cap reached</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="toolbar"><span class="field" style="min-width:260px">Search projects…</span><span class="field">Group: all ▾</span><span class="field">State: open, parked ▾</span><span class="field">Sort: last activity ▾</span><span class="sp"></span><span class="small muted">0 selected</span><span class="btn dis">Open</span><span class="btn dis">Park</span><span class="btn dis">Archive</span></div>
+ </div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="small muted">Acme 6 · Harbor 4 · Orchard 3 · Area: tools 12 · 22 more groups</span></div>
+ <div class="panel" style="margin-top:-2px">
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Ready issues / next</th><th>Last activity</th><th></th></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>harbor-docs</b><div class="small muted">Harbor (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>3 ready issues</td><td class="muted">41 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>kite-sdk</b><div class="small muted">Area: tools</div></td><td>win2</td><td><span class="chip ">normal</span></td><td>Fix the CI cache</td><td class="muted">19 days ago</td><td><span class="btn sm pri">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>lumen-site</b><div class="small muted">Lumen (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>—</td><td class="muted">73 days ago</td><td><span class="btn sm">Open</span></td></tr>
+  </table>
+ </div>
+ <div class="panel" style="border-color:var(--crit)">
+  <div class="head"><h3 style="color:var(--crit)">Cannot open kite-sdk</h3><span class="chip crit">3 of cap 3 open</span><span class="sp"></span><span class="small muted">Close ✕</span></div>
+  <div class="small">The cap on open projects is reached. Park one project to free a slot. The cap never closes a project by itself.</div>
+  <table style="margin-top:8px"><tr><th></th><th>Open project</th><th>Factory</th><th>Next action</th><th>Last activity</th><th></th></tr>
+   <tr><td class="pin on">★</td><td><b>acme-web</b><div class="small muted">Acme (client)</div></td><td>mac</td><td>Review pack for the checkout form</td><td class="muted">12 min ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr><td class="pin on">★</td><td><b>orchard-api</b><div class="small muted">Orchard (client)</div></td><td>mac</td><td>Merge the rate-limit branch</td><td class="muted">2 h ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr><td class="pin"></td><td><b>garden-notes</b><div class="small muted">Personal</div></td><td>win1</td><td>Wait for the Owner: pick the font</td><td class="muted">5 h ago</td><td><span class="btn sm">Park</span></td></tr>
+  </table>
+  <div class="note">A pinned project counts toward the cap. Park runs the seven park checks and refuses on a failed check. After a park, select Open on kite-sdk again. The command <span class="mono">project open kite-sdk --force</span> overrides only the cap.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="cap-desk-dark">Cap reached: Open refuses, desktop 1280 px, dark</span>
+<div class="frames">
+<div class="frame f1280 dark">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip crit">open 3 of cap 3 · cap reached</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="toolbar"><span class="field" style="min-width:260px">Search projects…</span><span class="field">Group: all ▾</span><span class="field">State: open, parked ▾</span><span class="field">Sort: last activity ▾</span><span class="sp"></span><span class="small muted">0 selected</span><span class="btn dis">Open</span><span class="btn dis">Park</span><span class="btn dis">Archive</span></div>
+ </div>
+ <div class="fold"><span class="arrow">▾</span><b>Parked (47)</b><span class="small muted">Acme 6 · Harbor 4 · Orchard 3 · Area: tools 12 · 22 more groups</span></div>
+ <div class="panel" style="margin-top:-2px">
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Ready issues / next</th><th>Last activity</th><th></th></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>harbor-docs</b><div class="small muted">Harbor (client)</div></td><td>mac</td><td><span class="chip ">low</span></td><td>3 ready issues</td><td class="muted">41 days ago</td><td><span class="btn sm">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>kite-sdk</b><div class="small muted">Area: tools</div></td><td>win2</td><td><span class="chip ">normal</span></td><td>Fix the CI cache</td><td class="muted">19 days ago</td><td><span class="btn sm pri">Open</span></td></tr>
+   <tr><td><span class="cb"></span></td><td class="pin "></td><td><b>lumen-site</b><div class="small muted">Lumen (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>—</td><td class="muted">73 days ago</td><td><span class="btn sm">Open</span></td></tr>
+  </table>
+ </div>
+ <div class="panel" style="border-color:var(--crit)">
+  <div class="head"><h3 style="color:var(--crit)">Cannot open kite-sdk</h3><span class="chip crit">3 of cap 3 open</span><span class="sp"></span><span class="small muted">Close ✕</span></div>
+  <div class="small">The cap on open projects is reached. Park one project to free a slot. The cap never closes a project by itself.</div>
+  <table style="margin-top:8px"><tr><th></th><th>Open project</th><th>Factory</th><th>Next action</th><th>Last activity</th><th></th></tr>
+   <tr><td class="pin on">★</td><td><b>acme-web</b><div class="small muted">Acme (client)</div></td><td>mac</td><td>Review pack for the checkout form</td><td class="muted">12 min ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr><td class="pin on">★</td><td><b>orchard-api</b><div class="small muted">Orchard (client)</div></td><td>mac</td><td>Merge the rate-limit branch</td><td class="muted">2 h ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr><td class="pin"></td><td><b>garden-notes</b><div class="small muted">Personal</div></td><td>win1</td><td>Wait for the Owner: pick the font</td><td class="muted">5 h ago</td><td><span class="btn sm">Park</span></td></tr>
+  </table>
+  <div class="note">A pinned project counts toward the cap. Park runs the seven park checks and refuses on a failed check. After a park, select Open on kite-sdk again. The command <span class="mono">project open kite-sdk --force</span> overrides only the cap.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="cap-phone">Cap reached: Open refuses, phone 393 px (light, dark)</span>
+<div class="frames">
+<div class="frame f393 light">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip crit">3 / 3 · cap</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="fold"><span class="arrow">▸</span><b>Parked (47)</b></div>
+ <div class="pcard"><div class="top"><span class="cb"></span><b>kite-sdk</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Area: tools · win2</div><div class="small" style="margin-top:4px">Next: Fix the CI cache</div><div style="margin-top:6px"><span class="btn sm pri">Open</span></div></div>
+ <div class="sheet" style="border-color:var(--crit);margin-top:8px">
+  <div class="head" style="margin-bottom:4px"><h3 style="color:var(--crit)">Cannot open kite-sdk</h3><span class="sp"></span><span class="small muted">✕</span></div>
+  <div class="small">3 of 3 projects are open. Park one to free a slot.</div>
+  <div class="row"><span class="pin on">★</span><div><b>acme-web</b><div class="small muted">Active 12 min ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="row"><span class="pin on">★</span><div><b>orchard-api</b><div class="small muted">Active 2 h ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="row"><span class="pin">☆</span><div><b>garden-notes</b><div class="small muted">Active 5 h ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="note">The cap never closes a project. A pinned project counts toward the cap.</div>
+ </div>
+ <div class="fold" style="margin-top:10px"><span class="arrow">▸</span><b>Archived (6)</b></div>
+</div>
+<div class="frame f393 dark">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip crit">3 / 3 · cap</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="fold"><span class="arrow">▸</span><b>Parked (47)</b></div>
+ <div class="pcard"><div class="top"><span class="cb"></span><b>kite-sdk</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Area: tools · win2</div><div class="small" style="margin-top:4px">Next: Fix the CI cache</div><div style="margin-top:6px"><span class="btn sm pri">Open</span></div></div>
+ <div class="sheet" style="border-color:var(--crit);margin-top:8px">
+  <div class="head" style="margin-bottom:4px"><h3 style="color:var(--crit)">Cannot open kite-sdk</h3><span class="sp"></span><span class="small muted">✕</span></div>
+  <div class="small">3 of 3 projects are open. Park one to free a slot.</div>
+  <div class="row"><span class="pin on">★</span><div><b>acme-web</b><div class="small muted">Active 12 min ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="row"><span class="pin on">★</span><div><b>orchard-api</b><div class="small muted">Active 2 h ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="row"><span class="pin">☆</span><div><b>garden-notes</b><div class="small muted">Active 5 h ago</div></div><span class="sp"></span><span class="btn sm">Park</span></div>
+  <div class="note">The cap never closes a project. A pinned project counts toward the cap.</div>
+ </div>
+ <div class="fold" style="margin-top:10px"><span class="arrow">▸</span><b>Archived (6)</b></div>
+</div>
+</div>
+<span class="label" id="bulk-desk-light">Bulk select bar and Park result, desktop 1280 px, light</span>
+<div class="frames">
+<div class="frame f1280 light">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip ok">open 3 of cap 3</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="bottombar" style="margin-top:0"><span class="small"><b>3 selected</b></span><span class="small muted">3 open</span><span class="sp"></span><span class="btn pri">Park</span><span class="btn dis">Open</span><span class="btn">Pin</span><span class="btn">Archive</span><span class="small muted">Clear selection</span></div>
+ </div>
+ <div class="panel">
+  <div class="head"><h2>Open (3)</h2></div>
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Next action</th><th>Last activity</th><th></th></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin on">★</td><td><b>acme-web</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip hi">high</span></td><td>Review pack for the checkout form</td><td class="muted">12 min ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin on">★</td><td><b>orchard-api</b><div class="small muted">Orchard (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>Merge the rate-limit branch</td><td class="muted">2 h ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>garden-notes</b><div class="small muted">Personal</div></td><td>win1</td><td><span class="chip ">normal</span></td><td>Wait for the Owner: pick the font</td><td class="muted">5 h ago</td><td><span class="btn sm">Park</span></td></tr>
+  </table>
+  <div class="note">Open is off: every selected row is open. Park runs the seven park checks for each selected project and parks only the projects that pass.</div>
+ </div>
+ <div class="panel" style="border-color:var(--warn)">
+  <div class="head"><h3>Park result</h3><span class="chip ok">1 parked</span><span class="chip crit">2 refused</span><span class="sp"></span><span class="small muted">Close ✕</span></div>
+  <div class="chk" style="grid-template-columns:auto 1fr 1fr auto">
+   <span class="ok-t">✓</span><b>orchard-api</b><span>Parked. All 7 checks passed.</span><span class="muted small">parked</span>
+   <span class="bad-t">✗</span><b>acme-web</b><span>2 unpushed commits. Status older than the last commit.</span><span class="muted small">git, status</span>
+   <span class="bad-t">✗</span><b>garden-notes</b><span>Blocking Owner item: pick the font.</span><span class="muted small">owner</span>
+  </div>
+  <div class="note">A refused project stays open and stays selected. Park changes nothing for it. Open the project to fix the failed check, or use Prepare and park from its row.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="bulk-desk-dark">Bulk select bar and Park result, desktop 1280 px, dark</span>
+<div class="frames">
+<div class="frame f1280 dark">
+ <div class="nav"><span>Overview</span><span>Agents</span><b>Projects</b><span>Allocation</span><span>Fleet</span><span>Settings</span></div>
+ <div class="panel">
+  <div class="head"><h3>Projects</h3><span class="chip ok">open 3 of cap 3</span><span class="chip">parked 47</span><span class="chip">archived 6</span><span class="sp"></span><span class="btn pri">New project</span></div>
+  <div class="bottombar" style="margin-top:0"><span class="small"><b>3 selected</b></span><span class="small muted">3 open</span><span class="sp"></span><span class="btn pri">Park</span><span class="btn dis">Open</span><span class="btn">Pin</span><span class="btn">Archive</span><span class="small muted">Clear selection</span></div>
+ </div>
+ <div class="panel">
+  <div class="head"><h2>Open (3)</h2></div>
+  <table><tr><th></th><th></th><th>Project</th><th>Factory</th><th>Priority</th><th>Next action</th><th>Last activity</th><th></th></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin on">★</td><td><b>acme-web</b><div class="small muted">Acme (client)</div></td><td>mac</td><td><span class="chip hi">high</span></td><td>Review pack for the checkout form</td><td class="muted">12 min ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin on">★</td><td><b>orchard-api</b><div class="small muted">Orchard (client)</div></td><td>mac</td><td><span class="chip ">normal</span></td><td>Merge the rate-limit branch</td><td class="muted">2 h ago</td><td><span class="btn sm">Park</span></td></tr>
+   <tr class="sel"><td><span class="cb on"></span></td><td class="pin "></td><td><b>garden-notes</b><div class="small muted">Personal</div></td><td>win1</td><td><span class="chip ">normal</span></td><td>Wait for the Owner: pick the font</td><td class="muted">5 h ago</td><td><span class="btn sm">Park</span></td></tr>
+  </table>
+  <div class="note">Open is off: every selected row is open. Park runs the seven park checks for each selected project and parks only the projects that pass.</div>
+ </div>
+ <div class="panel" style="border-color:var(--warn)">
+  <div class="head"><h3>Park result</h3><span class="chip ok">1 parked</span><span class="chip crit">2 refused</span><span class="sp"></span><span class="small muted">Close ✕</span></div>
+  <div class="chk" style="grid-template-columns:auto 1fr 1fr auto">
+   <span class="ok-t">✓</span><b>orchard-api</b><span>Parked. All 7 checks passed.</span><span class="muted small">parked</span>
+   <span class="bad-t">✗</span><b>acme-web</b><span>2 unpushed commits. Status older than the last commit.</span><span class="muted small">git, status</span>
+   <span class="bad-t">✗</span><b>garden-notes</b><span>Blocking Owner item: pick the font.</span><span class="muted small">owner</span>
+  </div>
+  <div class="note">A refused project stays open and stays selected. Park changes nothing for it. Open the project to fix the failed check, or use Prepare and park from its row.</div>
+ </div>
+</div>
+</div>
+<span class="label" id="bulk-phone">Bulk select bar and Park result, phone 393 px (light, dark)</span>
+<div class="frames">
+<div class="frame f393 light">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip ok">3 / 3 open</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin on">★</span><b>acme-web</b><span class="sp"></span><span class="chip hi">high</span></div><div class="small muted">Acme (client) · mac</div></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin on">★</span><b>orchard-api</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Orchard (client) · mac</div></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin">☆</span><b>garden-notes</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Personal · win1</div></div>
+ <div class="sheet" style="border-color:var(--warn)">
+  <div class="head" style="margin-bottom:4px"><h3>Park result</h3><span class="sp"></span><span class="small muted">✕</span></div>
+  <div class="small"><span class="ok-t">1 parked</span> · <span class="bad-t">2 refused</span></div>
+  <div class="chk" style="margin-top:6px">
+   <span class="ok-t">✓</span><b>orchard-api</b><span class="muted small">parked</span>
+   <span class="bad-t">✗</span><b>acme-web</b><span class="muted small">git, status</span>
+   <span class="bad-t">✗</span><b>garden-notes</b><span class="muted small">owner</span>
+  </div>
+  <div class="note">acme-web: 2 unpushed commits. garden-notes: blocking Owner item.</div>
+ </div>
+ <div class="bottombar"><span class="small"><b>3 selected</b></span><span class="sp"></span><span class="btn sm pri">Park</span><span class="btn sm dis">Open</span><span class="btn sm">Pin</span></div>
+</div>
+<div class="frame f393 dark">
+ <div class="nav"><span>Overview</span><b>Projects</b><span>More ▾</span></div>
+ <div class="head"><h3>Projects</h3><span class="chip ok">3 / 3 open</span><span class="sp"></span><span class="btn pri sm">New</span></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin on">★</span><b>acme-web</b><span class="sp"></span><span class="chip hi">high</span></div><div class="small muted">Acme (client) · mac</div></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin on">★</span><b>orchard-api</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Orchard (client) · mac</div></div>
+ <div class="pcard" style="border-color:var(--accent)"><div class="top"><span class="cb on"></span><span class="pin">☆</span><b>garden-notes</b><span class="sp"></span><span class="chip">normal</span></div><div class="small muted">Personal · win1</div></div>
+ <div class="sheet" style="border-color:var(--warn)">
+  <div class="head" style="margin-bottom:4px"><h3>Park result</h3><span class="sp"></span><span class="small muted">✕</span></div>
+  <div class="small"><span class="ok-t">1 parked</span> · <span class="bad-t">2 refused</span></div>
+  <div class="chk" style="margin-top:6px">
+   <span class="ok-t">✓</span><b>orchard-api</b><span class="muted small">parked</span>
+   <span class="bad-t">✗</span><b>acme-web</b><span class="muted small">git, status</span>
+   <span class="bad-t">✗</span><b>garden-notes</b><span class="muted small">owner</span>
+  </div>
+  <div class="note">acme-web: 2 unpushed commits. garden-notes: blocking Owner item.</div>
+ </div>
+ <div class="bottombar"><span class="small"><b>3 selected</b></span><span class="sp"></span><span class="btn sm pri">Park</span><span class="btn sm dis">Open</span><span class="btn sm">Pin</span></div>
+</div>
+</div>
 </div></body></html>
