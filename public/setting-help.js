@@ -529,7 +529,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'handoff.autoCooldownHours', 'Successor cooldown hours', {
-    what: 'The time that automatic handover skips a harness and model after its automatic successor expired, was cancelled, never became ready, or stayed in preparing. The stored reason of the choice names each skipped kind. A successor that was ready and went unused does not count. A successor of a weaker or unranked model tier than the source is never chosen, whatever this value is.',
+    what: 'The time that automatic handover skips an agent app and model after its automatic successor expired, was cancelled, never became ready, or stayed in preparing. The stored reason of the choice names each skipped kind. A successor that was ready and went unused does not count. A successor of a weaker or unranked model tier than the source is never chosen, whatever this value is.',
     default: '6', unit: 'Hours', range: '1 to 72',
     raise: 'A higher value keeps a failed kind out of the choice for longer.',
     lower: 'A lower value lets a failed kind return sooner.',
