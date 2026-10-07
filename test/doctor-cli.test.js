@@ -182,3 +182,19 @@ test('doctor prints late tools as notes and security releases as failures', (t) 
   assert.equal(report.exitCode, 4);
   assert.equal(report.toolUpdates[0].line, 'error: GitHub CLI update: installed 2.101.0, latest 2.102.0, 2 days.');
 });
+
+test('doctor reports a stale security check as a note and keeps exit code zero', (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(f.data);
+  fs.writeFileSync(path.join(f.data, 'tools-state.json'), JSON.stringify({
+    schemaVersion: 1,
+    checkedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+    tools: [{ id: 'gh', name: 'GitHub CLI', trackedVersion: '2.101.0', latest: '2.102.0', ageDays: 2, risk: 'security' }],
+  }));
+
+  const result = f.run(['doctor'], 'green');
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /note: tool check is stale, run herdr-boss tools check\./);
+  assert.doesNotMatch(result.stdout, /error: GitHub CLI update/);
+});

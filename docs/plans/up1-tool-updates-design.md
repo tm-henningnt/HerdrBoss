@@ -128,7 +128,7 @@ Reason for A: a change in `herdr`, `s6-overlay`, or `node` changes the base of e
 - **Option A (recommended):** A release that fixes a security issue is flagged first. The flag shows in the Updates card and in one Mailbox item. The release skips the 3-day wait of P1. It still goes to the canary first.
 - **Option B:** No separate rule. A security release follows P1 or P2.
 
-The source of a security flag is one of: a GitHub security advisory of the upstream repository (`gh api repos/<owner>/<repo>/security-advisories`), the word "security" or a CVE id in the release notes, or the Debian security tracker for `chromium`. The check never decides a fix is a security release without one of these. When a source is unclear, the card shows "unknown" and not "no".
+The source of a security flag is one of: a GitHub security advisory for the upstream repository, a CVE ID or a GitHub advisory link with a GHSA ID in release notes, or the Debian security tracker for `chromium`. The check never decides a fix is a security release without one of these. When a source is unclear, the card shows "unknown" and not "no".
 
 - Accept item: "P3: Flag security releases first. Skip the waiting time."
 - Deny item: "P3: Treat a security release like any other release."
@@ -231,7 +231,7 @@ checked 2026-10-06 08:00
 ### Other places
 
 - **Factory card badge**: the factory card shows `updates 2` when its image tag differs from the tag of the pins on `main`, and `security` when a security release is open. A click opens the Updates card filtered to that factory.
-- **`herdr-boss doctor`**: one line for each tool that is `late` or has a `security` release. The line names the tool, the Installed and Latest values, and the age. `doctor` exits with 0 or 4 only (`src/doctor.js:321`). A `security` item is a failed check and makes the exit code 4. A `late` item is a note and leaves the exit code at 0.
+- **`herdr-boss doctor`**: one line for each tool that is `late` or has a `security` release. The line names the tool, the Installed and Latest values, and the age. `doctor` exits with 0 or 4 only (`src/doctor.js:321`). A fresh `security` item is a failed check and makes the exit code 4. A stale `security` item is ignored and prints a note. A `late` item is a note and leaves the exit code at 0.
 - **Mailbox**: see P6.
 
 ## 4. Mechanics
@@ -240,9 +240,10 @@ checked 2026-10-06 08:00
 
 - Read-only. It reads the installed version, `pins.json`, and the upstream source for each tool.
 - It writes `~/.herdr-boss/tools-state.json` with the result and the check time. The Updates card reads this file.
-- It sends no secret. Calls to GitHub use the existing `gh` login. Calls to npm are anonymous. The output never prints a token or a header value.
-- A failed upstream call marks that tool `unknown` and keeps the previous Latest value. It never marks a tool `ok` by default.
-- The weekly run is a scheduled job of the service. `tools check --now` runs it by hand.
+- The check uses anonymous HTTPS requests to public upstream endpoints. It does not use the GitHub CLI login. The output never prints a token or a header value.
+- A failed release request keeps the previous Latest value. It preserves a saved `security` risk and marks other risk values `unknown`. A failed advisory request does not discard good release data.
+- Every `tools check` command checks upstream. It does not use a cache.
+- For GitHub releases, choose the highest version on the tracked major line when that line has a release. Otherwise, choose the highest version overall.
 
 ### `herdr-boss tools bump TOOL`
 

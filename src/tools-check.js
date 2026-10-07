@@ -128,27 +128,16 @@ function pinValue(definition, pins) {
   return definition.pinKey ? (pins[definition.pinKey] ?? null) : null;
 }
 
-function responseFromJson(body) {
-  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
-}
-
 function defaultFetch(url, options = {}) {
   const parsed = new URL(url);
+  const request = { ...options, signal: options.signal ?? AbortSignal.timeout(15_000) };
   if (parsed.hostname === 'api.github.com') {
-    const endpoint = `${parsed.pathname.replace(/^\//, '')}${parsed.search}`;
-    try {
-      const output = execFileSync('gh', ['api', endpoint], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        maxBuffer: 8 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      return Promise.resolve(responseFromJson(JSON.parse(output)));
-    } catch {
-      return Promise.resolve({ ok: false, status: 503, json: async () => null, text: async () => '' });
-    }
+    const headers = new Headers(options.headers);
+    headers.set('accept', 'application/vnd.github+json');
+    headers.delete('authorization');
+    request.headers = headers;
   }
-  return globalThis.fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(15_000) });
+  return globalThis.fetch(url, request);
 }
 
 function readInstalledVersion(command, args, { env } = {}) {
@@ -207,6 +196,14 @@ function readPreviousState(dataDir) {
 
 function saveState(dataDir, state) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const uid = process.getuid?.();
+  if (Number.isInteger(uid)) {
+    let directory;
+    try {
+      directory = fs.lstatSync(dataDir);
+    } catch { /* Skip directory changes when ownership or type is unclear. */ }
+    if (directory?.isDirectory() && !directory.isSymbolicLink() && directory.uid === uid) fs.chmodSync(dataDir, 0o700);
+  }
   const target = path.join(dataDir, TOOLS_STATE_FILE);
   const temporary = path.join(dataDir, `.${TOOLS_STATE_FILE}.${process.pid}.${randomUUID()}.tmp`);
   let fd;
@@ -254,7 +251,9 @@ function nearestNewerDebianRelease(releases, installed, latest) {
 }
 
 function isSecurityRelease(release) {
-  return /\bsecurity\b|\bCVE-\d{4}-\d{4,}\b/i.test(`${release?.name ?? ''}\n${release?.body ?? ''}`);
+  const text = `${release?.name ?? ''}\n${release?.body ?? ''}`;
+  return /\bCVE-\d{4}-\d{4,}\b/i.test(text)
+    || /https?:\/\/github\.com\/advisories\/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b/i.test(text);
 }
 
 function versionInRange(version, range) {
@@ -308,8 +307,14 @@ async function githubAdvisories(repo, fetch) {
   return advisories.filter((advisory) => advisory && !advisory.withdrawn_at);
 }
 
-function latestGithub(releases) {
-  return [...releases].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))[0] ?? null;
+function latestGithub(releases, trackedVersion) {
+  const validReleases = releases.filter((release) => versionParts(release.version));
+  const trackedMajor = versionParts(trackedVersion)?.numbers[0];
+  const trackedLine = trackedMajor === undefined
+    ? []
+    : validReleases.filter((release) => versionParts(release.version)?.numbers[0] === trackedMajor);
+  const candidates = trackedLine.length ? trackedLine : validReleases;
+  return [...candidates].sort((a, b) => compareVersions(b.version, a.version))[0] ?? null;
 }
 
 function cleanTrackerText(value) {
@@ -336,19 +341,19 @@ function simplePinVersion(value) {
   return match?.[0] ?? null;
 }
 
-async function inspectUpstream(definition, fetch) {
+async function inspectUpstream(definition, fetch, trackedVersion) {
   const source = definition.source;
   if (source.kind === 'npm') {
     const npm = await npmLatest(source, fetch);
     const releases = source.repo ? await githubReleases(source.repo, fetch) : [];
-    const advisories = source.repo ? await githubAdvisories(source.repo, fetch) : [];
-    const latestRelease = latestGithub(releases);
+    const advisories = source.repo ? await githubAdvisories(source.repo, fetch).catch(() => []) : [];
+    const latestRelease = latestGithub(releases, trackedVersion);
     return { latest: npm.latest, publishedAt: npm.publishedAt, releases: npm.releases, releaseNotes: releases, advisories, latestRelease, latestDigest: null };
   }
   if (source.kind === 'github') {
     const releases = await githubReleases(source.repo, fetch);
-    const advisories = await githubAdvisories(source.repo, fetch);
-    const latestRelease = latestGithub(releases);
+    const advisories = await githubAdvisories(source.repo, fetch).catch(() => []);
+    const latestRelease = latestGithub(releases, trackedVersion);
     let latestDigest = null;
     let registryUpdatedAt = null;
     if (source.dockerRepository) {
@@ -378,13 +383,19 @@ function previousTool(previous, id) {
   return previous?.tools?.find((tool) => tool?.id === id) ?? null;
 }
 
+function trackedVersionFor(definition, pins, installed) {
+  const pinned = pinValue(definition, pins);
+  const installedMac = definition.whereRuns.includes('mac') ? (installed[definition.id] ?? null) : null;
+  return definition.id === 'buildkit' ? pinned
+    : definition.id === 'base-image' ? (pins.base?.digest ?? null)
+      : definition.source.kind === 'debian' ? pinned
+        : pinned ? simplePinVersion(pinned) : installedMac;
+}
+
 function makeToolState(definition, { pins, installed, upstream, previous, now }) {
   const pinned = pinValue(definition, pins);
   const installedMac = definition.whereRuns.includes('mac') ? (installed[definition.id] ?? null) : null;
-  const trackedVersion = definition.id === 'buildkit' ? pinned
-    : definition.id === 'base-image' ? (pins.base?.digest ?? null)
-      : definition.source.kind === 'debian' ? pinned
-      : pinned ? simplePinVersion(pinned) : installedMac;
+  const trackedVersion = trackedVersionFor(definition, pins, installed);
   const latest = upstream.latest;
   const nearest = definition.source.kind === 'debian'
     ? nearestNewerDebianRelease(upstream.releases ?? [], trackedVersion, latest)
@@ -454,7 +465,7 @@ function failedToolState(definition, { pins, installed, previous }) {
         : pinned ? simplePinVersion(pinned) : (installed[definition.id] ?? null),
     latestPublishedAt: prior?.latestPublishedAt ?? null,
     ageDays: prior?.ageDays ?? null,
-    risk: 'unknown',
+    risk: prior?.risk === 'security' ? 'security' : 'unknown',
     source: sourceLabel(definition.source),
     error: 'upstream unavailable',
     ...(prior?.latestDigest ? { latestDigest: prior.latestDigest } : {}),
@@ -469,7 +480,10 @@ export function readToolsState({ dataDir = DATA_DIR } = {}) {
 export function toolsDoctorUpdates({ dataDir = DATA_DIR } = {}) {
   const state = readToolsState({ dataDir });
   if (!state) return null;
-  return state.tools.filter((tool) => ['late', 'security'].includes(tool?.risk)).map((tool) => {
+  const checkedAt = Date.parse(state.checkedAt);
+  const staleSecurity = !Number.isFinite(checkedAt) || Date.now() - checkedAt > DAY_MS;
+  const securityRows = state.tools.filter((tool) => tool?.risk === 'security');
+  const updates = state.tools.filter((tool) => tool?.risk === 'late' || (tool?.risk === 'security' && !staleSecurity)).map((tool) => {
     const level = tool.risk === 'security' ? 'error' : 'note';
     const installed = tool.trackedVersion ?? tool.installed?.mac ?? 'unknown';
     const age = Number.isInteger(tool.ageDays) ? `, ${tool.ageDays} days` : ', age unknown';
@@ -483,6 +497,10 @@ export function toolsDoctorUpdates({ dataDir = DATA_DIR } = {}) {
       line: `${level}: ${tool.name} update: installed ${installed}, latest ${tool.latest ?? 'unknown'}${age}.`,
     };
   });
+  if (staleSecurity && securityRows.length) {
+    updates.push({ id: 'tool-check-stale', risk: 'stale', level: 'note', line: 'note: tool check is stale, run herdr-boss tools check.' });
+  }
+  return updates;
 }
 
 export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fetch: injectedFetch = null, installed: installedVersions = null, now = () => new Date() } = {}) {
@@ -496,7 +514,7 @@ export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fet
     const tools = [];
     for (const definition of TOOL_DEFINITIONS) {
       try {
-        const upstream = await inspectUpstream(definition, fetch);
+        const upstream = await inspectUpstream(definition, fetch, trackedVersionFor(definition, pins, installed));
         tools.push(makeToolState(definition, { pins, installed, upstream, previous, now: checkTime }));
       } catch {
         tools.push(failedToolState(definition, { pins, installed, previous }));
@@ -520,8 +538,8 @@ function formatState(state) {
 }
 
 export async function toolsCommand(args, options = {}) {
-  if (args[0] !== 'check' || args.length > 3 || args.slice(1).some((flag) => !['--now', '--json'].includes(flag)) || new Set(args.slice(1)).size !== args.length - 1) {
-    throw new Error('Usage: tools check [--now] [--json]');
+  if (args[0] !== 'check' || args.length > 2 || args.slice(1).some((flag) => flag !== '--json') || new Set(args.slice(1)).size !== args.length - 1) {
+    throw new Error('Usage: tools check [--json]');
   }
   const state = await createToolsCheck(options)();
   const output = options.output ?? console.log;

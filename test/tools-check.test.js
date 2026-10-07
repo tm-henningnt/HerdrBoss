@@ -24,7 +24,7 @@ function jsonResponse(body) {
   return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
 }
 
-function fixtureFetch({ fail = new Set() } = {}) {
+function fixtureFetch({ fail = new Set(), failAdvisories = new Set(), advisories = {}, releaseBodies = {} } = {}) {
   const calls = [];
   const fetch = async (url) => {
     calls.push(String(url));
@@ -47,11 +47,12 @@ function fixtureFetch({ fail = new Set() } = {}) {
     if (target.hostname === 'api.github.com') {
       const repo = target.pathname.split('/').slice(2, 4).join('/');
       if (target.pathname.endsWith('/security-advisories')) {
-        return jsonResponse(repo === 'cli/cli' ? [{
+        if (failAdvisories.has(repo)) throw new Error('private failure detail');
+        return jsonResponse(advisories[repo] ?? (repo === 'cli/cli' ? [{
           published_at: '2026-09-20T00:00:00.000Z',
           withdrawn_at: null,
           vulnerabilities: [{ vulnerable_version_range: '< 2.102.0' }],
-        }] : []);
+        }] : []));
       }
       const releases = {
         'anthropics/claude-code': ['v2.1.291', 'v2.1.292'],
@@ -61,7 +62,7 @@ function fixtureFetch({ fail = new Set() } = {}) {
         'ogulcancelik/herdr': ['v0.9.2', 'v0.9.3'],
         'steipete/CodexBar': ['v0.72.0', 'v0.73.0'],
         'cli/cli': ['v2.101.0', 'v2.102.0'],
-        'nodejs/node': ['v26.10.0', 'v26.11.0'],
+        'nodejs/node': ['v26.10.0', 'v26.11.0', 'v27.0.0', 'v24.11.0'],
         'just-containers/s6-overlay': ['v3.2.3.1', 'v3.2.3.2'],
         'moby/buildkit': ['v0.33.0', 'v0.33.1'],
       }[repo];
@@ -69,8 +70,10 @@ function fixtureFetch({ fail = new Set() } = {}) {
       return jsonResponse(releases.map((tag_name, index) => ({
         tag_name,
         name: tag_name,
-        body: repo === 'cli/cli' && index === 1 ? 'Security fix CVE-2026-12345.' : 'Maintenance release.',
-        published_at: index === 0 ? '2026-09-01T00:00:00.000Z' : '2026-09-20T00:00:00.000Z',
+        body: releaseBodies[tag_name] ?? (repo === 'cli/cli' && index === 1 ? 'Security fix CVE-2026-12345.' : 'Maintenance release.'),
+        published_at: repo === 'nodejs/node'
+          ? ['2026-09-01T00:00:00.000Z', '2026-09-10T00:00:00.000Z', '2026-09-20T00:00:00.000Z', '2026-10-01T00:00:00.000Z'][index]
+          : index === 0 ? '2026-09-01T00:00:00.000Z' : '2026-09-20T00:00:00.000Z',
         prerelease: false,
         draft: false,
       })).reverse());
@@ -144,10 +147,157 @@ test('a failed upstream keeps the last latest value and marks the tool unknown',
   assert.doesNotMatch(JSON.stringify(state), /private failure detail/i);
 });
 
+test('a failed fetch preserves a previously saved security risk', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.gh = '2.101.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+  const installed = { claude: '2.1.292', codex: '0.160.1', opencode: '2.0.20', pi: '1.0.0', herdr: '0.9.3', codexbar: '0.72.0', gh: '2.102.0', node: '26.10.0' };
+  const first = await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed, now: () => CHECKED_AT })();
+  assert.equal(first.tools.find((tool) => tool.id === 'gh').risk, 'security');
+
+  const failed = await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch({ fail: new Set(['api.github.com']) }), installed, now: () => CHECKED_AT })();
+
+  const gh = failed.tools.find((tool) => tool.id === 'gh');
+  assert.equal(gh.risk, 'security');
+  assert.equal(gh.error, 'upstream unavailable');
+});
+
+test('a bare security word does not mark a release as a security release', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.gh = '2.101.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+  const fetch = fixtureFetch({
+    advisories: { 'cli/cli': [] },
+    releaseBodies: { 'v2.102.0': 'Security improvements for the terminal output.' },
+  });
+  const installed = { gh: '2.102.0' };
+
+  const state = await createToolsCheck({ dataDir, pinsFile, fetch, installed, now: () => CHECKED_AT })();
+
+  assert.equal(state.tools.find((tool) => tool.id === 'gh').risk, 'late');
+});
+
+test('a GitHub advisory link marks a release as a security release', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.gh = '2.101.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+  const fetch = fixtureFetch({
+    advisories: { 'cli/cli': [] },
+    releaseBodies: { 'v2.102.0': 'See https://github.com/advisories/GHSA-abcd-efgh-ijkl.' },
+  });
+
+  const state = await createToolsCheck({ dataDir, pinsFile, fetch, installed: { gh: '2.102.0' }, now: () => CHECKED_AT })();
+
+  assert.equal(state.tools.find((tool) => tool.id === 'gh').risk, 'security');
+});
+
+test('GitHub latest uses the highest version on the tracked major line', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.node = '26.10.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+
+  const state = await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed: { node: '26.10.0' }, now: () => CHECKED_AT })();
+
+  assert.equal(state.tools.find((tool) => tool.id === 'node').latest, '26.11.0');
+});
+
+test('GitHub latest uses the highest version overall when no release matches the tracked line', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.node = '25.0.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+
+  const state = await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed: { node: '25.0.0' }, now: () => CHECKED_AT })();
+
+  assert.equal(state.tools.find((tool) => tool.id === 'node').latest, '27.0.0');
+});
+
+test('a failed advisory request does not discard good release data', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
+  pins.gh = '2.101.0';
+  fs.writeFileSync(pinsFile, JSON.stringify(pins));
+
+  const state = await createToolsCheck({
+    dataDir,
+    pinsFile,
+    fetch: fixtureFetch({ failAdvisories: new Set(['cli/cli']) }),
+    installed: { gh: '2.102.0' },
+    now: () => CHECKED_AT,
+  })();
+
+  const gh = state.tools.find((tool) => tool.id === 'gh');
+  assert.equal(gh.latest, '2.102.0');
+  assert.equal(gh.risk, 'security');
+  assert.equal(gh.error, undefined);
+});
+
+test('the default GitHub request uses fetch without the gh login', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  const bin = path.join(dataDir, 'bin');
+  fs.mkdirSync(bin);
+  const marker = path.join(dataDir, 'gh-was-called');
+  const fakeGh = path.join(bin, 'gh');
+  fs.writeFileSync(fakeGh, '#!/bin/sh\n: > "$HERDR_TEST_GH_MARKER"\nprintf "[]"\n');
+  fs.chmodSync(fakeGh, 0o700);
+  const oldPath = process.env.PATH;
+  const oldMarker = process.env.HERDR_TEST_GH_MARKER;
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  const mockUpstream = fixtureFetch();
+  process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ''}`;
+  process.env.HERDR_TEST_GH_MARKER = marker;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    return mockUpstream(url);
+  };
+  try {
+    await createToolsCheck({ dataDir, pinsFile, installed: {}, now: () => CHECKED_AT })();
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    if (oldMarker === undefined) delete process.env.HERDR_TEST_GH_MARKER;
+    else process.env.HERDR_TEST_GH_MARKER = oldMarker;
+  }
+  assert.equal(fs.existsSync(marker), false);
+  const githubCalls = calls.filter((call) => new URL(call.url).hostname === 'api.github.com');
+  assert.ok(githubCalls.length > 0);
+  for (const call of githubCalls) assert.equal(new Headers(call.options.headers).has('authorization'), false);
+});
+
+test('tools check chmods an existing owned data directory to 0700', async (t) => {
+  const { dataDir, pinsFile } = fixture(t);
+  fs.chmodSync(dataDir, 0o755);
+  assert.equal(fs.statSync(dataDir).uid, process.getuid());
+
+  await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed: {}, now: () => CHECKED_AT })();
+
+  assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
+});
+
+test('tools check skips a directory mode change through a symbolic link', async (t) => {
+  const { dataDir: fixtureDir, pinsFile } = fixture(t);
+  fs.rmSync(fixtureDir, { recursive: true });
+  const targetDir = path.join(path.dirname(fixtureDir), 'target-data');
+  fs.mkdirSync(targetDir);
+  fs.chmodSync(targetDir, 0o755);
+  const dataDir = path.join(path.dirname(fixtureDir), 'data-link');
+  fs.symlinkSync(targetDir, dataDir, 'dir');
+
+  await createToolsCheck({ dataDir, pinsFile, fetch: fixtureFetch(), installed: {}, now: () => CHECKED_AT })();
+
+  assert.equal(fs.statSync(targetDir).mode & 0o777, 0o755);
+});
+
 test('tools check prints JSON and rejects invalid options before an upstream request', async (t) => {
   const { dataDir, pinsFile } = fixture(t);
   const output = [];
-  await toolsCommand(['check', '--now', '--json'], {
+  await toolsCommand(['check', '--json'], {
     dataDir,
     pinsFile,
     fetch: fixtureFetch(),
@@ -158,6 +308,14 @@ test('tools check prints JSON and rejects invalid options before an upstream req
   assert.equal(JSON.parse(output[0]).schemaVersion, 1);
 
   let requests = 0;
-  await assert.rejects(toolsCommand(['check', '--unknown'], { fetch: async () => { requests += 1; } }), /Usage: tools check/);
+  const options = {
+    dataDir,
+    pinsFile,
+    installed: {},
+    now: () => CHECKED_AT,
+    fetch: async () => { requests += 1; return jsonResponse([]); },
+  };
+  await assert.rejects(toolsCommand(['check', '--unknown'], options), /Usage: tools check/);
+  await assert.rejects(toolsCommand(['check', '--now'], options), /Usage: tools check/);
   assert.equal(requests, 0);
 });
