@@ -309,7 +309,7 @@ test('docker uses the registered Docker context without a shell and masks its pr
     assert.equal(f.calls[0].command, 'docker');
     assert.deepEqual(f.calls[0].args, ['--context', 'example-context', 'ps', '--format', '{{.Names}} x']);
     assert.equal(f.calls[0].options.shell, false);
-    assert.equal('DOCKER_CONTEXT' in f.calls[0].options.env, false);
+    assert.equal(f.calls[0].options.env.DOCKER_CONTEXT, 'example-context');
     assert.equal(f.errText().includes('example-context'), false);
     assert.equal(f.errText().includes(ADDRESS), false);
   } finally { f.cleanup(); }

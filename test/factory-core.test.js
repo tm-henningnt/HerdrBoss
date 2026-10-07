@@ -645,9 +645,10 @@ test('the local transport selects the orbstack context by argument and clears Do
   await createDockerTransport({ transport: 'docker-context', dockerContext: 'example-context' }, { spawn, env }).run(['ps']);
   assert.deepEqual(seen[0].args, ['--context', 'orbstack', 'ps']);
   assert.deepEqual(seen[1].args, ['--context', 'example-context', 'ps']);
+  // buildx runs an inner docker call for a remote builder: it reads the context from the environment, not from --context.
+  assert.deepEqual(seen.map(({ env: childEnv }) => childEnv.DOCKER_CONTEXT), ['orbstack', 'example-context']);
   for (const { env: childEnv } of seen) {
     assert.equal('DOCKER_HOST' in childEnv, false);
-    assert.equal('DOCKER_CONTEXT' in childEnv, false);
     assert.equal(childEnv.PATH, '/usr/bin');
   }
 });
