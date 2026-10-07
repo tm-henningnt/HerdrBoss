@@ -1,6 +1,17 @@
 // The client data store owns shared reads, their last good values, event delivery, and refresh timers.
 const SHARED = ['mailboxCounts', 'chats', 'roamgate'];
+const URL_CACHE_LIMIT = 50;
 const pageReads = (reads = []) => [...SHARED, ...reads];
+
+function olderUpdatedAt(value, current) {
+  const incoming = value?.updatedAt;
+  const stored = current?.updatedAt;
+  if (incoming == null || stored == null) return false;
+  const incomingTime = typeof incoming === 'number' ? incoming : Date.parse(incoming);
+  const storedTime = typeof stored === 'number' ? stored : Date.parse(stored);
+  if (Number.isFinite(incomingTime) && Number.isFinite(storedTime)) return incomingTime < storedTime;
+  return String(incoming) < String(stored);
+}
 
 // Each route names the shared API records that its view reads. Dynamic page reads use the store's readUrl method.
 export const PAGE_READS = Object.freeze({
@@ -33,6 +44,7 @@ export function createClientStore({
   const values = new Map();
   const errors = new Map();
   const inFlight = new Map();
+  const urlKeys = new Map();
   const valueListeners = new Map();
   const eventListeners = new Map();
   const connectionListeners = new Set();
@@ -40,7 +52,21 @@ export function createClientStore({
   let page = null;
   let source = null;
   let connected = false;
+  let stateEventVersion = 0;
   const resourceNameForUrl = (url) => Object.entries(resources).find(([, definition]) => !definition.dynamic && definition.url === url)?.[0] || null;
+
+  const touchUrlKey = (key) => {
+    if (!key.startsWith('url:')) return;
+    urlKeys.delete(key);
+    urlKeys.set(key, true);
+    while (urlKeys.size > URL_CACHE_LIMIT) {
+      const oldest = urlKeys.keys().next().value;
+      urlKeys.delete(oldest);
+      values.delete(oldest);
+      errors.delete(oldest);
+    }
+  };
+  const keepsUrlKey = (key) => !key.startsWith('url:') || urlKeys.has(key);
 
   const listenersFor = (map, key) => {
     if (!map.has(key)) map.set(key, new Set());
@@ -57,6 +83,7 @@ export function createClientStore({
   };
   const emit = (type, value) => {
     if (type === 'state') {
+      stateEventVersion += 1;
       errors.delete('state');
       notify('state', value);
     }
@@ -68,6 +95,7 @@ export function createClientStore({
 
   async function fetchValue(key, url, options) {
     if (inFlight.has(key)) return inFlight.get(key);
+    const requestStateEventVersion = key === 'state' ? stateEventVersion : null;
     const request = (async () => {
       try {
         const response = await fetchImpl(url, options);
@@ -75,12 +103,21 @@ export function createClientStore({
         if (response.ok === false) {
           throw Object.assign(new Error(body?.error || `The API read failed (${response.status}).`), { status: response.status, body });
         }
+        if (!keepsUrlKey(key)) return body;
         errors.delete(key);
+        const current = values.get(key);
+        if (key === 'state' && (requestStateEventVersion !== stateEventVersion || olderUpdatedAt(body, current))) {
+          return current;
+        }
         notify(key, body);
         return body;
       } catch (error) {
-        errors.set(key, error);
-        if (values.has(key)) return values.get(key);
+        if (keepsUrlKey(key)) errors.set(key, error);
+        if (key === 'roamgate') {
+          notify(key, null);
+          return null;
+        }
+        if (keepsUrlKey(key) && values.has(key)) return values.get(key);
         throw error;
       }
     })();
@@ -96,7 +133,11 @@ export function createClientStore({
     if (typeof definition.run === 'function') {
       const request = Promise.resolve().then(definition.run);
       inFlight.set(name, request);
-      try { return await request; }
+      try {
+        const value = await request;
+        errors.delete(name);
+        return value;
+      }
       catch (error) { errors.set(name, error); throw error; }
       finally { if (inFlight.get(name) === request) inFlight.delete(name); }
     }
@@ -126,6 +167,7 @@ export function createClientStore({
   function readUrl(url, { force = false, options } = {}) {
     const name = resourceNameForUrl(url);
     const key = name || `url:${url}`;
+    touchUrlKey(key);
     if (!force && values.has(key)) return Promise.resolve(values.get(key));
     return fetchValue(key, url, options || (name ? resources[name].options : undefined));
   }

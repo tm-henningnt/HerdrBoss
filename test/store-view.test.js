@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createClientStore, PAGE_READS } from '../public/store.js';
+
+const appSource = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
 class FakeEventSource {
   static sources = [];
@@ -31,6 +34,7 @@ function makeStore({ fetchImpl = async () => ({ ok: true, json: async () => ({ v
     state: { url: '/api/state', intervalMs: 30000 },
     counts: { url: '/api/counts', intervalMs: 30000 },
     optional: { url: '/api/optional', intervalMs: 30000 },
+    roamgate: { url: '/api/roamgate', intervalMs: 30000 },
   };
   return createClientStore({
     fetchImpl,
@@ -122,4 +126,99 @@ test('two simultaneous reads of one resource share one fetch', async () => {
   assert.equal(calls, 1);
   resolveFetch({ ok: true, json: async () => ({ value: 'shared' }) });
   assert.deepEqual(await Promise.all([first, second]), [{ value: 'shared' }, { value: 'shared' }]);
+});
+
+test('Chat reads a fresh list when it opens', () => {
+  const body = appSource.match(/async function loadChats\(\) \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(body, 'loadChats exists');
+  assert.match(body, /readApiUrl\('\/api\/chats',\s*\{\s*force:\s*true\s*\}\)/);
+});
+
+test('arbitrary URL reads keep the 50 newest cache entries', async () => {
+  const calls = new Map();
+  const store = makeStore({ fetchImpl: async (url) => {
+    calls.set(url, (calls.get(url) || 0) + 1);
+    return { ok: true, json: async () => ({ url }) };
+  } });
+  for (let index = 0; index < 50; index += 1) await store.readUrl(`/external/${index}`);
+  await store.readUrl('/external/0');
+  await store.readUrl('/external/50');
+
+  assert.deepEqual(await store.readUrl('/external/0'), { url: '/external/0' });
+  assert.deepEqual(await store.readUrl('/external/50'), { url: '/external/50' });
+  assert.deepEqual(await store.readUrl('/external/1'), { url: '/external/1' });
+  assert.equal(calls.get('/external/0'), 1, 'a recently used URL stays cached');
+  assert.equal(calls.get('/external/50'), 1, 'the newest URL stays cached');
+  assert.equal(calls.get('/external/1'), 2, 'the least recently used URL is fetched again');
+});
+
+test('two simultaneous reads of an arbitrary URL share one fetch', async () => {
+  let calls = 0;
+  let resolveFetch;
+  const store = makeStore({ fetchImpl: () => {
+    calls += 1;
+    return new Promise((resolve) => { resolveFetch = resolve; });
+  } });
+  const first = store.readUrl('/external/shared', { force: true });
+  const second = store.readUrl('/external/shared', { force: true });
+  assert.equal(calls, 1);
+  resolveFetch({ ok: true, json: async () => ({ value: 'shared' }) });
+  assert.deepEqual(await Promise.all([first, second]), [{ value: 'shared' }, { value: 'shared' }]);
+});
+
+test('an older state fetch cannot replace a newer SSE state', async () => {
+  let resolveFetch;
+  const store = makeStore({ fetchImpl: () => new Promise((resolve) => { resolveFetch = resolve; }) });
+  const pending = store.refresh('state');
+  store.connect();
+  const newer = { updatedAt: '2026-10-07T12:00:00.000Z', revision: 2 };
+  FakeEventSource.sources[0].emit('state', newer);
+  resolveFetch({ ok: true, json: async () => ({ updatedAt: '2026-10-07T11:59:00.000Z', revision: 1 }) });
+
+  assert.deepEqual(await pending, newer);
+  assert.deepEqual(store.value('state'), newer);
+});
+
+test('a state fetch with an older updatedAt keeps the stored state', async () => {
+  const values = [
+    { updatedAt: '2026-10-07T12:00:00.000Z', revision: 2 },
+    { updatedAt: '2026-10-07T11:59:00.000Z', revision: 1 },
+  ];
+  const store = makeStore({ fetchImpl: async () => ({ ok: true, json: async () => values.shift() }) });
+  const newer = await store.refresh('state');
+
+  assert.deepEqual(await store.refresh('state'), newer);
+  assert.deepEqual(store.value('state'), newer);
+});
+
+test('a successful run clears its earlier error', async () => {
+  let fail = true;
+  const store = createClientStore({
+    EventSourceImpl: FakeEventSource,
+    resources: { action: { run: async () => {
+      if (fail) throw new Error('offline');
+      return 'done';
+    } } },
+    pages: {},
+  });
+
+  await assert.rejects(store.refresh('action'), /offline/);
+  assert.equal(store.error('action')?.message, 'offline');
+  fail = false;
+  assert.equal(await store.refresh('action'), 'done');
+  assert.equal(store.error('action'), undefined);
+});
+
+test('a failed roamgate read clears its cached value', async () => {
+  let fail = false;
+  const store = makeStore({ fetchImpl: async () => {
+    if (fail) throw new Error('offline');
+    return { ok: true, json: async () => ({ available: true }) };
+  } });
+
+  assert.deepEqual(await store.refresh('roamgate'), { available: true });
+  fail = true;
+  assert.equal(await store.refresh('roamgate'), null);
+  assert.equal(store.value('roamgate'), null);
+  assert.equal(store.error('roamgate')?.message, 'offline');
 });

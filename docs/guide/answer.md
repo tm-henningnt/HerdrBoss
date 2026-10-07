@@ -32,6 +32,8 @@ Use the Chat for a normal conversation. Use the Mailbox for a question that need
 3. Type your message in the field at the bottom.
 4. Select the round send button, or press Enter.
 
+When you open Chat, the page refreshes the chat list.
+
 You should see your message at once. The reply of the agent follows. A message that asks for a decision shows buttons. Select a button to answer.
 
 If your message shows **Retry**, the service did not take it. Select **Retry**. If it fails again, run `herdr-boss doctor` and see [trouble.md](trouble.md).
