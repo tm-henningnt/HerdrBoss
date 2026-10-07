@@ -50,6 +50,7 @@ import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './pro
 import { BODY_LIMIT as HOST_GUIDE_BODY_LIMIT, createHostGuideApi } from './host-guide.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
+import { handleModelsApi } from './api/models.js';
 import { createRawRoute } from './review-raw.js';
 import * as reviewStore from './review-store.js';
 import { attachState } from './factory-store.js';
@@ -477,6 +478,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         engine.log('attachment', `Stored picture ${attachment.id}`, { id: attachment.id, type: attachment.type, size: attachment.size });
         return send(res, 200, attachment);
       }
+      if (handleModelsApi(req, res, { pathname: p, send, loadModels })) return;
       if (p.startsWith('/api/goal/')) {
         const routed = await goalApi.handle(req.method, p, () => projectNewBody(req));
         return send(res, routed.status, routed.body);
@@ -780,7 +782,6 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         res.writeHead(302, { location: roamgateUrl(req.headers.host, cfg), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
         return res.end();
       }
-      if (p === '/api/models' && req.method === 'GET') return send(res, 200, loadModels().kinds);
       if (p === '/api/settings' && req.method === 'PUT') {
         let body;
         try { body = await jsonBody(req); }

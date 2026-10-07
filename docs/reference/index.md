@@ -6,6 +6,7 @@ Use these pages for technical details.
 
 - [Service](service.md)
 - [API](api.md)
+- [API route modules](api-route-modules.md)
 - [Dashboard pages](dashboard.md)
 - [Dashboard shell and route registry](dashboard-shell.md)
 - [Settings and allocation](settings.md)
