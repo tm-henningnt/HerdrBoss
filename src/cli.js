@@ -648,7 +648,7 @@ async function main() {
   }
   if (cmd === 'release') {
     const { releaseCommand } = await import('./release.js');
-    const code = await releaseCommand(args, { env: process.env, dataDir: DATA_DIR, config: cfg });
+    const code = await releaseCommand(args, { env: process.env, dataDir: DATA_DIR, config: loadConfig() });
     if (code) process.exitCode = code;
     return;
   }
