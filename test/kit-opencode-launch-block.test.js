@@ -36,6 +36,7 @@ function flagFixture(t, name) {
   const start = () => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], model: MODEL }, {
     config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile,
     wait: (ms) => { state.waits.push(ms); }, output: () => {}, tuiSupportsModelFlags: () => true,
+    readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
   });
   const records = () => {
     try { return Object.values(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_BOSS_DIR, 'unavailable-models.json'), 'utf8'))); }
@@ -55,5 +56,7 @@ test('an Unrecognized flag fails on the first launch with no relaunch, no pause,
   assert.deepEqual(fx.state.waits, [], 'the removed relaunch makes no 15 s pause');
   assert.deepEqual(fx.records(), [], 'no model is marked unavailable');
   assert.equal(fs.existsSync(fx.lockFile), false, 'the lane lock is released');
-  assert.equal(withOpenCodeStartLock(fx.dataDir, () => 'free', { timeoutMs: 50, wait: () => {}, output: () => {} }), 'free');
+  assert.equal(withOpenCodeStartLock(fx.dataDir, () => 'free', {
+    timeoutMs: 50, wait: () => {}, output: () => {}, readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
+  }), 'free');
 });

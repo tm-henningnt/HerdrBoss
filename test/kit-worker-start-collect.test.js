@@ -1676,13 +1676,23 @@ function openCodeFixture(t, name) {
     f, commands, missing,
     get starts() { return starts; },
     exit: () => { registered = false; },
-    start: (override = herdr, options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
+    start: (override = herdr, options = {}, deps = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
       config: f.config, models: loadModels(), herdr: override, env: f.env, rulesFile: f.rulesFile,
       wait: () => {}, output: () => {}, tuiSupportsModelFlags: () => true,
+      readProcessStart: () => 'Mon Sep 28 10:00:00 2026', ...deps,
     }),
     herdr,
   };
 }
+
+test('OpenCode start lock uses the injected process identity reader', (t) => {
+  const f = openCodeFixture(t, 'opencode-reader-injected');
+  let reads = 0;
+  assert.throws(() => f.start(undefined, {}, { readProcessStart: () => { reads++; return null; } }),
+    /Cannot read process start identity for the OpenCode start lock owner/);
+  assert.equal(reads, 1, 'startWorker passes the injected reader to the start lock');
+  assert.equal(f.starts, 0, 'the identity guard refuses before launching a TUI');
+});
 
 test('OpenCode start relaunches a fake TUI that exits at launch', (t) => {
   const f = openCodeFixture(t, 'opencode-launch-race');
@@ -1744,7 +1754,10 @@ test('OpenCode start lock release retries a busy mutation guard', (t) => {
     }
     return withMutationLock(directory, operation, options);
   };
-  assert.equal(withOpenCodeStartLock(dataDir, () => 'started', { timeoutMs: 5000, output: () => {}, wait: () => {}, mutationLock }), 'started');
+  assert.equal(withOpenCodeStartLock(dataDir, () => 'started', {
+    timeoutMs: 5000, output: () => {}, wait: () => {}, mutationLock,
+    readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
+  }), 'started');
   assert.equal(calls, 4);
   assert.equal(fs.existsSync(file), false, 'the release removes the owner record');
 });
@@ -1768,6 +1781,7 @@ test('OpenCode starts in separate processes share a lock through brief delivery'
     try {
       startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'] }, {
         config: f.config, models: loadModels(), env: f.env, rulesFile: f.rulesFile, wait: () => {},
+        readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
         tuiSupportsModelFlags: () => true,
         output: (line) => { if (line.includes('Waiting for OpenCode start lock')) event('waiting'); },
         herdr: (args) => {
