@@ -53,8 +53,10 @@ test('harness check accepts the per-project line', (t) => {
   projects(f, [alpha]);
   settings(f, [`**Herdr Boss projects**: ${alpha} (o/alpha). Worker worktrees are in ${f.home}/Projects/.herdr-wt/<repo>/<name>.`]);
   const lines = claudeFindings(run(f, ['harness', 'check']));
-  assert.equal(lines.length, 1);
+  assert.equal(lines.length, 3, lines.join('\n'));
   assert.match(lines[0], /^ok +claude autoMode: .*names .*alpha \(alpha\)$/);
+  assert.match(lines[1], /^missing +claude autoMode: .*release request;/);
+  assert.match(lines[2], /^missing +claude autoMode: .*release publish;/);
 });
 
 test('harness check accepts a parent folder line and says which projects it covers', (t) => {
@@ -64,9 +66,11 @@ test('harness check accepts a parent folder line and says which projects it cove
   projects(f, [alpha, beta]);
   settings(f, [parentLine(f, [`${f.home}/work/apps/`, `${f.home}/work/tools/`])]);
   const lines = claudeFindings(run(f, ['harness', 'check']));
-  assert.equal(lines.length, 2, lines.join('\n'));
+  assert.equal(lines.length, 4, lines.join('\n'));
   assert.match(lines[0], /^ok +claude autoMode: .*covers .*alpha \(alpha\) through the parent folder .*work\/apps$/);
   assert.match(lines[1], /^ok +claude autoMode: .*covers .*beta \(beta\) through the parent folder .*work\/tools$/);
+  assert.match(lines[2], /^missing +claude autoMode: .*release request;/);
+  assert.match(lines[3], /^missing +claude autoMode: .*release publish;/);
 });
 
 test('harness check accepts a ~ parent folder and a parent without a trailing slash', (t) => {
@@ -255,6 +259,8 @@ test('harness sync names a project singly when it needs an eleventh parent, and 
   assert.ok(line);
   settings(f, [line]);
   const findings = claudeFindings(run(f, ['harness', 'check']));
-  assert.equal(findings.length, 12);
-  assert.ok(findings.every((entry) => entry.startsWith('ok ')), findings.join('\n'));
+  assert.equal(findings.length, 14, findings.join('\n'));
+  assert.ok(findings.slice(0, 12).every((entry) => entry.startsWith('ok ')), findings.join('\n'));
+  assert.match(findings[12], /^missing +claude autoMode: .*release request;/);
+  assert.match(findings[13], /^missing +claude autoMode: .*release publish;/);
 });

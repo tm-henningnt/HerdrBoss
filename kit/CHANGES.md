@@ -270,6 +270,6 @@ Summary: Browser output masks URLs with a repeated or missing scheme and stored 
 Impact: useful
 Summary: `browser bookmarks SLUG open INDEX --new-tab` prints JSON with the new tab id, a masked title, and a masked URL again (BM2 had trimmed it to the bookmark list); when the open fails after it created a tab, the command closes the tab and exits non-zero. Project helpers can read the tab id.
 
-## 9379f316ecda
+## 7188ba9cda66
 Impact: required
 Summary: Require `herdr-boss release publish` after the Owner accepts the release approval item in the Mailbox.

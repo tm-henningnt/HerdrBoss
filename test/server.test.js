@@ -118,14 +118,14 @@ try {
     'workers.uncollectedNoticeMinutes',
     'workers.leaseGraceMinutes',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
-    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'chromePath',
+    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'chromePath', 'releases.repos',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'factories.claudeUsageHelper', 'analytics.actionsMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
     'config', 'default', 'config', 'default', 'default', 'default', 'config', 'config', 'default',
-    'config', 'config', 'config', 'default', 'default', 'default', 'config', 'config', 'config',
+    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'config', 'config', 'config',
     'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
@@ -2342,7 +2342,7 @@ test('the Chat page is compact: no page heading, slim bubbles, a round send butt
   assert.match(app, /<span class="chat-line-one"><span class="chat-name">\$\{esc\(item\.title\)\}<\/span>\$\{time \? `<span class="chat-time">\$\{esc\(time\)\}<\/span>` : ''\}<\/span><span class="chat-line-two"><span class="chat-preview">\$\{esc\(preview\)\}<\/span>\$\{badge\}<\/span>/);
   assert.match(css, /button\.chat-row \{[^}]*min-height: 72px;/);
   // A mail report is one short line in the chat.
-  assert.match(app, /if \(record\.channel === 'mail'\) \{[\s\S]*?Report: \$\{esc\(record\.title \|\| 'Report'\)\}[\s\S]*?Open in Mailbox/);
+  assert.match(app, /if \(record\.channel === 'mail' && !releaseApproval\) \{[\s\S]*?Report: \$\{esc\(record\.title \|\| 'Report'\)\}[\s\S]*?Open in Mailbox/);
   assert.match(css, /\.chat-report \{/);
 });
 
