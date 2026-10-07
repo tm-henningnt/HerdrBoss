@@ -45,7 +45,17 @@ async function views(code = source) {
   // The module imports of the page come from the real files of public/.
   for (const match of code.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {
     const module = await import(`../public/${match[2]}`);
-    for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
+    for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) {
+      context[name] = name === 'createClientStore'
+        ? (options) => module[name]({
+          ...options,
+          fetchImpl: context.fetch,
+          EventSourceImpl: context.EventSource,
+          setIntervalImpl: context.setInterval,
+          clearIntervalImpl: context.clearInterval,
+        })
+        : module[name];
+    }
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
   vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, chatBubble, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);

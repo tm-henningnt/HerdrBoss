@@ -30,7 +30,17 @@ async function views() {
   };
   for (const match of source.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {
     const module = await import(`../public/${match[2]}`);
-    for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) context[name] = module[name];
+    for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) {
+      context[name] = name === 'createClientStore'
+        ? (options) => module[name]({
+          ...options,
+          fetchImpl: context.fetch,
+          EventSourceImpl: context.EventSource,
+          setIntervalImpl: context.setInterval,
+          clearIntervalImpl: context.clearInterval,
+        })
+        : module[name];
+    }
   }
   const body = source.replace(/^import [^\n]*\n/gm, '');
   vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, poolSettingsPanel, poolEditorState, setPoolEditor: (patch) => Object.assign(poolEditor, patch), setModels: (m) => { models = m; }, setState: (v) => { state = v; } };`, context);
