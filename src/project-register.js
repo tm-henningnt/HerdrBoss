@@ -7,6 +7,7 @@ import { readDataFile, writeDataFile } from './data-file-safety.js';
 import { scanText } from './secret-scan.js';
 import { DATA_DIR, ISO_TIME } from './config.js';
 import { stripRemoteCredentials, readProjectRepos } from './harness.js';
+import { withMutationLock } from './kit/locks.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const FACTORY = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -74,16 +75,36 @@ export function remoteProblem(value) {
   if (value === '') return null;
   if (!isText(value)) return 'shape';
   if (/\s/.test(value)) return 'shape';
-  const isUrl = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(value);
-  const isScp = /^[^\s@/:]+@[^\s/:]+:[^\s]+$/.test(value);
-  const isOwnerName = /^[\w.-]+\/[\w.-]+(?:\/[\w.-]+)*$/.test(value);
-  if (!isUrl && !isScp && !isOwnerName) return 'shape';
-  if (/^[a-z][a-z0-9+.-]*:\/\/[^/@]*@/i.test(value)) return 'credentials';
-  return null;
+  if (value.includes('?') || value.includes('#')) return 'credentials';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value)?.[1].toLowerCase();
+    const authority = value.slice(value.indexOf('://') + 3).split(/[/?#]/, 1)[0];
+    let url;
+    try { url = new URL(value); }
+    catch {
+      const rest = value.slice(value.indexOf('://') + 3);
+      const at = rest.indexOf('@');
+      if (at !== -1 && rest.slice(0, at).includes(':')) return 'credentials';
+      return /^https?$/.test(scheme) && rest.includes('@') ? 'credentials' : 'shape';
+    }
+    if (!url.hostname) return authority.includes('@') ? 'credentials' : 'shape';
+    if (url.password !== '') return 'credentials';
+    if (/^https?$/.test(scheme) && (url.username !== '' || authority.includes('@'))) return 'credentials';
+    return null;
+  }
+  const ownerName = /^([\w.-]+)\/([\w.-]+)$/.exec(value);
+  if (ownerName) return ownerName[1] === '.' || ownerName[1] === '..' || ownerName[2] === '.' || ownerName[2] === '..' ? 'shape' : null;
+  const scp = /^([^@/:\s]+)(?::([^@/\s]*))?@([^@/:\s]+):([^\s?#]+)$/.exec(value);
+  if (!scp) return 'shape';
+  return value.slice(0, value.lastIndexOf('@')).includes(':') ? 'credentials' : null;
 }
 
-export function validIso(value) {
-  if (value === '') return true;
+export function normalizeRepoPath(value) {
+  return isText(value) && value !== '' && path.isAbsolute(value) ? path.normalize(value) : value;
+}
+
+export function validIso(value, { allowEmpty = true } = {}) {
+  if (value === '') return allowEmpty;
   if (!isText(value) || !ISO_TIME.test(value)) return false;
   return Number.isFinite(Date.parse(value));
 }
@@ -112,7 +133,7 @@ function fieldRules(record, slug) {
   const remote = remoteProblem(record.remote);
   if (remote === 'shape') throw recordError(`The remote of ${slug} must be owner/name or a URL without spaces.`);
   if (remote === 'credentials') {
-    throw recordError(`The remote of ${slug} must not hold credentials. Remove the user name and the password from the URL.`);
+    throw recordError(`The remote of ${slug} must not hold credentials, a query string, or a fragment.`);
   }
   if (!isText(record.factory) || !FACTORY.test(record.factory)) {
     throw recordError(`The factory of ${slug} must match [a-z0-9][a-z0-9-]* and have at most 40 characters.`);
@@ -130,7 +151,7 @@ function fieldRules(record, slug) {
   if (!isText(record.notes) || [...record.notes].length > 2000) {
     throw recordError(`The notes of ${slug} must hold at most 2000 characters.`);
   }
-  if (!validIso(record.createdAt)) throw recordError(`The createdAt of ${slug} must be an ISO time.`);
+  if (!validIso(record.createdAt, { allowEmpty: false })) throw recordError(`The createdAt of ${slug} must be an ISO time.`);
 }
 
 function secretRule(value, field) {
@@ -197,21 +218,32 @@ export function readRegister(dataDir = DATA_DIR) {
 
 export function writeRegister(register, dataDir = DATA_DIR) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const body = `${JSON.stringify({ version: 1, projects: register.projects }, null, 2)}\n`;
+  const projects = register.projects.map((record) => ({ ...record, repo: normalizeRepoPath(record.repo) }));
+  const body = `${JSON.stringify({ version: 1, projects }, null, 2)}\n`;
   writeDataFile(path.join(dataDir, 'project-register.json'), body, dataDir);
 }
 
+export function withRegisterLock(dataDir, operation) {
+  const directory = path.join(dataDir, 'locks', 'project-register');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return withMutationLock(directory, operation, { busyMessage: 'The project register is busy. Retry when it finishes.' });
+}
+
 // Appends one audit line with mode 0600. A dry run calls this never.
-export function appendAudit(slug, action, command, dataDir = DATA_DIR) {
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const file = path.join(dataDir, 'project-audit.jsonl');
-  const line = `${JSON.stringify({ at: new Date().toISOString(), slug, action, command, by: 'owner-cli', result: 'done' })}\n`;
-  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+export function appendAudit(slug, action, dataDir = DATA_DIR) {
   try {
-    fs.fchmodSync(fd, 0o600);
-    fs.writeSync(fd, line);
-  } finally {
-    fs.closeSync(fd);
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    const file = path.join(dataDir, 'project-audit.jsonl');
+    const line = `${JSON.stringify({ at: new Date().toISOString(), slug, action, by: 'owner-cli', result: 'done', failedCheck: null, dryRun: false })}\n`;
+    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+    try {
+      fs.fchmodSync(fd, 0o600);
+      fs.writeSync(fd, line);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    throw recordError('The register changed, but its audit line could not be written.');
   }
 }
 
@@ -266,12 +298,17 @@ function readStatusFile(dir, name) {
 // and the published status files. A candidate holds only slug, title, repo, remote, lastActivityAt, and state.
 export function collectImportCandidates({ dataDir = DATA_DIR, herdr } = {}) {
   const candidates = new Map();
+  let invalidRepoSlugs = 0;
   const ensure = (slug) => {
     if (!candidates.has(slug)) candidates.set(slug, { slug, state: 'parked' });
     return candidates.get(slug);
   };
 
   for (const row of readProjectRepos(dataDir)) {
+    if (!SLUG.test(row.slug)) {
+      invalidRepoSlugs += 1;
+      continue;
+    }
     const candidate = ensure(row.slug);
     if (row.repo) candidate.repo = row.repo;
     const remote = stripRemoteCredentials(row.remote);
@@ -312,7 +349,7 @@ export function collectImportCandidates({ dataDir = DATA_DIR, herdr } = {}) {
     candidate.state = labels.has(candidate.slug) ? 'open' : 'parked';
   }
 
-  return { candidates: [...candidates.values()], warning };
+  return { candidates: [...candidates.values()], warning, invalidRepoSlugs };
 }
 
 function safeText(value, max, fallback) {
@@ -330,7 +367,7 @@ export function buildCandidateRecord(candidate, dataDir = DATA_DIR) {
     title: safeText(candidate.title, 80, slug),
     group: '',
     repo: isText(candidate.repo) && candidate.repo !== '' && path.isAbsolute(candidate.repo) && !secretClasses(candidate.repo)
-      ? candidate.repo
+      ? normalizeRepoPath(candidate.repo)
       : '',
     remote: isText(candidate.remote) && remoteProblem(candidate.remote) === null && !secretClasses(candidate.remote)
       ? candidate.remote

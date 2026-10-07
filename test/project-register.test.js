@@ -8,6 +8,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { stripRemoteCredentials } from '../src/harness.js';
+import { remoteProblem } from '../src/project-register.js';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli.js');
 const REPO = path.resolve(path.dirname(CLI), '..');
@@ -139,13 +141,14 @@ test('project register add writes the record with mode 0600 and one audit line',
   const lines = readAudit(f);
   assert.equal(lines.length, 1);
   const raw = fs.readFileSync(f.auditPath, 'utf8');
-  assert.deepEqual(Object.keys(lines[0]).sort(), ['action', 'at', 'by', 'command', 'result', 'slug']);
+  assert.deepEqual(Object.keys(lines[0]).sort(), ['action', 'at', 'by', 'dryRun', 'failedCheck', 'result', 'slug'].sort());
   assert.match(lines[0].at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, 'at is an ISO time');
   assert.equal(lines[0].slug, 'acme-web');
   assert.equal(lines[0].action, 'register-add');
-  assert.equal(lines[0].command, 'project register add');
   assert.equal(lines[0].by, 'owner-cli');
   assert.equal(lines[0].result, 'done');
+  assert.equal(lines[0].failedCheck, null);
+  assert.equal(lines[0].dryRun, false);
   assert.ok(!raw.includes(repoPath), 'the audit line holds no path');
   assert.ok(!raw.includes('acme/acme-web'), 'the audit line holds no remote');
 });
@@ -216,7 +219,7 @@ test('project register edit changes the Owner fields and writes one audit line',
   const lines = readAudit(f);
   assert.equal(lines.length, 2, 'one audit line per register write');
   assert.equal(lines[1].action, 'register-edit');
-  assert.equal(lines[1].command, 'project register edit');
+  assert.ok(!Object.hasOwn(lines[1], 'command'));
   assert.equal(lines[1].slug, 'acme-web');
 });
 
@@ -321,7 +324,7 @@ test('project register import adds a record for each source, keeps edits, and is
   assert.equal(stored['kite-sdk'].lastActivityAt, '2026-10-01T00:00:00.000Z', 'the activity comes from the published status');
   assert.equal(stored['kite-sdk'].state, 'open');
   assert.equal(readAudit(f).length, 4, 'one audit line per new record');
-  assert.ok(readAudit(f).every((line) => line.action === 'register-add' && line.command === 'project register import'));
+  assert.ok(readAudit(f).every((line) => line.action === 'register-add' && !Object.hasOwn(line, 'command')));
 
   const edited = f.run(['project', 'register', 'edit', 'acme-web', '--group', 'web']);
   assert.equal(edited.status, 0, edited.stderr);
@@ -367,6 +370,157 @@ test('project register import warns and parks every record when Herdr lists no w
   assert.equal(readRegisterFile(f).projects[0].state, 'parked');
 });
 
+test('project register import skips invalid repository slugs and counts them in a warning', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([
+    { slug: 'good-project', repo: path.join(f.root, 'repos', 'good-project'), remote: '' },
+    { slug: 'Bad_Name', repo: path.join(f.root, 'repos', 'bad-name'), remote: '' },
+  ]));
+
+  const result = f.run(['project', 'register', 'import']);
+  assert.equal(result.status, 0, 'an invalid source row does not abort the import');
+  assert.match(result.stderr, /Warning: skipped 1 project-repos\.json row with an invalid slug\./);
+  assert.equal(result.stdout, 'new good-project (parked)\n1 new records.\n');
+  assert.deepEqual(readRegisterFile(f).projects.map((entry) => entry.slug), ['good-project']);
+});
+
+test('register remote parsing removes credentials and query data and accepts SSH user names', (t) => {
+  const slashPassword = 'https://user:pa/ss@host/o/n';
+  const queryRemote = 'https://host/o/n?access_token=example';
+  const strippedPassword = stripRemoteCredentials(slashPassword);
+  const strippedQuery = stripRemoteCredentials(queryRemote);
+  const strippedFragment = stripRemoteCredentials('https://host/o/n#access_token=example');
+  const strippedSshUser = stripRemoteCredentials('ssh://git@github.com/o/n');
+  assert.ok(strippedPassword === 'https://host/o/n', 'URL parsing removes credentials with a slash in the password');
+  assert.ok(strippedQuery === 'https://host/o/n', 'URL parsing removes query data');
+  assert.ok(strippedFragment === 'https://host/o/n', 'URL parsing removes fragment data');
+  assert.ok(strippedSshUser === 'ssh://git@github.com/o/n', 'URL parsing keeps a bare SSH user name');
+  assert.equal(remoteProblem(slashPassword), 'credentials');
+  assert.notEqual(remoteProblem(queryRemote), null, 'direct validation refuses a query string');
+  assert.equal(remoteProblem('ssh://git@github.com/o/n'), null, 'SSH accepts a user name without a password');
+  assert.equal(remoteProblem('git@github.com:o/n.git'), null, 'scp-style SSH remotes remain valid');
+  assert.equal(remoteProblem('ssh://git:example@github.com/o/n'), 'credentials', 'SSH refuses a password');
+  assert.equal(remoteProblem('./repo'), 'shape');
+  assert.equal(remoteProblem('../repo'), 'shape');
+  assert.equal(remoteProblem('./name'), 'shape');
+  assert.equal(remoteProblem('owner/..'), 'shape');
+  assert.equal(remoteProblem('owner/name/subpath'), 'shape');
+
+  const f = fixture(t);
+  const ssh = f.run(['project', 'register', 'add', 'ssh-url', '--remote', 'ssh://git@github.com/o/n']);
+  assert.equal(ssh.status, 0, 'register add accepts a bare SSH user name');
+  const scp = f.run(['project', 'register', 'add', 'scp-url', '--remote', 'git@github.com:o/n.git']);
+  assert.equal(scp.status, 0, 'register add accepts an scp-style remote');
+});
+
+test('register add and edit refuse unsafe remotes without printing or storing them', (t) => {
+  const f = fixture(t);
+  const slashPassword = 'https://user:pa/ss@host/o/n';
+  const queryRemote = 'https://host/o/n?access_token=example';
+
+  const add = f.run(['project', 'register', 'add', 'unsafe-remote', '--remote', slashPassword]);
+  assert.equal(add.status, 1, 'add refuses HTTP user information');
+  assert.ok(!add.stdout.includes('pa/ss') && !add.stderr.includes('pa/ss'), 'add prints no credential');
+  assert.ok(!fs.existsSync(f.registerPath), 'add stores no rejected remote');
+
+  const created = f.run(['project', 'register', 'add', 'safe-project']);
+  assert.equal(created.status, 0);
+  const edit = f.run(['project', 'register', 'edit', 'safe-project', '--remote', queryRemote]);
+  assert.equal(edit.status, 1, 'edit refuses a query string');
+  assert.ok(!edit.stdout.includes('access_token') && !edit.stderr.includes('access_token'), 'edit prints no query data');
+  assert.equal(readRegisterFile(f).projects[0].remote, '', 'edit stores no rejected remote');
+});
+
+test('register import strips credentials and query data before storing source remotes', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([
+    { slug: 'slash-password', repo: path.join(f.root, 'repos', 'slash-password'), remote: 'https://user:pa/ss@host/o/n' },
+    { slug: 'query-remote', repo: path.join(f.root, 'repos', 'query-remote'), remote: 'https://host/o/n?access_token=example' },
+  ]));
+
+  const result = f.run(['project', 'register', 'import']);
+  assert.equal(result.status, 0, 'source URLs are sanitized');
+  const remotes = readRegisterFile(f).projects.map((entry) => entry.remote);
+  assert.ok(remotes.every((remote) => remote === 'https://host/o/n'), 'only clean remotes are stored');
+  assert.ok(!result.stdout.includes('pa/ss') && !result.stderr.includes('pa/ss'), 'import prints no credential');
+  assert.ok(!result.stdout.includes('access_token') && !result.stderr.includes('access_token'), 'import prints no query data');
+});
+
+test('register sync strips credentials and query data and normalizes repository paths', (t) => {
+  const f = fixture(t);
+  const created = f.run(['project', 'register', 'add', 'sync-project']);
+  assert.equal(created.status, 0);
+  const rawRepo = `${f.root}/repos/parent/../sync-project`;
+  fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([
+    { slug: 'sync-project', repo: rawRepo, remote: 'https://user:pa/ss@host/o/n?access_token=example' },
+  ]));
+
+  const result = f.run(['project', 'register', 'sync']);
+  assert.equal(result.status, 0);
+  const stored = readRegisterFile(f).projects[0];
+  assert.ok(stored.repo === path.normalize(rawRepo), 'sync normalizes the repository path');
+  assert.ok(stored.remote === 'https://host/o/n', 'sync stores no credentials or query data');
+  assert.ok(!result.stdout.includes('pa/ss') && !result.stderr.includes('pa/ss'), 'sync prints no credential');
+  assert.ok(!result.stdout.includes('access_token') && !result.stderr.includes('access_token'), 'sync prints no query data');
+});
+
+test('register sync refuses an unparseable source remote without clearing a saved remote', (t) => {
+  const f = fixture(t);
+  const created = f.run(['project', 'register', 'add', 'saved-remote', '--remote', 'owner/repo']);
+  assert.equal(created.status, 0);
+  fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([
+    { slug: 'saved-remote', repo: '', remote: 'https://user:pa/ss@?access_token=example' },
+  ]));
+
+  const result = f.run(['project', 'register', 'sync']);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '0 records changed.\n');
+  assert.equal(readRegisterFile(f).projects[0].remote, 'owner/repo', 'a rejected source remote does not clear a saved remote');
+  assert.ok(!result.stdout.includes('access_token') && !result.stderr.includes('access_token'), 'sync prints no query data');
+});
+
+test('register add normalizes repository paths', (t) => {
+  const f = fixture(t);
+  const rawRepo = `${f.root}/repos/parent/../normalized-project`;
+  const result = f.run(['project', 'register', 'add', 'normalized-project', '--repo', rawRepo]);
+  assert.equal(result.status, 0);
+  assert.ok(readRegisterFile(f).projects[0].repo === path.normalize(rawRepo), 'add stores a normalized repository path');
+  const rawEditedRepo = `${f.root}/repos/other/../edited-project`;
+  const edited = f.run(['project', 'register', 'edit', 'normalized-project', '--repo', rawEditedRepo]);
+  assert.equal(edited.status, 0);
+  assert.ok(readRegisterFile(f).projects[0].repo === path.normalize(rawEditedRepo), 'edit stores a normalized repository path');
+});
+
+test('register rejects an empty createdAt value', (t) => {
+  const f = fixture(t);
+  writeRegisterFile(f.dataDir, [record('empty-created-at', { createdAt: '' })]);
+
+  const result = f.run(['project', 'register', 'list']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /createdAt.*ISO time/);
+});
+
+test('register reports an audit failure after keeping the changed record', (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(f.auditPath);
+
+  const result = f.run(['project', 'register', 'add', 'audit-project']);
+  assert.equal(result.status, 1, 'an audit failure does not report success');
+  assert.equal(result.stdout, '', 'the command reports no success before the audit line');
+  assert.match(result.stderr, /register changed.*audit line could not be written/i);
+  assert.deepEqual(readRegisterFile(f).projects.map((entry) => entry.slug), ['audit-project']);
+});
+
+test('register writes use and release the project-register mutation lock', (t) => {
+  const f = fixture(t);
+  const lockDirectory = path.join(f.dataDir, 'locks', 'project-register');
+
+  const result = f.run(['project', 'register', 'add', 'locked-project']);
+  assert.equal(result.status, 0);
+  assert.ok(fs.statSync(lockDirectory).isDirectory(), 'the command uses the mutation lock directory');
+  assert.ok(!fs.existsSync(path.join(lockDirectory, '.mutation')), 'the command releases its lock');
+});
+
 test('project register sync copies repo and remote, is idempotent, and matches its dry run', (t) => {
   const f = fixture(t);
   const added = f.run(['project', 'register', 'add', 'acme-web', '--title', 'Acme Web']);
@@ -385,7 +539,7 @@ test('project register sync copies repo and remote, is idempotent, and matches i
   let lines = readAudit(f);
   assert.equal(lines.length, 2, 'one audit line per register write, the add and the sync');
   assert.equal(lines[1].action, 'register-edit');
-  assert.equal(lines[1].command, 'project register sync');
+  assert.ok(!Object.hasOwn(lines[1], 'command'));
 
   const again = f.run(['project', 'register', 'sync']);
   assert.equal(again.status, 0, again.stderr);
@@ -405,7 +559,7 @@ test('project register sync copies repo and remote, is idempotent, and matches i
   assert.equal(readRegisterFile(f).projects[0].remote, 'acme/acme-web');
   lines = readAudit(f);
   assert.equal(lines.length, 3);
-  assert.equal(lines[2].command, 'project register sync');
+  assert.ok(!Object.hasOwn(lines[2], 'command'));
 });
 
 test('a worker pane cannot run a register command and a boss pane can', (t) => {

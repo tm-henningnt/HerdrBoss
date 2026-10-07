@@ -79,15 +79,36 @@ function codexPrefixRuleState(text, target) {
   return allow ? 'allow' : null;
 }
 
-// Remove the user information of an http(s) URL and the password of any other URL.
-// An scp-style remote such as git@host:owner/repo holds no credential.
+// Remove URL credentials and query data before a remote can leave its source file.
+// An scp-style remote has a strict fallback because URL cannot parse its form.
 export function stripRemoteCredentials(remote) {
   const text = String(remote || '').trim();
-  const match = /^([a-z][a-z0-9+.-]*:\/\/)([^/@]*)@(.*)$/i.exec(text);
-  if (!match) return text;
-  const [, scheme, user, rest] = match;
-  if (/^https?:\/\//i.test(scheme)) return `${scheme}${rest}`;
-  return `${scheme}${user.split(':')[0]}@${rest}`;
+  const cleanUrl = (url) => {
+    if (url.protocol === 'http:' || url.protocol === 'https:') url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  };
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    try {
+      return cleanUrl(new URL(text));
+    } catch {
+      // A slash inside an HTTP password makes the URL invalid. Recover only when the
+      // authority cannot parse and the suffix after @ is a valid host and path.
+      const match = /^(https?:\/\/)([^@\s]+)@([^\s]+)$/i.exec(text);
+      if (!match || !match[2].includes(':') || /\s/.test(text)) return '';
+      try {
+        return cleanUrl(new URL(`${match[1]}${match[3].split(/[?#]/, 1)[0]}`));
+      } catch {
+        return '';
+      }
+    }
+  }
+  const scp = /^([^@/:\s]+)(?::([^@/\s]*))?@([^@/:\s]+):([^\s?#]+)$/.exec(text);
+  if (scp) return `${scp[1]}@${scp[3]}:${scp[4]}`;
+  if (text.includes('@') || text.includes('?') || text.includes('#')) return '';
+  return text;
 }
 
 export function readProjectRepos(dataDir = DATA_DIR) {

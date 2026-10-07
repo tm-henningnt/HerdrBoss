@@ -17,9 +17,12 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(TMP, 'herdr-scan-'));
   const home = path.join(root, 'home');
   const dataDir = path.join(root, 'data');
+  const bin = path.join(root, 'bin');
   fs.mkdirSync(home);
   fs.mkdirSync(dataDir);
-  const base = { PATH: process.env.PATH, HOME: home, HERDR_BOSS_DIR: dataDir };
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'herdr'), `#!/bin/sh\nif [ "$1" = "pane" ] && [ "$2" = "get" ]; then\n  printf '{"pane":{"pane_id":"%s","label":"%s","workspace_id":"ws-1"}}\\n' "$3" "\${FAKE_HERDR_LABEL:-boss}"\n  exit 0\nfi\nexit 1\n`, { mode: 0o755 });
+  const base = { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: home, HERDR_BOSS_DIR: dataDir };
   const run = (args, env = base) => spawnSync(process.execPath, [CLI, ...args], { cwd: root, env, encoding: 'utf8' });
   const registerPath = path.join(dataDir, 'project-register.json');
   const auditPath = path.join(dataDir, 'project-audit.jsonl');
@@ -161,6 +164,74 @@ test('project scan does not follow a symlinked folder', (t) => {
   assert.ok(!result.stdout.includes('zlink'), 'the scan does not enter a symlink');
   assert.ok(!result.stdout.includes('hidden-target'), 'the scan sees the target only through the link');
   assert.equal(result.stdout, `No Git repositories found under ${f.root}.\n`);
+});
+
+test('project scan does not treat a .git symlink as a repository and removes control characters from output', (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.root, 'odd\nname', '.git'), { recursive: true });
+  fs.mkdirSync(path.join(f.root, '.hidden-git-target'));
+  fs.mkdirSync(path.join(f.root, 'linked-repo'));
+  fs.symlinkSync(path.join(f.root, '.hidden-git-target'), path.join(f.root, 'linked-repo', '.git'), 'dir');
+
+  const result = f.run(['project', 'scan', f.root]);
+  assert.equal(result.status, 0);
+  assert.ok(!result.stdout.includes('odd\nname'), 'folder names do not inject control characters into output');
+  assert.ok(!result.stdout.includes('linked-repo'), 'a symlinked .git entry is not a repository');
+  assert.ok(result.stdout.includes('skip oddname:'), 'the folder name prints without control characters');
+});
+
+test('project scan removes control characters from printed paths', (t) => {
+  const f = fixture(t);
+  const root = `${f.root}/root\npath`;
+  const repo = path.join(root, 'clean-project');
+  gitInit(repo);
+
+  const result = f.run(['project', 'scan', root]);
+  assert.equal(result.status, 0);
+  assert.ok(!result.stdout.includes('root\npath'), 'a path cannot inject a line break into output');
+  assert.ok(result.stdout.includes(`propose clean-project ${repo.replace('\n', '')} -`), 'the path prints without control characters');
+});
+
+test('project scan strips URL credentials and query data before printing remotes', (t) => {
+  const f = fixture(t);
+  gitInit(path.join(f.root, 'query-project'), 'https://host/o/n?access_token=example');
+  gitInit(path.join(f.root, 'slash-password'), 'https://user:pa/ss@host/o/n');
+
+  const result = f.run(['project', 'scan', f.root]);
+  assert.equal(result.status, 0);
+  assert.ok(!result.stdout.includes('access_token') && !result.stderr.includes('access_token'), 'scan prints no query data');
+  assert.ok(!result.stdout.includes('pa/ss') && !result.stderr.includes('pa/ss'), 'scan prints no credential');
+  assert.ok(result.stdout.includes('https://host/o/n'), 'scan prints the clean remote');
+});
+
+test('project scan --add registers candidates through the register command and supports a dry run', (t) => {
+  const f = fixture(t);
+  const repo = path.join(f.root, 'candidate-project');
+  gitInit(repo, 'https://host/o/candidate-project');
+
+  const dry = f.run(['project', 'scan', f.root, '--add', '--dry-run']);
+  assert.equal(dry.status, 0, 'the scan dry run succeeds');
+  assert.match(dry.stdout, /would add candidate-project/);
+  assert.ok(!fs.existsSync(f.registerPath), 'the dry run writes no register');
+  assert.ok(!fs.existsSync(f.auditPath), 'the dry run writes no audit');
+
+  const added = f.run(['project', 'scan', f.root, '--add']);
+  assert.equal(added.status, 0, 'the add uses the register add command');
+  const record = JSON.parse(fs.readFileSync(f.registerPath, 'utf8')).projects[0];
+  assert.ok(record.slug === 'candidate-project' && record.repo === repo, 'the candidate is registered with its folder path');
+  assert.equal(record.remote, 'https://host/o/candidate-project');
+  assert.equal(fs.readFileSync(f.auditPath, 'utf8').trim().split('\n').length, 1, 'the register add path writes an audit line');
+});
+
+test('project scan --add refuses a worker through the register add caller check', (t) => {
+  const f = fixture(t);
+  gitInit(path.join(f.root, 'candidate-project'));
+  const workerEnv = { ...f.base, HERDR_ENV: '1', HERDR_PANE_ID: 'p1', HERDR_WORKSPACE_ID: 'ws-1', FAKE_HERDR_LABEL: 'worker' };
+
+  const result = f.run(['project', 'scan', f.root, '--add'], workerEnv);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /project lead/);
+  assert.ok(!fs.existsSync(f.registerPath), 'a worker adds no project');
 });
 
 test('project scan changes no file of the data folder', (t) => {

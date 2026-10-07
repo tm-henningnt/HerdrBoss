@@ -14,6 +14,8 @@ import {
   readRegister,
   writeRegister,
   appendAudit,
+  normalizeRepoPath,
+  withRegisterLock,
   localFactory,
   collectImportCandidates,
   buildCandidateRecord,
@@ -120,7 +122,7 @@ function addCommand(rest, { dataDir, log }) {
     slug,
     title: flags['--title'] ?? slug,
     group: flags['--group'] ?? '',
-    repo: flags['--repo'] ?? '',
+    repo: normalizeRepoPath(flags['--repo'] ?? ''),
     remote: flags['--remote'] ?? '',
     factory: flags['--factory'] ?? localFactory(dataDir),
     state: 'parked',
@@ -137,17 +139,20 @@ function addCommand(rest, { dataDir, log }) {
     createdAt: new Date().toISOString(),
   };
   checkRecord(record);
-  const register = readRegister(dataDir);
-  if (register.projects.some((entry) => entry.slug === slug)) throw new Error(`${slug} is already in the register.`);
-  if (flags['--dry-run']) {
-    log(`Dry run: would add ${slug} to the register.`);
+  const add = () => {
+    const register = readRegister(dataDir);
+    if (register.projects.some((entry) => entry.slug === slug)) throw new Error(`${slug} is already in the register.`);
+    if (flags['--dry-run']) {
+      log(`Dry run: would add ${slug} to the register.`);
+      return 0;
+    }
+    register.projects.push(record);
+    writeRegister(register, dataDir);
+    appendAudit(slug, 'register-add', dataDir);
+    log(`Added ${slug} to the register.`);
     return 0;
-  }
-  register.projects.push(record);
-  writeRegister(register, dataDir);
-  appendAudit(slug, 'register-add', 'project register add', dataDir);
-  log(`Added ${slug} to the register.`);
-  return 0;
+  };
+  return flags['--dry-run'] ? add() : withRegisterLock(dataDir, add);
 }
 
 function editCommand(rest, { dataDir, log }) {
@@ -164,90 +169,108 @@ function editCommand(rest, { dataDir, log }) {
   }
   if (flags['--pinned'] !== undefined) changes.pinned = flags['--pinned'] === 'on';
   if (flags['--auto-open'] !== undefined) changes.autoOpen = flags['--auto-open'];
+  if (changes.repo !== undefined) changes.repo = normalizeRepoPath(changes.repo);
   if (flags['--issue-repo'] !== undefined) changes.issueSource = { repo: flags['--issue-repo'], label: flags['--issue-label'] };
   if (flags['--issue-clear']) changes.issueSource = null;
   if (Object.keys(changes).length === 0) throw new Error(`Give at least one field. ${usage}`);
-  const register = readRegister(dataDir);
-  const index = register.projects.findIndex((entry) => entry.slug === slug);
-  if (index === -1) throw new Error(`${slug} is not in the register.`);
-  const before = register.projects[index];
-  const merged = { ...before, ...changes };
-  checkRecord(merged);
-  const changed = EDIT_FIELDS.filter((field) => JSON.stringify(merged[field]) !== JSON.stringify(before[field]));
-  if (changed.length === 0) {
-    log(`No change for ${slug}.`);
+  const edit = () => {
+    const register = readRegister(dataDir);
+    const index = register.projects.findIndex((entry) => entry.slug === slug);
+    if (index === -1) throw new Error(`${slug} is not in the register.`);
+    const before = register.projects[index];
+    const merged = { ...before, ...changes };
+    checkRecord(merged);
+    const changed = EDIT_FIELDS.filter((field) => JSON.stringify(merged[field]) !== JSON.stringify(before[field]));
+    if (changed.length === 0) {
+      log(`No change for ${slug}.`);
+      return 0;
+    }
+    if (flags['--dry-run']) {
+      log(`Dry run: would edit ${slug}: ${changed.join(', ')}`);
+      return 0;
+    }
+    register.projects[index] = merged;
+    writeRegister(register, dataDir);
+    appendAudit(slug, 'register-edit', dataDir);
+    log(`Edited ${slug}: ${changed.join(', ')}`);
     return 0;
-  }
-  if (flags['--dry-run']) {
-    log(`Dry run: would edit ${slug}: ${changed.join(', ')}`);
-    return 0;
-  }
-  register.projects[index] = merged;
-  writeRegister(register, dataDir);
-  appendAudit(slug, 'register-edit', 'project register edit', dataDir);
-  log(`Edited ${slug}: ${changed.join(', ')}`);
-  return 0;
+  };
+  return flags['--dry-run'] ? edit() : withRegisterLock(dataDir, edit);
 }
 
 function syncCommand(rest, { dataDir, log }) {
   const usage = SUB_USAGE.sync;
   const { flags, positional } = parseFlags(rest, { booleans: ['--dry-run'], usage });
   if (positional.length > 0) throw new Error(`Give no other argument. ${usage}`);
-  const register = readRegister(dataDir);
-  const known = new Map(register.projects.map((entry) => [entry.slug, entry]));
-  const changed = [];
-  for (const row of readProjectRepos(dataDir)) {
-    const current = known.get(row.slug);
-    if (!current) continue;
-    const next = { ...current };
-    const fields = [];
-    if (typeof row.repo === 'string' && row.repo !== '' && path.isAbsolute(row.repo) && row.repo !== current.repo) {
-      next.repo = row.repo;
-      fields.push('repo');
-    }
-    if (typeof row.remote === 'string') {
-      const remote = stripRemoteCredentials(row.remote);
-      if (remoteProblem(remote) === null && remote !== current.remote) {
-        next.remote = remote;
-        fields.push('remote');
+  const sync = () => {
+    const register = readRegister(dataDir);
+    const known = new Map(register.projects.map((entry) => [entry.slug, entry]));
+    const changed = [];
+    for (const row of readProjectRepos(dataDir)) {
+      const current = known.get(row.slug);
+      if (!current) continue;
+      const next = { ...current };
+      const fields = [];
+      const repo = normalizeRepoPath(row.repo);
+      if (typeof repo === 'string' && repo !== '' && path.isAbsolute(repo) && repo !== current.repo) {
+        next.repo = repo;
+        fields.push('repo');
       }
+      if (typeof row.remote === 'string') {
+        const sourceRemote = row.remote.trim() === '' ? '' : stripRemoteCredentials(row.remote);
+        const sourceRemoteIsSafe = (sourceRemote === '' && row.remote.trim() === '')
+          || (sourceRemote !== '' && remoteProblem(sourceRemote) === null);
+        if (sourceRemoteIsSafe && sourceRemote !== current.remote) {
+          next.remote = sourceRemote;
+          fields.push('remote');
+        }
+      }
+      if (fields.length === 0) continue;
+      checkRecord(next);
+      changed.push({ slug: row.slug, record: next, fields });
     }
-    if (fields.length === 0) continue;
-    checkRecord(next);
-    log(`sync ${row.slug}: ${fields.join(', ')}`);
-    changed.push({ slug: row.slug, record: next });
-  }
-  log(`${changed.length} records changed.`);
-  if (changed.length === 0 || flags['--dry-run']) return 0;
-  for (const entry of changed) {
-    const index = register.projects.findIndex((record) => record.slug === entry.slug);
-    register.projects[index] = entry.record;
-  }
-  writeRegister(register, dataDir);
-  for (const entry of changed) appendAudit(entry.slug, 'register-edit', 'project register sync', dataDir);
-  return 0;
+    if (changed.length > 0 && !flags['--dry-run']) {
+      for (const entry of changed) {
+        const index = register.projects.findIndex((record) => record.slug === entry.slug);
+        register.projects[index] = entry.record;
+      }
+      writeRegister(register, dataDir);
+      for (const entry of changed) appendAudit(entry.slug, 'register-edit', dataDir);
+    }
+    for (const entry of changed) log(`sync ${entry.slug}: ${entry.fields.join(', ')}`);
+    log(`${changed.length} records changed.`);
+    return 0;
+  };
+  return flags['--dry-run'] ? sync() : withRegisterLock(dataDir, sync);
 }
 
 function importCommand(rest, { dataDir, herdr, log }) {
   const usage = SUB_USAGE.import;
   const { flags, positional } = parseFlags(rest, { booleans: ['--dry-run'], usage });
   if (positional.length > 0) throw new Error(`Give no other argument. ${usage}`);
-  const register = readRegister(dataDir);
-  const existing = new Set(register.projects.map((entry) => entry.slug));
-  const { candidates, warning } = collectImportCandidates({ dataDir, herdr });
-  if (warning) console.error(warning);
-  const records = [];
-  for (const candidate of candidates) {
-    if (existing.has(candidate.slug)) continue;
-    records.push(buildCandidateRecord(candidate, dataDir));
-  }
-  for (const record of records) log(`new ${record.slug} (${record.state})`);
-  log(`${records.length} new records.`);
-  if (records.length === 0 || flags['--dry-run']) return 0;
-  register.projects.push(...records);
-  writeRegister(register, dataDir);
-  for (const record of records) appendAudit(record.slug, 'register-add', 'project register import', dataDir);
-  return 0;
+  const importRecords = () => {
+    const register = readRegister(dataDir);
+    const existing = new Set(register.projects.map((entry) => entry.slug));
+    const { candidates, warning, invalidRepoSlugs } = collectImportCandidates({ dataDir, herdr });
+    if (invalidRepoSlugs > 0) {
+      console.error(`Warning: skipped ${invalidRepoSlugs} project-repos.json row${invalidRepoSlugs === 1 ? '' : 's'} with an invalid slug.`);
+    }
+    if (warning) console.error(warning);
+    const records = [];
+    for (const candidate of candidates) {
+      if (existing.has(candidate.slug)) continue;
+      records.push(buildCandidateRecord(candidate, dataDir));
+    }
+    if (records.length > 0 && !flags['--dry-run']) {
+      register.projects.push(...records);
+      writeRegister(register, dataDir);
+      for (const record of records) appendAudit(record.slug, 'register-add', dataDir);
+    }
+    for (const record of records) log(`new ${record.slug} (${record.state})`);
+    log(`${records.length} new records.`);
+    return 0;
+  };
+  return flags['--dry-run'] ? importRecords() : withRegisterLock(dataDir, importRecords);
 }
 
 const COMMANDS = {
