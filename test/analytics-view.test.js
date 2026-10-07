@@ -11,6 +11,7 @@ import {
   lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
 } from '../public/analytics.js';
 import * as communicationView from '../public/analytics.js';
+import { PAGE_READS } from '../public/store.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -777,7 +778,11 @@ test('the page draws Memory by class from the analytics aggregate, with the clas
   assert.match(view, /Memory by class/);
   assert.match(view, /No memory samples in the last 24 hours/);
   assert.match(view, /peak/i);
-  assert.match(app, /analyticsData = results\[9\]\.value/);
+  assert.ok(PAGE_READS.analytics.includes('analytics'), 'Analytics reads the analytics aggregate');
+  const analyticsSubscription = /clientStore\.subscribe\('analytics', \(value\) => \{([\s\S]*?)\n\}\);/.exec(app)?.[1] || '';
+  assert.ok(analyticsSubscription, 'the app subscribes to the analytics store resource');
+  assert.match(analyticsSubscription, /if \(value\?\.timeline\) analyticsData = value;/);
+  assert.match(analyticsSubscription, /renderStoreData\(\)/);
   const startAnalytics = app.indexOf('function analyticsView(');
   assert.match(app.slice(startAnalytics, app.indexOf('\n}\n', startAnalytics)), /memoryBlock\(/);
 });

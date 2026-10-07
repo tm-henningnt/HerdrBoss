@@ -9,6 +9,7 @@ import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { SETTING_GROUPS } from '../public/setting-help.js';
 import { MENU_ROUTES, NAV_LABEL, matchRoute } from '../public/routes.js';
+import { PAGE_READS } from '../public/store.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
@@ -2226,8 +2227,8 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /const before = oldest \? `&before=\$\{encodeURIComponent\(oldest\.id\)\}` : '';/);
   assert.match(app, /if \(scroller\.scrollTop < 32 && chat\.more && !chat\.moreLoading\) loadChatOlder\(\);/);
   assert.match(app, /chat\.keepScroll = \{ top: scroller\.scrollTop, height: scroller\.scrollHeight \};/);
-  // The stream adds a message at the bottom and shows a pill when the Owner reads another chat.
-  assert.match(app, /es\.addEventListener\('message', \(e\) => onChatMessage\(JSON\.parse\(e\.data\)\)\);/);
+  // The app passes message events from the client store to Chat.
+  assert.match(app, /clientStore\.subscribeEvent\('message', onChatMessage\)/);
   assert.match(app, /function onChatMessage\(event\)/);
   assert.match(app, /chat\.unseen \+= 1;/);
   assert.match(app, /data-chat-jump/);
@@ -2692,7 +2693,10 @@ test('GET /api/analytics returns memoryByClass from the memory samples in the da
 
 test('the Analytics page serves and its script fetches and draws the machine hours', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /'\/api\/machine-hours'\];\n\s*if \(location\.pathname === '\/analytics'\) urls\.push\('\/api\/quota-plan\/codex'\);\n\s*const results = await Promise\.allSettled\(urls\.map/);
+  assert.match(app, /machineHours: \{ url: '\/api\/machine-hours', intervalMs: 30000 \}/);
+  assert.ok(PAGE_READS.analytics.includes('machineHours'), 'Analytics reads the machine-hours resource');
+  assert.match(app, /clientStore\.subscribe\('machineHours', \(value\) => \{/);
+  assert.match(app, /if \(value\?\.hours\) machineHours = value;/);
   assert.match(app, /function machineHoursBlock/);
   assert.match(app, /<details class="mh-details" data-mh-detail/);
   assert.match(app, /machineHoursOpen = e\.target\.open/);

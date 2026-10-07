@@ -85,6 +85,15 @@ test('the same event source recovers after a connection error and delivers later
   assert.deepEqual(updates, [{ revision: 2 }]);
 });
 
+test('a message event reaches Chat subscribers', () => {
+  const store = makeStore();
+  const messages = [];
+  store.subscribeEvent('message', (message) => messages.push(message));
+  store.connect();
+  FakeEventSource.sources[0].emit('message', { id: 'message-1', text: 'Hello.' });
+  assert.deepEqual(messages, [{ id: 'message-1', text: 'Hello.' }]);
+});
+
 test('an optional read keeps and returns its last good value after a later failure', async () => {
   let fail = false;
   const store = makeStore({ fetchImpl: async () => {
