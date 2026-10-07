@@ -176,6 +176,8 @@ const USAGE = `herdr-boss <command>
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
   project paths [--json]  Print the registered paths of other projects.
+  project register list|add|edit|sync|import  Read or change the project register, or fill it from its sources.
+  project scan DIR [--depth N]  List Git repositories under DIR and propose register records. It writes nothing.
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
   hub promote [--force]                   Take the head office role with the next epoch and tell every factory. See docs/cli.md.
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
@@ -559,6 +561,19 @@ async function main() {
     if (args[0] === 'transfer') {
       const { projectTransferCommand } = await import('./project-transfer.js');
       const code = await projectTransferCommand(args.slice(1), { env: process.env, dataDir: DATA_DIR });
+      if (code) process.exitCode = code;
+      return;
+    }
+    if (args[0] === 'register') {
+      const { projectRegisterCommand } = await import('./project-register-cli.js');
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      const code = await projectRegisterCommand(args.slice(1), { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR });
+      if (code) process.exitCode = code;
+      return;
+    }
+    if (args[0] === 'scan') {
+      const { projectScanCommand } = await import('./project-scan.js');
+      const code = projectScanCommand(args.slice(1), { dataDir: DATA_DIR, cwd: process.cwd() });
       if (code) process.exitCode = code;
       return;
     }

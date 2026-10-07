@@ -602,6 +602,33 @@ Run `project paths` to print one line with the slug and path of each registered 
 
 Use `project paths --json` to print an array of objects. Each object has `slug` and `path` fields. The command exits 0 and prints an empty line when no other project is registered. The JSON form prints an empty array in this case.
 
+## Project register
+
+The project register lists every project of this factory. Herdr Boss stores the register in the file `project-register.json` in the data folder. The file has mode 0600. The register never lands in a Git repository. Each record holds the 16 fields `slug`, `title`, `group`, `repo`, `remote`, `factory`, `state`, `pinned`, `priority`, `issueSource`, `autoOpen`, `lastOpenedAt`, `lastActivityAt`, `nextAction`, `notes`, and `createdAt`.
+
+| `herdr-boss` command | Effect |
+| --- | --- |
+| `project register list [--state STATE] [--group NAME] [--json]` | Print the records sorted by slug. `--state` takes `open`, `parked`, or `archived`. Only this subcommand accepts `--json`. |
+| `project register add SLUG [FIELD ...] [--dry-run]` | Add one record. The record starts in the state `parked` with the factory of this data folder. |
+| `project register edit SLUG [FIELD ...] [--dry-run]` | Change Owner fields of one record. The command prints the changed field names, never the values. State changes belong to a later slice. |
+| `project register sync [--dry-run]` | Copy the repo and the remote from `project-repos.json` into the matching record. |
+| `project register import [--dry-run]` | Add a record for each source that the register does not hold yet. |
+| `project scan DIR [--depth N]` | List the Git repositories under DIR and propose records. The scan writes nothing. |
+
+Run `herdr-boss project register add acme-web --title "Acme Web" --repo /path/to/repo --remote owner/repo` to add one project. Run `herdr-boss project register edit acme-web --group web --pinned on` to change fields. Run `herdr-boss project register list --state open` to list the open projects. A bare `herdr-boss project register` prints the usage of every subcommand.
+
+Each `project register` subcommand runs a caller check before it reads an option. A plain terminal is the Owner and passes the check. A Herdr pane must carry the label `boss` or `orch`. A worker pane is refused, and the refusal tells the worker to ask its project lead. `project scan` writes nothing, so it runs from every pane.
+
+Every subcommand that writes the register accepts `--dry-run`. A dry run prints the same result lines as the real run. It writes no register file and no audit line. A refused command prints a reason and writes nothing. A refusal names the class of a value that matches the secret scan, never the value itself. A remote must be `owner/name` or a URL without spaces, and it must hold no credentials.
+
+`project register import` reads three sources: the rows of `project-repos.json`, the project keys of `policy.json`, and the published status files in the folder `projects/`. It adds one record for each slug that the register does not hold. It keeps each record that the register already holds, so a second import adds nothing and keeps the edits of the Owner. A slug that names a Herdr workspace gets the state `open`. Every other new record gets the state `parked`. When Herdr lists no workspaces, the command prints a warning on the error stream and parks every new record.
+
+`project register sync` reads the rows of `project-repos.json`. A row is the source of truth for the repo and the remote of its record. An empty remote in a row clears the remote of the record. The sync stores a remote without its credentials.
+
+`project scan DIR` walks DIR and prints one line for each Git repository. It prints `skip` for a folder name that is no project slug, `registered` for a slug that the register holds, and `propose` for a new slug with its path and its remote. The scan prints each remote without its credentials. `--depth N` sets the depth of the walk. The depth is a whole number from 0 to 10, and 2 is the default. The scan follows no symlink and skips each hidden folder. It has no caller check and changes no file.
+
+A command that writes the register appends one line per written record to the file `project-audit.jsonl` in the data folder. The audit file has mode 0600. Each line holds the fields `at`, `slug`, `action`, `command`, `by`, and `result`. The action is `register-add` or `register-edit`. The value of `by` is `owner-cli` and the value of `result` is `done`. A line holds no path, no remote, and no value of a record. A dry run appends no line.
+
 ## Release approval
 
 An orchestrator publishes a GitHub release only after the Owner approves it in the Mailbox. The Owner taps Approve and types no command. The commands use the existing `gh` login of the Owner and never print a token.
