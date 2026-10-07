@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
+import { postToolUpdate } from './messages.js';
 
 export const TOOLS_STATE_FILE = 'tools-state.json';
 export const TOOLS_STATE_SCHEMA = 1;
@@ -123,7 +124,7 @@ function pinValue(definition, pins) {
   if (definition.pinKey === 'buildkit') {
     const buildkit = pins.buildkit;
     if (!buildkit || !buildkit.image || !buildkit.tag) return null;
-    return `${buildkit.image}:${buildkit.tag}`;
+    return `${buildkit.image}:${buildkit.tag}${buildkit.digest ? `@${buildkit.digest}` : ''}`;
   }
   return definition.pinKey ? (pins[definition.pinKey] ?? null) : null;
 }
@@ -176,7 +177,7 @@ function readInstalledVersions() {
 
 function readPins(pinsFile) {
   const pins = JSON.parse(fs.readFileSync(pinsFile, 'utf8'));
-  if (!pins || typeof pins !== 'object' || pins.schema !== 1) throw new Error('The factory pin file has an unsupported schema.');
+  if (!pins || typeof pins !== 'object' || ![1, 2].includes(pins.schema)) throw new Error('The factory pin file has an unsupported schema.');
   return pins;
 }
 
@@ -503,7 +504,7 @@ export function toolsDoctorUpdates({ dataDir = DATA_DIR } = {}) {
   return updates;
 }
 
-export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fetch: injectedFetch = null, installed: installedVersions = null, now = () => new Date() } = {}) {
+export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fetch: injectedFetch = null, installed: installedVersions = null, now = () => new Date(), mailbox = postToolUpdate } = {}) {
   const fetch = injectedFetch ?? defaultFetch;
   return async function checkTools() {
     const checkTime = now();
@@ -522,8 +523,285 @@ export function createToolsCheck({ dataDir = DATA_DIR, pinsFile = PINS_FILE, fet
     }
     const state = { schemaVersion: TOOLS_STATE_SCHEMA, checkedAt: checkTime.toISOString(), tools };
     saveState(dataDir, state);
+    for (const tool of tools) {
+      if (tool.risk !== 'security' && !(tool.risk === 'late' && Number.isInteger(tool.ageDays) && tool.ageDays > 14)) continue;
+      await mailbox(tool, { dir: dataDir, now: checkTime.getTime() });
+    }
     return state;
   };
+}
+
+const SHA256_ARTIFACTS = {
+  's6-overlay': {
+    files: () => ['s6-overlay-noarch.tar.xz', 's6-overlay-aarch64.tar.xz', 's6-overlay-x86_64.tar.xz'],
+    checksumUrl: (version, file) => `https://github.com/just-containers/s6-overlay/releases/download/v${version}/${file}.sha256`,
+    artifactUrl: (version, file) => `https://github.com/just-containers/s6-overlay/releases/download/v${version}/${file}`,
+  },
+  node: {
+    files: (version) => [`node-v${version}-linux-arm64.tar.xz`, `node-v${version}-linux-x64.tar.xz`],
+    checksumUrl: (version) => `https://nodejs.org/dist/v${version}/SHASUMS256.txt`,
+    artifactUrl: (version, file) => `https://nodejs.org/dist/v${version}/${file}`,
+  },
+  gh: {
+    files: (version) => [`gh_${version}_linux_arm64.tar.gz`, `gh_${version}_linux_amd64.tar.gz`],
+    checksumUrl: (version) => `https://github.com/cli/cli/releases/download/v${version}/gh_${version}_checksums.txt`,
+    artifactUrl: (version, file) => `https://github.com/cli/cli/releases/download/v${version}/${file}`,
+  },
+  codexbar: {
+    files: (version) => [`CodexBarCLI-v${version}-linux-aarch64.tar.gz`, `CodexBarCLI-v${version}-linux-x86_64.tar.gz`],
+    checksumUrl: (version, file) => `https://github.com/steipete/CodexBar/releases/download/v${version}/${file}.sha256`,
+    artifactUrl: (version, file) => `https://github.com/steipete/CodexBar/releases/download/v${version}/${file}`,
+  },
+};
+
+function checkedIntegrity(value) {
+  return typeof value === 'string' && /^sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2}(?:\s+sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2})*$/.test(value.trim())
+    ? value.trim()
+    : null;
+}
+
+function parsePublishedChecksum(text, file) {
+  const expectedName = path.posix.basename(file);
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const matches = lines.map((line) => /^([a-f0-9]{64})(?:\s+\*?(.+))?$/i.exec(line)).filter(Boolean);
+  const match = matches.find((entry) => entry[2] && path.posix.basename(entry[2]) === expectedName)
+    ?? (matches.length === 1 && !matches[0][2] ? matches[0] : null);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+async function requestBytes(fetch, url) {
+  const response = await fetch(url);
+  if (!response?.ok) throw new Error('upstream unavailable');
+  if (typeof response.arrayBuffer === 'function') return Buffer.from(await response.arrayBuffer());
+  return Buffer.from(await response.text());
+}
+
+async function checkedGithubVersion(definition, requested, pins, fetch) {
+  const releases = await githubReleases(definition.source.repo, fetch);
+  const selected = requested
+    ? releases.find((release) => release.version === releaseVersion(requested))
+    : latestGithub(releases, simplePinVersion(pinValue(definition, pins)));
+  if (!selected) throw new Error(`The requested ${definition.name} release was not found upstream.`);
+  return selected;
+}
+
+async function checkArtifactHashes(definition, version, fetch) {
+  const source = SHA256_ARTIFACTS[definition.id];
+  if (!source) throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
+  const hashes = {};
+  for (const file of source.files(version)) {
+    const publishedText = await requestText(fetch, source.checksumUrl(version, file));
+    const published = parsePublishedChecksum(publishedText, file);
+    if (!published) throw new Error(`The published checksum is missing for ${file}. Herdr Boss did not guess a hash.`);
+    const artifact = await requestBytes(fetch, source.artifactUrl(version, file));
+    const actual = createHash('sha256').update(artifact).digest('hex');
+    if (actual !== published) throw new Error(`The downloaded checksum does not match the published value for ${file}.`);
+    hashes[file] = published;
+  }
+  return hashes;
+}
+
+function formatDiff(fileName, before, after) {
+  if (before === after) return '';
+  const left = before.replace(/\n$/, '').split('\n');
+  const right = after.replace(/\n$/, '').split('\n');
+  const rows = Array.from({ length: left.length + 1 }, () => new Uint32Array(right.length + 1));
+  for (let i = left.length - 1; i >= 0; i -= 1) {
+    for (let j = right.length - 1; j >= 0; j -= 1) rows[i][j] = left[i] === right[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);
+  }
+  const operations = [];
+  let i = 0;
+  let j = 0;
+  while (i < left.length || j < right.length) {
+    if (i < left.length && j < right.length && left[i] === right[j]) {
+      operations.push({ type: ' ', text: left[i] });
+      i += 1;
+      j += 1;
+    } else if (i < left.length && (j === right.length || rows[i + 1][j] >= rows[i][j + 1])) {
+      operations.push({ type: '-', text: left[i] });
+      i += 1;
+    } else {
+      operations.push({ type: '+', text: right[j] });
+      j += 1;
+    }
+  }
+  const changes = operations.map((operation, index) => operation.type === ' ' ? -1 : index).filter((index) => index >= 0);
+  const groups = [];
+  for (const change of changes) {
+    const last = groups.at(-1);
+    if (last && change - last.last <= 6) last.last = change;
+    else groups.push({ first: change, last: change });
+  }
+  const beforeCount = (index, type) => operations.slice(0, index).filter((operation) => operation.type !== (type === 'old' ? '+' : '-')).length;
+  const range = (start, count) => `${start}${count === 1 ? '' : `,${count}`}`;
+  const hunks = groups.map(({ first, last }) => {
+    const start = Math.max(0, first - 3);
+    const end = Math.min(operations.length, last + 4);
+    const body = operations.slice(start, end);
+    const oldCount = body.filter((operation) => operation.type !== '+').length;
+    const newCount = body.filter((operation) => operation.type !== '-').length;
+    const oldStart = beforeCount(start, 'old') + (oldCount ? 1 : 0);
+    const newStart = beforeCount(start, 'new') + (newCount ? 1 : 0);
+    return `@@ -${range(oldStart, oldCount)} +${range(newStart, newCount)} @@\n${body.map((operation) => `${operation.type}${operation.text}`).join('\n')}`;
+  });
+  return [`--- a/${fileName}`, `+++ b/${fileName}`, ...hunks].join('\n');
+}
+
+function atomicWrite(file, contents) {
+  const mode = fs.statSync(file).mode & 0o777;
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, 'wx', mode);
+    fs.writeFileSync(fd, contents, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, file);
+    try {
+      const dirFd = fs.openSync(path.dirname(file), 'r');
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    } catch { /* Some file systems do not support syncing a directory. */ }
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+
+function gitRunner(injected) {
+  return injected ?? ((args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+}
+
+function bumpUsage() {
+  return 'Usage: tools bump TOOL [--to VERSION] [--dry-run]';
+}
+
+async function bumpNpm(definition, requested, pins, fetch, now) {
+  const metadata = await requestJson(fetch, `https://registry.npmjs.org/${definition.source.package.replace('/', '%2f')}`);
+  const target = requested ?? metadata?.['dist-tags']?.[definition.source.tag];
+  const version = metadata?.versions?.[target];
+  if (!target || !version) throw new Error(`The requested ${definition.name} version was not found in the npm registry.`);
+  const integrity = checkedIntegrity(version?.dist?.integrity);
+  if (!integrity) throw new Error(`The published integrity is missing for ${definition.name} ${target}.`);
+  let security = false;
+  let publishedAt = metadata?.time?.[target];
+  if (['claude', 'codex', 'opencode'].includes(definition.id)) {
+    const releases = await githubReleases(definition.source.repo, fetch);
+    const notes = releases.find((release) => release.version === target) ?? null;
+    const advisories = await githubAdvisories(definition.source.repo, fetch).catch(() => []);
+    const pinned = simplePinVersion(pinValue(definition, pins));
+    security = isSecurityRelease(notes) || advisories.some((advisory) => (advisory.vulnerabilities ?? []).some((vulnerability) => versionInRange(pinned, vulnerability?.vulnerable_version_range)));
+    publishedAt ??= notes?.publishedAt;
+    const releaseTime = Date.parse(publishedAt);
+    if (!Number.isFinite(releaseTime)) throw new Error(`The release date is missing for ${definition.name} ${target}.`);
+    if (!security && now.getTime() - releaseTime < 3 * DAY_MS) throw new Error(`${definition.name} ${target} is less than 3 days old. Wait before bumping it.`);
+  }
+  return { version: target, integrity, security, releaseNotesUrl: `https://github.com/${definition.source.repo}/releases` };
+}
+
+async function bumpDocker(definition, requested, pins, fetch) {
+  const source = definition.source;
+  const repository = source.kind === 'docker' ? source.repository : source.dockerRepository;
+  const tag = source.kind === 'docker' ? source.tag : source.dockerTag;
+  const image = await requestJson(fetch, `https://hub.docker.com/v2/repositories/${repository}/tags/${tag}`);
+  const digest = image?.digest;
+  if (typeof digest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error(`The registry digest is missing for ${definition.name}.`);
+  let version = digest;
+  if (definition.id === 'buildkit') {
+    if (requested) throw new Error('BuildKit uses a rolling image tag. Do not pass --to.');
+    const release = await checkedGithubVersion(definition, null, pins, fetch);
+    version = release.version;
+  } else if (requested) throw new Error(`${definition.name} uses a registry digest. Do not pass --to.`);
+  return { version, digest, releaseNotesUrl: definition.source.repo ? `https://github.com/${definition.source.repo}/releases` : null };
+}
+
+async function bumpDetails(definition, requested, pins, fetch, now) {
+  if (definition.source.kind === 'npm') return { kind: 'npm', ...(await bumpNpm(definition, requested, pins, fetch, now)) };
+  if (definition.id === 'base-image' || definition.id === 'buildkit') return { kind: 'docker', ...(await bumpDocker(definition, requested, pins, fetch)) };
+  if (!SHA256_ARTIFACTS[definition.id]) throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
+  const release = await checkedGithubVersion(definition, requested, pins, fetch);
+  const hashes = await checkArtifactHashes(definition, release.version, fetch);
+  return { kind: 'sha256', version: release.version, hashes, releaseNotesUrl: `https://github.com/${definition.source.repo}/releases/tag/v${release.version}` };
+}
+
+function applyBump(pins, definition, details) {
+  const next = structuredClone(pins);
+  next.schema = 2;
+  next.sha256Mark ??= {};
+  next.integrity ??= {};
+  next.digestMark ??= {};
+  for (const name of Object.keys(next.sha256 ?? {})) next.sha256Mark[name] ??= 'published';
+  if (next.base?.digest) next.digestMark.base ??= 'published';
+  if (next.buildkit?.digest) next.digestMark.buildkit ??= 'published';
+  if (details.kind === 'npm') {
+    next[definition.pinKey] = details.version;
+    next.integrity[definition.pinKey] = { version: details.version, value: details.integrity, mark: 'published' };
+  } else if (details.kind === 'sha256') {
+    next[definition.pinKey] = details.version;
+    Object.assign(next.sha256, details.hashes);
+    for (const name of Object.keys(details.hashes)) next.sha256Mark[name] = 'published';
+  } else if (definition.id === 'base-image') {
+    next.base.digest = details.digest;
+    next.digestMark.base = 'published';
+  } else {
+    next.buildkit.digest = details.digest;
+    next.buildkit.version = details.version;
+    next.digestMark.buildkit = 'published';
+  }
+  return next;
+}
+
+async function runToolsBump(args, options = {}) {
+  const flags = {};
+  const positional = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--dry-run') {
+      if (flags['--dry-run']) throw new Error(bumpUsage());
+      flags['--dry-run'] = true;
+    } else if (arg === '--to') {
+      if (flags['--to'] || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error(bumpUsage());
+      flags['--to'] = args[index + 1].replace(/^v(?=\d)/, '');
+      index += 1;
+    } else if (arg.startsWith('--')) throw new Error(bumpUsage());
+    else positional.push(arg);
+  }
+  if (positional.length !== 1 || !/^[a-z][a-z0-9-]*$/.test(positional[0])) throw new Error(bumpUsage());
+  const definition = TOOL_DEFINITIONS.find((tool) => tool.id === positional[0]);
+  if (!definition?.pinKey) throw new Error(`Tool ${positional[0]} has no factory pin to bump.`);
+  if (definition.id === 'herdr' || definition.id === 'chromium') throw new Error(`${definition.name} has no checksum source. Herdr Boss did not guess a hash.`);
+  const pinsFile = options.pinsFile ?? PINS_FILE;
+  const before = fs.readFileSync(pinsFile, 'utf8');
+  const pins = readPins(pinsFile);
+  const fetch = options.fetch ?? defaultFetch;
+  const now = options.now ? options.now() : new Date();
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('The tools bump time is invalid.');
+  const details = await bumpDetails(definition, flags['--to'], pins, fetch, now);
+  const currentVersion = definition.id === 'buildkit' ? pins.buildkit?.version
+    : definition.id === 'base-image' ? null : pins[definition.pinKey];
+  if (currentVersion && compareVersions(details.version, currentVersion) < 0) {
+    throw new Error(`The requested ${definition.name} version is older than its pin. Herdr Boss did not move the pin backwards.`);
+  }
+  const nextPins = applyBump(pins, definition, details);
+  const after = `${JSON.stringify(nextPins, null, 2)}\n`;
+  const diff = formatDiff('factory/pins.json', before, after);
+  const output = options.output ?? console.log;
+  if (!diff) {
+    output('The factory pin is already current.');
+    return 0;
+  }
+  if (!flags['--dry-run']) {
+    const git = gitRunner(options.git);
+    const status = git(['status', '--porcelain']);
+    if (String(status ?? '').trim()) throw new Error('The working tree is not clean. Herdr Boss did not change the factory pin.');
+    const branchPart = details.version.replace(/[^A-Za-z0-9._-]/g, '_');
+    git(['switch', '-c', `tools/${definition.id}-${branchPart}`]);
+    atomicWrite(pinsFile, after);
+  }
+  output(diff);
+  if (details.releaseNotesUrl) output(`Release notes: ${details.releaseNotesUrl}`);
+  return 0;
 }
 
 function formatState(state) {
@@ -538,8 +816,9 @@ function formatState(state) {
 }
 
 export async function toolsCommand(args, options = {}) {
+  if (args[0] === 'bump') return runToolsBump(args.slice(1), options);
   if (args[0] !== 'check' || args.length > 2 || args.slice(1).some((flag) => flag !== '--json') || new Set(args.slice(1)).size !== args.length - 1) {
-    throw new Error('Usage: tools check [--json]');
+    throw new Error('Usage: tools check [--json] or tools bump TOOL [--to VERSION] [--dry-run]');
   }
   const state = await createToolsCheck(options)();
   const output = options.output ?? console.log;

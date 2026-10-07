@@ -695,8 +695,41 @@ export function postReport(file, { to = null, title = null, action = null } = {}
   refuseSecret(text, 'report');
   const pictures = uploadReportPictures(text, { dir, now });
   try {
-    return appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'report', title: name, text: pictures.text, action: chosen, replyTo: null, status: 'new', ...(pictures.attachments.length ? { attachments: pictures.attachments } : {}) }, { dir, now });
+    return writeOwnerReport({ title: name, text: pictures.text, action: chosen, ...(pictures.attachments.length ? { attachments: pictures.attachments } : {}) }, { dir, now });
   } catch (error) { pictures.rollback(); throw error; }
+}
+
+function writeOwnerReport(fields, { dir = DATA_DIR, now = Date.now(), key = null, messageStore = null } = {}) {
+  const report = { thread: 'boss', from: 'boss', to: 'owner', kind: 'report', replyTo: null, status: 'new', ...fields };
+  if (key == null) return appendMessage(report, { dir, now });
+  const store = messageStore ?? openMessageStore({ dir });
+  return store.mutate((records) => {
+    const index = records.findIndex((record) => record.to === 'owner' && record.kind === 'report' && record.key === key && !record.closedAt);
+    if (index >= 0) {
+      const updated = { ...records[index], ...report, key, id: records[index].id, at: records[index].at };
+      records[index] = updated;
+      return { records, result: updated };
+    }
+    const record = { id: newId(now), at: new Date(now).toISOString(), action: null, sentAt: null, error: null, relayedAt: null, relayedBy: null, ...report, key };
+    records.push(record);
+    return { records, result: record };
+  }, { now });
+}
+
+export function postToolUpdate(tool, { dir = DATA_DIR, now = Date.now(), messageStore = null } = {}) {
+  if (!tool || !/^[a-z][a-z0-9-]*$/.test(tool.id ?? '') || typeof tool.name !== 'string' || typeof tool.latest !== 'string') {
+    throw new Error('The tool update is incomplete.');
+  }
+  if (tool.risk !== 'late' && tool.risk !== 'security') throw new Error('Only late or security tool rows can make a Mailbox item.');
+  const name = `${tool.name} ${tool.latest}`;
+  const title = tool.risk === 'security' ? `Security: ${name}` : `Update: ${name}`;
+  const pinned = tool.pinned ?? 'none';
+  const text = tool.risk === 'security'
+    ? `Security release.\n\n${name} has a security release.\n\nPinned: ${pinned}\nLatest: ${tool.latest}.`
+    : `${name} is more than 14 days late.\n\nPinned: ${pinned}\nLatest: ${tool.latest}\nAge: ${Number.isInteger(tool.ageDays) ? `${tool.ageDays} days` : 'unknown'}.`;
+  refuseSecret(title, 'title');
+  refuseSecret(text, 'report');
+  return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:${tool.id}:${tool.latest}`, messageStore });
 }
 
 // ---------- Review pack items ----------

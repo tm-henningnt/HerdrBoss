@@ -17,7 +17,8 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | Command | Action |
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
-| `herdr-boss tools check [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Do not upgrade a tool. |
+| `herdr-boss tools check [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Post a read Mailbox item for each late or security tool version. Do not upgrade a tool. |
+| `herdr-boss tools bump TOOL [--to VERSION] [--dry-run]` | Prepare a factory pin change on a new branch. Verify the published checksum or registry integrity. Print the `pins.json` diff. `--dry-run` prints the diff and changes no file or branch. |
 | `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
 | `herdr-boss install` | Install and start the service of the platform. On macOS it writes the launchd agent `no.tallmaker.herdr-boss`. On Linux it writes the systemd user service `herdr-boss.service`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the service of the platform. |
