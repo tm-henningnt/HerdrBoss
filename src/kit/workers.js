@@ -20,6 +20,7 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
+import { processStartIdentity } from './process-info.js';
 import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
 import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
 import { archiveWorkerReports } from './worker-archive.js';
@@ -1439,6 +1440,7 @@ function startWorkerOnce(name, options, {
   browserLookup,
   refreshKit = refreshKitIfRequired,
   tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags,
+  readProcessStart = processStartIdentity,
   piModelLister = null,
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
@@ -1891,7 +1893,7 @@ function startWorkerOnce(name, options, {
     };
     if (options.kind === 'opencode') {
       return withOpenCodeStartLock(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'),
-        () => retryOpenCodeStart(name, paneId, startAndDeliver, { herdr, output }), { wait, output });
+        () => retryOpenCodeStart(name, paneId, startAndDeliver, { herdr, output }), { wait, output, readProcessStart });
     }
     return startAndDeliver();
   } catch (error) {
