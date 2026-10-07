@@ -1,5 +1,6 @@
 // Onboarding checks. Raw probe output never reaches a report.
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,12 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { parseCodexRoots } from './harness.js';
 import { listProjectPaths } from './project-paths.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, ROOT_DEFAULTS, resolveRootPath } from './config.js';
 import { toolsDoctorUpdates } from './tools-check.js';
 import { FACTORY_HOME, FACTORY_PROJECT_GROUP, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
+export const DOCTOR_DISK_NOTE_BYTES = 15_000_000_000;
 export const DOCTOR_MIN_MEMORY_BYTES = 8 * 1024 ** 3;
 // The Claude helper file is stale after this age. It matches the stale limit of the Claude reader.
 export const DOCTOR_CLAUDE_USAGE_MAX_AGE_MS = 3 * 3600_000;
@@ -40,6 +42,32 @@ const inside = (file, dir) => {
   const relative = path.relative(dir, file);
   return !relative || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 };
+
+function doctorDiskPaths(home, env) {
+  const dataDir = path.resolve(env.HERDR_BOSS_DIR || path.join(home, '.herdr-boss'));
+  let worktreeRoot;
+  try {
+    const config = JSON.parse(fsSync.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    const value = config?.worktreeRoot ?? ROOT_DEFAULTS.worktreeRoot;
+    worktreeRoot = resolveRootPath(value, home);
+  } catch { worktreeRoot = resolveRootPath(ROOT_DEFAULTS.worktreeRoot, home); }
+  return [...new Set([path.resolve(dataDir), worktreeRoot])];
+}
+
+async function readFreeSpace(file) {
+  let target = path.resolve(file);
+  for (;;) {
+    try {
+      await fs.stat(target);
+      return await fs.statfs(target);
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      const parent = path.dirname(target);
+      if (parent === target) throw error;
+      target = parent;
+    }
+  }
+}
 
 function jsonc(value) {
   // Keep strings intact. Comments and trailing commas are legal in OpenCode JSONC.
@@ -132,7 +160,10 @@ function checks({ home, env, factoryHost }) {
       return ['ps:e', 'ps:-E', 'ps:eww', 'ps:auxe', 'ps:auxeww', 'pkill', 'killall'].every((rule) => forbidden.has(rule));
     }),
     { ...read('opencode-settings', 'OpenCode worker profile', '.config/opencode/opencode.json', 'Copy the worker profile from kit/templates/harness/opencode-worker-agent.json into ~/.config/opencode/opencode.json under agent.worker.', (value) => object(jsonc(value)?.agent?.worker)), request: { kind: 'opencode-settings' } },
-    { id: 'disk', stepId: 'check', name: 'Disk', fix: 'Free at least 5 GiB on the disk that holds your home folder. Remove only files that you own.', pass: (value) => Number(value?.bavail) * Number(value?.bsize) >= DOCTOR_MIN_DISK_BYTES, request: { kind: 'disk', file: home } },
+    { id: 'disk', stepId: 'check', name: 'Disk', fix: 'Free at least 5 GiB on the disk that holds your Herdr Boss data and worktrees. Remove only files that you own.', pass: (value) => {
+      const rows = Array.isArray(value) ? value : [value];
+      return rows.length > 0 && rows.every((row) => Number(row?.bavail) * Number(row?.bsize) >= DOCTOR_MIN_DISK_BYTES);
+    }, request: { kind: 'disk', files: doctorDiskPaths(home, env) } },
     { id: 'memory', stepId: 'check', name: 'Memory', fix: 'Use a computer with at least 8 GiB of memory. For a factory, give it at least 8 GiB.', pass: (value) => Number(value) >= DOCTOR_MIN_MEMORY_BYTES, request: { kind: 'memory' } },
     { ...command('usage-reading', 'pacing', 'Usage reading', 'codexbar', ['usage', '--format', 'json', '--provider', 'claude'], 'Only you: sign in to Claude Code. Set the Claude usage source in CodexBar to Auto. Run doctor again.', (value) => {
       const rows = json(value);
@@ -211,7 +242,7 @@ function exec(command, args, options) {
 
 // A runner accepts a read request and { signal, timeout }. Tests replace the whole
 // runner; they never call real tools, package managers, or the network.
-export function createDoctorRunner({ home = os.homedir(), env = process.env, platform = os.platform(), uid = process.getuid?.() ?? 0 } = {}) {
+export function createDoctorRunner({ home = os.homedir(), env = process.env, platform = os.platform(), uid = process.getuid?.() ?? 0, diskSpaceReader = readFreeSpace } = {}) {
   const openCodeDir = path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode');
   const openCodeFiles = ['opencode.json', 'opencode.jsonc'].map((file) => path.join(openCodeDir, file));
   const allowed = ['.claude/settings.json', '.codex/config.toml', '.codex/rules/herdr.rules'].map((file) => path.join(home, file)).concat(openCodeFiles);
@@ -255,7 +286,11 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
         await fs.access(realDir, constants.R_OK | constants.W_OK | constants.X_OK);
         return true;
       }
-      case 'disk': return fs.statfs(request.file);
+      case 'disk': {
+        const files = Array.isArray(request.files) ? request.files : [request.file];
+        const values = await Promise.all(files.filter(Boolean).map((file) => diskSpaceReader(file)));
+        return values.length === 1 ? values[0] : values;
+      }
       // Return the age of the newest helper file in milliseconds, or null. Only the modification time is read, never the content.
       case 'claude-usage-age': {
         const dir = claudeRateLimitsDir(env.HERDR_BOSS_DIR || path.join(home, '.herdr-boss'));
@@ -308,18 +343,30 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
     let timer;
     let timedOut = false;
     let good = false;
+    let value;
     try {
       const deadline = new Promise((_, reject) => {
         timer = setTimeout(() => { timedOut = true; controller.abort(); reject(new Error('Check timed out.')); }, timeoutMs);
       });
-      const value = await Promise.race([Promise.resolve().then(() => runner({ ...check.request, id: check.id }, { signal: controller.signal, timeout: timeoutMs })), deadline]);
+      value = await Promise.race([Promise.resolve().then(() => runner({ ...check.request, id: check.id }, { signal: controller.signal, timeout: timeoutMs })), deadline]);
       if (check.id === 'os') platform = value === 'darwin' ? 'darwin' : 'linux';
       good = check.pass(value) === true;
     } catch { /* Print fixed words only, never a probe error or its output. */ }
     finally { clearTimeout(timer); }
     if (stepId && check.stepId !== stepId) continue;
     const fix = DOCTOR_INSTALL_FIXES[check.id]?.[platform] ?? check.fix;
-    items.push({ id: check.id, stepId: check.stepId, name: check.name, status: good ? 'green' : 'red', message: good ? `${check.name} is good.` : `${check.name} ${timedOut ? 'check timed out' : 'needs a fix'}.`, fix: good ? null : fix });
+    const diskStats = check.id === 'disk' && value ? (Array.isArray(value) ? value : [value]) : [];
+    const diskValues = diskStats.map((stat) => Number(stat?.bavail) * Number(stat?.bsize)).filter((bytes) => Number.isFinite(bytes) && bytes >= 0);
+    const diskBytes = check.id === 'disk' && diskValues.length ? Math.min(...diskValues) : null;
+    const diskSeverity = check.id === 'disk'
+      ? Number.isFinite(diskBytes) ? (diskBytes < DOCTOR_MIN_DISK_BYTES ? 'error' : diskBytes < DOCTOR_DISK_NOTE_BYTES ? 'note' : 'info') : 'error'
+      : null;
+    const message = check.id === 'disk'
+      ? Number.isFinite(diskBytes)
+        ? `Disk has ${(diskBytes / 1_000_000_000).toFixed(1)} GB free.`
+        : 'Disk free space could not be read.'
+      : good ? `${check.name} is good.` : `${check.name} ${timedOut ? 'check timed out' : 'needs a fix'}.`;
+    items.push({ id: check.id, stepId: check.stepId, name: check.name, status: good ? 'green' : 'red', ...(diskSeverity ? { severity: diskSeverity } : {}), ...(diskBytes !== null && Number.isFinite(diskBytes) ? { freeBytes: diskBytes } : {}), message, fix: good ? null : fix });
   }
   const ok = items.every((item) => item.status === 'green');
   const warnings = factory
@@ -343,7 +390,11 @@ export async function doctorCommand(args, { output = console.log, dataDir = DATA
   }
   if (args.includes('--json')) output(JSON.stringify(report, null, 2));
   else {
-    for (const item of report.items) output(`${item.status}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+    for (const item of report.items) {
+      const level = item.id === 'disk' && item.severity === 'note' ? 'note'
+        : item.id === 'disk' && item.severity === 'error' ? 'error' : item.status;
+      output(`${level}: ${item.message}${item.fix ? ` Fix: ${item.fix}` : ''}`);
+    }
     for (const item of toolUpdates ?? []) output(item.line);
     for (const warning of report.warnings) output(`warning: ${warning}`);
   }

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createDoctorRunner } from '../src/doctor.js';
+import { createDoctorRunner, runDoctor } from '../src/doctor.js';
 
 function fixture(t) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-runner-')));
@@ -57,6 +57,42 @@ test('the directory check uses metadata and leaves a missing data folder absent'
   const absent = path.join(home, 'missing-data');
   await assert.rejects(runner({ kind: 'directory', file: absent }, options()), { code: 'ENOENT' });
   assert.equal(fs.existsSync(absent), false);
+});
+
+test('the disk runner uses an injected free-space reader for the worktree file system', async (t) => {
+  const home = fixture(t);
+  let requestedPath;
+  const runner = createDoctorRunner({
+    home,
+    env: { HOME: home },
+    diskSpaceReader: async (file) => {
+      requestedPath = file;
+      return { bavail: 12, bsize: 1024 };
+    },
+  });
+  const result = await runner({ kind: 'disk', file: path.join(home, 'worktrees') }, options());
+  assert.deepEqual(result, { bavail: 12, bsize: 1024 });
+  assert.equal(requestedPath, path.join(home, 'worktrees'));
+});
+
+test('doctor checks free space at the data folder and configured worktree root', async (t) => {
+  const home = fixture(t);
+  const dataDir = path.join(home, 'boss-data');
+  const worktreeRoot = path.join(home, 'worker-trees');
+  write(path.join(dataDir, 'config.json'), JSON.stringify({ worktreeRoot }));
+  const requests = [];
+  await runDoctor({
+    home,
+    env: { HOME: home, HERDR_BOSS_DIR: dataDir },
+    runner: async (request) => {
+      requests.push(request);
+      if (request.id === 'os') return 'darwin';
+      if (request.id === 'disk') return request.files.map(() => ({ bavail: 20_000_000_000, bsize: 1 }));
+      return '';
+    },
+  });
+  const disk = requests.find((request) => request.id === 'disk');
+  assert.deepEqual(disk.files, [dataDir, worktreeRoot]);
 });
 
 test('the settings runner refuses a canonical path to a linked private data folder', async (t) => {

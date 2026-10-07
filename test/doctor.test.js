@@ -52,6 +52,23 @@ test('doctor returns each onboarding item with its shared step ID when all check
   assert.ok(lines.every((line) => /^green: [^\n]+$/.test(line)));
 });
 
+test('doctor reports free disk space as a note under 15 GB and keeps the existing error threshold', async () => {
+  for (const [freeBytes, expectedLine, expectedExit] of [
+    [20_000_000_000, /green: Disk has 20\.0 GB free\./, 0],
+    [10_000_000_000, /note: Disk has 10\.0 GB free\./, 0],
+    [4_000_000_000, /error: Disk has 4\.0 GB free\./, 4],
+  ]) {
+    const lines = [];
+    const code = await doctorCommand([], {
+      home: HOME,
+      runner: fake({ disk: { bavail: freeBytes, bsize: 1 } }),
+      output: (line) => lines.push(line),
+    });
+    assert.equal(code, expectedExit);
+    assert.match(lines.find((line) => /Disk/.test(line)), expectedLine);
+  }
+});
+
 test('doctor can verify one setup step without probing later steps', async () => {
   const ids = [];
   const report = await runDoctor({ home: HOME, stepId: 'tools', runner: async (request) => {
@@ -85,7 +102,7 @@ const FIXES = {
   'codex-settings': 'Run herdr-boss harness sync --codex-only. Keep ~/.config/herdr-boss and its parent folders outside writable_roots.',
   'codex-rules': 'Copy kit/templates/harness/codex-herdr.rules to ~/.codex/rules/herdr.rules. Replace {{UID}} with your numeric user ID.',
   'opencode-settings': 'Copy the worker profile from kit/templates/harness/opencode-worker-agent.json into ~/.config/opencode/opencode.json under agent.worker.',
-  disk: 'Free at least 5 GiB on the disk that holds your home folder. Remove only files that you own.',
+  disk: 'Free at least 5 GiB on the disk that holds your Herdr Boss data and worktrees. Remove only files that you own.',
   memory: 'Use a computer with at least 8 GiB of memory. For a factory, give it at least 8 GiB.',
   'usage-reading': 'Only you: sign in to Claude Code. Set the Claude usage source in CodexBar to Auto. Run doctor again.',
   'service-answers': 'Run bin/herdr-boss install from the Herdr Boss folder. Run doctor again after the service starts.',
@@ -120,8 +137,9 @@ for (const id of IDS.concat(['docker', 'docker-contexts'])) {
     assert.equal(red[0].fix, FIXES[id]);
     const plain = [];
     await doctorCommand(args.filter((arg) => arg !== '--json'), { home: HOME, runner: fake({ [id]: BAD[id] }), output: (line) => plain.push(line) });
-    assert.equal(plain.filter((line) => line.startsWith('red: ')).length, 1);
-    assert.ok(plain.find((line) => line.startsWith('red: ')).endsWith(`Fix: ${FIXES[id]}`));
+    const level = id === 'disk' ? 'error' : 'red';
+    assert.equal(plain.filter((line) => line.startsWith(`${level}: `)).length, 1);
+    assert.ok(plain.find((line) => line.startsWith(`${level}: `)).endsWith(`Fix: ${FIXES[id]}`));
   });
 }
 

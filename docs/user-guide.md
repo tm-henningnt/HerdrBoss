@@ -39,5 +39,14 @@ For GitHub releases, the check chooses the highest version on the tracked major 
 Run `herdr-boss project unregister <slug>` to remove a project from the registry. The command saves a registry backup first. It removes only the registry row. It leaves the project files, worktrees, and branches in place. It reports an error for an unknown slug.
 
 A factory Boss skips a registered project outside the factory work volume. It does not trust that project or install kit files there. The start command prints a warning. `herdr-boss doctor` prints the same warning inside a factory. Use `project unregister <slug>` to remove the stale registration.
+## Disk use
+
+Run `herdr-boss worktree disk` from a project repository to see the size of each worktree, the total, and free space. Add `--json` for a JSON report.
+
+Run `herdr-boss worktree prune --clean-build` to list rebuildable output in worktrees that the prune keeps. Add `--apply` to delete it. The command skips tracked files, `node_modules`, the primary checkout, and worktrees with a live pane or running process. It removes only `dist`, `.vite`, `test-results`, and screenshots older than one day from `.worker/tmp`.
+
+The Doctor disk line reports free space at the Herdr Boss data folder and the configured worktree root. It uses the lower value when they are on different file systems. It gives a note below 15 GB. It gives an error below 5 GiB.
+
+When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
 
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

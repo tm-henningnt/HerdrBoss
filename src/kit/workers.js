@@ -3,6 +3,7 @@ import { readFactoryShares, FACTORY_SHARE_ERROR } from '../fleet-pacing.js';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendDelegatedRun, compareChangedPaths, gitLog, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
@@ -26,6 +27,7 @@ import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
 import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
+import { LOCKFILE_NAMES } from './suite-passes.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -1328,6 +1330,63 @@ function mainCheckout(root) {
   }) ?? worktrees[0] ?? root;
 }
 
+function dependencyLockHashes(root) {
+  const hashes = new Map();
+  for (const name of LOCKFILE_NAMES) {
+    const file = path.join(root, name);
+    try {
+      if (!fs.lstatSync(file).isFile()) continue;
+      hashes.set(name, createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return hashes;
+}
+
+function sameDependencyLocks(mainRoot, worktree) {
+  const main = dependencyLockHashes(mainRoot);
+  const worker = dependencyLockHashes(worktree);
+  if (!main.size || main.size !== worker.size) return false;
+  for (const [name, digest] of main) if (worker.get(name) !== digest) return false;
+  return true;
+}
+
+function cloneNodeModulesCow(source, destination) {
+  if (process.platform !== 'darwin') throw new Error('Copy-on-write clone is available only on macOS.');
+  execFileSync('cp', ['-cR', source, destination], { stdio: 'ignore' });
+}
+
+function tryCloneDependencies(mainRoot, worktree, copyOnWriteClone) {
+  const source = path.join(mainRoot, 'node_modules');
+  const destination = path.join(worktree, 'node_modules');
+  try {
+    const sourceStat = fs.lstatSync(source);
+    if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) return { attempted: false, cloned: false };
+  } catch (error) {
+    if (error.code === 'ENOENT') return { attempted: false, cloned: false };
+    return { attempted: false, cloned: false };
+  }
+  let hasLocks;
+  try { hasLocks = sameDependencyLocks(mainRoot, worktree); }
+  catch { return { attempted: true, cloned: false }; }
+  if (!hasLocks) return { attempted: true, cloned: false };
+  try {
+    if (fs.existsSync(destination)) return { attempted: true, cloned: false };
+    copyOnWriteClone(source, destination);
+    const targetStat = fs.lstatSync(destination);
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) throw new Error('The clone did not create a directory.');
+    return { attempted: true, cloned: true };
+  } catch {
+    try { fs.rmSync(destination, { recursive: true, force: true }); } catch {}
+    return { attempted: true, cloned: false };
+  }
+}
+
+function isDependencyInstallCommand(command) {
+  return typeof command === 'string' && /(?:^|[;&|]\s*)(?:npm\s+(?:ci|install)|pnpm\s+(?:install|i)|yarn(?:\s+install)?|bun\s+install)\b/.test(command.trim());
+}
+
 function lstatMaybe(file) {
   try { return fs.lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -1436,6 +1495,7 @@ function startWorkerOnce(name, options, {
   projectStatus = null,
   wait = pause,
   runSetup = runSetupCommand,
+  cloneNodeModules = cloneNodeModulesCow,
   leaseOptions = null,
   browserLookup,
   refreshKit = refreshKitIfRequired,
@@ -1715,12 +1775,15 @@ function startWorkerOnce(name, options, {
   let placement = null;
   let plannerRegistered = false;
   let startAttempts = 0;
+  let dependencyClone = { attempted: false, cloned: false };
   try {
     if (!options.noWorktree) {
       fs.mkdirSync(path.dirname(worktree), { recursive: true });
       git(config.root, ['worktree', 'add', '-b', branch, worktree, base]);
       createdWorktree = true;
-      const localCopy = copyLocalOrchestration(mainCheckout(config.root), worktree);
+      const mainRoot = mainCheckout(config.root);
+      dependencyClone = tryCloneDependencies(mainRoot, worktree, cloneNodeModules);
+      const localCopy = copyLocalOrchestration(mainRoot, worktree);
       if (localCopy) {
         const fileWord = localCopy.copied === 1 ? 'file' : 'files';
         output(`Copied ${localCopy.copied} ${fileWord} from .orchestration/local.`);
@@ -1751,11 +1814,19 @@ function startWorkerOnce(name, options, {
       else fs.copyFileSync(file.source, destination, fs.constants.COPYFILE_EXCL);
     }
     fs.writeFileSync(path.join(worktree, plan.workerDir, 'brief.md'), brief);
-    if (plan.setup) {
-      output(`Running project setup in ${worktree}: ${plan.setup}`);
+    const configuredInstall = isDependencyInstallCommand(plan.setup);
+    if (dependencyClone.cloned) output('Dependencies: clone was used.');
+    else if (dependencyClone.attempted || configuredInstall) output('Dependencies: install was used.');
+    const setupCommands = dependencyClone.cloned
+      ? (plan.setup && !configuredInstall ? [plan.setup] : [])
+      : dependencyClone.attempted
+        ? [...(configuredInstall ? [plan.setup] : fs.existsSync(path.join(worktree, 'package-lock.json')) ? ['npm ci'] : []), ...(plan.setup && !configuredInstall ? [plan.setup] : [])]
+        : (plan.setup ? [plan.setup] : []);
+    for (const setupCommand of setupCommands) {
+      output(`Running project setup in ${worktree}: ${setupCommand}`);
       const started = Date.now();
-      try { runSetup(plan.setup, worktree, plan.setupTimeoutSeconds * 1000); }
-      catch (error) { throw setupFailure(error, plan.setup, plan.setupTimeoutSeconds); }
+      try { runSetup(setupCommand, worktree, plan.setupTimeoutSeconds * 1000); }
+      catch (error) { throw setupFailure(error, setupCommand, plan.setupTimeoutSeconds); }
       output(`Project setup finished in ${Math.round((Date.now() - started) / 1000)} s.`);
     }
     placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);

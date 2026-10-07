@@ -17,10 +17,10 @@ export function gitText(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 }).trim();
 }
 
-const LOCKFILE_NAMES = [
+export const LOCKFILE_NAMES = Object.freeze([
   'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb',
   'Cargo.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
-];
+]);
 
 // The tree hash covers a tracked lockfile. This hash also covers an ignored lockfile.
 function lockfileHashes(root) {
@@ -251,4 +251,3 @@ export function findDocsOnlyBase(dataDir, key, command, root) {
   const change = docsOnlyChange(root, pass.tree);
   return change.skip ? { pass, files: change.files } : null;
 }
-
