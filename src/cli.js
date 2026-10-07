@@ -208,6 +208,7 @@ const USAGE = `herdr-boss <command>
   browser tab new SLUG [URL] [--full]  Open a tab in its own background window and print its ID.
   browser tab close SLUG --tab ID [--force]  Close a tab; refuses a tab an agent is attached to.
   browser screenshot SLUG [--tab ID] [--out DIR]  Save a private JPEG and print its path.
+  browser measure SLUG [--tab ID] [--selector CSS ...]  Print bounded page measurements as JSON.
   browser navigate SLUG URL [--tab ID] [--full]  Open an HTTP(S) page.
   browser click SLUG X% Y% [--tab ID]  Click at screenshot-relative percentages.
   browser drag SLUG X1% Y1% X2% Y2% [--tab ID] [--steps N]  Press at the first position, move to the second, and release. N is 1 to 60 and defaults to 10.
@@ -833,8 +834,9 @@ async function main() {
         if (!supportsFull) throw new Error('--full is for the Owner at a terminal. Use it with browser request, tabs, tab new, navigate, or bookmarks list, open, or start.');
       }
       const { parseScreenshotOptions, saveBrowserScreenshot } = await import('./browser-output.js');
+      const { parseMeasureOptions } = await import('./browser-measure.js');
       const { requestBrowser, listBrowserSessions, browserStatus, setBrowserWindowSize, closeBrowser, restartBrowser, releaseBrowser, listBookmarks, addBookmark, removeBookmark, setStartPage } = await import('./browser-pool.js');
-      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserHover, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab } = await import('./browser-preview.js');
+      const { listBrowserTabs, browserScreenshot, browserNavigate, browserClick, browserHover, browserDrag, browserInsertText, browserKey, browserViewport, browserNewTab, browserCloseTab, browserMeasure } = await import('./browser-preview.js');
       const tabOption = (rest) => {
         if (!rest.length) return null;
         if (rest.length !== 2 || rest[0] !== '--tab' || !rest[1]) throw new Error('Use --tab ID to select a browser page.');
@@ -949,6 +951,12 @@ async function main() {
         const image = await browserScreenshot(args[1], tab);
         printBrowser(saveBrowserScreenshot(image, { out: screenshotOptions.out }));
       }
+      else if (args[0] === 'measure' && args[1]) {
+        await verifyBrowserCaller(args[1]);
+        const measureOptions = parseMeasureOptions(args.slice(2));
+        const tab = await selectedTab(args[1], measureOptions.tab ? ['--tab', measureOptions.tab] : []);
+        printBrowserJson(await browserMeasure(args[1], tab, measureOptions.selectors));
+      }
       else if (args[0] === 'navigate' && args[1] && args[2]) {
         await verifyBrowserCaller(args[1]);
         const tab = await selectedTab(args[1], args.slice(3));
@@ -1021,7 +1029,7 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         printBrowserJson(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }));
       }
-      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|measure|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {
