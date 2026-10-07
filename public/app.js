@@ -1283,7 +1283,7 @@ function settingsView(s) {
     'log.maxMegabytes': [1, 1000],
     'log.keepFiles': [1, 2],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'worktrees.pruneAtCollect']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'browser.allowVisible', 'worktrees.pruneAtCollect']);
   // The group names are the keys of the service settings. The page shows the plain words.
   const settingsGroupLabels = { Quota: 'Usage limit', 'Quota plan': 'Usage limit plan' };
   const serviceRows = settingsGroups.map((group) => {
@@ -1474,9 +1474,9 @@ function browserState(b) {
 // A browser is usable for a preview only when it answers and passed the CDP probe.
 const browserAnswers = (b) => !!b?.responsive && !b.notResponding;
 
-// The warning on a card of a browser that failed the CDP probe. Restart uses the same route as the Manage control, in the current mode, and restores saved tabs.
-function browserNotRespondingBlock(slug, b) {
-  const mode = b.headless ? 'headless' : 'visible';
+// The warning on a card of a browser that failed the CDP probe. Restart offers visible mode only when the Owner setting allows it.
+function browserNotRespondingBlock(slug, b, allowVisible = false) {
+  const mode = b.headless && allowVisible ? 'visible' : 'headless';
   return `<div class="browser-warning" role="alert"><div><strong>Not responding</strong><span>${esc(b.probeReason || 'The browser failed two checks in a row.')}</span></div><button type="button" data-browser-restart="${esc(slug)}" data-browser-mode="${mode}" title="Restart the browser in ${mode} mode. Saved tabs reopen in a separate window for each tab. Restart drops query strings and fragments. It also drops path parameters. It skips login and callback pages and sign-in hosts. A busy command or a connected CDP client can prevent the restart.">Restart</button></div>`;
 }
 
@@ -1496,6 +1496,7 @@ function browserBookmarkSection(slug, b) {
 function browserResources(s) {
   const projects = Object.values(s.control?.projects || {});
   const sessions = browserSessions;
+  const allowVisible = s.serviceSettings?.find((item) => item.setting === 'browser.allowVisible')?.value === true;
   const cards = (group) => group.map((p) => {
     const b = sessions.find((x) => x.project === p.slug);
     const tabs = browserTabs[p.slug] || [];
@@ -1503,10 +1504,11 @@ function browserResources(s) {
     const preview = browserPreviewOpen.has(p.slug) && browserAnswers(b);
     const lease = (s.resourceLeases?.leases || []).find((candidate) => candidate.pool === 'project-browsers' && candidate.project === p.slug);
     const leaseLine = lease ? `<p class="browser-lease"><span class="mono">Leased port :${esc(lease.item)}</span> · CDP <span class="mono">http://127.0.0.1:${esc(lease.item)}</span> · <a href="/allocation#lease-project-browsers-${esc(lease.item)}">View lease</a></p>` : '';
-    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${browserAnswers(b) ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${b.headless ? 'visible' : 'headless'}">Restart ${b.headless ? 'visible' : 'headless'}</button>${browserAnswers(b) ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen saved tabs</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}${copyFieldHtml(`http://127.0.0.1:${b.port}`, esc, 'Copy the connection address')}<br>${esc(b.profile)}${copyFieldHtml(b.profile, esc, 'Copy the profile path')}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
+    const restartMode = b?.headless && allowVisible ? 'visible' : 'headless';
+    return `<article class="panel browser-card ${b?.profileVerified ? 'browser-card-active' : 'browser-card-idle'}"><div class="browser-card-head"><div><h3>${esc(p.label)}</h3><p>${b ? `<span class="mono">:${b.port}</span> · ${browserState(b)} · ${b.headless ? 'headless' : 'visible'}` : 'No browser running'}</p></div>${b?.profileVerified ? `<div class="browser-head-actions">${browserAnswers(b) ? `<button type="button" class="browser-preview-toggle" data-browser-preview="${esc(p.slug)}">${preview ? 'Hide preview' : 'Show preview'}</button>` : ''}<details class="browser-manage" data-browser-manage="${esc(p.slug)}" ${browserManageOpen.has(p.slug) ? 'open' : ''}><summary>Manage</summary><div class="browser-manage-content"><div class="browser-actions"><button type="button" data-browser-restart="${esc(p.slug)}" data-browser-mode="${restartMode}">Restart ${restartMode}</button>${browserAnswers(b) ? `<label class="browser-restore"><input type="checkbox" data-browser-restore="${esc(p.slug)}" checked> Reopen saved tabs</label>` : ''}<button type="button" data-browser-close="${esc(p.slug)}">Close browser</button></div><form class="browser-size" data-browser-size="${esc(p.slug)}"><label>Next launch size <input type="number" name="width" min="320" max="3840" value="${size.width}" aria-label="${esc(p.label)} window width"> × <input type="number" name="height" min="240" max="2160" value="${size.height}" aria-label="${esc(p.label)} window height"> px</label><button type="submit">Save size</button></form><details class="browser-record"><summary>Connection and profile</summary><small class="mono">http://127.0.0.1:${b.port}${copyFieldHtml(`http://127.0.0.1:${b.port}`, esc, 'Copy the connection address')}<br>${esc(b.profile)}${copyFieldHtml(b.profile, esc, 'Copy the profile path')}</small></details></div></details></div>` : '<span class="tag">Available</span>'}</div>
       ${leaseLine}
-      ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button></div>` : ''}
-      ${b?.profileVerified && b.notResponding && !b.responsive ? browserNotRespondingBlock(p.slug, b) : ''}
+      ${!b?.profileVerified ? `<div class="browser-actions"><button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="headless">Open headless</button>${allowVisible ? `<button type="button" data-browser-request="${esc(p.slug)}" data-browser-mode="visible">Open visible</button>` : ''}</div>` : ''}
+      ${b?.profileVerified && b.notResponding && !b.responsive ? browserNotRespondingBlock(p.slug, b, allowVisible) : ''}
       ${b?.profileVerified && !b.responsive && !b.notResponding ? '<small class="inline-feedback" role="status">Chrome does not answer on its debugging port. Restart or close it from Manage.</small>' : ''}
       ${browserMessages[p.slug] ? `<small class="inline-feedback" role="status">${esc(browserMessages[p.slug])}</small>` : ''}
       ${browserBookmarkSection(p.slug, b)}
@@ -2567,7 +2569,7 @@ document.addEventListener('click', (e) => {
 
 function browsersView(s) {
   return [
-    '<header class="page-intro"><div><h1>Project browsers</h1><p>Dedicated profiles, live page previews, and controls for each project.</p></div></header>',
+    '<header class="page-intro"><div><h1>Project browsers</h1><p>Each project has a headless browser. Turn on Allow visible project browsers in Settings to allow a visible window.</p></div></header>',
     browserResources(s),
   ].join('');
 }

@@ -78,6 +78,14 @@ export function readRootSettings({ dataDir = DATA_DIR } = {}) {
   return roots;
 }
 
+// Read this Owner-controlled launch permission without creating or changing service data.
+export function visibleBrowsersAllowed({ dataDir = DATA_DIR } = {}) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    return config?.browser?.allowVisible === true;
+  } catch { return false; }
+}
+
 // A preview tick writes state.json, rules.json, bulletin.md, and quota history. Refuse a preview that would write them
 // into the service data directory. Compare real paths, so a symlink cannot point the preview at that directory. A data
 // directory that holds files from an earlier preview is allowed. Call this before loadConfig() and before serve() write
@@ -155,7 +163,7 @@ const DEFAULTS = {
     // Sweep old code-sign clones that no running Chrome process owns.
     sweepCodeSignClones: true,
   },
-  browser: { idleCloseMinutes: 20 },
+  browser: { idleCloseMinutes: 20, allowVisible: false },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
   // Remove a clean worker worktree and its merged branch after collection.
   worktrees: { pruneAtCollect: true },
@@ -214,6 +222,7 @@ const SERVICE_SETTINGS = [
   ['Browsers', 'browsers.staleOwnedMinutes'],
   ['Browsers', 'browsers.sweepCodeSignClones'],
   ['Browsers', 'browser.idleCloseMinutes'],
+  ['Browsers', 'browser.allowVisible'],
   ['Browsers', 'chromePath'],
   ['Releases', 'releases.repos'],
   ['Service', 'tickSeconds'],
@@ -471,6 +480,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'push',
   'analytics.actionsMinutes',
   'factories.claudeUsageHelper',
+  'browser.allowVisible',
   'worktrees.pruneAtCollect',
 ]);
 const MAX_ALLOWED_HOSTS = 50;

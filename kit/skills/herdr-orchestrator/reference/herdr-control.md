@@ -74,7 +74,7 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 - Give browser workers the project slug and a tab ID. For simple screenshots, navigation, clicks, text, and keys, use [the project browser service](../../../browser-service.md).
 - Have the Owner enter credentials through the dashboard.
 - For dashboard and web checks, prefer the project browser: `herdr-boss browser request <slug>`, then `browser tabs`, `browser tab new`, and `browser screenshot`.
-- `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
+- Never launch your own Chrome, agent-browser, Playwright, or chrome-devtools from a worker or project lead. Attach to the project browser with `herdr-boss browser` and its CDP port.
 - Close only browser sessions that the worker owns.
 - Close Chrome with `herdr-boss browser close <slug>` or CDP `Browser.close`. Never send a signal to Chrome yourself.
 - When a worker changed a file outside its scope and the orchestrator approved that file by message, run `herdr-boss worker collect <name> --accept-scope FILE[,FILE] --reason TEXT`. Use it only for files that you reviewed. The command passes only the listed outside files, refuses every other outside file, and records the files and the reason as a Scope exception in the run record and the printed report.

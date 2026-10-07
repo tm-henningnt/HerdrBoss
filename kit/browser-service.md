@@ -1,6 +1,6 @@
 # Project browser service
 
-Each project has its own persistent Chrome profile and debugging port. Ask the orchestrator for the project slug, then request its browser with `herdr-boss browser request <slug>`. Read the tab list before acting:
+Each project has its own persistent Chrome profile and debugging port. The browser starts headless. Visible mode needs the Owner's `browser.allowVisible` setting. Ask the orchestrator for the project slug, then request its browser with `herdr-boss browser request <slug>`. Read the tab list before acting:
 
 Herdr Boss masks outside hosts in URLs, tab titles, and bookmark names. It keeps loopback hosts in full. It removes query strings and fragments from all output URLs, including URLs inside titles. The final text and JSON filter replaces values after `code=`, `state=`, `session_state=`, `access_token=`, `id_token=`, `refresh_token=`, `token=`, `key=`, and `Bearer ` with `<redacted>`. It also replaces JWT strings. The filter applies to errors. The dashboard, browser API, and new event log records use the same rules.
 
@@ -44,7 +44,8 @@ A project browser is "not responding" when its Chrome process runs with the proj
 ## Browser choice for checks
 
 - For dashboard and web checks, prefer the project browser. Run `herdr-boss browser request <slug>`, then use `browser tabs`, `browser tab new`, and `browser screenshot`.
-- `playwright-cli` and `agent-browser` are also permitted. Close their sessions when you are done.
+- Never launch your own Chrome, agent-browser, Playwright, or chrome-devtools from a worker or project lead. Attach to the project browser with `herdr-boss browser` and its CDP port.
+- A driver may do other page work only when it attaches to the project's CDP port. Close its DevTools connection when the task ends.
 - Google Chrome leaves a code-sign clone when it does not exit cleanly. Herdr Boss removes orphaned clones every 10 minutes. The clones share disk blocks with the Chrome app, so they use little real space.
 - Close Chrome with `herdr-boss browser close <slug>` or the CDP command `Browser.close`. Never send a signal to Chrome yourself.
 

@@ -362,6 +362,82 @@ function chromeCmd(port, profile, extra = '') {
   return `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=${port} --user-data-dir=${profile} --headless${extra}`;
 }
 
+test('new browser requests and reservations default to headless', async () => {
+  const reserved = await pool.requestBrowser('headless-reserve-default', { launch: false,
+    collectProcesses: async () => new Map(), portOpen: async () => false });
+  assert.equal(reserved.headless, true);
+  assert.equal(pool.listBrowserSessions()['headless-reserve-default'].headless, true);
+
+  const network = fakeLaunchNet();
+  const processes = new Map();
+  let launchArgs;
+  const launched = await pool.requestBrowser('headless-launch-default', {
+    chromePath: process.execPath,
+    cloneDir: null,
+    portOpen: network.portOpen,
+    fetch: network.fetch,
+    collectProcesses: async () => new Map(processes),
+    spawn: (_chrome, args) => {
+      launchArgs = args;
+      const port = Number(args.find((arg) => arg.startsWith('--remote-debugging-port=')).split('=')[1]);
+      const profile = args.find((arg) => arg.startsWith('--user-data-dir=')).split('=')[1];
+      processes.set(4201, { pid: 4201, cmd: chromeCmd(port, profile) });
+      network.launched.add(port);
+      return { pid: 4201, on() {}, unref() {} };
+    },
+  });
+  assert.equal(launched.headless, true);
+  assert.ok(launchArgs.includes('--headless'));
+});
+
+test('visible browser requests require browser.allowVisible and the refusal happens before a restart', async () => {
+  let processReads = 0;
+  const collectProcesses = async () => { processReads++; return new Map(); };
+  await assert.rejects(pool.requestBrowser('visible-refused', { launch: false, headless: false, collectProcesses }), /browser\.allowVisible/);
+  assert.equal(processReads, 0);
+  assert.equal(pool.listBrowserSessions()['visible-refused'], undefined);
+
+  const session = register('visible-restart-refused', 45684);
+  session.headless = false;
+  const closed = register('visible-closed-refused', 45685);
+  closed.headless = false;
+  closed.closedAt = '2026-10-07T10:00:00.000Z';
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify({ [session.project]: session, [closed.project]: closed }));
+  await assert.rejects(pool.restartBrowser(session.project, false, { collectProcesses, closeViaCdp: async () => { throw new Error('must not close'); } }), /browser\.allowVisible/);
+  await assert.rejects(pool.requestBrowser(closed.project, { headless: false, collectProcesses }), /browser\.allowVisible/);
+  assert.equal(processReads, 0);
+  assert.equal(pool.listBrowserSessions()[closed.project].closedAt, closed.closedAt);
+});
+
+test('visible browser requests work only after the Owner enables them', async () => {
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ browser: { allowVisible: true } }));
+  const session = await pool.requestBrowser('visible-allowed', { launch: false, headless: false,
+    collectProcesses: async () => new Map(), portOpen: async () => false });
+  assert.equal(session.headless, false);
+  assert.equal(pool.listBrowserSessions()['visible-allowed'].headless, false);
+  fs.rmSync(path.join(dataDir, 'config.json'), { force: true });
+});
+
+test('a legacy visible session stays usable by a plain request until the service migrates it', async () => {
+  const project = 'legacy-visible-request';
+  const session = register(project, 9226);
+  session.headless = false;
+  delete session.headlessPolicyVersion;
+  const sessions = pool.listBrowserSessions();
+  sessions[project] = session;
+  fs.writeFileSync(path.join(dataDir, 'browser-sessions.json'), JSON.stringify(sessions));
+  const profile = session.profile;
+  const actual = { pid: 4226, cmd: chromeCmd(session.port, profile).replace(' --headless', '') };
+  const status = await pool.requestBrowser(project, {
+    collectProcesses: async () => new Map([[actual.pid, actual]]),
+    portOpen: async () => true,
+    fetch: async () => new Response(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:9226/devtools/browser/fake' }), { status: 200 }),
+  });
+  assert.equal(status.headless, false);
+  assert.equal(status.profileVerified, true);
+  assert.equal(pool.listBrowserSessions()[project].headlessPolicyVersion, undefined);
+});
+
 // A fake process table with a Chrome owner, its renderer, and an unrelated process on the same port.
 function fakeMachine(session, { withOwner = true } = {}) {
   const procs = new Map();

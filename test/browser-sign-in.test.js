@@ -243,3 +243,12 @@ test('the read-only preview refuses the sign-in route and input', async (t) => {
   assert.equal((await post('/api/browser-sessions/sign-in', { project: 'alpha', url: 'https://login.example.test/' })).status, 403);
   assert.equal((await post('/api/browser-sessions/input', { project: 'alpha', tab: 't', type: 'text', text: 'abc', signIn: true })).status, 403);
 });
+
+test('the Owner sign-in view uses the headless project browser and has exact user steps', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  assert.match(app, /browser-viewer-signin/);
+  assert.match(app, /viewer\.querySelector\('#browser-viewer-control'\)\.checked = true/);
+  assert.match(guide, /Project browsers run headless[\s\S]*Open the \*\*Browsers\*\* page[\s\S]*select \*\*Show preview\*\*[\s\S]*select the project browser screenshot[\s\S]*\*\*Open sign-in tab\*\*[\s\S]*turns on \*\*Control browser\*\*/i);
+  assert.match(guide, /Only the Owner can open a sign-in tab or send sign-in input from this view/i);
+});

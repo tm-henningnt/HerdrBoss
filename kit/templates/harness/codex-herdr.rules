@@ -4,7 +4,6 @@ prefix_rule(pattern=["launchctl", "kickstart", "-k", "gui/{{UID}}/no.tallmaker.h
 prefix_rule(pattern=["herdr-boss", "browser"], decision="allow")
 # A worker stops its own process through the helper, never with a raw signal.
 prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="allow")
-prefix_rule(pattern=["playwright-cli"], decision="allow")
 # Never print the environment of another process.
 prefix_rule(pattern=["ps", "e"], decision="forbidden")
 prefix_rule(pattern=["ps", "-E"], decision="forbidden")

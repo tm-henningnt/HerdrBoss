@@ -119,6 +119,32 @@ test('Settings renders and saves the collect-time worktree pruning switch', asyn
   assert.throws(() => validateServiceSettings({ 'worktrees.pruneAtCollect': 'false' }), /must be true or false/);
 });
 
+test('Settings renders and saves the visible project browser switch, off by default', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  const setting = s.serviceSettings.find((item) => item.setting === 'browser.allowVisible');
+  assert.deepEqual(setting && { value: setting.value, source: setting.source }, { value: false, source: 'default' });
+  const html = app.settingsView(s);
+  assert.match(html, /type="checkbox" data-service-setting="browser\.allowVisible" data-service-group="Browsers" aria-label="browser\.allowVisible"/);
+  assert.equal((html.match(/data-setting-help="browser\.allowVisible"/g) || []).length, 1);
+
+  const toggle = { type: 'checkbox', dataset: { serviceSetting: 'browser.allowVisible' }, checked: true };
+  app.context.document = {
+    querySelectorAll: () => [toggle],
+    querySelector: () => ({ textContent: '' }),
+  };
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ settings: [] }) };
+  };
+  await app.saveServiceSettings('Browsers', { disabled: false });
+  assert.deepEqual(sent.changes, { 'browser.allowVisible': true });
+  assert.deepEqual(validateServiceSettings({ 'browser.allowVisible': true }), { 'browser.allowVisible': true });
+  assert.throws(() => validateServiceSettings({ 'browser.allowVisible': 'true' }), /must be true or false/);
+});
+
 test('Settings shows and saves release repository rows with all three fields', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
