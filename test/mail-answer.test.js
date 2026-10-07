@@ -51,6 +51,26 @@ test('an Owner answer to a mailbox item is a mail answer, and a plain chat messa
   assert.deepEqual(kept, [chat.id, ask.id, own.id], 'the answer is not a chat record');
 });
 
+test('a needs-you review appears in Chat and Mailbox with its answer', (t) => {
+  const dir = fs.mkdtempSync(path.join(dataDir, 'review-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = openMessageStore({ dir });
+  const review = store.append({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'review', action: 'approve', text: 'Approve this pack?' }, { now: base });
+  const answer = store.append({ thread: 'alpha', from: 'owner', to: 'orch', kind: 'message', replyTo: review.id, text: 'Approved.', status: 'sent' }, { now: base + 1000 });
+  const records = store.all();
+  const byId = messages.messagesById(records);
+
+  assert.equal(messages.messageChannel(review, byId), 'both');
+  assert.equal(messages.messageChannel(answer, byId), 'both');
+  assert.equal(messages.isMailAnswer(answer, byId), true);
+  assert.ok(messages.chatRecords(records).some((record) => record.id === review.id));
+  assert.equal(messages.withMailAnswers([review], records)[0].answer.text, 'Approved.');
+  assert.equal(messages.mailboxFolders(records).needsYou.find((record) => record.id === review.id).answer.text, 'Approved.');
+  const counts = messages.mailboxCounts(records);
+  assert.equal(counts.chatUnread, 1);
+  assert.equal(counts.mailUnread, 0);
+});
+
 test('the chat list, the chat thread, and the counts leave out a Mailbox answer', (t) => {
   const dir = fs.mkdtempSync(path.join(dataDir, 'chat-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -164,6 +184,16 @@ test('the chat routes leave out a Mailbox answer and give a card its answer', { 
   assert.equal(chats[0].unread, 2);
   const mailbox = await (await fetch(`${url}/api/mailbox?thread=alpha&conversation=${ask.id}`)).json();
   assert.deepEqual(mailbox.messages.map((record) => record.id), [ask.id, answer.id], 'the Mailbox thread holds the question and the answer');
+
+  const review = store.append({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'review', action: 'approve', text: 'Approve the reviewed pack?' }, { now: base + 6000 });
+  const projectLeadReply = store.append({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', replyTo: review.id, text: 'The review is ready.' }, { now: base + 6500 });
+  const reviewAnswer = store.append({ thread: 'alpha', from: 'owner', to: 'orch', kind: 'message', text: 'Approved.', replyTo: review.id, status: 'sent' }, { now: base + 7000 });
+  const updatedPage = await (await fetch(`${url}/api/chats/alpha?limit=10`)).json();
+  const reviewCard = updatedPage.messages.find((record) => record.id === review.id);
+  assert.equal(reviewCard.channel, 'both');
+  assert.equal(reviewCard.answer.id, reviewAnswer.id);
+  assert.equal(reviewCard.answer.text, 'Approved.');
+  assert.equal(updatedPage.messages.find((record) => record.id === projectLeadReply.id).channel, 'both');
 });
 
 test('an Owner reply to a plain chat reply stays in Chat and does not close the reply', { timeout: 20000 }, async (t) => {

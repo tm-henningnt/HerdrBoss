@@ -588,10 +588,12 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         for (const [thread, project] of Object.entries(projects)) {
           if (project?.orch?.pane) writable.set(thread, { title: String(project.project || project.title || thread) });
         }
-        const stored = new Map(chatSummaries(messageStore.all()).map((chat) => [chat.thread, chat]));
+        const records = messageStore.all();
+        const byId = messagesById(records);
+        const stored = new Map(chatSummaries(records).map((chat) => [chat.thread, chat]));
         const mailUnreadByThread = new Map();
-        for (const item of messageStore.all()) {
-          if (item.to !== 'owner' || item.readAt || messageChannel(item) !== 'mail') continue;
+        for (const item of records) {
+          if (item.to !== 'owner' || item.readAt || messageChannel(item, byId) !== 'mail') continue;
           mailUnreadByThread.set(item.thread, (mailUnreadByThread.get(item.thread) ?? 0) + 1);
         }
         const chats = [...writable].map(([thread, { title }]) => {
@@ -606,7 +608,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
               id: record.id,
               at: record.at,
               from: record.from,
-              channel: messageChannel(record),
+              channel: messageChannel(record, byId),
               title: record.title ?? null,
               text: String(record.text ?? '').slice(0, 120),
               status: record.status ?? null,
@@ -628,9 +630,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         if (thread !== 'boss' && !projects[thread]?.orch?.pane) return send(res, 404, { error: `No open project uses the thread ${thread}.` });
         const now = Date.now();
         const updated = messageStore.mutate((records) => {
+          const byId = messagesById(records);
           let count = 0;
           for (const record of records) {
-            if (record.thread === thread && record.to === 'owner' && !record.readAt && messageChannel(record) !== 'mail') {
+            if (record.thread === thread && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail') {
               record.readAt = new Date(now).toISOString();
               count += 1;
             }
@@ -653,10 +656,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         const before = url.searchParams.get('before');
         if (before === '') return send(res, 400, { error: 'before must be a message ID.' });
         const everything = messageStore.all();
+        const byId = messagesById(everything);
         const page = chatThreadPage(everything, thread, { before, limit: limit + 1 });
         const more = page.length > limit;
         const messages = withMailAnswers(messagesWithReplyState(more ? page.slice(1) : page, everything), everything)
-          .map((record) => ({ ...record, channel: messageChannel(record) }));
+          .map((record) => ({ ...record, channel: messageChannel(record, byId) }));
         return send(res, 200, { thread, messages, more });
       }
       if (p === '/api/leases/release' && req.method === 'POST') {

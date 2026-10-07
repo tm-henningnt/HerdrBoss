@@ -75,6 +75,29 @@ function contractSuite(name, createStore, backend = 'json') {
     assert.notEqual(store.version(), appended);
   });
 
+  test(`${name}: update and mutate do not change a stored kind`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const record = store.append({ thread: 'alpha', kind: 'reply', text: 'First.' });
+
+    assert.throws(() => store.update(record.id, { kind: 'report' }), TypeError);
+    assert.equal(store.all().find((item) => item.id === record.id).kind, 'reply');
+
+    assert.throws(() => store.mutate((records) => {
+      records.find((item) => item.id === record.id).kind = 'review';
+      return { records, result: null };
+    }), TypeError);
+    assert.equal(store.all().find((item) => item.id === record.id).kind, 'reply');
+  });
+
+  test(`${name}: update can set the first kind on a record without one`, (t) => {
+    const store = createStore({ dir: freshDir(t) });
+    const record = store.append({ thread: 'alpha', text: 'Legacy record.' });
+
+    const updated = store.update(record.id, { kind: 'message' });
+    assert.equal(updated.kind, 'message');
+    assert.equal(store.all().find((item) => item.id === record.id).kind, 'message');
+  });
+
   test(`${name}: mutate keeps a concurrent process append`, async (t) => {
     const dir = freshDir(t);
     const store = createStore({ dir });

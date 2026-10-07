@@ -2,8 +2,10 @@
 
 Choose the chapter for your task.
 
+Use Chat for ordinary messages. Use the Mailbox to answer, approve, or decide. A reply keeps the same conversation thread.
+
 - [I want to see what is happening](guide/see.md)
-- [I want to answer a question](guide/answer.md)
+- [I want to answer a Mailbox question](guide/answer.md)
 - [I want to review a pack](guide/review.md)
 - [I want to limit the cost](guide/cost.md)
 - [I want to use it from my phone](guide/phone.md)

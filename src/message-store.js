@@ -22,6 +22,19 @@ const LOCK_STALE_MS = 10000;
 const listenersByStore = new Map();
 const messageOrder = (left, right) => Date.parse(left.at) - Date.parse(right.at);
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const KIND_CHANGE_ERROR = 'A stored message kind cannot change.';
+
+function assertKindUnchanged(previous, next) {
+  if (previous?.kind != null && previous.kind !== next?.kind) throw new TypeError(KIND_CHANGE_ERROR);
+}
+
+function assertKindsUnchanged(before, after) {
+  const beforeById = new Map(before.map((record) => [record.id, record]));
+  for (const record of after) {
+    const previous = beforeById.get(record.id);
+    if (previous) assertKindUnchanged(previous, record);
+  }
+}
 
 function pause(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -210,7 +223,10 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
         const records = sqliteRecords(connection);
         const index = records.findIndex((record) => record.id === id);
         if (index < 0) return { record: null, notify: false };
-        records[index] = { ...records[index], ...patch, id };
+        const previous = records[index];
+        const updatedRecord = { ...previous, ...patch, id };
+        assertKindUnchanged(previous, updatedRecord);
+        records[index] = updatedRecord;
         const updated = records[index];
         const kept = fresh(records, now).sort(messageOrder);
         replaceSqliteRecords(connection, kept);
@@ -230,6 +246,7 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
         if (changed && typeof changed.then === 'function') throw new TypeError('Message store mutate needs a synchronous function.');
         if (!changed || !Array.isArray(changed.records)) throw new TypeError('Message store mutate must return { records, result }.');
         const after = fresh(changed.records, now).sort(messageOrder);
+        assertKindsUnchanged(before, after);
         const needsWrite = stored.length !== after.length || JSON.stringify(before) !== JSON.stringify(after);
         if (needsWrite) replaceSqliteRecords(connection, after);
 
@@ -332,7 +349,10 @@ export function openMessageStore(options = {}) {
         const records = readStoredRecords(dir);
         const index = records.findIndex((record) => record.id === id);
         if (index < 0) return { record: null, notify: false };
-        records[index] = { ...records[index], ...patch, id };
+        const previous = records[index];
+        const updatedRecord = { ...previous, ...patch, id };
+        assertKindUnchanged(previous, updatedRecord);
+        records[index] = updatedRecord;
         const updated = records[index];
         rewrite(dir, fresh(records, now).sort(messageOrder));
         return { record: updated, notify: fresh(records, now).some((record) => record.id === id) };
@@ -351,6 +371,7 @@ export function openMessageStore(options = {}) {
         if (changed && typeof changed.then === 'function') throw new TypeError('Message store mutate needs a synchronous function.');
         if (!changed || !Array.isArray(changed.records)) throw new TypeError('Message store mutate must return { records, result }.');
         const after = fresh(changed.records, now).sort(messageOrder);
+        assertKindsUnchanged(before, after);
         const needsWrite = stored.length !== after.length || JSON.stringify(before) !== JSON.stringify(after);
         if (needsWrite) rewrite(dir, after);
 
