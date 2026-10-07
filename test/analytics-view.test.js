@@ -319,7 +319,7 @@ test('activityFilter filters by kind, project, level, time range, and search, ne
   assert.deepEqual(activityChoices(events), { kinds: ['error', 'handoff', 'notify'], projects: ['lantern', 'orchard'] });
 });
 
-test('the Analytics page leads with questions and charts, each with a Details table', () => {
+test('the Analytics page leads with questions and charts, each with a Details table', async () => {
   const start = app.indexOf('function analyticsView(');
   const view = app.slice(start, app.indexOf('\n}\n', start));
   for (const block of ['analyticsHeadline', 'spendChart', 'quotaChart', 'quotaPlanChart', 'scorecardChart', 'denialsBlock', 'timelineChart', 'machineHoursBlock', 'noticeChart', 'activitySection']) assert.match(view, new RegExp(`${block}\\(`), block);
@@ -329,15 +329,16 @@ test('the Analytics page leads with questions and charts, each with a Details ta
   assert.match(app, /if \(location\.pathname === '\/analytics'\) urls\.push\('\/api\/quota-plan\/codex'\)/);
   assert.match(app, /API-price equivalent/);
   // The page keeps its DOM on refresh, so a chart keeps its sideways scroll and the search keeps its focus.
-  assert.match(app, /const KEYED_ROUTES = \[[^\]]*'analytics'/);
+  assert.ok((await import('../public/routes.js')).KEYED_ROUTES.includes('analytics'));
 });
 
-test('the activity log moves to Analytics and old Logs links keep working', () => {
+test('the activity log moves to Analytics and old Logs links keep working', async () => {
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
   assert.doesNotMatch(nav, /data-nav="logs"/);
   assert.doesNotMatch(app, /\['\/logs', 'Logs'\]/);
-  assert.match(app, /location\.pathname === '\/logs'/);
-  assert.match(app, /'\/analytics#activity'/);
+  const { resolveAlias } = await import('../public/routes.js');
+  assert.equal(resolveAlias('/logs', '').url, '/analytics#activity');
+  assert.match(app, /readLocation\(location, history\)/);
   assert.doesNotMatch(app, /href="\/logs/);
   assert.match(app, /<select data-activity-filter="\$\{field\}">/);
   for (const field of ['kind', 'project', 'level', 'range']) assert.match(app, new RegExp(`select\\('${field}', `), field);

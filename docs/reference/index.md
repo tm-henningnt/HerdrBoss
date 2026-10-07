@@ -7,6 +7,7 @@ Use these pages for technical details.
 - [Service](service.md)
 - [API](api.md)
 - [Dashboard pages](dashboard.md)
+- [Dashboard shell and route registry](dashboard-shell.md)
 - [Settings and allocation](settings.md)
 - [Orchestrator handover](handover.md)
 - [Project browsers](browsers.md)
