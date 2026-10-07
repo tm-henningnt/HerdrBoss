@@ -31,6 +31,7 @@ import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollG
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
+import { createClientStore } from './store.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -46,13 +47,13 @@ let fleetData = null, fleetSettings = null, fleetShares = null, fleetLoading = f
 let fleetNudgeId = null;
 let fleetSharesFeedback = '', fleetNudgeFeedback = '', fleetSharesSaving = false, fleetNudgeSaving = false;
 async function refreshFleet() {
-  if (fleetLoading) return;
+  if (!clientStore || fleetLoading) return;
   fleetLoading = true;
   try {
-    const responses = await Promise.all(['/api/fleet', '/api/fleet/settings', '/api/fleet/shares'].map((url) => fetch(url)));
-    if (responses.some((response) => !response.ok)) throw new Error('Fleet data could not be read.');
-    [fleetData, fleetSettings, fleetShares] = await Promise.all(responses.map((response) => response.json()));
-  } catch { fleetData = { factories: [], registryError: 'Fleet data could not be read.' }; }
+    await clientStore.refresh('fleetBundle');
+  } catch {
+    if (!clientStore.value('fleetBundle')) fleetData = { factories: [], registryError: 'Fleet data could not be read.' };
+  }
   finally { fleetLoading = false; lastRender = ''; autoRender(); }
 }
 document.addEventListener('submit', async (event) => {
@@ -156,6 +157,7 @@ function setNavMenu(open) {
 }
 
 let state = null;
+let clientStore = null;
 let lastRender = '';
 // The project page patches its DOM in place when the previous render was the project page too.
 let lastRoute = null;
@@ -2313,8 +2315,14 @@ function openLeaseRelease(pool, item, project, holder) {
 
 // Re-read the whole state from the service, for example after a change that the engine applied on a tick.
 async function refreshState() {
-  const response = await fetch('/api/state');
-  if (response.ok) state = await response.json();
+  return clientStore.refresh('state');
+}
+
+async function readApiUrl(url, { force = true } = {}) {
+  const value = await clientStore.readUrl(url, { force });
+  const error = clientStore.errorForUrl(url);
+  if (error) throw error;
+  return value;
 }
 
 // The lease release re-reads the whole state after the change.
@@ -3707,9 +3715,8 @@ async function loadMailbox(auto = false) {
   mailbox.loading = true;
   try {
     const folder = mailboxFolderFromLocation();
-    const response = await fetch(`/api/mailbox?folder=${encodeURIComponent(folder)}`);
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'The mailbox could not be read.');
+    const url = `/api/mailbox?folder=${encodeURIComponent(folder)}`;
+    const result = await readApiUrl(url);
     Object.assign(mailbox, { needsYou: result.needsYou, inbox: result.inbox || [], updates: result.updates, sent: result.sent, done: result.done, updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
     const requested = new URLSearchParams(location.search).get('folder');
     const resolved = resolveMailboxFolder(requested, storedMailboxFolder(), mailbox.needsYou.length);
@@ -4382,9 +4389,7 @@ function chatBubble(record, startOfRun = false) {
 async function loadChats() {
   chat.loading = true;
   try {
-    const response = await fetch('/api/chats');
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'The chats could not be read.');
+    const result = await readApiUrl('/api/chats', { force: false });
     chat.list = chatSortList(result);
     chat.loaded = true;
     chat.error = '';
@@ -6946,6 +6951,15 @@ function reviewsRender() { if (currentRoute() === 'reviews') render(); }
 
 // A failed request throws a plain sentence. See reviewErrorText() in public/review.js.
 async function reviewFetch(url, options) {
+  if (!options || options.method === 'GET') {
+    try {
+      return await readApiUrl(url);
+    } catch (error) {
+      const status = error.status || 0;
+      const body = error.body ?? null;
+      throw Object.assign(new Error(reviewErrorText({ network: status === 0, status, body })), { status, body });
+    }
+  }
   let response;
   try { response = await fetch(url, options); } catch { throw Object.assign(new Error(reviewErrorText({ network: true })), { status: 0, body: null }); }
   const body = await response.json().catch(() => null);
@@ -7800,6 +7814,7 @@ function render(force = false) {
   const located = readLocation(location, history);
   if (located.pendingHash) pendingHash = located.pendingHash;
   const { route, slug: projectSlug, task } = located;
+  if (clientStore) void clientStore.setPage(route);
   if (task) {
     projectView(task.slug).selected = task.id;
     requestAnimationFrame(() => { centerGraphOn(task.slug, task.id); revealCard(task.slug, task.id, 'center'); });
@@ -8844,7 +8859,7 @@ async function runHandoffAction(action, key) {
       } else {
         if (!handoffPlans[key]) throw new Error('Plan this handover first.');
         const prepared = await postJson('/api/handoffs/prepare', body);
-        handoffRecords = await fetch('/api/handoffs').then((r) => r.json());
+        handoffRecords = await clientStore.refresh('handoffs');
         handoffMessages[prepared.id] = prepared.promptError ? `Successor started. Prompt needs inspection: ${prepared.promptError}` : 'Successor started. Inspect its response before activation.';
       }
     } else if (action === 'output') {
@@ -8857,7 +8872,7 @@ async function runHandoffAction(action, key) {
       handoffMessages[key] = 'Review the output below before confirming activation.';
     } else if (action === 'activate') {
       await postJson('/api/handoffs/activate', { id: key, confirmed: true });
-      handoffRecords = await fetch('/api/handoffs').then((r) => r.json());
+      handoffRecords = await clientStore.refresh('handoffs');
       await fetch('/api/tick', { method: 'POST' });
       handoffMessages[key] = 'Handover activated.';
     }
@@ -9293,69 +9308,111 @@ document.addEventListener('click', (e) => {
 });
 addEventListener('popstate', () => { lastRender = ''; render(); if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true); if (location.hash) revealHash(); });
 
-function connect() {
-  const es = new EventSource('/api/events');
-  es.addEventListener('state', (e) => {
-    state = JSON.parse(e.data);
-    autoRender();
-    // A link from the Browsers page opens /allocation#lease-POOL-ITEM. Scroll to that row once.
-    if (!hashScrolled && location.hash) {
-      hashScrolled = true;
-      revealHash();
-    }
-    if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox(true);
-  });
-  es.onopen = () => $dot.classList.add('on');
-  es.addEventListener('message', (e) => onChatMessage(JSON.parse(e.data)));
-  es.addEventListener('review', (e) => { try { onReviewEvent(JSON.parse(e.data)); } catch { /* a bad event changes nothing */ } });
-  es.onerror = () => { $dot.classList.remove('on'); $updated.textContent = 'reconnecting…'; };
-}
-async function refreshRoamgate() {
-  try {
-    const response = await fetch('/api/roamgate');
-    const status = await response.json();
-    $roamgate.hidden = !response.ok || !status.available;
-  } catch { $roamgate.hidden = true; }
-}
-// The Mailbox and the Chat keep their DOM when the refreshed HTML is the same, so the reading position stays.
+const clientResources = {
+  state: { url: '/api/state' },
+  mailboxCounts: { url: '/api/mailbox?folder=needs-you', intervalMs: 30000 },
+  chats: { url: '/api/chats', intervalMs: 30000 },
+  roamgate: { url: '/api/roamgate', intervalMs: 30000 },
+  models: { url: '/api/models', intervalMs: 30000 },
+  usage: { url: '/api/usage', intervalMs: 30000 },
+  browserSessions: { url: '/api/browser-sessions', intervalMs: 30000 },
+  handoffs: { url: '/api/handoffs', intervalMs: 30000 },
+  denials: { url: '/api/denials', intervalMs: 30000 },
+  prices: { url: '/api/settings/prices', intervalMs: 30000 },
+  spend: { url: '/api/spend?days=14', intervalMs: 30000 },
+  analytics: { url: '/api/analytics', intervalMs: 30000 },
+  machineHours: { url: '/api/machine-hours', intervalMs: 30000 },
+  quotaPlan: { url: '/api/quota-plan/codex', intervalMs: 30000 },
+  fleetBundle: {
+    intervalMs: 30000,
+    load: async ({ fetchImpl }) => {
+      const urls = ['/api/fleet', '/api/fleet/settings', '/api/fleet/shares'];
+      const responses = await Promise.all(urls.map((url) => fetchImpl(url)));
+      if (responses.some((response) => !response.ok)) throw new Error('Fleet data could not be read.');
+      return Promise.all(responses.map((response) => response.json()));
+    },
+  },
+  mailboxList: { intervalMs: 30000, run: () => loadMailbox(true) },
+  agentRefresh: { intervalMs: 30000, run: () => agentsRefresh() },
+  reviewReads: { dynamic: true },
+  agentReads: { dynamic: true },
+  projectReads: { dynamic: true },
+  browserReads: { dynamic: true },
+  allocationReads: { dynamic: true },
+  settingsReads: { dynamic: true },
+  docsReads: { dynamic: true },
+  mailboxReads: { dynamic: true },
+  chatReads: { dynamic: true },
+  hostGuideReads: { dynamic: true },
+};
+clientStore = createClientStore({ resources: clientResources });
 function refreshForcesRender(pathname) {
   return !['/mailbox', '/chat'].includes(pathname);
 }
-
-async function refreshExtras() {
-  if (['/fleet', '/mailbox'].includes(location.pathname)) void refreshFleet();
-  const urls = ['/api/models', '/api/usage', '/api/browser-sessions', '/api/handoffs', '/api/denials', '/api/mailbox?folder=needs-you', '/api/chats', '/api/settings/prices', '/api/spend?days=14', '/api/analytics', '/api/machine-hours'];
-  if (location.pathname === '/analytics') urls.push('/api/quota-plan/codex');
-  const results = await Promise.allSettled(urls.map((url) => fetch(url).then((r) => r.json())));
-  if (results[0].status === 'fulfilled') models = results[0].value;
-  if (results[1].status === 'fulfilled') usage = results[1].value;
-  if (results[2].status === 'fulfilled') {
-    browserSessions = results[2].value;
-    if (!browserPreviewsInitialized) {
-      for (const browser of browserSessions) if (browser.profileVerified && browserAnswers(browser)) browserPreviewOpen.add(browser.project);
-      browserPreviewsInitialized = true;
-    }
-  }
-  if (results[3].status === 'fulfilled') handoffRecords = results[3].value;
-  if (results[4].status === 'fulfilled') denials = results[4].value;
-  if (results[5].status === 'fulfilled') mailbox.updatesUnread = results[5].value.updatesUnread || 0;
-  if (results[6].status === 'fulfilled' && Array.isArray(results[6].value)) { chat.list = chatSortList(results[6].value); chat.loaded = true; }
-  if (results[7].status === 'fulfilled' && results[7].value?.prices) priceTable = results[7].value;
-  if (results[8].status === 'fulfilled' && Array.isArray(results[8].value?.days)) spendData = results[8].value;
-  if (results[9].status === 'fulfilled' && results[9].value?.timeline) analyticsData = results[9].value;
-  if (results[10].status === 'fulfilled' && results[10].value?.hours) machineHours = results[10].value;
-  if (location.pathname === '/analytics' && results[11]?.status === 'fulfilled' && results[11].value?.provider === 'codex') quotaPlanData = results[11].value;
-  if (location.pathname === '/mailbox' && !mailbox.loading) await loadMailbox(true);
-  agentsRefresh();
-  if (refreshForcesRender(location.pathname)) lastRender = '';
+const renderStoreData = (force = false) => {
+  if (force || refreshForcesRender(location.pathname)) lastRender = '';
   autoRender();
+};
+clientStore.subscribe('state', (value) => {
+  state = value;
+  autoRender();
+  // A link from the Browsers page opens /allocation#lease-POOL-ITEM. Scroll to that row once.
+  if (!hashScrolled && location.hash) {
+    hashScrolled = true;
+    revealHash();
+  }
+  if (location.pathname === '/mailbox' && mailbox.loaded && !mailbox.loading && JSON.stringify(state.mailbox) !== mailbox.counts) loadMailbox(true);
+});
+clientStore.subscribe('mailboxCounts', (value) => {
+  mailbox.updatesUnread = value?.updatesUnread || 0;
+  renderStoreData();
+});
+clientStore.subscribe('chats', (value) => {
+  if (Array.isArray(value)) { chat.list = chatSortList(value); chat.loaded = true; }
+  renderStoreData();
+});
+clientStore.subscribe('roamgate', (value) => { $roamgate.hidden = !value?.available; });
+clientStore.subscribe('models', (value) => { models = value || {}; renderStoreData(); });
+clientStore.subscribe('usage', (value) => { usage = value; renderStoreData(); });
+clientStore.subscribe('browserSessions', (value) => {
+  browserSessions = value;
+  if (Array.isArray(browserSessions) && !browserPreviewsInitialized) {
+    for (const browser of browserSessions) if (browser.profileVerified && browserAnswers(browser)) browserPreviewOpen.add(browser.project);
+    browserPreviewsInitialized = true;
+  }
+  renderStoreData();
+});
+clientStore.subscribe('handoffs', (value) => { handoffRecords = value || []; renderStoreData(); });
+clientStore.subscribe('denials', (value) => { denials = value; renderStoreData(); });
+clientStore.subscribe('prices', (value) => { if (value?.prices) priceTable = value; renderStoreData(); });
+clientStore.subscribe('spend', (value) => { if (Array.isArray(value?.days)) spendData = value; renderStoreData(); });
+clientStore.subscribe('analytics', (value) => { if (value?.timeline) analyticsData = value; renderStoreData(); });
+clientStore.subscribe('machineHours', (value) => { if (value?.hours) machineHours = value; renderStoreData(); });
+clientStore.subscribe('quotaPlan', (value) => { if (location.pathname === '/analytics' && value?.provider === 'codex') quotaPlanData = value; renderStoreData(); });
+clientStore.subscribe('fleetBundle', (value) => {
+  if (Array.isArray(value)) [fleetData, fleetSettings, fleetShares] = value;
+  renderStoreData(true);
+});
+clientStore.subscribeEvent('message', onChatMessage);
+clientStore.subscribeEvent('review', (event) => { try { onReviewEvent(event); } catch { /* a bad event changes nothing */ } });
+let eventSourceOpened = false;
+clientStore.subscribeConnection((connected) => {
+  if (connected) {
+    eventSourceOpened = true;
+    $dot.classList.add('on');
+  } else {
+    $dot.classList.remove('on');
+    if (eventSourceOpened) $updated.textContent = 'reconnecting…';
+  }
+});
+clientStore.connect();
+void clientStore.setPage(currentRoute());
+
+// Refresh the reads of the current page after an action that changes its data.
+async function refreshExtras() {
+  await clientStore.refreshPage(currentRoute());
   if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true);
 }
-connect();
-refreshExtras();
-refreshRoamgate();
-setInterval(refreshExtras, 30000);
-setInterval(refreshRoamgate, 30000);
 setInterval(() => {
   if (document.hidden || location.pathname !== '/browsers') return;
   const active = new Set(browserPreviewLive);
