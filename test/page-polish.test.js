@@ -6,6 +6,7 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const tokenCss = fs.readFileSync(new URL('../public/theme.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 const phoneCheck = fs.readFileSync(new URL('./phone-check.mjs', import.meta.url), 'utf8');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -23,7 +24,7 @@ const body = (name) => { const start = source.indexOf(`function ${name}(`); retu
 
 // The token values of one :root block: the first light block, or the first dark block.
 function tokens(dark) {
-  const block = dark ? /:root\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(css)[1] : /:root\s*\{([^}]*)\}/.exec(css)[1];
+  const block = dark ? /:root\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(tokenCss)[1] : /:root\s*\{([^}]*)\}/.exec(tokenCss)[1];
   return Object.fromEntries([...block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
 }
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
