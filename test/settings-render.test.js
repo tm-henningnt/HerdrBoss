@@ -155,6 +155,25 @@ test('Settings renders and saves the visible project browser switch, off by defa
   assert.throws(() => validateServiceSettings({ 'browser.allowVisible': 'true' }), /must be true or false/);
 });
 
+test('Settings renders the Haiku pace tolerance beside the general pace tolerance', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const state = fixture();
+  app.setState(state);
+  app.setDraft(state.policy);
+  const html = app.settingsView(state);
+  const general = html.indexOf('data-policy-number="paceTolerancePoints"');
+  const haiku = html.indexOf('data-policy-number="paceHaikuTolerancePoints"');
+  assert.ok(general >= 0, 'the general pace tolerance is visible');
+  assert.ok(haiku > general, 'the Haiku tolerance follows the general tolerance');
+  assert.ok(html.includes('<input id="sf-paceHaikuTolerancePoints" type="number" min="0" max="100" step="1" value="15" data-policy-number="paceHaikuTolerancePoints">'), 'the Haiku tolerance has its default and range');
+  assert.equal((html.match(/data-setting-help="paceHaikuTolerancePoints"/g) || []).length, 1);
+  const change = app.context.handlers.get('input').find((handler) => handler.toString().includes('el.dataset.policyNumber'));
+  assert.ok(change, 'the generic policy number input handler is registered');
+  change({ target: { dataset: { policyNumber: 'paceHaikuTolerancePoints' }, value: '22', closest: () => ({}) } });
+  assert.equal(state.policy.paceHaikuTolerancePoints, 22, 'the input updates the saved policy draft');
+});
+
 test('Settings shows and saves release repository rows with all three fields', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
@@ -367,6 +386,29 @@ test('Allocation shows the default-off automatic Claude goal command switch', as
   assert.ok(change, 'the policy change handler is registered');
   change({ target: { dataset: { policyGoalBool: 'autoCommand' }, checked: true, closest: () => true } });
   assert.equal(s.policy.goals.autoCommand, true, 'the switch updates the nested policy draft');
+});
+
+test('Allocation shows effort choices only for models with an effort setting', async () => {
+  const app = await views();
+  app.setModels({
+    codex: catalog,
+    claude: {
+      defaultModel: 'claude-sonnet-5-5', defaultEffort: null, allowedEfforts: [],
+      allowedModels: ['claude-sonnet-5-5', 'claude-haiku-5-5'],
+      modelEfforts: { 'claude-haiku-5-5': { allowedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' } },
+    },
+  });
+  const s = fixture();
+  s.policy.orchestratorLadder = [
+    { kind: 'claude', model: 'claude-haiku-5-5', effort: 'medium' },
+    { kind: 'claude', model: 'claude-sonnet-5-5', effort: null },
+  ];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  assert.match(html, /<select data-ladder-effort="0"[^>]*>[\s\S]*<option value="medium" selected>medium<\/option>/);
+  assert.doesNotMatch(html, /data-ladder-effort="1"/);
+  assert.match(html, /No effort setting/);
 });
 
 test('the Boss rules row keeps its input inside the card at a phone width', async () => {

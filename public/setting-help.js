@@ -178,6 +178,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lane is ahead of pace sooner. A value of 0 uses no tolerance.',
     apply: 'policy',
   }),
+  S('quotas', 'paceHaikuTolerancePoints', 'Haiku pace tolerance points', {
+    what: 'The most percentage points Claude may be above its expected use when you start claude-haiku-5-5. Other Claude models use paceTolerancePoints.',
+    default: '15', unit: 'Percentage points', range: '0 to 100',
+    raise: 'Haiku workers can start with a larger lead over pace.',
+    lower: 'Haiku workers are refused sooner. A value of 0 allows no lead over pace.',
+    apply: 'policy',
+  }),
   S('quotas', 'paceMinUsePercent', 'Minimum use for ahead of pace', {
     what: 'The lane is never ahead of pace below this used percent of a usage limit window. This holds also when the use is above the expected use.',
     default: '30', unit: 'Percent used', range: '0 to 100',

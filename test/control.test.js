@@ -73,7 +73,7 @@ test('Engine applies the configured night worker cap to global control and prese
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
     watch: { maxWorkers: 3, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null } },
   }));
-  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, projects: {
+  fs.writeFileSync(path.join(data, 'policy.json'), JSON.stringify({ maxWorkers: 8, paceHaikuTolerancePoints: 12, projects: {
     alpha: { share: 60, mode: 'active' }, beta: { share: 40, mode: 'paused' },
   } }));
   fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: true, since: '2026-09-26T20:00:00.000Z', until: '2099-09-27T05:30:00.000Z' }));
@@ -85,6 +85,7 @@ test('Engine applies the configured night worker cap to global control and prese
   fs.mkdirSync(runs, { recursive: true });
   fs.writeFileSync(path.join(runs, 'free-worker.json'), JSON.stringify({ pane: 'w1:p2', kind: 'opencode', model: 'opencode/free', provider: null }));
   fs.writeFileSync(path.join(runs, 'metered-worker.json'), JSON.stringify({ pane: 'w2:p2', kind: 'pi', model: 'opencode-go/model', provider: 'opencodego' }));
+  fs.writeFileSync(path.join(runs, 'haiku-worker.json'), JSON.stringify({ pane: 'w2:p3', kind: 'claude', model: 'claude-haiku-5-5' }));
   fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([{ slug: 'alpha', repo }]));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
@@ -104,6 +105,7 @@ const engine = new Engine(loadConfig(), { push: false, act: false, collectors: {
       { id: 'w1:p1', workspace: 'w1', agent: 'codex', status: 'working' },
       { id: 'w1:p2', workspace: 'w1', agent: 'opencode', name: 'free-worker', status: 'working' },
       { id: 'w2:p2', workspace: 'w2', agent: 'pi', name: 'metered-worker', status: 'working' },
+      { id: 'w2:p3', workspace: 'w2', agent: 'claude', name: 'haiku-worker', status: 'working' },
     ],
   }),
   collectMachine: async () => null,
@@ -120,6 +122,7 @@ fs.writeFileSync(path.join(data, 'night.json'), JSON.stringify({ active: false }
 now += 1000;
 const day = await engine.tick();
 process.stdout.write(JSON.stringify({
+  haikuTolerance: activeRules.policy.paceHaikuTolerancePoints,
   activeCap: active.control.maxWorkers,
   activeSlots: Object.values(active.control.projects).reduce((sum, project) => sum + project.baseSlots, 0),
   borrowedSlots: active.control.projects.alpha.borrowed,
@@ -138,7 +141,8 @@ process.stdout.write(JSON.stringify({
   assert.equal(result.activeSlots, 3, 'project shares distribute the night global cap');
   assert.equal(result.borrowedSlots, 1, 'night cap preserves idle project slot lending');
   assert.equal(result.effectiveSlots, 3);
-  assert.deepEqual(result.activeLaneCounts, { codex: 1, unmetered: 1, opencodego: 1 });
+  assert.equal(result.haikuTolerance, 12, 'the worker rules include the saved Haiku tolerance');
+  assert.deepEqual(result.activeLaneCounts, { codex: 1, unmetered: 1, opencodego: 1, claude: 1 });
   assert.deepEqual(result.activeNight, {
     active: true, maxWorkersByLane: { unmetered: 2, codex: 1, claude: null, opencodego: null },
   });
@@ -1720,6 +1724,20 @@ test('handoff targets use the merged allow-list and the per-harness enabled stat
   assert.throws(() => handoffTarget('pi', { model: 'bad model' }, policy({ extraModels: { pi: ['bad model'] } }), models), /allow-list/);
 });
 
+test('Haiku handoffs use its effort default and Sonnet keeps refusing effort', async () => {
+  const { handoffTarget } = await import('../src/handoff.js');
+  const haiku = handoffTarget('claude', { model: 'claude-haiku-5-5' }, policy(), models);
+  assert.equal(haiku.effort, 'medium');
+  assert.deepEqual(haiku.launchArgs.slice(-2), ['--effort', 'medium']);
+  assert.equal(handoffTarget('claude', { model: 'claude-haiku-5-5', effort: 'high' }, policy(), models).effort, 'high');
+  assert.throws(() => handoffTarget('claude', { model: 'claude-sonnet-5-5', effort: 'medium' }, policy(), models), /allow-list/);
+});
+
+test('the orchestrator ladder accepts effort only for a model that has an effort setting', () => {
+  assert.deepEqual(validatePolicy(policy({ orchestratorLadder: [{ kind: 'claude', model: 'claude-haiku-5-5', effort: 'medium' }] }), models), []);
+  assert.match(validatePolicy(policy({ orchestratorLadder: [{ kind: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }] }), models).join(' '), /Invalid orchestrator choice/);
+});
+
 test('harness routes permit only the compatible provider or unmetered for Codex and Claude', async () => {
   const { harnessProviders } = await import('../src/control.js');
   assert.deepEqual(harnessProviders('codex'), ['codex', null]);
@@ -1746,6 +1764,23 @@ test('saving rejects an incompatible effective legacy route unless the harness h
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, harnessRoutes: { codex: { 'gpt-6.1-sol': null } } }), models), []);
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'gpt-6.1-sol': 'claude' }, allowedKinds: ['claude', 'pi'] }), models), [], 'a disabled harness does not block a save');
   assert.deepEqual(validatePolicy(policy({ modelProviders: { 'claude-opus-5-5': 'claude' } }), models), [], 'the compatible live route stays valid');
+});
+
+test('Claude Haiku is allowed and its model provider maps to the Claude quota lane', async (t) => {
+  const { providerFor } = await import('../src/control.js');
+  const model = 'claude-haiku-5-5';
+  assert.ok(models.kinds.claude.allowedModels.includes(model));
+  assert.equal(POLICY_DEFAULTS.modelProviders[model], 'claude');
+  const configured = policy({ modelProviders: { [model]: 'claude' } });
+  assert.deepEqual(validatePolicy(configured, models), []);
+  assert.equal(providerFor('claude', model, configured), 'claude');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-haiku-policy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  fs.writeFileSync(file, JSON.stringify({ modelProviders: {} }));
+  const loaded = loadPolicy({ file, models, warn: () => {} });
+  assert.equal(loaded.modelProviders[model], 'claude', 'an older saved map keeps the new default route');
+  assert.equal(providerFor('claude', model, loaded), 'claude');
 });
 
 test('loading treats an incompatible legacy route as unmetered, keeps the raw value, and warns once', async (t) => {

@@ -277,3 +277,7 @@ Summary: Require `herdr-boss release publish` after the Owner accepts the releas
 ## 1f61910804c3
 Impact: useful
 Summary: Keep project browsers headless by default and require every worker and project lead to attach to the shared browser.
+
+## e0cff6746406
+Impact: useful
+Summary: Add Claude Haiku 5.5 for bounded worker and read-only research tasks, with adjustable effort, Claude quota routing, and same-kind model comparisons.
