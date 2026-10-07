@@ -20,8 +20,9 @@ test('the automatic refresh does not force a full re-render of the Mailbox and t
   assert.equal(keeps('/browsers'), true);
 
   const refresh = body('refreshExtras()');
-  assert.doesNotMatch(refresh, /^\s*lastRender = '';/m, 'refreshExtras clears lastRender only through refreshForcesRender');
-  assert.match(refresh, /if \(refreshForcesRender\(location\.pathname\)\) lastRender = '';/);
+  assert.match(refresh, /clientStore\.refreshPage\(currentRoute\(\)\)/, 'the store refreshes the active page reads');
+  assert.doesNotMatch(refresh, /lastRender = '';/, 'store subscribers decide whether to force a full render');
+  assert.match(app, /if \(force \|\| refreshForcesRender\(location\.pathname\)\) lastRender = '';/);
 });
 
 test('an automatic render waits 3 seconds after the last Owner input or scroll', () => {
@@ -32,10 +33,10 @@ test('an automatic render waits 3 seconds after the last Owner input or scroll',
   assert.equal(wait(OWNER_QUIET_MS, 100000, 100500), 2500);
   assert.equal(wait(OWNER_QUIET_MS, 100000, 103000), 0);
 
-  // The state stream, the 10-second tick, and the 30-second refresh use the waiting render.
-  assert.match(app, /es\.addEventListener\('state', \(e\) => \{\n\s*state = JSON\.parse\(e\.data\);\n\s*autoRender\(\);/);
+  // The store sends state events and 10-second ticks through the waiting render.
+  assert.match(app, /clientStore\.subscribe\('state', \(value\) => \{\n\s*state = value;\n\s*autoRender\(\);/);
   assert.match(app, /setInterval\(autoRender, 10000\);/);
-  assert.match(body('refreshExtras()'), /\n\s*autoRender\(\);/);
+  assert.match(app, /const renderStoreData = \(force = false\) => \{[\s\S]*?autoRender\(\);/);
   const auto = body('autoRender()');
   assert.match(auto, /ownerQuietWait\(ownerActiveAt, Date\.now\(\)\)/);
   assert.match(auto, /setTimeout\(/);
