@@ -457,12 +457,14 @@ test('the list keys follow the Gmail set, and a text field takes every key excep
 
 // ---------- Menu entry and Mailbox button ----------
 
-test('the menu has a Reviews entry after the Board, on the desktop bar and in the phone drawer', () => {
-  assert.match(html, /data-nav="board">Board<\/a><a href="\/reviews" data-nav="reviews">Reviews<\/a><a href="\/agents"/);
-  assert.match(app, /\['\/board', 'Board'\], \['\/reviews', 'Reviews'\], \['\/agents'/);
-  assert.match(app, /NAV_LABEL = \{[^}]*reviews: 'Reviews'/);
+test('the menu has a Reviews entry after the Board, on the desktop bar and in the phone drawer', async () => {
+  const registry = await import('../public/routes.js');
+  const ids = registry.MENU_ROUTES.map((r) => r.id);
+  assert.equal(ids[ids.indexOf('board') + 1], 'reviews');
+  assert.equal(registry.DRAWER_ROUTES.map((r) => r.id)[registry.DRAWER_ROUTES.findIndex((r) => r.id === 'board') + 1], 'reviews');
+  assert.equal(registry.NAV_LABEL.reviews, 'Reviews');
   assert.match(app, /reviews: \['Reviews', `/, 'the page help');
-  assert.match(fs.readFileSync(new URL('../public/app-view.js', import.meta.url), 'utf8'), /'reviews'/, 'the reviews page is a phone app view');
+  assert.ok(registry.APP_VIEW_ROUTES.includes('reviews'), 'the reviews page is a phone app view');
 });
 
 test('a review item in the Mailbox opens the pack with Open review instead of the answer form', () => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createDocument, byKey } from './fake-dom.js';
 import { patchHtml } from '../public/keyed.js';
+import { KEYED_ROUTES } from '../public/routes.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const keyed = fs.readFileSync(new URL('../public/keyed.js', import.meta.url), 'utf8');
@@ -17,7 +18,7 @@ function body(signature) {
 test('a render of the project page patches the page in place and does not replace it', () => {
   assert.match(app, /import \{ patchHtml \} from '\.\/keyed\.js';/);
   const renderBody = body('render(force = false)');
-  assert.match(app, /const KEYED_ROUTES = \[[^\]]*'projects', 'board'[^\]]*\];/);
+  assert.ok(KEYED_ROUTES.includes('projects') && KEYED_ROUTES.includes('board'), 'the registry keys the projects and board routes');
   assert.match(renderBody, /if \(KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\);\s*else \$app\.innerHTML = html;/);
   assert.match(renderBody, /lastRoute = route;/);
   assert.match(renderBody, /syncBoards\(\);/);
@@ -118,9 +119,10 @@ test('the Board page patches in place and keys each card by project and task', (
 test('a Board card links to the project page with the task selected, and the project page reads the task once', () => {
   assert.match(app, /function fleetTaskUrl\(slug, id\) \{\s*return `\/projects\/\$\{encodeURIComponent\(slug\)\}\?task=\$\{encodeURIComponent\(id\)\}`;/);
   const renderBody = body('render(force = false)');
-  assert.match(renderBody, /new URLSearchParams\(location\.search\)\.get\('task'\)/);
-  assert.match(renderBody, /projectView\(slug\)\.selected = pick;/);
-  assert.match(renderBody, /history\.replaceState\(null, '', location\.pathname \+ location\.hash\);/);
+  assert.match(renderBody, /readLocation\(location, history\)/);
+  assert.match(renderBody, /projectView\(task\.slug\)\.selected = task\.id;/);
+  assert.match(fs.readFileSync(new URL('../public/shell.js', import.meta.url), 'utf8'), /hist\.replaceState\(null, '', loc\.pathname \+ loc\.hash\);/);
+  assert.match(fs.readFileSync(new URL('../public/routes.js', import.meta.url), 'utf8'), /new URLSearchParams\(search\)\.get\('task'\)/);
 });
 
 test('the Board search renders once, 150 ms after the last key', () => {

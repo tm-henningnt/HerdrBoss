@@ -1,6 +1,7 @@
 // The phone app view of the Mailbox, the Reviews, and the Chat.
 
-export const APP_VIEW_ROUTES = ['mailbox', 'reviews', 'chat'];
+// The route registry (routes.js) names these routes.
+export { APP_VIEW_ROUTES } from './routes.js';
 
 // height and offsetTop come from window.visualViewport. A pinch zoom (scale > 1) keeps the layout height.
 export function appViewport({ height, offsetTop, scale, innerHeight }) {

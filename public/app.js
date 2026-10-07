@@ -1,5 +1,6 @@
 import { fleetView, fleetMailbox, fleetSettingsFromForm, fleetSharesFromForm } from './fleet.js';
-import { HOST_GUIDE_PATH } from './host-guide-view.js';
+import { APP_VIEW_ROUTES, KEYED_ROUTES, HELP_FILES, helpRoute } from './routes.js';
+import { mountMenu, syncMenu, drawerLinksHtml, readLocation } from './shell.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText, waitsForOwner } from './board.js';
 import { patchHtml } from './keyed.js';
@@ -15,7 +16,7 @@ import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows
 import { AGENT_DIRECTORY_LIMIT, AGENT_PAGE_LIMIT, addressKey as agentAddressKey, agentMessagesHtml, agentPairRowHtml, agentQuery, agentsUrl, buildDirectory as agentBuildDirectory, conversationOrder as agentConversationOrder, filterPairs as agentFilterPairs, mergeNewest as agentMergeNewest, mergeOlder as agentMergeOlder, pairEnds as agentPairEnds, pairProject as agentPairProject, pairTitle as agentPairTitle, projectOptions as agentProjectOptions } from './agent-chat.js';
 import { chatJumpHtml, chatJumpButtonHtml, chatAtBottom, chatJumpScroll } from './chat-jump.js';
 import { mailBarItem, mailActionBarHtml, mailSelectionBarHtml, mailElsewhereButtonHtml, mailSuggestionHtml } from './mail-bar.js';
-import { APP_VIEW_ROUTES, appViewport, chatShouldStickToBottom, chatViewportLayout, readViewport, createChatViewportDebug } from './app-view.js';
+import { appViewport, chatShouldStickToBottom, chatViewportLayout, readViewport, createChatViewportDebug } from './app-view.js';
 import { parseReviewPath, reviewItemFromHash, reviewUrl, packListHtml, packPageHtml, reviewMessageHtml, reviewKeyAction, reviewOpenLinkHtml, reviewErrorText, submitConfirmText, computeVerdict, reviewDoneLineHtml, parseFrameMessage, pinsInView, frameView, pickPinFields } from './review.js';
 import { viewerKeyAction, nextOpenItem, itemNeighbors, sectionStep, addPin, removePin, setPinText, itemSpec } from './review-viewer.js';
 import { attachGestures, restoreStages, resetStages, zoomStage } from './review-gestures.js';
@@ -41,7 +42,6 @@ const $nav = document.getElementById('primary-nav');
 const $roamgate = document.getElementById('roamgate-link');
 const $navMenu = document.getElementById('nav-menu');
 const $navMenuLabel = document.getElementById('nav-menu-label');
-const NAV_LABEL = { overview: 'Overview', board: 'Board', mailbox: 'Mailbox', reviews: 'Reviews', chat: 'Chat', agents: 'Agents', projects: 'Projects', browsers: 'Browsers', allocation: 'Allocation', analytics: 'Analytics', fleet: 'Fleet', 'add-host': 'Add a host', settings: 'Settings', docs: 'Docs' };
 let fleetData = null, fleetSettings = null, fleetShares = null, fleetLoading = false, fleetMessage = '';
 let fleetNudgeId = null;
 let fleetSharesFeedback = '', fleetNudgeFeedback = '', fleetSharesSaving = false, fleetNudgeSaving = false;
@@ -148,17 +148,8 @@ document.addEventListener('submit', async (event) => {
     if (location.pathname === '/analytics') { lastRender = ''; render(); }
   }
 });
-const settingsLink = document.createElement('a');
-settingsLink.href = '/settings';
-settingsLink.dataset.nav = 'settings';
-settingsLink.textContent = 'Settings';
-// Settings goes after Logs and before Roamgate. Roamgate stays the last entry when it is shown.
-$nav.insertBefore(settingsLink, $roamgate);
-const docsLink = document.createElement('a');
-docsLink.href = '/docs';
-docsLink.dataset.nav = 'docs';
-docsLink.textContent = 'Docs';
-$nav.insertBefore(docsLink, $roamgate);
+// The route registry fills the menu: the pages in order, then Settings and Docs. Roamgate stays the last entry when it is shown.
+mountMenu($nav);
 function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   $navMenu.setAttribute('aria-expanded', String(open));
@@ -3620,8 +3611,7 @@ function appMenuButton(s, route) {
 
 // The drawer holds the Mailbox folders (on the Mailbox) and the links to all pages. It replaces the page header on a phone.
 function appDrawer(s, route, folderLinks = '') {
-  const pages = [['/', 'Overview'], ['/board', 'Board'], ['/reviews', 'Reviews'], ['/agents', 'Agents'], ['/projects', 'Projects'], ['/browsers', 'Browsers'], ['/allocation', 'Allocation'], ['/analytics', 'Analytics']];
-  const links = pages.map(([href, label, count]) => `<a href="${href}"${href.slice(1) === route ? ' aria-current="page"' : ''}><span>${label}</span>${count ? `<span class="app-drawer-count num">${count > 99 ? '99+' : count}</span>` : ''}</a>`).join('');
+  const links = drawerLinksHtml(route);
   return `<div class="app-drawer" id="app-drawer" data-key="app-drawer"${appDrawerOpen ? '' : ' hidden'}><button type="button" class="app-drawer-scrim" data-app-drawer-close tabindex="-1" aria-label="Close the menu"></button>`
     + `<nav class="app-drawer-panel" aria-label="Menu"><div class="app-drawer-head"><span class="app-drawer-brand">Herdr Boss</span><button type="button" class="app-icon-button" data-app-drawer-close aria-label="Close the menu">${appIcon('close')}</button></div>`
     + `${folderLinks ? `<div class="app-drawer-group" aria-label="Mailbox folders">${folderLinks}</div><hr>` : ''}<div class="app-drawer-group app-drawer-pages">${links}</div><hr><button type="button" class="app-drawer-help" data-app-help>${appIcon('help')}<span>Help</span></button></nav></div>`;
@@ -6831,18 +6821,10 @@ const HELP = {
 };
 
 // The text of these topics is in docs/help/<topic>.md. The service renders the file, and the Docs section shows the same file.
-const HELP_FILES = ['add-host', 'board', 'browsers', 'docs', 'fleet'];
 const helpFiles = new Map();
 const helpLoading = new Set();
 
-function currentRoute() {
-  if (docsPageName(location.pathname) !== null) return 'docs';
-  if (location.pathname === HOST_GUIDE_PATH) return 'add-host';
-  if (/^\/(projects|p)(\/|$)/.test(location.pathname)) return 'projects';
-  if (parseReviewPath(location.pathname)) return 'reviews';
-  const name = location.pathname.slice(1);
-  return HELP[name] || HELP_FILES.includes(name) ? name : 'overview';
-}
+const currentRoute = () => helpRoute(location.pathname);
 
 async function helpLoad(topic) {
   if (helpLoading.has(topic)) return;
@@ -7803,9 +7785,6 @@ function restoreScroll(route, scroll) {
   if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
 }
 
-// These routes keep their DOM across a render. A keyed patch changes only what changed.
-const KEYED_ROUTES = ['projects', 'board', 'mailbox', 'chat', 'analytics', 'settings', 'allocation', 'reviews', 'fleet'];
-
 function render(force = false) {
   if (!state) return;
   if (!policyDirty) { policyDraft = null; allocationMeta = null; policyStale = false; }
@@ -7817,25 +7796,14 @@ function render(force = false) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
   }
-  const legacy = /^\/p\/([^/]+)\/?$/.exec(location.pathname);
-  if (legacy) history.replaceState(null, '', `/projects/${legacy[1]}`);
-  // An old Organization link opens the Agents page in the Chart view.
-  if (location.pathname === '/organization') history.replaceState(null, '', '/agents?view=chart');
-  // The activity log moved to Analytics and the guidance to the Overview. An old Logs link opens the new place.
-  if (location.pathname === '/logs') {
-    history.replaceState(null, '', location.hash === '#guidance' ? '/#overview-guidance' : '/analytics#activity');
-    pendingHash = location.hash.slice(1);
+  // An old address opens its new place. A Board card links to /projects/<slug>?task=<id>. The page selects the task once.
+  const located = readLocation(location, history);
+  if (located.pendingHash) pendingHash = located.pendingHash;
+  const { route, slug: projectSlug, task } = located;
+  if (task) {
+    projectView(task.slug).selected = task.id;
+    requestAnimationFrame(() => { centerGraphOn(task.slug, task.id); revealCard(task.slug, task.id, 'center'); });
   }
-  const m = /^\/projects\/([^/]+)\/?$/.exec(location.pathname);
-  // A Board card links to /projects/<slug>?task=<id>. The page selects the task once, then drops the parameter from the address.
-  const pick = m ? new URLSearchParams(location.search).get('task') : null;
-  if (pick) {
-    const slug = decodeURIComponent(m[1]);
-    projectView(slug).selected = pick;
-    history.replaceState(null, '', location.pathname + location.hash);
-    requestAnimationFrame(() => { centerGraphOn(slug, pick); revealCard(slug, pick, 'center'); });
-  }
-  const route = docsPageName(location.pathname) !== null ? 'docs' : location.pathname === HOST_GUIDE_PATH ? 'add-host' : m || location.pathname === '/projects' ? 'projects' : parseReviewPath(location.pathname) ? 'reviews' : ['board', 'mailbox', 'chat', 'allocation', 'settings', 'agents', 'browsers', 'analytics', 'fleet'].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : 'overview';
   if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
   const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
   const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
@@ -7845,7 +7813,7 @@ function render(force = false) {
   const nudgeDraft = nudgeForm ? { factoryId: nudgeForm.elements.factoryId.value, text: nudgeForm.elements.text.value } : null;
   const sharesView = fleetShares ? { ...fleetShares, accounts: sharesDraft ? fleetShares.accounts.map((account) => ({ ...account, shares: sharesDraft.accounts.find((row) => row.accountKey === account.accountKey).shares })) : fleetShares.accounts,
     feedback: fleetSharesFeedback, nudgeFeedback: fleetNudgeFeedback, saving: fleetSharesSaving, nudgeSaving: fleetNudgeSaving, nudge: nudgeDraft } : null;
-  const page = route === 'docs' ? docsView() : route === 'add-host' ? hostGuideView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage, sharesView) : route === 'projects' ? projectsView(state, m ? decodeURIComponent(m[1]) : null) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
+  const page = route === 'docs' ? docsView() : route === 'add-host' ? hostGuideView() : route === 'fleet' ? fleetView(fleetData, fleetDraft, fleetMessage, sharesView) : route === 'projects' ? projectsView(state, projectSlug) : route === 'board' ? boardView(state) : route === 'mailbox' ? mailboxView(state) : route === 'reviews' ? reviewsView(state) : route === 'chat' ? chatView(state) : route === 'allocation' ? allocationView(state) : route === 'settings' ? settingsView(state) : route === 'agents' ? agentsView(state) : route === 'browsers' ? browsersView(state) : route === 'analytics' ? analyticsView(state) : overview(state);
   const html = page;
   // The Mailbox and the Chat are app views: on a phone they fill the visual viewport and hide the page header.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
@@ -7855,11 +7823,7 @@ function render(force = false) {
   chatViewportDebug?.setVisible(chatPhoneOpen);
   if (!APP_VIEW_ROUTES.includes(route)) appDrawerOpen = false;
   if (route !== 'docs') document.title = route === 'add-host' ? 'Add a host · Herdr Boss' : 'Herdr Boss';
-  $navMenuLabel.textContent = NAV_LABEL[route] || 'Menu';
-  for (const a of $nav.querySelectorAll('a')) {
-    if (a.dataset.nav === (route === 'add-host' ? 'fleet' : route)) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
-  }
+  syncMenu({ nav: $nav, label: $navMenuLabel, route });
   updateMailboxBadge(state);
   updateWatchIcon(state);
   // The Add a host page owns its DOM. A render of the same route leaves it alone, so a refresh never resets the scroll or the typed text.

@@ -128,7 +128,7 @@ test('the Overview shows the current guidance collapsed near the top and remembe
 });
 
 test('the help and the user guide describe the new layout', () => {
-  const help = source.slice(source.indexOf('const HELP = {'), source.indexOf('function currentRoute('));
+  const help = source.slice(source.indexOf('const HELP = {'), source.indexOf('const helpFiles'));
   assert.match(help, /<h3>Current guidance<\/h3>/);
   assert.match(help, /<h3>Now<\/h3>/);
   assert.match(help, /<h3>Details<\/h3>/);

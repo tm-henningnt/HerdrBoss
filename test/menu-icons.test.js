@@ -4,6 +4,7 @@ import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const { MENU_ROUTES, DRAWER_ROUTES, ROUTE_IDS } = await import('../public/routes.js');
 const read = (p) => fs.readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8');
 const html = read('index.html');
 const app = read('app.js');
@@ -12,8 +13,8 @@ const review = read('review.js');
 const guide = readUserGuide();
 
 const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-const navKeys = [...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]);
-const drawerPages = /const pages = (\[\[[^\n]*\]\]);/.exec(app)?.[1] || '';
+// The registry (routes.js) fills the menu host. The first nine entries are the pages of the Owner order; Settings and Docs follow.
+const navKeys = MENU_ROUTES.map((r) => r.id).slice(0, 9);
 const icons = [...html.matchAll(/<a class="top-icon[^"]*" data-top-icon="([^"]+)"[^>]*href="([^"]+)" aria-label="([^"]+)"/g)].map((m) => ({ name: m[1], href: m[2], label: m[3] }));
 
 test('the desktop menu has no Mailbox and no Chat entry and keeps the other entries in order', () => {
@@ -22,7 +23,7 @@ test('the desktop menu has no Mailbox and no Chat entry and keeps the other entr
 });
 
 test('the phone drawer has no Mailbox and no Chat entry and keeps the other entries in order', () => {
-  const hrefs = [...drawerPages.matchAll(/\['([^']+)'/g)].map((m) => m[1]);
+  const hrefs = DRAWER_ROUTES.map((r) => r.path);
   assert.deepEqual(hrefs, ['/', '/board', '/reviews', '/agents', '/projects', '/browsers', '/allocation', '/analytics']);
 });
 
@@ -71,12 +72,11 @@ test('at phone width each top-bar icon is at least 44px wide and high, also in t
 });
 
 test('every page route has at least one link', () => {
-  const list = /\['board', 'mailbox', 'chat'[^\]]*\]/.exec(app)?.[0] || '';
-  const routes = ['overview', 'projects', 'reviews', ...[...list.matchAll(/'([a-z]+)'/g)].map((m) => m[1])];
+  const routes = ROUTE_IDS.filter((id) => !['docs', 'add-host'].includes(id));
   assert.ok(routes.includes('mailbox') && routes.includes('chat') && routes.includes('settings'));
   const paths = new Set();
   for (const m of html.matchAll(/<a [^>]*href="([^"?#]+)/g)) paths.add(m[1].replace(/^\/$/, 'overview').replace(/^\//, ''));
-  if (/settingsLink\.href = '\/settings'/.test(app)) paths.add('settings');
+  for (const route of MENU_ROUTES) paths.add(route.id);
   for (const route of routes) assert.ok(paths.has(route), `the route ${route} has a link`);
   // The review packs open from the Mailbox.
   assert.match(app, /reviewOpenLinkHtml\(item, esc\)/);

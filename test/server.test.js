@@ -8,6 +8,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { SETTING_GROUPS } from '../public/setting-help.js';
+import { MENU_ROUTES, NAV_LABEL, matchRoute } from '../public/routes.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-test-'));
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-home-'));
@@ -1616,18 +1617,19 @@ test('the project page shows a Needs your decision group, wait labels, and an Ov
   assert.match(guide, /waitingOn/);
 });
 
-test('one Agents tab has Chart and List views, a new menu order, and an /organization redirect', () => {
+test('one Agents tab has Chart and List views, a new menu order, and an /organization redirect', async () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // The menu holds the pages in the Owner order, with no Organization entry.
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
-  assert.doesNotMatch(nav, /data-nav="organization"/);
+  assert.deepEqual(MENU_ROUTES.map((r) => r.id).slice(0, 9), ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.equal(NAV_LABEL.organization, undefined);
   assert.doesNotMatch(app, /organization: 'Organization'/);
   assert.doesNotMatch(app, /route === 'organization'/);
   // Settings goes before the Roamgate link, which keeps its new-tab attributes.
-  assert.match(app, /\$nav\.insertBefore\(settingsLink, \$roamgate\)/);
+  assert.deepEqual(MENU_ROUTES.slice(-2).map((r) => r.id), ['settings', 'docs']);
+  assert.match(app, /mountMenu\(\$nav\)/);
   assert.match(nav, /<a id="roamgate-link" href="\/roamgate" target="_blank" rel="noopener noreferrer" hidden>/);
   // One Agents page has a Chart and a List view. Chart is the default.
   assert.match(app, /const AGENTS_VIEW_KEY = 'herdr-boss\.agentsView'/);
@@ -1638,7 +1640,7 @@ test('one Agents tab has Chart and List views, a new menu order, and an /organiz
   // Motion runs only in the Chart view.
   assert.match(app, /if \(route === 'agents' && agentsViewMode\(\) === 'chart'\) orgMotion\(state\)/);
   // /organization opens the Chart view in place.
-  assert.match(app, /if \(location\.pathname === '\/organization'\) history\.replaceState\(null, '', '\/agents\?view=chart'\)/);
+  assert.equal((await import('../public/routes.js')).resolveAlias('/organization').url, '/agents?view=chart');
 });
 
 test('the browser tab-close route closes one tab, refuses an attached tab, reports a missing tab, and refuses the preview', { timeout: 20000 }, async (t) => {
@@ -2206,11 +2208,11 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   const guide = readUserGuide();
   // The page and the route. Chat goes right after Mailbox.
   assert.match(app, /chat: \['Chat'/);
-  assert.match(app, /chat: 'Chat'/);
-  assert.match(app, /'mailbox', 'chat', 'allocation'/);
+  assert.equal(NAV_LABEL.chat, 'Chat');
+  assert.equal(matchRoute('/chat').id, 'chat');
   assert.match(app, /route === 'chat' \? chatView\(state\)/);
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
-  assert.deepEqual([...nav.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1]), ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics']);
+  assert.ok(!MENU_ROUTES.some((r) => r.id === 'chat'), 'the menu has no Chat entry');
   assert.doesNotMatch(nav, /href="\/chat"/);
   assert.match(html, /<a class="top-icon" data-top-icon="chat" data-empty="true" href="\/chat" aria-label="Chat">/);
   // The list reads the chat API and shows a badge with the total unread count.

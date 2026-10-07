@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+import { KEYED_ROUTES } from '../public/routes.js';
+
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
 function body(signature) {
@@ -59,8 +61,7 @@ test('a re-render keeps the scroll of the Mailbox list, the Mailbox conversation
 
 test('render patches the Mailbox and the Chat in place after the first mount', () => {
   const renderBody = body('render(force = false)');
-  assert.match(renderBody, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'(, '[a-z]+')*\];|KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\)/);
-  assert.match(app, /const KEYED_ROUTES = \['projects', 'board', 'mailbox', 'chat', 'analytics'(, '[a-z]+')*\];/);
+  for (const id of ['projects', 'board', 'mailbox', 'chat', 'analytics']) assert.ok(KEYED_ROUTES.includes(id), `the registry keys ${id}`);
   assert.match(renderBody, /if \(KEYED_ROUTES\.includes\(route\) && lastRoute === route\) patchHtml\(\$app, html\);\n\s*else \$app\.innerHTML = html;/);
 });
 

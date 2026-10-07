@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { docsPageName, docsUrl, docsNeighbors, docsViewHtml, docsPageTitle } from '../public/docs-view.js';
 import { renderMarkdown, headingSlug } from '../public/markdown.js';
+import { HELP_FILES, MENU_ROUTES } from '../public/routes.js';
 
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const tree = { sections: [{ title: 'Start', pages: [{ name: '', title: 'Front' }, { name: 'a', title: 'A <b>' }] }, { title: 'Guide', pages: [{ name: 'guide/x', title: 'X' }] }] };
@@ -59,9 +60,9 @@ test('docs mode renders headings from h1, with ids, and leaves the default rende
 
 test('help text lives in docs/help and not in app.js', () => {
   const app = read('public/app.js');
-  const files = /const HELP_FILES = \[([^\]]*)\]/.exec(app)[1].match(/'([a-z0-9-]+)'/g).map((t) => t.slice(1, -1));
-  assert.deepEqual(files, ['add-host', 'board', 'browsers', 'docs', 'fleet']);
-  const help = app.slice(app.indexOf('const HELP = {'), app.indexOf('const HELP_FILES'));
+  const files = HELP_FILES;
+  assert.deepEqual([...files].sort(), ['add-host', 'board', 'browsers', 'docs', 'fleet']);
+  const help = app.slice(app.indexOf('const HELP = {'), app.indexOf('const helpFiles'));
   for (const topic of files) {
     const md = read(`docs/help/${topic}.md`);
     assert.match(md, /^# [A-Z][^\n]* help\n/, `${topic} starts with its title`);
@@ -71,9 +72,8 @@ test('help text lives in docs/help and not in app.js', () => {
 
 test('the dashboard links to the Docs section from the menu and from the Help panel', () => {
   const app = read('public/app.js');
-  assert.match(app, /docsLink\.href = '\/docs'/);
-  assert.match(app, /\$nav\.insertBefore\(docsLink, \$roamgate\)/);
-  assert.match(app, /docs: 'Docs'/);
+  assert.deepEqual(MENU_ROUTES.at(-1), { id: 'docs', path: '/docs', label: 'Docs', menu: 11, help: 'file' });
+  assert.match(app, /mountMenu\(\$nav\)/);
   assert.match(app, /href="\/docs\/start-here">Start here<\/a> in the Docs/);
   assert.match(read('public/index.html'), /href="\/docs\.css"/);
 });
