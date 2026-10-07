@@ -954,7 +954,37 @@ test('the model catalog endpoint lists free opencode/ models only for the openco
     server.once('error', reject);
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const catalog = await (await fetch(`${base}/api/models`)).json();
+  const catalogResponse = await fetch(`${base}/api/models`);
+  assert.equal(catalogResponse.status, 200);
+  const catalogHeaders = Object.fromEntries(['content-type', 'cache-control', 'x-content-type-options', 'x-frame-options', 'referrer-policy']
+    .map((name) => [name, catalogResponse.headers.get(name)]));
+  assert.deepEqual(catalogHeaders, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+  });
+  const catalogBody = await catalogResponse.text();
+  const catalog = JSON.parse(catalogBody);
+  assert.equal(catalogBody, JSON.stringify(catalog), 'the catalog response uses compact JSON');
+  assert.deepEqual(Object.keys(catalog).sort(), ['claude', 'codex', 'opencode', 'pi']);
+  for (const provider of Object.values(catalog)) {
+    assert.equal(typeof provider.defaultModel, 'string');
+    assert.ok(Array.isArray(provider.allowedModels));
+  }
+  const malformedQuery = await fetch(`${base}/api/models?bad=%E0%A4%A`);
+  assert.equal(malformedQuery.status, 200, 'the route ignores a malformed query value');
+  assert.deepEqual(Object.fromEntries(['content-type', 'cache-control', 'x-content-type-options', 'x-frame-options', 'referrer-policy']
+    .map((name) => [name, malformedQuery.headers.get(name)])), catalogHeaders);
+  assert.equal(await malformedQuery.text(), catalogBody, 'the malformed query does not change the response bytes');
+  const unsupportedMethod = await fetch(`${base}/api/models`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{',
+  });
+  assert.equal(unsupportedMethod.status, 404, 'an unsupported method reaches the existing fallback');
+  assert.equal(await unsupportedMethod.text(), '{"error":"not found"}');
   assert.deepEqual(catalog.pi.allowedModels.filter((model) => model.startsWith('opencode/')), [], 'Pi lists no free opencode/ model');
   assert.ok(catalog.opencode.allowedModels.includes('opencode/big-pickle'), 'the opencode harness lists its free models');
   assert.equal(catalog.pi.defaultModel, 'opencode-go/muse-spark-1.3-contributor', 'the Pi default is unchanged');
