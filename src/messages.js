@@ -732,16 +732,18 @@ export function postToolUpdate(tool, { dir = DATA_DIR, now = Date.now(), message
   return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:${tool.id}:${tool.latest}`, messageStore });
 }
 
-export function postToolPromotionFailure(tool, version, factory, { dir = DATA_DIR, now = Date.now(), messageStore = null } = {}) {
+export function postToolPromotionFailure(tool, version, factory, { dir = DATA_DIR, now = Date.now(), messageStore = null, stage = 'canary-failed', waiting = false } = {}) {
   if (!/^[a-z][a-z0-9-]*$/.test(tool || '') || typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:+~-]{0,255}$/.test(version)
-    || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(factory || '')) {
+    || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(factory || '') || !/^[a-z][a-z0-9-]*$/.test(stage || '') || typeof waiting !== 'boolean') {
     throw new Error('The tool promotion failure is incomplete.');
   }
-  const title = `Update failed: ${tool} ${version}`;
-  const text = `The ${tool} ${version} update failed on factory ${factory}. The rollout stopped.\n\nOther factories still use the previous image. Fix the canary, then run \`herdr-boss tools promote ${tool}\` to resume.`;
+  const title = `Update ${waiting ? 'waits' : 'failed'}: ${tool} ${version}`;
+  const text = waiting
+    ? `The image update for factory ${factory} waits for the Boss or the Owner to run \`herdr-boss factory update ${factory} --tier image --allow-boss-restart\`. Then run \`herdr-boss tools promote ${tool}\` to resume.`
+    : `The ${tool} ${version} update failed on factory ${factory} during ${stage}. The rollout stopped.\n\nOther factories still use the previous image. Fix the failure, then run \`herdr-boss tools promote ${tool}\` to resume.`;
   refuseSecret(title, 'title');
   refuseSecret(text, 'report');
-  return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:promote:${tool}:${version}`, messageStore });
+  return writeOwnerReport({ title, text, action: 'read' }, { dir, now, key: `tools:promote:${tool}:${version}:${stage}`, messageStore });
 }
 
 // ---------- Review pack items ----------

@@ -17,6 +17,7 @@ const {
   appendMessage, updateMessage, readMessages, listThread, messagesFile, deliverQueued,
   sayMessage, postReport, ownerPromptText, messageChannel, MAX_DELIVERY_ATTEMPTS,
   chatSummaries, chatThreadPage, markMailboxRead, postReview, closeReviewItems, isMailboxItem, isMailRecord, isMailAnswer, messagesById, chatRecords, mailboxView, mailboxCounts,
+  postToolPromotionFailure,
 } = messages;
 
 test.after(() => {
@@ -32,6 +33,26 @@ function freshDir(t) {
 
 const DAY = 86400000;
 const now = Date.now();
+
+test('tool promotion notices use a stage key and keep the read state of an open item', (t) => {
+  const dir = freshDir(t);
+  const item = postToolPromotionFailure('codex', '0.160.1', 'win1', {
+    dir, now, stage: 'waiting-owner', waiting: true,
+  });
+  assert.equal(item.title, 'Update waits: codex 0.160.1');
+  assert.equal(item.action, 'read');
+  assert.equal(item.key, 'tools:promote:codex:0.160.1:waiting-owner');
+
+  const readAt = new Date(now + 1000).toISOString();
+  updateMessage(item.id, { readAt }, { dir, now: now + 1000 });
+  const repeated = postToolPromotionFailure('codex', '0.160.1', 'win1', {
+    dir, now: now + 2000, stage: 'waiting-owner', waiting: true,
+  });
+  const records = readMessages({ dir });
+  assert.equal(repeated.id, item.id);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].readAt, readAt);
+});
 
 function owner(thread, text, extra = {}) {
   return { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind: 'message', text, action: null, replyTo: null, status: 'queued', ...extra };

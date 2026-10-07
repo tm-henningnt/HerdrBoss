@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
 import { postToolPromotionFailure } from './messages.js';
@@ -14,12 +15,14 @@ export const TOOLS_PROMOTE_CANARY = 'win1';
 export const TOOLS_PROMOTE_SOAK_MS = 24 * 60 * 60 * 1000;
 export const TOOLS_PROMOTE_DRAIN_TIMEOUT_MS = 5 * 60 * 1000;
 export const TOOLS_PROMOTE_POLL_MS = 5_000;
+const TOOLS_PROMOTE_MAX_SOAK_FUTURE_MS = 25 * 60 * 60 * 1000;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PIN_FILE = path.join(ROOT, 'factory', 'pins.json');
 const FACTORY_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SAFE_PIN = /^[A-Za-z0-9][A-Za-z0-9_.:+~-]{0,255}$/;
-const STAGES = new Set(['planned', 'building', 'canary', 'soaking', 'promoting', 'done', 'failed']);
+const STAGES = new Set(['planned', 'building', 'canary', 'soaking', 'promoting', 'waiting-owner', 'done', 'failed']);
+const soakMonotonicStarts = new WeakMap();
 
 function usage() {
   return 'Usage: tools promote TOOL [--dry-run]';
@@ -70,6 +73,7 @@ function readPromotionState(file) {
         for (const [name, record] of Object.entries(rollout.factories)) {
           if (!FACTORY_NAME.test(name) || !record || typeof record !== 'object' || !STAGES.has(record.stage)) throw new Error();
           if (record.stage === 'failed' && !STAGES.has(record.resumeStage)) throw new Error();
+          if (record.stage === 'waiting-owner' && !['canary', 'promoting'].includes(record.waitingFrom)) throw new Error();
         }
         if (rollout.version !== version || typeof rollout.pinsHash !== 'string' || !/^[a-f0-9]{64}$/.test(rollout.pinsHash) || !Array.isArray(rollout.order)) throw new Error();
       }
@@ -147,18 +151,11 @@ function freshRollout(tool, version, pinsHash, imageTag, order, now) {
   };
 }
 
-function ownerApprovalRecorded({ root, name, tool, version, pinsHash }) {
-  let text;
-  try { text = fs.readFileSync(path.join(root, 'docs', 'orchestration', 'memory.md'), 'utf8'); }
-  catch { return false; }
-  return text.split(/\r?\n/).some((line) => line.includes('yes image update') && line.includes(name)
-    && (line.includes(`${tool} ${version}`) || line.includes(pinsHash) || line.includes(pinsHash.slice(0, 12))));
-}
-
-function ownerApprovalRequired(name) {
+function ownerWait(name) {
   const command = `herdr-boss factory update ${name} --tier image --allow-boss-restart`;
-  const error = new Error(`A Boss pane is live. The Owner has not approved this image update. Run '${command}' only after the Owner records this update in docs/orchestration/memory.md.`);
+  const error = new Error(`The factory update is waiting. The Boss or the Owner runs this command: ${command}`);
   error.code = 'OWNER_APPROVAL_REQUIRED';
+  error.exitCode = 3;
   return error;
 }
 
@@ -209,7 +206,6 @@ function defaultDependencies(options, imageTag) {
     readers: async (name) => captureFactoryCommand([
       'shell', name, '--', 'node', '/home/factory/herdr-boss/src/cli.js', 'doctor', '--json',
     ], options),
-    ownerApproval: (details) => ownerApprovalRecorded({ root: ROOT, ...details }),
   };
 }
 
@@ -218,6 +214,21 @@ function validateStatus(status, name) {
     throw new Error(`The status of factory ${name} cannot prove that no worker is running.`);
   }
   return status;
+}
+
+function targetImageMatches(status, pinsHash) {
+  if (status.pinsHash !== pinsHash) return false;
+  if (typeof status.containerImageId === 'string' && status.containerImageId
+    && typeof status.tagImageId === 'string' && status.tagImageId) {
+    return status.containerImageId === status.tagImageId;
+  }
+  return true;
+}
+
+function assertBossNotLive(status, name) {
+  if (status.bossPane === true) return true;
+  if (status.bossPane !== false) throw new Error(`The status of factory ${name} cannot prove that no Boss pane is live.`);
+  return false;
 }
 
 async function drain(name, deps, now, timeoutMs, pollMs) {
@@ -231,46 +242,126 @@ async function drain(name, deps, now, timeoutMs, pollMs) {
   }
 }
 
-async function applyImageUpdate(name, rollout, tool, deps) {
-  try {
-    await deps.update(name, []);
-  } catch (error) {
-    if (!isBossRestartRefusal(error)) throw error;
-    const approved = await deps.ownerApproval({ name, tool, version: rollout.version, pinsHash: rollout.pinsHash });
-    if (!approved) throw ownerApprovalRequired(name);
-    await deps.update(name, ['--allow-boss-restart']);
-  }
-}
-
-function markFailed(state, file, rollout, name, stage, reason, now) {
+function markFailed(state, file, rollout, name, resumeStage, failureStage, now) {
   rollout.factories[name] = {
     ...rollout.factories[name],
     stage: 'failed',
-    resumeStage: stage,
-    failure: reason,
+    resumeStage,
+    failure: failureStage,
     failedAt: currentTime(now),
   };
   savePromotionState(file, state);
 }
 
-function canaryFailure(tool, rollout, name, stage, state, file, deps, now) {
-  markFailed(state, file, rollout, name, stage, 'canary-failed', now);
+function canaryFailure(tool, rollout, name, resumeStage, failureStage, state, file, deps, now) {
+  markFailed(state, file, rollout, name, resumeStage, failureStage, now);
   try {
-    postToolPromotionFailure(tool, rollout.version, name, { dir: deps.dataDir, now: currentTime(now), messageStore: deps.messageStore });
+    postToolPromotionFailure(tool, rollout.version, name, { dir: deps.dataDir, now: currentTime(now), messageStore: deps.messageStore, stage: failureStage });
   } catch {
-    throw new Error(`The canary failed during ${stage}. The rollout stopped. The failure state is saved, but the Mailbox item could not be posted.`);
+    throw new Error(`The canary failed during ${resumeStage}. The rollout stopped. The failure state is saved, but the Mailbox item could not be posted.`);
   }
-  throw new Error(`The canary failed during ${stage}. The rollout stopped. Other factories still use the previous image.`);
+  const detail = failureStage === 'drain-timeout' ? 'drain timeout' : failureStage.replaceAll('-', ' ');
+  throw new Error(`The canary failed during ${resumeStage} (${detail}). The rollout stopped. Other factories still use the previous image.`);
+}
+
+function promotionFailure(tool, rollout, name, resumeStage, failureStage, state, file, deps, now, reason) {
+  markFailed(state, file, rollout, name, resumeStage, failureStage, now);
+  try {
+    postToolPromotionFailure(tool, rollout.version, name, { dir: deps.dataDir, now: currentTime(now), messageStore: deps.messageStore, stage: failureStage });
+  } catch {
+    throw new Error(`${reason} The failure state is saved, but the Mailbox item could not be posted.`);
+  }
+  throw new Error(reason);
+}
+
+function waitForOwner(tool, rollout, name, row, waitingFrom, state, file, deps, now) {
+  row.stage = 'waiting-owner';
+  row.waitingFrom = waitingFrom;
+  savePromotionState(file, state);
+  try {
+    postToolPromotionFailure(tool, rollout.version, name, {
+      dir: deps.dataDir, now: currentTime(now), messageStore: deps.messageStore, stage: 'waiting-owner', waiting: true,
+    });
+  } catch {
+    const error = ownerWait(name);
+    error.message += ' The Mailbox item could not be posted.';
+    deps.output(`The Boss or the Owner runs this command: herdr-boss factory update ${name} --tier image --allow-boss-restart`);
+    throw error;
+  }
+  deps.output(`The Boss or the Owner runs this command: herdr-boss factory update ${name} --tier image --allow-boss-restart`);
+  throw ownerWait(name);
+}
+
+function failureStage(error, fallback) {
+  return /drain timeout/i.test(String(error?.message || '')) ? 'drain-timeout' : fallback;
+}
+
+function monotonicTime(deps) {
+  const value = deps.monotonicNow();
+  if (!Number.isFinite(value)) throw new Error('The tools promotion monotonic clock is invalid.');
+  return value;
+}
+
+function startSoak(row, state, file, deps, now) {
+  row.soakStartedAt = currentTime(now);
+  row.soakUntil = row.soakStartedAt + TOOLS_PROMOTE_SOAK_MS;
+  soakMonotonicStarts.set(row, monotonicTime(deps));
+  savePromotionState(file, state);
 }
 
 async function waitForSoak(rollout, row, state, file, deps, now) {
-  if (!Number.isFinite(row.soakUntil)) {
-    row.soakUntil = currentTime(now) + TOOLS_PROMOTE_SOAK_MS;
+  const wallNow = currentTime(now);
+  let startedAt = Number.isFinite(row.soakStartedAt)
+    ? row.soakStartedAt
+    : (Number.isFinite(row.soakUntil) ? row.soakUntil - TOOLS_PROMOTE_SOAK_MS : wallNow);
+  let soakUntil = startedAt + TOOLS_PROMOTE_SOAK_MS;
+  if (!Number.isFinite(startedAt) || startedAt > wallNow + TOOLS_PROMOTE_MAX_SOAK_FUTURE_MS
+    || soakUntil > wallNow + TOOLS_PROMOTE_MAX_SOAK_FUTURE_MS) {
+    startedAt = wallNow;
+    soakUntil = startedAt + TOOLS_PROMOTE_SOAK_MS;
+  }
+  if (row.soakStartedAt !== startedAt || row.soakUntil !== soakUntil) {
+    row.soakStartedAt = startedAt;
+    row.soakUntil = soakUntil;
     savePromotionState(file, state);
   }
-  const remaining = row.soakUntil - currentTime(now);
+  const monotonicStart = soakMonotonicStarts.get(row);
+  const remaining = monotonicStart === undefined
+    ? row.soakUntil - currentTime(now)
+    : TOOLS_PROMOTE_SOAK_MS - (monotonicTime(deps) - monotonicStart);
   if (remaining > 0) await deps.sleep(remaining);
-  if (currentTime(now) < row.soakUntil) throw new Error('The canary soak has not finished. Run tools promote again to resume.');
+  const elapsed = monotonicStart === undefined
+    ? currentTime(now) - row.soakStartedAt
+    : monotonicTime(deps) - monotonicStart;
+  if (elapsed < TOOLS_PROMOTE_SOAK_MS) throw new Error('The canary soak has not finished. Run tools promote again to resume.');
+  row.stage = 'done';
+  soakMonotonicStarts.delete(row);
+  savePromotionState(file, state);
+}
+
+async function resumeWaitingOwner({ name, isCanary, row, state, file, rollout, tool, deps, now }) {
+  const waitingFrom = row.waitingFrom;
+  const status = validateStatus(await deps.status(name), name);
+  if (!targetImageMatches(status, rollout.pinsHash)) waitForOwner(tool, rollout, name, row, waitingFrom, state, file, deps, now);
+
+  row.stage = waitingFrom;
+  delete row.waitingFrom;
+  savePromotionState(file, state);
+  if (isCanary) {
+    try {
+      await deps.smoke(name, rollout.imageTag);
+      await deps.readers(name);
+    } catch {
+      canaryFailure(tool, rollout, name, 'canary', 'canary-failed', state, file, deps, now);
+    }
+    startSoak(row, state, file, deps, now);
+    await waitForSoak(rollout, row, state, file, deps, now);
+    return;
+  }
+  try { await deps.readers(name); }
+  catch {
+    promotionFailure(tool, rollout, name, 'promoting', 'factory-update-failed', state, file, deps, now, `Factory ${name} update failed. The rollout stopped.`);
+  }
   row.stage = 'done';
   savePromotionState(file, state);
 }
@@ -303,18 +394,28 @@ function resetFailed(row, state, file) {
 async function promoteFactory({ name, isCanary, state, file, rollout, tool, deps, now, timeoutMs, pollMs }) {
   const row = rollout.factories[name];
   if (row.stage === 'done') return;
+  if (row.stage === 'waiting-owner') {
+    await resumeWaitingOwner({ name, isCanary, row, state, file, rollout, tool, deps, now });
+    return;
+  }
   let stage = row.stage === 'failed' ? resetFailed(row, state, file) : row.stage;
 
   if (stage === 'planned' || stage === 'building') {
-    const current = await drain(name, deps, now, timeoutMs, pollMs);
-    if (current.pinsHash !== rollout.pinsHash) {
+    let current;
+    try { current = await drain(name, deps, now, timeoutMs, pollMs); }
+    catch (error) {
+      const failedAt = failureStage(error, isCanary ? 'canary-failed' : 'factory-update-failed');
+      const reason = error.message || `Factory ${name} could not drain.`;
+      if (isCanary) canaryFailure(tool, rollout, name, stage, failedAt, state, file, deps, now);
+      promotionFailure(tool, rollout, name, stage, failedAt, state, file, deps, now, reason);
+    }
+    if (!targetImageMatches(current, rollout.pinsHash)) {
       row.stage = 'building';
       savePromotionState(file, state);
       try { await deps.build(name, rollout.imageTag); }
       catch (error) {
-        if (isCanary) canaryFailure(tool, rollout, name, stage, state, file, deps, now);
-        markFailed(state, file, rollout, name, stage, 'build-failed', now);
-        throw new Error(`Factory ${name} image build failed. The rollout stopped.`);
+        if (isCanary) canaryFailure(tool, rollout, name, stage, 'build-failed', state, file, deps, now);
+        promotionFailure(tool, rollout, name, stage, 'build-failed', state, file, deps, now, `Factory ${name} image build failed. The rollout stopped.`);
       }
     }
     stage = isCanary ? 'canary' : 'promoting';
@@ -325,23 +426,26 @@ async function promoteFactory({ name, isCanary, state, file, rollout, tool, deps
   if (isCanary && stage === 'canary') {
     try {
       const before = validateStatus(await deps.status(name), name);
-      if (before.pinsHash !== rollout.pinsHash) {
-        await drain(name, deps, now, timeoutMs, pollMs);
-        await applyImageUpdate(name, rollout, tool, deps);
+      if (!targetImageMatches(before, rollout.pinsHash)) {
+        const drained = validateStatus(await drain(name, deps, now, timeoutMs, pollMs), name);
+        if (assertBossNotLive(drained, name)) waitForOwner(tool, rollout, name, row, 'canary', state, file, deps, now);
+        await deps.update(name, []);
       }
+      const after = validateStatus(await deps.status(name), name);
+      if (!targetImageMatches(after, rollout.pinsHash)) throw new Error(`Factory ${name} does not report the running pinned image.`);
     } catch (error) {
       if (error.code === 'OWNER_APPROVAL_REQUIRED') throw error;
-      canaryFailure(tool, rollout, name, 'canary', state, file, deps, now);
+      if (isBossRestartRefusal(error)) waitForOwner(tool, rollout, name, row, 'canary', state, file, deps, now);
+      canaryFailure(tool, rollout, name, 'canary', failureStage(error, 'canary-failed'), state, file, deps, now);
     }
     try {
       await deps.smoke(name, rollout.imageTag);
       await deps.readers(name);
-    } catch (error) {
-      canaryFailure(tool, rollout, name, 'canary', state, file, deps, now);
+    } catch {
+      canaryFailure(tool, rollout, name, 'canary', 'canary-failed', state, file, deps, now);
     }
     row.stage = 'soaking';
-    row.soakUntil = currentTime(now) + TOOLS_PROMOTE_SOAK_MS;
-    savePromotionState(file, state);
+    startSoak(row, state, file, deps, now);
     stage = 'soaking';
   }
 
@@ -353,14 +457,18 @@ async function promoteFactory({ name, isCanary, state, file, rollout, tool, deps
   if (!isCanary && stage === 'promoting') {
     try {
       const before = validateStatus(await deps.status(name), name);
-      if (before.pinsHash !== rollout.pinsHash) {
-        await drain(name, deps, now, timeoutMs, pollMs);
-        await applyImageUpdate(name, rollout, tool, deps);
+      if (!targetImageMatches(before, rollout.pinsHash)) {
+        const drained = validateStatus(await drain(name, deps, now, timeoutMs, pollMs), name);
+        if (assertBossNotLive(drained, name)) waitForOwner(tool, rollout, name, row, 'promoting', state, file, deps, now);
+        await deps.update(name, []);
       }
+      const after = validateStatus(await deps.status(name), name);
+      if (!targetImageMatches(after, rollout.pinsHash)) throw new Error(`Factory ${name} does not report the running pinned image.`);
+      await deps.readers(name);
     } catch (error) {
       if (error.code === 'OWNER_APPROVAL_REQUIRED') throw error;
-      markFailed(state, file, rollout, name, 'promoting', 'factory-update-failed', now);
-      throw new Error(`Factory ${name} update failed. The rollout stopped.`);
+      if (isBossRestartRefusal(error)) waitForOwner(tool, rollout, name, row, 'promoting', state, file, deps, now);
+      promotionFailure(tool, rollout, name, 'promoting', failureStage(error, 'factory-update-failed'), state, file, deps, now, `Factory ${name} update failed. The rollout stopped.`);
     }
     row.stage = 'done';
     savePromotionState(file, state);
@@ -384,6 +492,8 @@ export async function runToolsPromote(args, options = {}) {
     ...options,
     dataDir,
     now,
+    output,
+    monotonicNow: options.monotonicNow ?? (() => performance.now()),
     sleep: options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   };
   const order = validateFactories(await deps.factories());
