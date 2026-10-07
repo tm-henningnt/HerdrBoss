@@ -47,7 +47,7 @@ test('Overview project rows keep a native focusable link as the keyboard action'
 test('the token sheet defines light and dark color, spacing, type, border, and focus tokens', () => {
   const tokens = fs.readFileSync(new URL('../public/theme.css', import.meta.url), 'utf8');
 
-  assert.match(index, /href="\/tokens\.css"/);
+  assert.match(index, /href="\/theme\.css"/);
   assert.match(tokens, /:root\s*\{/);
   assert.match(tokens, /:root\[data-theme="dark"\]/);
   for (const name of ['--bg', '--space-', '--type-', '--border-width', '--focus-color']) {
@@ -57,5 +57,5 @@ test('the token sheet defines light and dark color, spacing, type, border, and f
 
 test('dashboard shell docs name the shared component module and token sheet', () => {
   assert.match(docs, /public\/components\.js/);
-  assert.match(docs, /public\/tokens\.css/);
+  assert.match(docs, /public\/theme\.css/);
 });
