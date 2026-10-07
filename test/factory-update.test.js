@@ -9,7 +9,7 @@ import { factoryCommand } from '../src/factory-host.js';
 import { readFleet, writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
 
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft15' };
-const image = { Config: { Labels: {
+const image = { Id: 'sha256:tag-image', Config: { Labels: {
   'org.opencontainers.image.created': '2026-10-03T00:00:00Z',
   'org.herdr-boss.pins-sha256': 'b'.repeat(64),
 } } };
@@ -25,7 +25,7 @@ function fixture() {
   fs.mkdirSync(env.HOME);
   const volumes = new Map(Object.keys(VOLUMES).map((kind) => [`hf-demo-${kind}`, { Name: `hf-demo-${kind}`, Labels: { ...labels } }]));
   const container = {
-    Id: 'demo-id', Config: { Labels: { ...labels } },
+    Id: 'demo-id', Image: 'sha256:running-image', Config: { Labels: { ...labels } },
     HostConfig: { Privileged: false, CapAdd: null, SecurityOpt: ['seccomp=example-profile', 'systempaths=unconfined'] },
     Mounts: Object.entries(VOLUMES).map(([kind, target]) => ({ Type: 'volume', Name: `hf-demo-${kind}`, Destination: target })),
     State: { Running: true, Status: 'running' },
@@ -178,6 +178,23 @@ function updateFixture() {
   return { ...f, docker, expectedOrigin, set helperReply(value) { helperReply = value; }, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
     set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
+
+test('factory status reports the running image ID, its tag image ID, and the Boss pane state', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['status', 'demo', '--json'], f.io), 0);
+    let status = JSON.parse(f.output.join(''));
+    assert.equal(status.containerImageId, 'sha256:running-image');
+    assert.equal(status.tagImageId, 'sha256:tag-image');
+    assert.equal(status.bossPane, false);
+
+    f.output.length = 0;
+    f.state = { ...f.state, bossPane: true };
+    assert.equal(await factoryCommand(['status', 'demo', '--json'], f.io), 0);
+    status = JSON.parse(f.output.join(''));
+    assert.equal(status.bossPane, true);
+  } finally { f.cleanup(); }
+});
 
 test('update dry run checks the factory and prints the selected tier without Docker writes', async () => {
   const f = fixture();

@@ -142,13 +142,15 @@ async function reachableStatus(name, io) {
   const state = container?.State?.Status || 'missing';
   let health = null;
   let workers = null;
+  let bossPane = null;
   let disk = null;
   if (container?.State?.Running) {
     try { health = await readHealth(docker, name); } catch (error) { if (isHostUnreachable(error)) throw error; }
     try {
-      const script = 'const fs=require("fs");const s=JSON.parse(fs.readFileSync("/home/factory/.herdr-boss/state.json","utf8"));console.log(JSON.stringify({workers:s.control?.runningWorkers??null}));';
+      const script = 'const fs=require("fs");const s=JSON.parse(fs.readFileSync("/home/factory/.herdr-boss/state.json","utf8"));console.log(JSON.stringify({workers:s.control?.runningWorkers??null,bossPane:Boolean(s.control?.bossHandoff?.pane)}));';
       const result = JSON.parse(await dockerCall(docker, ['exec', '--user', 'factory', record.containerName, 'node', '-e', script]));
       if (Number.isInteger(result.workers) && result.workers >= 0) workers = result.workers;
+      if (typeof result.bossPane === 'boolean') bossPane = result.bossPane;
     } catch (error) { if (isHostUnreachable(error)) throw error; }
     try {
       const lines = (await dockerCall(docker, ['exec', record.containerName, 'df', '-Pk', '/home/factory'])).trim().split('\n');
@@ -163,7 +165,7 @@ async function reachableStatus(name, io) {
   try { assertVersion(health?.version || record.version, effectiveMinimum(fleet)); } catch { compatible = false; }
   return { name, state, health: container?.State?.Health?.Status || null, schema: health?.schema ?? null, kitRevision: health?.kitRevision ?? null,
     version: health?.version ?? null, imageBuildDate: labels['org.opencontainers.image.created'] || null, pinsHash: labels['org.herdr-boss.pins-sha256'] || null,
-    workers, disk, minimumFactoryVersion: effectiveMinimum(fleet), compatible };
+    containerImageId: container?.Image || null, tagImageId: image?.Id || null, bossPane, workers, disk, minimumFactoryVersion: effectiveMinimum(fleet), compatible };
 }
 
 async function statusFactory(name, io) {
@@ -172,7 +174,7 @@ async function statusFactory(name, io) {
     if (!isHostUnreachable(error)) throw error;
     const { fleet } = managedFactory(io.env, name);
     return { name, state: 'host-unreachable', health: 'host-unreachable', schema: null, kitRevision: null, version: null, imageBuildDate: null, pinsHash: null,
-      workers: null, disk: null, minimumFactoryVersion: effectiveMinimum(fleet), compatible: null };
+      containerImageId: null, tagImageId: null, bossPane: null, workers: null, disk: null, minimumFactoryVersion: effectiveMinimum(fleet), compatible: null };
   }
 }
 

@@ -157,6 +157,7 @@ const USAGE = `herdr-boss <command>
   doctor [--json] [--factory-host]  Check onboarding items. Exit 4 when an item needs a fix.
   tools check [--json]  Read tool versions, save the check, and post late or security notices.
   tools bump TOOL [--to VERSION] [--dry-run]  Prepare a checksum-checked factory pin change.
+  tools promote TOOL [--dry-run]  Drain factories, test the win1 canary, wait one day, then update the other factories.
   setup [--resume] [--dry-run] [--pacing paced|unpaced]  Run the first-hour setup. Exit 3 when it waits for you.
   publish <slug> <file> [--force] [--sync] Validate a project status file and install it. Use "-" for stdin. --sync sets each card state from git, workers and issues first.
                         Refuses a live worker on a task that is not doing, unless --force.

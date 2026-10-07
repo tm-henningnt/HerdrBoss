@@ -28,7 +28,7 @@ const TOOL_DEFINITIONS = [
   { id: 'base-image', name: 'Base image', whereRuns: ['factory build'], pinKey: 'base', source: { kind: 'docker', repository: 'library/debian', tag: 'trixie-slim' } },
   { id: 'buildkit', name: 'BuildKit', whereRuns: ['factory build'], pinKey: 'buildkit', source: { kind: 'github', repo: 'moby/buildkit', dockerRepository: 'moby/buildkit', dockerTag: 'buildx-stable-1' } },
 ];
-const TOOL_REGISTRY = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.id, tool]));
+export const TOOL_REGISTRY = Object.fromEntries(TOOL_DEFINITIONS.map((tool) => [tool.id, tool]));
 
 function versionParts(value) {
   if (typeof value !== 'string') return null;
@@ -871,8 +871,12 @@ function formatState(state) {
 
 export async function toolsCommand(args, options = {}) {
   if (args[0] === 'bump') return runToolsBump(args.slice(1), options);
+  if (args[0] === 'promote') {
+    const { runToolsPromote } = await import('./tools-promote.js');
+    return runToolsPromote(args.slice(1), options.promoteOptions ?? options);
+  }
   if (args[0] !== 'check' || args.length > 2 || args.slice(1).some((flag) => flag !== '--json') || new Set(args.slice(1)).size !== args.length - 1) {
-    throw new Error('Usage: tools check [--json] or tools bump TOOL [--to VERSION] [--dry-run]');
+    throw new Error('Usage: tools check [--json], tools bump TOOL [--to VERSION] [--dry-run], or tools promote TOOL [--dry-run]');
   }
   const state = await createToolsCheck(options)();
   const output = options.output ?? console.log;
