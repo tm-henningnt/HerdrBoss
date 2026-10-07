@@ -20,6 +20,7 @@ import { describeLabels, labelsStep } from './project-new-labels.js';
 import { ORG_NAME, RemoteError, checkDecision, describeRemote, remoteStep, validateRemoteUrl } from './project-new-remote.js';
 import { CI_WORKFLOW_TEMPLATES, copyWorkflowTemplates } from './ci-workflows.js';
 import { FACTORY_PROJECT_GROUP, isFactoryRole } from './factory-role.js';
+import { readRegister } from './project-register.js';
 
 export const PROJECT_NEW_STEPS = ['validate', 'folder', 'files', 'kit', 'commit', 'remote', 'labels', 'policy', 'register', 'status', 'workspace', 'harness', 'check'];
 export const NOT_BUILT = new Set(['check']);
@@ -431,8 +432,10 @@ export function runProjectStep(name, options = {}) {
   let inputs = saved?.inputs;
   if (!inputs) {
     const row = readProjectRepos(dataDir).find((entry) => entry.slug === slug);
-    if (!row) refuse(`The project ${slug} has no flow state and is not registered. The folder is unknown.`);
-    inputs = { slug, name: path.basename(row.repo), path: row.repo, goal: '' };
+    const record = readRegister(dataDir).projects.find((entry) => entry.slug === slug);
+    const repo = row?.repo || record?.repo;
+    if (!repo) refuse(`The project ${slug} has no flow state and has no registered repository path.`);
+    inputs = { slug, name: path.basename(repo), path: repo, goal: '' };
   }
   const state = saved || { inputs, steps: {}, ids: {} };
   state.ids ||= {};

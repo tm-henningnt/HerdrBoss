@@ -428,6 +428,9 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
 herdr-boss project check <slug> [--fix STEP [--start]]
+herdr-boss project open <slug> [--start] [--force] [--dry-run]
+herdr-boss project park <slug> [--prepare] [--dry-run]
+herdr-boss project archive|unarchive <slug> [--dry-run]
 herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
 herdr-boss project paths [--json]
 herdr-boss project unregister <slug>
@@ -473,6 +476,33 @@ The step `harness` does three things for the new project:
 A Codex root or a browser port that cannot be set is a warning in the step detail. The step does not fail. A second run changes nothing. A dry run changes and reserves nothing.
 
 The step changes a file under the home folder only for the live data dir. A temporary data dir is not the live data dir: the same test as `assertTempDataDir`, inverted. For a temporary data dir, the step does not change `~/.codex/config.toml`, does not write a backup, and does not reserve a browser. It prints `skipped: not the live data dir` and the Claude autoMode lines. The other steps write only inside the project folder or the data dir, so they need no such rule. The browser command of the step uses the same data dir as the flow.
+
+### Commands project open and park
+
+Run these commands from an Owner terminal or the pane labeled `boss`. A pane labeled `orch` can run a command only for the project that owns its workspace. A project lead cannot park its own workspace. Only the Boss or Owner can act on another project or park a project. A worker pane cannot run these commands. The command uses only the register of the local factory. Run it on the factory named in the project record.
+
+`project open <slug>` changes a parked project to open. It checks the project and runs each missing fix step once, in this order: `folder`, `kit`, `policy`, `register`, `workspace`, and `harness`. It writes `state: open` and `lastOpenedAt` after the checks pass. It prints the project's next action. A failed step leaves the project parked and records the failed check in `project-audit.jsonl`.
+
+| Flag | Meaning |
+|---|---|
+| `--start` | Create or reuse the Herdr workspace and start the project lead. The command uses the workspace step of `project new`. It uses model quota. |
+| `--force` | Open the project when the default cap of 3 open projects is full. This flag overrides the cap only. |
+| `--dry-run` | Print every check and step. Change no state, take no lock, and write no audit line. |
+
+An archived project must be unarchived before it can open. A project with an active transfer is refused. The default cap is 3 open projects. Pinned open projects count toward the cap. Settings for the cap and pinned count will be available in a later slice. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
+
+`project park <slug>` changes an open project to parked after all checks pass. It checks workers, input prompts, Git state, locks and leases, published status, project memory, and blocking Owner mailbox items. It refuses a workspace that contains an unrecognized pane. It checks the pane list again just before it closes the saved Herdr workspace by its ID. It closes the workspace before it releases the browser reservation. It never closes a browser. It keeps the repository, status, policy, Mailbox items, review packs, and data files. It clears the pin when park finishes.
+
+| Flag | Meaning |
+|---|---|
+| `--prepare` | When Git, status, or memory blocks park, ask an idle project lead to commit and push, update memory, and publish status. Wait up to 10 minutes, then run every check again. The command sends no prompt when a worker is active or a pane waits for input. |
+| `--dry-run` | Print every check and change no state, send no prompt, release no browser reservation, close no workspace, take no lock, and write no audit line. |
+
+If a check fails, the project stays open. Park writes the state `parking` before it closes the workspace. If a later step fails, the register and audit name the failed step, and park keeps the browser reservation. Fix the cause, then run `project park` again. Park writes `parked` only after it closes the workspace and releases the reservation. The state `parking` means that park is in progress.
+
+`project archive <slug>` changes a parked project to archived. `project unarchive <slug>` changes an archived project to parked. These commands change only the register state. Each command accepts `--dry-run`.
+
+Each non-dry-run open and park attempt writes an audit record. A park that starts closing resources writes a second record when it finishes. Archive and unarchive write one record per state change. Audit records hold the slug, action, caller, result, failed check, and dry-run flag. They hold no repository path or remote.
 
 ### Command project check
 
@@ -647,6 +677,33 @@ Use `project paths --json` to print an array of objects. Each object has `slug` 
 ### Command project unregister
 
 Run `project unregister <slug>` to remove one project from the registry. The command writes a backup of `project-repos.json` first. It removes only the registry row. It does not delete project files, worktrees, or branches. An unknown slug exits with an error.
+
+## Project register
+
+The project register lists every project of this factory. Herdr Boss stores the register in the file `project-register.json` in the data folder. The file has mode 0600. The register never lands in a Git repository. Each record holds the 16 fields `slug`, `title`, `group`, `repo`, `remote`, `factory`, `state`, `pinned`, `priority`, `issueSource`, `autoOpen`, `lastOpenedAt`, `lastActivityAt`, `nextAction`, `notes`, and `createdAt`.
+
+| `herdr-boss` command | Effect |
+| --- | --- |
+| `project register list [--state STATE] [--group NAME] [--json]` | Print the records sorted by slug. `--state` takes `open`, `parked`, or `archived`. Only this subcommand accepts `--json`. |
+| `project register add SLUG [FIELD ...] [--dry-run]` | Add one record. The record starts in the state `parked` with the factory of this data folder. |
+| `project register edit SLUG [FIELD ...] [--dry-run]` | Change Owner fields of one record. The command prints the changed field names, never the values. State changes belong to a later slice. |
+| `project register sync [--dry-run]` | Copy the repo and the remote from `project-repos.json` into the matching record. |
+| `project register import [--dry-run]` | Add a record for each source that the register does not hold yet. |
+| `project scan DIR [--depth N] [--add] [--dry-run]` | List repositories and propose records. `--add` registers new records. |
+
+Run `herdr-boss project register add acme-web --title "Acme Web" --repo /path/to/repo --remote owner/repo` to add one project. Run `herdr-boss project register edit acme-web --group web --pinned on` to change fields. Run `herdr-boss project register list --state open` to list the open projects. A bare `herdr-boss project register` prints the usage of every subcommand.
+
+Each `project register` subcommand runs a caller check before it reads an option. A plain terminal is the Owner and passes the check. A Herdr pane must carry the label `boss` or `orch`. A worker pane is refused, and the refusal tells the worker to ask its project lead. `project scan` writes nothing, so it runs from every pane.
+
+Every subcommand that writes the register accepts `--dry-run`. A dry run prints the same result lines as the real run. It writes no register file and no audit line. A refused command prints a reason and writes nothing. A refusal names the class of a value that matches the secret scan, never the value itself. A remote must be `owner/name` or a URL without credentials, a query string, or a fragment. An SSH remote may have a user name without a password.
+
+`project register import` reads three sources: the rows of `project-repos.json`, the project keys of `policy.json`, and the published status files in the folder `projects/`. It adds one record for each slug that the register does not hold. It keeps each record that the register already holds, so a second import adds nothing and keeps the edits of the Owner. A slug that names a Herdr workspace gets the state `open`. Every other new record gets the state `parked`. When Herdr lists no workspaces, the command prints a warning on the error stream and parks every new record.
+
+`project register sync` reads the rows of `project-repos.json`. A row is the source of truth for the repo and the remote of its record. An empty remote in a row clears the remote of the record. The sync stores a remote without its credentials.
+
+`project scan DIR` walks DIR and prints one line for each Git repository. It prints `skip` for a folder name that is no project slug, `registered` for a slug that the register holds, and `propose` for a new slug with its path and its remote. The scan prints each remote without credentials, query strings, or fragments. `--depth N` sets the depth of the walk. The depth is a whole number from 0 to 10, and 2 is the default. The scan follows no symlink, skips each hidden folder, and ignores a `.git` symlink. Folder names and paths have no control characters in the output. Without `--add`, the scan changes no file and has no caller check. Add `--add` to register each new repository through `project register add`. The register command checks the caller, validates the record, takes the register lock, and writes the audit line. Add `--dry-run` with `--add` to print each record that the scan would register without writing it.
+
+A command that writes the register appends one line per written record to the file `project-audit.jsonl` in the data folder. The audit file has mode 0600. Each line holds the fields `at`, `slug`, `action`, `by`, `result`, `failedCheck`, and `dryRun`. The action is `register-add` or `register-edit`. The value of `by` is `owner-cli`, the value of `result` is `done`, `failedCheck` is `null`, and `dryRun` is false. A line holds no path, no remote, and no value of a record. A dry run appends no line.
 
 ## Release approval
 

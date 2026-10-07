@@ -12,6 +12,7 @@ import { KIT_ROOT } from './kit/config.js';
 import { SLUG } from './projects.js';
 import { redact } from './project-new-remote.js';
 import { checkLabels } from './project-new-labels.js';
+import { readRegister } from './project-register.js';
 import { lintWorkflows } from './ci-lint.js';
 import { readWorkflowFiles } from './ci-workflows.js';
 
@@ -111,7 +112,8 @@ export function checkProject(slug, options = {}) {
   const home = options.home ? path.resolve(options.home) : os.homedir();
   const state = readState(dataDir, slug);
   const row = readProjectRepos(dataDir).find((entry) => entry.slug === slug);
-  const dir = row?.repo ?? state?.inputs?.path ?? null;
+  const registered = readRegister(dataDir).projects.find((entry) => entry.slug === slug);
+  const dir = row?.repo ?? state?.inputs?.path ?? registered?.repo ?? null;
   const items = [];
   const ok = (name, detail = '') => items.push({ name, ok: true, detail });
   const missing = (name, detail, fix = null) => items.push({ name, ok: false, detail, fix });
@@ -193,7 +195,7 @@ export function checkProject(slug, options = {}) {
   else ok('status', `${status.value.tasks.length} task(s)`);
 
   const started = state?.steps?.workspace?.status === 'done';
-  if (!started) {
+  if (!started && !options.requireWorkspace) {
     ok('workspace', 'not started: the flow ran without --start');
     ok('orchestrator', 'not started: the flow ran without --start');
   } else {

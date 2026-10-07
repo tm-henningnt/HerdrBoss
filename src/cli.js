@@ -176,8 +176,13 @@ const USAGE = `herdr-boss <command>
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
+  project open <slug> [--start] [--force] [--dry-run]  Open a registered project. --start starts its project lead.
+  project park <slug> [--prepare] [--dry-run]  Check and park a project. Park never closes a browser.
+  project archive|unarchive <slug> [--dry-run]  Hide or restore a parked project.
   project paths [--json]  Print the registered paths of other projects.
   project unregister <slug>  Back up the registry and remove one row. Keep project files.
+  project register list|add|edit|sync|import  Read or change the project register, or fill it from its sources.
+  project scan DIR [--depth N] [--add] [--dry-run]  List Git repositories and optionally add records.
   fleet settings|init|account|read-token  Read fleet settings and provision private account digests or read credentials. See docs/cli.md.
   hub promote [--force]                   Take the head office role with the next epoch and tell every factory. See docs/cli.md.
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
@@ -571,9 +576,23 @@ async function main() {
       if (code) process.exitCode = code;
       return;
     }
+    if (args[0] === 'register') {
+      const { projectRegisterCommand } = await import('./project-register-cli.js');
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      const code = await projectRegisterCommand(args.slice(1), { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR });
+      if (code) process.exitCode = code;
+      return;
+    }
+    if (args[0] === 'scan') {
+      const { projectScanCommand } = await import('./project-scan.js');
+      const { createHerdrRunner } = await import('./kit/workers.js');
+      const code = projectScanCommand(args.slice(1), { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR, cwd: process.cwd() });
+      if (code) process.exitCode = code;
+      return;
+    }
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
-    const code = projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    const code = await projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
     if (code) process.exitCode = code;
     return;
   }
