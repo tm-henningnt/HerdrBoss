@@ -593,7 +593,7 @@ test('project register rejects bad usage', (t) => {
 
   const state = f.run(['project', 'register', 'list', '--state', 'sideways']);
   assert.equal(state.status, 1);
-  assert.match(state.stderr, /--state must be open, parked, or archived/);
+  assert.match(state.stderr, /--state must be open, parked, parking, or archived/);
 
   const slug = f.run(['project', 'register', 'add', 'Acme']);
   assert.equal(slug.status, 1);

@@ -170,6 +170,75 @@ test('the open cap refuses by default and --force overrides only the cap', async
   assert.equal(archived.result().projects[0].state, 'archived');
 });
 
+test('the cap reads register settings and can exclude pinned open projects', async (t) => {
+  const f = fixture(t, { lifecycle: { registerSettings: { cap: 2, capCountsPinned: false } } });
+  writeRegister({ version: 1, projects: [
+    f.project,
+    record('pinned-project', { state: 'open', pinned: true }),
+    record('open-project', { state: 'open' }),
+  ] }, f.dataDir);
+  assert.equal(await run(f, ['open', 'acme-web']), 0);
+  assert.equal(f.result().projects.find((item) => item.slug === 'acme-web').state, 'open');
+
+  const defaults = fixture(t, { lifecycle: { registerSettings: { cap: 3 } } });
+  writeRegister({ version: 1, projects: [
+    defaults.project,
+    record('pinned-project', { state: 'open', pinned: true }),
+    record('open-project-a', { state: 'open' }),
+    record('open-project-b', { state: 'open' }),
+  ] }, defaults.dataDir);
+  assert.equal(await run(defaults, ['open', 'acme-web']), 1, 'the default cap is 3 and pinned projects count by default');
+  assert.ok(defaults.messages.some((line) => /open project cap is 3/.test(line)));
+});
+
+test('lifecycle commands refuse an orch pane from another project', async (t) => {
+  for (const [action, state] of [['open', 'parked'], ['park', 'open'], ['archive', 'parked'], ['unarchive', 'archived']]) {
+    const f = fixture(t, { state });
+    f.env = { HERDR_ENV: '1', HERDR_PANE_ID: 'p-foreign', HERDR_WORKSPACE_ID: 'ws-other' };
+    f.herdr = (args) => {
+      if (args[0] === 'pane' && args[1] === 'get') {
+        return { pane: { pane_id: 'p-foreign', label: 'orch', workspace_id: 'ws-other' } };
+      }
+      if (args[0] === 'workspace' && args[1] === 'list') {
+        return { workspaces: [{ id: 'ws-acme', label: 'acme-web' }, { id: 'ws-other', label: 'other-project' }] };
+      }
+      return {};
+    };
+    assert.equal(await run(f, [action, 'acme-web']), 1, `${action} must refuse a foreign orch`);
+    assert.equal(f.result().projects[0].state, state, `${action} must not change the target`);
+    assert.deepEqual(f.commands, [], `${action} must not run project steps`);
+  }
+});
+
+test('a project lead cannot park its own workspace, while the Boss can act across projects', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  f.env = { HERDR_ENV: '1', HERDR_PANE_ID: 'p-lead', HERDR_WORKSPACE_ID: 'ws-acme' };
+  const makeHerdr = (label, workspaceId) => (args) => {
+    if (args[0] === 'pane' && args[1] === 'get') {
+      return { pane: { pane_id: args[2], label, workspace_id: workspaceId } };
+    }
+    if (args[0] === 'workspace' && args[1] === 'list') {
+      return { workspaces: [{ id: 'ws-acme', label: 'acme-web' }, { id: 'ws-other', label: 'other-project' }] };
+    }
+    if (args[0] === 'pane' && args[1] === 'list') {
+      return { panes: [{ pane_id: 'p-lead', label: 'orch', agent_name: 'acme-web-orch', workspace_id: 'ws-acme' }] };
+    }
+    if (args[0] === 'agent' && args[1] === 'list') return { agents: [{ name: 'acme-web-orch', pane_id: 'p-lead', agent_status: 'idle' }] };
+    if (args[0] === 'workspace' && args[1] === 'close') return {};
+    return {};
+  };
+  f.herdr = makeHerdr('orch', 'ws-acme');
+  assert.equal(await run(f, ['park', 'acme-web']), 1);
+  assert.equal(f.result().projects[0].state, 'open');
+  assert.deepEqual(f.commands, []);
+
+  const boss = fixture(t, { state: 'parked' });
+  boss.env = { HERDR_ENV: '1', HERDR_PANE_ID: 'p-boss', HERDR_WORKSPACE_ID: 'ws-other' };
+  boss.herdr = makeHerdr('boss', 'ws-other');
+  assert.equal(await run(boss, ['archive', 'acme-web']), 0);
+  assert.equal(boss.result().projects[0].state, 'archived');
+});
+
 test('project open refuses archived projects and projects assigned to another factory', async (t) => {
   const archived = fixture(t, { state: 'archived' });
   assert.equal(await run(archived, ['open', 'acme-web']), 1);
@@ -196,7 +265,28 @@ test('a worker pane cannot open or park a project', async (t) => {
 
 test('project park checks before it releases the browser reservation or closes the exact workspace', async (t) => {
   const f = fixture(t, { state: 'open', pinned: true });
+  const order = [];
+  let stateAtClose;
+  const herdr = f.herdr;
+  f.herdr = (args) => {
+    if (args[0] === 'workspace' && args[1] === 'close') {
+      order.push('close');
+      stateAtClose = f.result().projects[0].state;
+    }
+    return herdr(args);
+  };
+  let stateAtRelease;
+  f.lifecycle.releaseBrowser = async (slug) => {
+    order.push('release');
+    stateAtRelease = f.result().projects[0].state;
+    f.commands.push({ name: 'releaseBrowser', slug });
+    return { released: true };
+  };
   assert.equal(await run(f, ['park', 'acme-web']), 0);
+  assert.deepEqual(order, ['close', 'release']);
+  assert.equal(stateAtClose, 'parking');
+  assert.equal(stateAtRelease, 'parking');
+  assert.equal(f.calls.filter((args) => args[0] === 'pane' && args[1] === 'list').length, 3, 'the pane list is checked again immediately before close');
   assert.deepEqual(f.commands.map((entry) => entry.name), ['releaseBrowser']);
   assert.deepEqual(f.calls.filter((args) => args[0] === 'workspace' && args[1] === 'close'), [['workspace', 'close', 'ws-acme']]);
   const parked = f.result().projects[0];
@@ -275,9 +365,83 @@ test('project park does not close a browser when release refuses', async (t) => 
   const f = fixture(t, { state: 'open' });
   f.lifecycle.releaseBrowser = async () => { throw new Error('The browser is still open.'); };
   assert.equal(await run(f, ['park', 'acme-web']), 1);
-  assert.equal(f.result().projects[0].state, 'open');
-  assert.ok(!f.calls.some((args) => args[0] === 'workspace' && args[1] === 'close'));
+  assert.equal(f.result().projects[0].state, 'parking');
+  assert.ok(f.calls.some((args) => args[0] === 'workspace' && args[1] === 'close'), 'the workspace closes before browser release');
   assert.ok(!f.calls.some((args) => args[0] === 'browser' && args[1] === 'close'));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'leases.json'), 'utf8')).leases.some((lease) => lease.project === 'acme-web'));
+  assert.equal(audit(f).at(-1).failedCheck, 'browser');
+});
+
+test('a workspace close failure keeps the parking state and browser reservation', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  const herdr = f.herdr;
+  f.herdr = (args) => {
+    if (args[0] === 'workspace' && args[1] === 'close') throw new Error('workspace close failed');
+    return herdr(args);
+  };
+  assert.equal(await run(f, ['park', 'acme-web']), 1);
+  assert.equal(f.result().projects[0].state, 'parking');
+  assert.deepEqual(f.commands, []);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'leases.json'), 'utf8')).leases.some((lease) => lease.project === 'acme-web'));
+  assert.equal(audit(f).at(-1).failedCheck, 'workspace');
+});
+
+test('a final register failure restores the browser reservation and leaves park retryable', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  const leaseFile = path.join(f.dataDir, 'leases.json');
+  let failFinalWrite = true;
+  f.lifecycle.writeRegister = (register, dataDir) => {
+    if (register.projects[0].state === 'parked' && failFinalWrite) {
+      failFinalWrite = false;
+      throw new Error('register write failed');
+    }
+    writeRegister(register, dataDir);
+  };
+  f.lifecycle.releaseBrowser = async (slug) => {
+    const leases = JSON.parse(fs.readFileSync(leaseFile, 'utf8'));
+    leases.leases = leases.leases.filter((lease) => lease.project !== slug);
+    fs.writeFileSync(leaseFile, JSON.stringify(leases));
+    f.commands.push({ name: 'releaseBrowser', slug });
+  };
+  f.lifecycle.reserveBrowser = async (slug) => {
+    const leases = JSON.parse(fs.readFileSync(leaseFile, 'utf8'));
+    leases.leases.push({ pool: 'project-browsers', item: '9223', project: slug });
+    fs.writeFileSync(leaseFile, JSON.stringify(leases));
+    f.commands.push({ name: 'reserveBrowser', slug });
+  };
+  assert.equal(await run(f, ['park', 'acme-web']), 1);
+  assert.equal(f.result().projects[0].state, 'parking');
+  assert.deepEqual(f.commands.map((entry) => entry.name), ['releaseBrowser', 'reserveBrowser']);
+  assert.ok(JSON.parse(fs.readFileSync(leaseFile, 'utf8')).leases.some((lease) => lease.project === 'acme-web'));
+  assert.equal(audit(f).at(-1).failedCheck, 'register');
+  assert.equal(await run(f, ['park', 'acme-web']), 0, 'park retries from the parking state');
+  assert.equal(f.result().projects[0].state, 'parked');
+  assert.deepEqual(f.commands.map((entry) => entry.name), ['releaseBrowser', 'reserveBrowser', 'releaseBrowser']);
+  assert.ok(!JSON.parse(fs.readFileSync(leaseFile, 'utf8')).leases.some((lease) => lease.project === 'acme-web'));
+});
+
+test('park refuses a pane that appears before close and keeps the browser reservation', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  const herdr = f.herdr;
+  let paneLists = 0;
+  f.herdr = (args) => {
+    if (args[0] === 'pane' && args[1] === 'list') {
+      paneLists += 1;
+      if (paneLists === 3) {
+        return { panes: [
+          { pane_id: 'p-lead', label: 'orch', agent_name: 'acme-web-orch', workspace_id: 'ws-acme' },
+          { pane_id: 'p-late', label: 'worker', workspace_id: 'ws-acme' },
+        ] };
+      }
+    }
+    return herdr(args);
+  };
+  assert.equal(await run(f, ['park', 'acme-web']), 1);
+  assert.equal(f.result().projects[0].state, 'parking');
+  assert.ok(!f.calls.some((args) => args[0] === 'workspace' && args[1] === 'close'));
+  assert.deepEqual(f.commands, []);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'leases.json'), 'utf8')).leases.some((lease) => lease.project === 'acme-web'));
+  assert.equal(audit(f).at(-1).failedCheck, 'workspace');
 });
 
 test('archive and unarchive use only parked state transitions and write audit lines', async (t) => {

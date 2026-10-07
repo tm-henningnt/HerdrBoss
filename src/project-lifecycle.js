@@ -114,19 +114,19 @@ function assertFactory(record, dataDir) {
   if (record.factory !== factory) throw new Error(`Project ${record.slug} belongs to factory ${record.factory}. Run this command on that factory.`);
 }
 
-function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, now = Date.now } = {}) {
+function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, now = Date.now, write = writeRegister } = {}) {
   return withRegisterLock(dataDir, () => {
     const register = readRegister(dataDir);
     const index = register.projects.findIndex((item) => item.slug === slug);
     if (index < 0) throw new Error(`${slug} is no longer in the project register.`);
     const previous = register.projects[index];
     register.projects[index] = update({ ...previous });
-    writeRegister(register, dataDir);
+    write(register, dataDir);
     try {
       appendAudit(slug, action, dataDir, { result, failedCheck, dryRun: false, at: new Date(now()).toISOString() });
     } catch (error) {
       register.projects[index] = previous;
-      try { writeRegister(register, dataDir); }
+      try { write(register, dataDir); }
       catch { throw new Error(`The ${action} audit line could not be written, and the register change could not be reverted.`); }
       throw error;
     }
@@ -208,10 +208,14 @@ function openProject(parsed, options) {
     if (transfer) throw new Error(`Project ${slug} has an open transfer. Finish or cancel the transfer before opening it.`);
     const transferRefusal = projectTransferRefusal(slug, { dataDir });
     if (transferRefusal) throw new Error(transferRefusal);
-    const cap = options.cap ?? options.registerSettings?.cap ?? 3;
-    const open = readRegister(dataDir).projects.filter((item) => item.state === 'open').length;
+    const registerSettings = options.registerSettings ?? {};
+    const cap = registerSettings.cap ?? options.cap ?? 3;
+    const capCountsPinned = registerSettings.capCountsPinned ?? true;
+    const projects = readRegister(dataDir).projects;
+    const open = projects.filter((item) => ['open', 'parking'].includes(item.state)
+      && (capCountsPinned || !item.pinned)).length;
     if (!parsed.force && open >= cap) {
-      const current = readRegister(dataDir).projects.filter((item) => item.state === 'open').map((item) => item.slug);
+      const current = projects.filter((item) => item.state === 'open').map((item) => item.slug);
       throw new Error(`The open project cap is ${cap}. Open projects: ${current.join(', ')}. Park one project or use --force.`);
     }
 
@@ -277,13 +281,13 @@ function resolveRecordedWorkspace(slug, record, status, flow, herdr, options) {
   if (typeof expectedId !== 'string' || !expectedId) throw new Error('The project has no saved Herdr workspace ID. Refusing to close a workspace by its label.');
   const workspaces = rows(herdr(['workspace', 'list']), 'workspaces');
   const workspace = workspaces.find((item) => idOf(item) === expectedId);
-  if (!workspace) return { id: expectedId, workspace: null, panes: [], agents: [] };
+  const runDir = (options.projectConfig ?? loadProjectConfig({ cwd: record.repo })).runsPath;
+  const runFiles = listRunRecords(runDir);
+  if (!workspace) return { id: expectedId, workspace: null, panes: [], agents: [], runFiles };
   if (workspace.label !== slug) throw new Error(`Saved workspace ${expectedId} does not belong to ${slug}. Refusing to close it.`);
   if (workspace.label?.toLowerCase() === 'boss') throw new Error('The Boss workspace cannot be parked.');
   const panes = rows(herdr(['pane', 'list', '--workspace', expectedId]), 'panes');
   const agents = rows(herdr(['agent', 'list']), 'agents');
-  const runDir = (options.projectConfig ?? loadProjectConfig({ cwd: record.repo })).runsPath;
-  const runFiles = listRunRecords(runDir);
   const allowedPanes = new Set(runFiles.map((run) => run.pane).filter(Boolean));
   for (const pane of panes) {
     const name = pane.agent_name ?? pane.agentName ?? agentOf(pane);
@@ -471,10 +475,19 @@ async function prepareProject(slug, initial, record, options) {
   return inspectPark(slug, record, options);
 }
 
-function closeWorkspaceById(slug, parkResult, herdr) {
+function closeWorkspaceById(slug, record, parkResult, options) {
+  const { herdr } = options;
   const info = parkResult.workspaceInfo;
   if (!info?.workspace) return;
   if (info.workspace.label !== slug) throw new Error(`Saved workspace ${info.id} does not belong to ${slug}. Refusing to close it.`);
+  const panes = rows(herdr(['pane', 'list', '--workspace', info.id]), 'panes');
+  const runDir = (options.projectConfig ?? loadProjectConfig({ cwd: record.repo, home: options.flowOptions.home })).runsPath;
+  const allowedPanes = new Set(listRunRecords(runDir).map((run) => run.pane).filter(Boolean));
+  for (const pane of panes) {
+    const name = pane.agent_name ?? pane.agentName ?? agentOf(pane);
+    const lead = pane.label === 'orch' && name === `${slug}-orch`;
+    if (!lead && !allowedPanes.has(paneOf(pane))) throw new Error('The project workspace has a pane that is not its lead or a recorded worker. Refusing to close it.');
+  }
   herdr(['workspace', 'close', info.id]);
 }
 
@@ -488,13 +501,27 @@ async function releaseBrowserReservation(slug, dataDir, options) {
   return releaseBrowser(slug);
 }
 
+async function restoreBrowserReservation(slug, dataDir, options) {
+  let leases;
+  try { leases = (options.readLeases ?? readLeases)(dataDir).leases; } catch {}
+  if (leases?.some((lease) => lease.pool === PROJECT_BROWSER_POOL_NAME && lease.project === slug)) return;
+  if (options.reserveBrowser) await options.reserveBrowser(slug, { dataDir });
+  else {
+    const { requestBrowser } = await import('./browser-pool.js');
+    await requestBrowser(slug, { launch: false, dataDir });
+  }
+  const restored = (options.readLeases ?? readLeases)(dataDir).leases
+    .some((lease) => lease.pool === PROJECT_BROWSER_POOL_NAME && lease.project === slug);
+  if (!restored) throw new Error(`The browser reservation for ${slug} could not be restored.`);
+}
+
 async function parkProject(parsed, options) {
   const { slug, dataDir, log } = { ...parsed, ...options };
   const record = findRecord(slug, dataDir);
   assertFactory(record, dataDir);
   if (record.state === 'archived') throw new Error(`Project ${slug} is archived. Run herdr-boss project unarchive ${slug} first.`);
   if (record.state === 'parked') { log(`Project ${slug} is already parked.`); return 0; }
-  if (record.state !== 'open') throw new Error(`Project ${slug} cannot park from state ${record.state}.`);
+  if (!['open', 'parking'].includes(record.state)) throw new Error(`Project ${slug} cannot park from state ${record.state}.`);
 
   let checked = inspectPark(slug, record, options);
   showParkChecks(checked, log);
@@ -517,7 +544,7 @@ async function parkProject(parsed, options) {
   return withActionLock(dataDir, slug, async () => {
     const current = findRecord(slug, dataDir);
     assertFactory(current, dataDir);
-    if (current.state !== 'open') throw new Error(`Project ${slug} changed state before park. Run the command again.`);
+    if (!['open', 'parking'].includes(current.state)) throw new Error(`Project ${slug} changed state before park. Run the command again.`);
     checked = inspectPark(slug, current, options);
     showParkChecks(checked, log);
     if (!checked.ok) {
@@ -525,19 +552,27 @@ async function parkProject(parsed, options) {
       return 1;
     }
 
-    appendAudit(slug, 'park', dataDir, { result: 'started', failedCheck: null });
-    let failedStep = 'browser';
+    let failedStep = 'register';
     try {
-      await releaseBrowserReservation(slug, dataDir, options);
+      writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parking' }), {
+        result: 'started', failedCheck: null, now: options.now, write: options.writeRegister,
+      });
       failedStep = 'workspace';
-      closeWorkspaceById(slug, checked, options.herdr);
+      closeWorkspaceById(slug, current, checked, options);
+      failedStep = 'browser';
+      await releaseBrowserReservation(slug, dataDir, options);
       failedStep = 'register';
-      writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parked', pinned: false }), { now: options.now });
+      writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parked', pinned: false }), {
+        now: options.now, write: options.writeRegister,
+      });
       log(`Parked ${slug}. Its project files and status stay in place.`);
       return 0;
     } catch (error) {
+      let reservationError = null;
+      try { await restoreBrowserReservation(slug, dataDir, options); } catch (restoreError) { reservationError = restoreError; }
       try { appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failedStep }); } catch {}
-      log(`Park stopped. Project ${slug} stays open. ${error.message}`);
+      const state = (() => { try { return findRecord(slug, dataDir).state; } catch { return 'unknown'; } })();
+      log(`Park stopped at ${failedStep}. Project ${slug} stays in state ${state}. ${error.message}${reservationError ? ` The browser reservation could not be restored: ${reservationError.message}` : ''}`);
       return 1;
     }
   });
@@ -569,8 +604,8 @@ export async function projectLifecycleCommand(action, args, {
   wait = pause,
   ...injections
 } = {}) {
-  verifyProjectCaller(env, herdr, `project ${action}`);
   const parsed = parseArgs(action, args);
+  verifyProjectCaller(env, herdr, `project ${action}`, { targetSlug: parsed.slug, action });
   const options = { ...injections, env, herdr, dataDir, log, hooks, flowOptions, now, wait };
   if (action === 'open') {
     if (parsed.dryRun) return openProject(parsed, options);

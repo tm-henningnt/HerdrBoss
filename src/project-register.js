@@ -11,7 +11,7 @@ import { withMutationLock } from './kit/locks.js';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const FACTORY = /^[a-z0-9][a-z0-9-]{0,39}$/;
-export const STATE = ['open', 'parked', 'archived'];
+export const STATE = ['open', 'parked', 'parking', 'archived'];
 export const PRIORITY = ['high', 'normal', 'low'];
 
 export const FIELDS = [

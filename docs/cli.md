@@ -437,7 +437,7 @@ The step changes a file under the home folder only for the live data dir. A temp
 
 ### Commands project open and park
 
-Run these commands from a plain terminal, the pane labeled `boss`, or a project lead pane labeled `orch`. A worker pane cannot run them. The command uses only the register of the local factory. Run it on the factory named in the project record.
+Run these commands from an Owner terminal or the pane labeled `boss`. A pane labeled `orch` can run a command only for the project that owns its workspace. A project lead cannot park its own workspace. Only the Boss or Owner can act on another project or park a project. A worker pane cannot run these commands. The command uses only the register of the local factory. Run it on the factory named in the project record.
 
 `project open <slug>` changes a parked project to open. It checks the project and runs each missing fix step once, in this order: `folder`, `kit`, `policy`, `register`, `workspace`, and `harness`. It writes `state: open` and `lastOpenedAt` after the checks pass. It prints the project's next action. A failed step leaves the project parked and records the failed check in `project-audit.jsonl`.
 
@@ -447,16 +447,16 @@ Run these commands from a plain terminal, the pane labeled `boss`, or a project 
 | `--force` | Open the project when the default cap of 3 open projects is full. This flag overrides the cap only. |
 | `--dry-run` | Print every check and step. Change no state, take no lock, and write no audit line. |
 
-An archived project must be unarchived before it can open. A project with an active transfer is refused. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
+An archived project must be unarchived before it can open. A project with an active transfer is refused. The default cap is 3 open projects. Pinned open projects count toward the cap. Settings for the cap and pinned count will be available in a later slice. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
 
-`project park <slug>` changes an open project to parked after all checks pass. It checks workers, input prompts, Git state, locks and leases, published status, project memory, and blocking Owner mailbox items. It refuses a workspace that contains an unrecognized pane. It releases the closed project's browser reservation and closes the saved Herdr workspace by its ID. It never closes a browser. It keeps the repository, status, policy, Mailbox items, review packs, and data files. It clears the pin.
+`project park <slug>` changes an open project to parked after all checks pass. It checks workers, input prompts, Git state, locks and leases, published status, project memory, and blocking Owner mailbox items. It refuses a workspace that contains an unrecognized pane. It checks the pane list again just before it closes the saved Herdr workspace by its ID. It closes the workspace before it releases the browser reservation. It never closes a browser. It keeps the repository, status, policy, Mailbox items, review packs, and data files. It clears the pin when park finishes.
 
 | Flag | Meaning |
 |---|---|
 | `--prepare` | When Git, status, or memory blocks park, ask an idle project lead to commit and push, update memory, and publish status. Wait up to 10 minutes, then run every check again. The command sends no prompt when a worker is active or a pane waits for input. |
 | `--dry-run` | Print every check and change no state, send no prompt, release no browser reservation, close no workspace, take no lock, and write no audit line. |
 
-If a check fails, the project stays open. If browser release or workspace close fails, the project stays open. Run `project park` again after you fix the cause.
+If a check fails, the project stays open. Park writes the state `parking` before it closes the workspace. If a later step fails, the register and audit name the failed step, and park keeps the browser reservation. Fix the cause, then run `project park` again. Park writes `parked` only after it closes the workspace and releases the reservation. The state `parking` means that park is in progress.
 
 `project archive <slug>` changes a parked project to archived. `project unarchive <slug>` changes an archived project to parked. These commands change only the register state. Each command accepts `--dry-run`.
 
