@@ -626,3 +626,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Not yet verified: full suite on the final tree, main fast-forward, service, push.
 
 - Released 2026-10-07: main 004c20c, pushed and live (suite 5114/5114 on integrate-r17 and on main, service restarted, /api/state 200, diff scan clean, push 614b215..004c20c): K30 to K32, the K33 note, the PR1 note and wireframe. Status published with --sync. Open: ARCH1 rework (Opus judge verdict rework; arch1), BH1 rework (bh1), BH2 queued, PR1 pack v2 with the Owner. The fpt5rev findings (FPT5-FIX) and the fs1close findings (FS1-NOTE-FIX) wait; a GUI page is not built before the ARCH1 pack is accepted.
+
+## Release checkpoint 2026-10-07 — integrate-r18 (BH1, FX1, ARCH1 study)
+
+- Released before this checkpoint: main 004c20c (K30 to K33, PR1 note).
+- Planned branches: bh1 e1cf1ef (every project browser headless: new session default, `browser.allowVisible` setting default off, migration of headed sessions on the tick, one-time tick warning with a process-list seam, kit rule against own Chrome launches; Kit-Impact useful; independent review: 2 medium and 4 low findings, all repaired, closure review passed; residual low: the word "orchestrator" in two older kit sentences), fx1 afb9b1e and 339697d (factory image build on the Mac: the Docker context also goes by DOCKER_CONTEXT because buildx 0.33 ignores --context for a remote builder; the Dockerfile extracts the regular file CodexBarCLI because `codexbar` is a link in the 0.72.0 release), arch1 8a4ff4b (the ARCH1 study; pack published, Mailbox m-muxztmik-b2c0fefb).
+- Not yet verified: full suite on this tree, main fast-forward, service restart, push, the win1 image build (running from the fx1 worktree). Applying the image tier to a factory needs the Owner's yes for the factory Boss pane restart, asked through the Boss (win1 first, then win2).
