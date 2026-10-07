@@ -23,20 +23,20 @@ Each term has one meaning in this note.
 
 ## Facts and gaps
 
-All values below were read on 2026-10-06. No secret was read.
+The inventory values below were read on 2026-10-06. The four gap checks were run on 2026-10-07. No secret was read.
 
 - The Mac tools report their version with `--version`. Versions of the latest release come from the public sources in section 1.
-- The factory image installs the harness CLIs with `npm install -g` at an exact version. Source: `factory/Dockerfile`.
-- The image sets `DISABLE_AUTOUPDATER=1` and `OPENCODE_DISABLE_AUTOUPDATE=true`. A harness in a factory changes only with an image rebuild. Source: `factory/Dockerfile`.
+- The factory image installs the agent apps with `npm install -g` at exact versions. Source: `factory/Dockerfile`.
+- The image sets `DISABLE_AUTOUPDATER=1` and `OPENCODE_DISABLE_AUTOUPDATE=true`. An agent app in a factory changes only with an image rebuild. Source: `factory/Dockerfile`.
 - `docs/specs/factories.md` lists a canary factory and automatic promotion as out of scope for the factory plan. UP1 adds them.
 - `pi` is not in `pins.json` and not in the image.
 
-Four facts are not verified. Step 2, slice 1 verifies them before it writes code.
+The four gaps are verified.
 
-1. How each Mac tool was installed (brew, npm, or its own installer) and whether it updates itself. Only `herdr`, `gh`, `node`, and `opencode` are known to have a brew formula.
-2. Whether the Mac `claude` and `codex` read a setting that turns their update check off.
-3. Which of the two `opencode` lines is current. The Mac runs v2.0.20 from brew. The npm package `opencode-ai` and the image pin are on 1.x. The check must not compare the two lines.
-4. The exact name of the checksum file of each upstream release, for the tools that publish one. Section 4 gives the fallback.
+1. **Mac install and update route.** Homebrew lists `claude-code@latest` 2.1.292, `codex` 0.160.1, and `codexbar` 0.72.0 as casks. It lists `opencode` 2.0.20, `herdr` 0.9.3, `gh` 2.102.0, and `node` 26.10.0 as formulas. The global npm list shows Pi 1.0.0. Claude Code updates from a Homebrew install only after a package-manager upgrade by default. `CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE=1` opts into a background Homebrew upgrade. The `DISABLE_AUTOUPDATER` setting is documented for native and npm installs. [Claude Code update guide](https://code.claude.com/docs/en/getting-started). Codex shows an update prompt at startup by default. Set `check_for_update_on_startup = false` in `config.toml` to turn off that check. [Codex configuration reference](https://developers.openai.com/codex/config-reference). OpenCode downloads an update at startup by default. Set `autoupdate` to `false` to stop it. Its `notify` mode does not work with Homebrew. [OpenCode configuration](https://opencode.ai/docs/config). Pi documents a manual `pi update --self` command. [Pi CLI guide](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md). CodexBar's Homebrew cask checks for a new cask version daily when checks are on and offers a one-click `brew upgrade`. [CodexBar updater guide](https://github.com/steipete/CodexBar/blob/main/docs/sparkle.md). Herdr's help has `herdr update`, which downloads and installs the latest version. The GitHub CLI checks for a new release once each day and prints an upgrade notice. Its help has no upgrade command. [GitHub CLI environment reference](https://cli.github.com/manual/gh_help_environment). Node's help has no update command. Herdr, `gh`, and Node use Homebrew formulas. This check did not run an upgrade.
+2. **Claude and Codex update checks.** The Mac Claude Code cask does not auto-update by default. Its documented package-manager setting turns updates on; the documented `DISABLE_AUTOUPDATER` setting applies to native and npm installs. The Codex CLI reads `check_for_update_on_startup`; `false` turns off its startup check. No private settings file was read.
+3. **OpenCode release line.** The Mac runs OpenCode 2.0.20 from the Homebrew formula. `opencode-ai` on npm and its GitHub release are both 1.18.35. The factory pin is 1.18.34. The check compares the pin with the 1.x release. It keeps the Mac 2.x version separate.
+4. **Checksum file names.** The [s6-overlay v3.2.3.2 release](https://github.com/just-containers/s6-overlay/releases/tag/v3.2.3.2) pairs each archive with `<archive>.sha256`, for example `s6-overlay-aarch64.tar.xz.sha256`. The [GitHub CLI v2.102.0 release](https://github.com/cli/cli/releases/tag/v2.102.0) uses `gh_<version>_checksums.txt`. [Node v26.11.0](https://nodejs.org/dist/v26.11.0/SHASUMS256.txt) publishes `SHASUMS256.txt`. The [CodexBar v0.73.0 release](https://github.com/steipete/CodexBar/releases/tag/v0.73.0) pairs each CLI archive with `<archive>.sha256`. The [Herdr v0.9.3 release](https://github.com/ogulcancelik/herdr/releases/tag/v0.9.3) has no checksum asset. The [Claude Code v2.1.292 release](https://github.com/anthropics/claude-code/releases/tag/v2.1.292) publishes `SHASUMS256.txt`, but the factory installs its npm package, whose `dist.integrity` is the hash source in section 4. The npm packages for Codex, OpenCode, and Pi use registry `dist.integrity`. The Debian base image uses its registry digest. The BuildKit tag has no pinned digest.
 
 ## 1. Inventory
 
@@ -128,7 +128,7 @@ Reason for A: a change in `herdr`, `s6-overlay`, or `node` changes the base of e
 - **Option A (recommended):** A release that fixes a security issue is flagged first. The flag shows in the Updates card and in one Mailbox item. The release skips the 3-day wait of P1. It still goes to the canary first.
 - **Option B:** No separate rule. A security release follows P1 or P2.
 
-The source of a security flag is one of: a GitHub security advisory of the upstream repository (`gh api repos/<owner>/<repo>/security-advisories`), the word "security" or a CVE id in the release notes, or the Debian security tracker for `chromium`. The check never decides a fix is a security release without one of these. When a source is unclear, the card shows "unknown" and not "no".
+The source of a security flag is one of: a GitHub security advisory for the upstream repository, a CVE ID or a GitHub advisory link with a GHSA ID in release notes, or the Debian security tracker for `chromium`. The check never decides a fix is a security release without one of these. When a source is unclear, the card shows "unknown" and not "no".
 
 - Accept item: "P3: Flag security releases first. Skip the waiting time."
 - Deny item: "P3: Treat a security release like any other release."
@@ -231,7 +231,7 @@ checked 2026-10-06 08:00
 ### Other places
 
 - **Factory card badge**: the factory card shows `updates 2` when its image tag differs from the tag of the pins on `main`, and `security` when a security release is open. A click opens the Updates card filtered to that factory.
-- **`herdr-boss doctor`**: one line for each tool that is `late` or has a `security` release. The line names the tool, the Installed and Latest values, and the age. `doctor` exits with 0 or 4 only (`src/doctor.js:321`). A `security` item is a failed check and makes the exit code 4. A `late` item is a note and leaves the exit code at 0.
+- **`herdr-boss doctor`**: one line for each tool that is `late` or has a `security` release. The line names the tool, the Installed and Latest values, and the age. `doctor` exits with 0 or 4 only (`src/doctor.js:321`). A fresh `security` item is a failed check and makes the exit code 4. A stale `security` item is ignored and prints a note. A `late` item is a note and leaves the exit code at 0.
 - **Mailbox**: see P6.
 
 ## 4. Mechanics
@@ -240,9 +240,10 @@ checked 2026-10-06 08:00
 
 - Read-only. It reads the installed version, `pins.json`, and the upstream source for each tool.
 - It writes `~/.herdr-boss/tools-state.json` with the result and the check time. The Updates card reads this file.
-- It sends no secret. Calls to GitHub use the existing `gh` login. Calls to npm are anonymous. The output never prints a token or a header value.
-- A failed upstream call marks that tool `unknown` and keeps the previous Latest value. It never marks a tool `ok` by default.
-- The weekly run is a scheduled job of the service. `tools check --now` runs it by hand.
+- The check uses anonymous HTTPS requests to public upstream endpoints. It does not use the GitHub CLI login. The output never prints a token or a header value.
+- A failed release request keeps the previous Latest value. It preserves a saved `security` risk and marks other risk values `unknown`. A failed advisory request does not discard good release data.
+- Every `tools check` command checks upstream. It does not use a cache.
+- For GitHub releases, choose the highest version on the tracked major line when that line has a release. Otherwise, choose the highest version overall.
 
 ### `herdr-boss tools bump TOOL`
 

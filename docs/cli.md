@@ -17,6 +17,7 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | Command | Action |
 |---|---|
 | `herdr-boss doctor [--json] [--factory-host]` | Check the onboarding items. Print a fix for each red item. Exit 0 when all items are green. Exit 4 when an item needs a fix. |
+| `herdr-boss tools check [--json]` | Read Mac versions, factory pins, and upstream versions. Save the check. Do not upgrade a tool. |
 | `herdr-boss setup [--resume] [--dry-run] [--pacing paced\|unpaced]` | Run the first-hour steps. Save progress. Exit 3 when a step waits for you. |
 | `herdr-boss install` | Install and start the service of the platform. On macOS it writes the launchd agent `no.tallmaker.herdr-boss`. On Linux it writes the systemd user service `herdr-boss.service`. Run it again after you move the repository. |
 | `herdr-boss uninstall` | Stop and remove the service of the platform. |
@@ -274,6 +275,38 @@ The service fix tells you to run the command without `sudo`.
 On Linux, the service check uses the systemd user service.
 CodexBar and its usage reading stay red when CodexBar is absent.
 The native Linux setup and Linux usage reader are separate onboarding tasks.
+
+## Tool versions
+
+Run `herdr-boss tools check` to compare the installed Mac versions and factory pins with public upstream releases.
+The command always checks upstream.
+Add `--json` to print the saved state as JSON.
+The command uses public HTTPS endpoints and does not use your GitHub CLI login.
+
+The command saves `tools-state.json` in the data directory.
+`HERDR_BOSS_DIR` selects this directory.
+The default is `~/.herdr-boss`.
+The file has mode `0600`.
+It contains version and risk data, but no login or token data.
+The command sets the directory mode to `0700` only when the directory is a real directory owned by the current user.
+The command reads the factory pin file.
+It does not query a running factory.
+
+For GitHub releases, the command chooses the highest version on the tracked major line when that line has a release.
+Otherwise, it chooses the highest version overall.
+The age is the number of days since the first release after the tracked version.
+`late` means the age is more than 14 days.
+`security` means a release note has a CVE ID or a GitHub advisory link with a GHSA ID, a public advisory affects the tracked version, or the Debian security version is newer.
+An advisory request failure does not discard good release data.
+It can delay an advisory warning until the next check.
+An upstream release request failure keeps the last known latest version.
+It keeps a saved `security` risk and marks other risk values `unknown`.
+
+`doctor` prints one line for each late or security row.
+A late row is a note and keeps exit code 0.
+A security row from a check older than 24 hours is ignored.
+`doctor` prints `note: tool check is stale, run herdr-boss tools check` for that row.
+A fresh security row is an error and sets exit code 4.
 
 ## Quota reset plan
 

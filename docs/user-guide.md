@@ -27,4 +27,12 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
 
+## Check tool versions
+
+Run `herdr-boss tools check` to compare versions on this Mac and in the factory pins with public upstream releases. Every run checks upstream. This command never upgrades a tool. It uses public HTTPS endpoints and does not use your GitHub CLI login.
+
+The check saves `tools-state.json` in the Herdr Boss data directory. `HERDR_BOSS_DIR` selects the directory. The default is `~/.herdr-boss`. The file has mode `0600` and contains version and risk data, but no login or token data. The command sets the directory mode to `0700` only when the directory is a real directory owned by the current user. Factory values come from the pin file. The command does not query running factories.
+
+For GitHub releases, the check chooses the highest version on the tracked major line when that line has a release. Otherwise, it chooses the highest version overall. The check reports `late` when the first release after the tracked version is more than 14 days old. It reports `security` when a release note has a CVE ID or a GitHub advisory link with a GHSA ID, a public advisory affects the tracked version, or the Debian security version is newer. An advisory request failure does not discard good release data, but it can delay an advisory warning until the next check. A failed release request keeps the last known latest version and a saved `security` risk. Other saved risk values become `unknown`. Run `herdr-boss doctor` to see one line for each late or security release. A late release is a note. A security result older than 24 hours is ignored and doctor prints `note: tool check is stale, run herdr-boss tools check`. A fresh security release makes `doctor` exit 4.
+
 For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).
