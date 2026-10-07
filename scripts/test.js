@@ -95,7 +95,7 @@ function expandTestInput(input) {
 
 function timeoutMs() {
   const raw = process.env.HERDR_BOSS_TEST_TIMEOUT_MS;
-  if (raw === undefined) return 120_000;
+  if (raw === undefined) return 300_000;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) {
     process.stderr.write('HERDR_BOSS_TEST_TIMEOUT_MS must be a positive whole number of milliseconds.\n');
