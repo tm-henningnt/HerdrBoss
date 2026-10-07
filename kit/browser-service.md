@@ -33,6 +33,8 @@ The screenshot command prints a private JPEG path. It writes the file under `$TM
 
 `browser measure` prints page measurements as one bounded JSON object. Give at most 10 selectors, each at most 200 characters. Every selector counts every matched element and lists the first 20 as items. No match returns `count: 0` and no items. A rectangle field that is not a finite number becomes `null`. A style value that is not plain text becomes `null`. The command prints no page text, cookies, storage, or attribute values. The output is at most 20 KB. When the output is larger, the command cuts the item lists and sets `truncated` to true.
 
+`browser console` reads up to 100 recent messages from one project tab, waits for 1 second by default, and masks secrets, URLs, and query strings.
+
 Set an exact page size with `browser viewport`. Width can be 200 to 3840 pixels. Height can be 150 to 2160 pixels. Scale can be 0.5 to 4 and defaults to 1. Add `--mobile` to enable the mobile viewport. The command sets the real window size, so every CDP client sees it. It falls back to emulation and says so. Headless Chrome keeps a window at least 500 px wide. For a narrower size, the command uses emulation, which only herdr-boss sessions see. The size stays active until you reset it, close the tab, or restart the browser. Run `browser screenshot` to capture the page at that size. The `browser size` command sets the window size for the next launch.
 
 A script that drives the browser over CDP must end when its task ends. A process that exits closes its DevTools connection; the project browser keeps running. Do not keep a script alive to "protect" the browser, and do not leave a script running in the background. Stop every script that a worker started before the worker reports.

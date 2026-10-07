@@ -1,6 +1,7 @@
 import { isProbeTab } from './browser-probe.js';
 import { maskUrl, maskBrowserText } from './browser-url-mask.js';
 import { capMeasurement, measureScript } from './browser-measure.js';
+import { CONSOLE_LIMITS, CONSOLE_LEVELS, formatConsoleEvent } from './browser-console.js';
 import { forgetAgentBrowserTab, recordAgentBrowserTab, withBrowserCommand } from './browser-activity.js';
 import { browserStatus, forgetBrowserTab, rememberBrowserTab, rememberBrowserTabs, listBrowserSessions, listBrowserTabViewports, setBrowserTabViewport } from './browser-pool.js';
 
@@ -135,6 +136,25 @@ async function pageContext(project, tabId, adapters = {}) {
   if (endpoint.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || Number(endpoint.port) !== session.port) throw new Error('Browser returned an unexpected debugging endpoint.');
   endpoint.hostname = '127.0.0.1';
   const viewports = (adapters.listViewports || listBrowserTabViewports)(project, pages.map((entry) => entry.id));
+  return { session, pages, target, endpoint: endpoint.href, viewport: viewports[target.id] || null };
+}
+
+async function consolePageContext(project, tabId, adapters = {}) {
+  const session = await (adapters.verifySession || verifiedSession)(project);
+  let targetPages;
+  try { targetPages = await (adapters.listTargets || targets)(session); }
+  catch { throw new Error('Could not connect to the browser page.'); }
+  const pages = targetPages.filter((page) => !isProbeTab(page.id));
+  if (!pages.length) throw new Error('No browser page is open.');
+  if (!tabId && pages.length > 1) throw new Error('Several pages are open. Run browser tabs and specify --tab ID.');
+  const target = tabId ? pages.find((page) => page.id === tabId) : pages[0];
+  if (!target) throw new Error('The selected tab is no longer open. Reload the tab list.');
+  let endpoint;
+  try { endpoint = new URL(target.webSocketDebuggerUrl); }
+  catch { throw new Error('Browser returned an unexpected debugging endpoint.'); }
+  if (endpoint.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || Number(endpoint.port) !== session.port) throw new Error('Browser returned an unexpected debugging endpoint.');
+  endpoint.hostname = '127.0.0.1';
+  const viewports = (adapters.listViewports || listBrowserTabViewports)(project, pages.map((page) => page.id));
   return { session, pages, target, endpoint: endpoint.href, viewport: viewports[target.id] || null };
 }
 
@@ -491,6 +511,89 @@ async function browserMeasureImpl(project, tabId, selectors, adapters = {}) {
   return capMeasurement(raw.result.value);
 }
 
+const CONSOLE_CONNECTION_ERROR = 'Could not connect to the browser page.';
+
+function collectConsoleMessages(endpoint, { levels, last, waitMs, knownHosts = [] }, adapters = {}) {
+  return new Promise((resolve, reject) => {
+    const WebSocketImpl = adapters.WebSocket || globalThis.WebSocket;
+    let socket;
+    try { socket = new WebSocketImpl(endpoint); }
+    catch { reject(new Error(CONSOLE_CONNECTION_ERROR)); return; }
+
+    let settled = false;
+    const pending = new Set([1, 2]);
+    const messages = [];
+    const seen = new Map();
+    const setupTimer = setTimeout(() => finish(new Error(CONSOLE_CONNECTION_ERROR)), CONSOLE_LIMITS.setupMs);
+    let waitTimer = null;
+
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(setupTimer);
+      clearTimeout(waitTimer);
+      try { socket.close(); } catch {}
+      if (error) reject(new Error(CONSOLE_CONNECTION_ERROR));
+      else resolve(result);
+    }
+
+    function receiveEvent(event) {
+      let message;
+      try { message = JSON.parse(String(event.data)); } catch { return; }
+      if (message.id === 1 || message.id === 2) {
+        if (!pending.has(message.id)) return;
+        if (message.error) return finish(new Error(CONSOLE_CONNECTION_ERROR));
+        pending.delete(message.id);
+        if (!pending.size) {
+          clearTimeout(setupTimer);
+          waitTimer = setTimeout(() => finish(null, messages.map(({ record }) => record)), waitMs);
+        }
+        return;
+      }
+      if (settled || typeof message.method !== 'string') return;
+      const record = formatConsoleEvent(message, { levels, knownHosts });
+      if (!record) return;
+      const kind = message.method === 'Runtime.consoleAPICalled' ? 'runtime' : 'log';
+      const otherKind = kind === 'runtime' ? 'log' : 'runtime';
+      const key = `${record.level}\u0000${record.timestamp}\u0000${record.source}\u0000${record.text}`;
+      const counts = seen.get(key) || { runtime: 0, log: 0 };
+      if (counts[otherKind] > 0) {
+        counts[otherKind] -= 1;
+        if (!counts.runtime && !counts.log) seen.delete(key);
+        else seen.set(key, counts);
+        return;
+      }
+      counts[kind] += 1;
+      seen.set(key, counts);
+      messages.push({ record, key, kind });
+      if (messages.length > last) {
+        const removed = messages.shift();
+        const prior = seen.get(removed.key);
+        if (prior) {
+          prior[removed.kind] -= 1;
+          if (!prior.runtime && !prior.log) seen.delete(removed.key);
+        }
+      }
+    }
+
+    socket.addEventListener('open', () => {
+      try {
+        // Enable both domains before waiting so Log can send entries that Chrome buffered before attach.
+        socket.send(JSON.stringify({ id: 1, method: 'Runtime.enable', params: {} }));
+        socket.send(JSON.stringify({ id: 2, method: 'Log.enable', params: {} }));
+      } catch { finish(new Error(CONSOLE_CONNECTION_ERROR)); }
+    });
+    socket.addEventListener('message', receiveEvent);
+    socket.addEventListener('error', () => finish(new Error(CONSOLE_CONNECTION_ERROR)));
+    socket.addEventListener('close', () => finish(new Error(CONSOLE_CONNECTION_ERROR)));
+  });
+}
+
+async function browserConsoleImpl(project, tabId, options, adapters = {}) {
+  const context = await consolePageContext(project, tabId, adapters);
+  return collectConsoleMessages(context.endpoint, options, adapters);
+}
+
 // Keep the activity record for the entire operation, including verification and a queued screenshot.
 export function listBrowserTabs(project, adapters = {}) {
   return withBrowserCommand(project, () => listBrowserTabsImpl(project, adapters), adapters.activity);
@@ -539,4 +642,7 @@ export function browserKey(project, tabId, key, adapters = {}, modifiers = []) {
 }
 export function browserMeasure(project, tabId, selectors, adapters = {}) {
   return withBrowserCommand(project, () => browserMeasureImpl(project, tabId, selectors, adapters), adapters.activity);
+}
+export function browserConsole(project, tabId, options, adapters = {}) {
+  return withBrowserCommand(project, () => browserConsoleImpl(project, tabId, options, adapters), adapters.activity);
 }
