@@ -294,3 +294,7 @@ Summary: Clarify the license rule: tests may sign tokens in memory with a throwa
 Impact: useful
 Summary: Scan changed test files and fixture folders for token-shaped strings, with a hash allowlist for documented samples; require a redacted reason for forced overrides; guard worker starts on free disk space on the worktree and data volumes with a bounded diagnosis.
 Shorten the orchestrator skill and preserve its rules and reference links.
+
+## 6e5e9c2624b3
+Impact: useful
+Summary: Workers never run impeccable ignores or edit .impeccable/config.json; worker collect treats .impeccable/ as out of scope; worker collect --exclude-path PATH --reason TEXT.

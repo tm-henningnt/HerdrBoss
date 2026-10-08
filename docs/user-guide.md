@@ -63,6 +63,16 @@ Use `--force --reason TEXT` for an authorized override. Give a reason from 1 to 
 
 When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
 
+## Collect a worker
+
+The project lead reviews a worker's change and runs its acceptance commands before collection. Run `herdr-boss worker collect NAME --outcome done --gate-passed` to record a completed run.
+
+If the worker lists an unintended path outside its scope, discard the change first. Then run `herdr-boss worker collect NAME --exclude-path PATH --reason "discarded an unintended file" --outcome done --gate-passed`. Separate multiple paths with a comma. Give a reason with 1 to 300 characters.
+
+Herdr Boss refuses the exclusion if the path is still in the branch diff against the recorded base or in the worktree diff or status. The error shows where the path remains. It also refuses an ordinary path inside the allowed scope. Every path under `.impeccable/` counts as outside the scope, even when the allowed paths cover it. Discard an unintended Impeccable change before exclusion. Exclusion records the run, removes the discarded paths from the scope check and ledger, and writes the run name, paths, and redacted reason to `action-audit.jsonl`. The report stays unchanged. Do not use `--no-record` with an exclusion.
+
+Use `--accept-scope` for other extra files that the project lead approved. This option cannot accept `.impeccable/` paths. Report an Impeccable false positive in the worker report. The project lead decides how to handle it. See the [worker commands](cli.md#workers) for the scope rules.
+
 ## Full-suite lock watchdog
 
 The lock watchdog checks a live `full-suite` lock after it runs longer than the multiplier times its predicted hold time. It sends one notice to the holder pane and the Boss when the process tree stays below the CPU limit in the Locks panel on Settings. The notice names the holder and child processes and tells you to inspect the pane. The Boss or holder pane can run `herdr-boss lock release`; the watchdog never releases the lock.

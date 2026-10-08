@@ -33,3 +33,37 @@ test('force reasons require 1 to 300 characters and cannot be used without force
   assert.throws(() => forceReason(false, 'reason'), /needs --force/);
   assert.equal(forceReason(true, ' approved '), 'approved');
 });
+
+test('a collect audit line redacts its paths and keeps the existing forced-action fields', (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-collect-audit-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const row = appendForcedAction({
+    dataDir, time: '2026-10-08T12:00:00.000Z', command: 'worker collect', project: 'fixture', workerName: 'discarded',
+    refusalKind: 'excluded-paths', paths: ['docs/discarded.md', 'docs/api_key="sample"'], reason: 'discarded',
+  });
+  assert.deepEqual(row.paths, ['docs/discarded.md', 'docs/api_key=[REDACTED]']);
+  const lines = fs.readFileSync(path.join(dataDir, ACTION_AUDIT_FILE), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).workerName, 'discarded');
+  assert.doesNotMatch(lines[0], /sample/);
+});
+
+test('audited paths have bounded count and length and no control characters', (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-bounded-audit-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const paths = Array.from({ length: 25 }, (_, index) => `docs/${index}`);
+  paths[0] = 'docs/\n\r\t\0\u007f';
+  paths[1] = 'x'.repeat(1200);
+  paths[2] = 'docs/api_key="sample"\n';
+  const row = appendForcedAction({
+    dataDir, command: 'worker collect', workerName: 'bounded', refusalKind: 'excluded-paths', reason: 'discarded', paths,
+  });
+  assert.equal(row.paths.length, 20);
+  assert.equal(row.paths[0], 'docs/?????');
+  assert.equal(row.paths[1].length, 1000);
+  assert.equal(row.paths[2], 'docs/api_key=[REDACTED]?');
+  assert.equal(row.paths[19], 'docs/19');
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, ACTION_AUDIT_FILE), 'utf8'));
+  assert.deepEqual(saved.paths, row.paths);
+  assert.ok(saved.paths.every((item) => !/[\u0000-\u001f\u007f]/.test(item)));
+});

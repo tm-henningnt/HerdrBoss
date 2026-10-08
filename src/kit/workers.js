@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendDelegatedRun, compareChangedPaths, gitLog, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, compareChangedPaths, gitLog, gitStatusPaths, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, paceHaikuTolerancePoints, paceMinUsePercent, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
@@ -2444,6 +2444,12 @@ export function commitWorker(name, { message = null } = {}, { config, output = c
 
 // One shell argument for a copyable example. The value always gets single quotes, so a path with a space or a metacharacter stays one token.
 const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
+const IMPECCABLE_WORKER_RULE = 'Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.';
+
+function impeccablePath(item) {
+  const candidate = path.posix.normalize(String(item).replaceAll('\\', '/')).toLowerCase();
+  return candidate === '.impeccable' || candidate.startsWith('.impeccable/');
+}
 
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid, herdr = null } = {}) {
   const record = options.noRecord !== true && options.record !== false;
@@ -2501,11 +2507,42 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (errors.length) throw new Error(`Worker ${name} has invalid ${label} paths: ${errors.join(', ')}.`);
     }
     const allowedPaths = [...new Set([...(run.allowedPaths ?? []), ...extensionPaths, ...oneTimePaths])];
+    let scopeExclusions = null;
+    if (options.excludePaths != null) {
+      const reason = forceReason(true, options.excludeReason, '--exclude-path');
+      if (!record) throw new Error('--exclude-path needs a recorded collection; remove --no-record.');
+      const errors = scopeEscapeErrors(run.worktree, options.excludePaths);
+      if (errors.length) throw new Error(`Invalid --exclude-path: ${errors.join(', ')}.`);
+      const paths = [...new Set(options.excludePaths.map((item) => path.posix.normalize(item.replaceAll('\\', '/')).replace(/\/$/, '')))];
+      if (paths.some((item) => item === '.' || item === '')) throw new Error('--exclude-path must not name the repository root.');
+      const inside = paths.filter((item) => !impeccablePath(item) && compareChangedPaths([item], allowedPaths).length === 0);
+      if (inside.length) throw new Error(`--exclude-path lists paths inside the allowed scope of worker ${name}: ${inside.join(', ')}.`);
+      const branchPaths = git(run.worktree, ['diff', '--no-renames', '--name-only', '-z', `${baseRef}...HEAD`]).split('\0').filter(Boolean);
+      const worktreePaths = gitStatusPaths(run.worktree);
+      for (const item of paths) {
+        const matches = (candidate) => candidate === item || candidate.startsWith(`${item}/`) || item.startsWith(`${candidate}/`);
+        const branch = branchPaths.filter(matches);
+        const worktree = worktreePaths.filter(matches);
+        const locations = [
+          ...(branch.length ? [`branch diff against ${baseRef}: ${branch.join(', ')}`] : []),
+          ...(worktree.length ? [`worktree diff or status: ${worktree.join(', ')}`] : []),
+        ];
+        if (locations.length) throw new Error(`--exclude-path cannot exclude ${item}; it is still in the ${locations.join('; ')}.`);
+      }
+      scopeExclusions = { paths, reason };
+    } else if (options.excludeReason != null) {
+      throw new Error('--reason needs --exclude-path PATH[,PATH].');
+    }
+    const excluded = (item) => scopeExclusions?.paths.some((excludedPath) => {
+      const candidate = path.posix.normalize(item.replaceAll('\\', '/')).replace(/\/$/, '');
+      return candidate === excludedPath || candidate.startsWith(`${excludedPath}/`);
+    });
     const reported = (reportJson.changedPaths || []).filter((item) => !ownFile(item));
-    const changed = gitWorkerChangedPaths(run.worktree, baseRef, run.base).filter((item) => !ownFile(item));
-    const reportScope = compareChangedPaths(reported, allowedPaths);
+    const changed = gitWorkerChangedPaths(run.worktree, baseRef, run.base).filter((item) => !ownFile(item) && !excluded(item));
+    const includedReportPaths = reported.filter((item) => !excluded(item));
+    const reportScope = compareChangedPaths(includedReportPaths, allowedPaths);
     const actualScope = compareChangedPaths(changed, allowedPaths);
-    const scopeErrors = [...new Set([...reportScope, ...actualScope])];
+    const scopeErrors = [...new Set([...reportScope, ...actualScope, ...includedReportPaths.filter(impeccablePath), ...changed.filter(impeccablePath)])];
     // A report entry that ends in / covers every changed file under that folder, when the folder is inside the
     // allowed paths. The scope check above still runs on each real file.
     const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], allowedPaths).length === 0);
@@ -2518,6 +2555,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (!reason) throw new Error('--accept-scope needs --reason TEXT with a reason that is not blank.');
       const listed = [...new Set(options.acceptScope.map((item) => String(item).trim()).filter(Boolean))];
       if (!listed.length) throw new Error('--accept-scope needs at least one repository-relative path.');
+      const forbidden = listed.filter(impeccablePath);
+      if (forbidden.length) throw new Error(`--accept-scope cannot accept .impeccable/ paths: ${forbidden.join(', ')}. ${IMPECCABLE_WORKER_RULE}`);
       const notOutside = listed.filter((item) => !scopeErrors.includes(item));
       if (notOutside.length) throw new Error(`--accept-scope lists paths that are not changed outside the allowed scope of worker ${name}: ${notOutside.join(', ')}.`);
       unlistedErrors = scopeErrors.filter((item) => !listed.includes(item));
@@ -2528,6 +2567,9 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     // The refusal names the exact allowed command form and gives one example with every unlisted file, so the orchestrator can rerun collect without a new search.
     if (unlistedErrors.length) {
       const list = unlistedErrors.join(', ');
+      if (unlistedErrors.some(impeccablePath)) {
+        throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. ${IMPECCABLE_WORKER_RULE} Discard the change, then use --exclude-path PATH[,PATH] --reason TEXT.`);
+      }
       const form = `herdr-boss worker collect ${name} --accept-scope FILE[,FILE] --reason TEXT`;
       const example = `herdr-boss worker collect ${name} --accept-scope ${shellQuote(unlistedErrors.join(','))} --reason "approved by the orchestrator"`;
       throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. The allowed command form is: ${form}. Example: ${example}.`);
@@ -2536,7 +2578,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     // Collection accepts that state and names it, so the orchestrator commits with worker commit.
     const uncommitted = run.kind === 'codex' && !log.trim() && changed.length > 0;
     if (uncommitted) output(`Codex worker ${name} left ${changed.length} changed path(s) uncommitted; the orchestrator commits with herdr-boss worker commit ${name} -m MESSAGE.`);
-    const recordedPaths = omitted.length ? changed : reported;
+    const recordedPaths = omitted.length ? changed : includedReportPaths;
     try {
       const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
       recordWorkerReport({
@@ -2563,6 +2605,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       outOfScope: unlistedErrors,
       ...(uncommitted ? { uncommitted: true } : {}),
       ...(scopeException ? { scopeException } : {}),
+      ...(scopeExclusions ? { scopeExclusions } : {}),
       scopeExtensions: run.scopeExtensions ?? [],
       artifactWarnings: collectArtifactWarnings(run.worktree, reportMd, config.artifactChecks ?? []),
       report: reportMd,
@@ -2571,6 +2614,11 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const releasedLeases = [];
     if (record) {
       const modelOutcome = deriveModelOutcome(options, reportJson);
+      if (scopeExclusions) appendForcedAction({
+        dataDir: leaseDataDir, time: new Date(now).toISOString(), command: 'worker collect',
+        project: config.slug, workerName: name, refusalKind: 'excluded-paths',
+        paths: scopeExclusions.paths, reason: options.excludeReason,
+      });
       const entry = {
         issue: run.issue,
         model: run.model,
@@ -2611,6 +2659,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (reportSummary) run.reportSummary = reportSummary;
       run.collectedAt = run.collectedAt || entry.endedAt;
       if (scopeException) run.scopeException = scopeException;
+      if (scopeExclusions) run.scopeExclusions = scopeExclusions;
       writeJsonAtomic(file, run);
       // Give back every lease that names this worker, also a lease that the worker took after its start.
       // A worker with no lease file does not need the lifecycle port.

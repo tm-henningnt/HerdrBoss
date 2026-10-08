@@ -85,6 +85,8 @@ Use Muse Spark only for narrow, bounded work when its model fits the task.
 
 ### Claude
 
+Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.
+
 Start Claude workers with `--permission-mode auto`. The worker then uses the auto-mode classifier with the Owner's `autoMode` rules, like the orchestrators. Without it, a worker runs in the default mode and can stop on a permission dialog, also for a read-only command in its own worktree.
 
 ### Pi
@@ -148,6 +150,8 @@ Confirm the worker leaves `idle` after you send the prompt.
 Limit a shared cheap model to two active workers.
 
 ### Codex
+
+Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.
 
 Give a Codex browser check, including a `serve-live` check, to `gpt-6-luna` or `gpt-6.1-sol` with the Chrome DevTools MCP of the project browser. The Viz trial showed that the MCP attaches in the Codex sandbox. Screenshot, DOM snapshot, evaluate, console messages, network list, and performance trace work on the worker's own tab. The trial covered `serve-live`. The full Qlik client is untested. Tell the worker to wait for the `serve-live` port before it opens the page. A refused connection before the port is ready is not a defect of the page.
 
