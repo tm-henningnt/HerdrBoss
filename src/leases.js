@@ -731,15 +731,20 @@ export function setLeasePane(poolName, item, pane, { dataDir = DATA_DIR } = {}) 
 export function reownLeases({ fromPane, toPane, project = null, dataDir = DATA_DIR } = {}) {
   if (typeof fromPane !== 'string' || typeof toPane !== 'string' || !fromPane || !toPane || fromPane === toPane) return [];
   if (!fs.existsSync(path.join(dataDir, LEASES_FILE))) return [];
-  return changeLeases(dataDir, (store) => {
-    const changed = [];
-    for (const lease of store.leases) {
-      if (lease.pane !== fromPane || (project !== null && lease.project !== project)) continue;
-      lease.pane = toPane;
-      changed.push({ pool: lease.pool, item: lease.item, project: lease.project });
-    }
-    return changed;
-  });
+  try {
+    return changeLeases(dataDir, (store) => {
+      const changed = [];
+      for (const lease of store.leases) {
+        if (lease.pane !== fromPane || (project !== null && lease.project !== project)) continue;
+        lease.pane = toPane;
+        changed.push({ pool: lease.pool, item: lease.item, project: lease.project });
+      }
+      return changed;
+    });
+  } finally {
+    // Remove only the empty guard directory touched by this handover, never the locks root.
+    try { fs.rmdirSync(path.join(dataDir, 'locks', 'machine')); } catch { /* Keep non-empty directories. */ }
+  }
 }
 
 // Remove leases that match the filter without a caller check. worker start and worker collect use it for their own worker.

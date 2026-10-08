@@ -104,8 +104,12 @@ export function buildModelScorecard(events = [], now = Date.now()) {
     const end = Date.parse(e.endedAt);
     if (!Number.isFinite(end) || end < cutoff) continue;
     const key = `${e.kind}\n${e.model}`;
-    const row = rows[key] ||= { kind: e.kind, model: e.model, runs: 0, firstTime: 0, rework: 0, failed: 0, durations: [] };
+    const row = rows[key] ||= { kind: e.kind, model: e.model, runs: 0, firstTime: 0, rework: 0, failed: 0, defects: null, defectRuns: 0, durations: [] };
     row.runs++;
+    if (Number.isInteger(e.defects) && e.defects >= 0 && e.defects <= 99) {
+      row.defects = (row.defects ?? 0) + e.defects;
+      row.defectRuns++;
+    }
     const result = e.modelOutcome?.result;
     if (result === 'first-time') row.firstTime++;
     else if (result === 'rework') row.rework++;

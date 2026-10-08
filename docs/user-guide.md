@@ -67,11 +67,21 @@ When the main checkout has `node_modules` and all detected lock files match the 
 
 The project lead reviews a worker's change and runs its acceptance commands before collection. Run `herdr-boss worker collect NAME --outcome done --gate-passed` to record a completed run.
 
+Add `--defects N` to record a defect count from 0 to 99. Omit it when the count is unknown. The model scorecard shows the total beside the first-time and rework results. It also shows how many runs supplied a count. A dash means no count was recorded.
+
 If the worker lists an unintended path outside its scope, discard the change first. Then run `herdr-boss worker collect NAME --exclude-path PATH --reason "discarded an unintended file" --outcome done --gate-passed`. Separate multiple paths with a comma. Give a reason with 1 to 300 characters.
 
 Herdr Boss refuses the exclusion if the path is still in the branch diff against the recorded base or in the worktree diff or status. The error shows where the path remains. It also refuses an ordinary path inside the allowed scope. Every path under `.impeccable/` counts as outside the scope, even when the allowed paths cover it. Discard an unintended Impeccable change before exclusion. Exclusion records the run, removes the discarded paths from the scope check and ledger, and writes the run name, paths, and redacted reason to `action-audit.jsonl`. The report stays unchanged. Do not use `--no-record` with an exclusion.
 
 Use `--accept-scope` for other extra files that the project lead approved. This option cannot accept `.impeccable/` paths. Report an Impeccable false positive in the worker report. The project lead decides how to handle it. See the [worker commands](cli.md#workers) for the scope rules.
+
+## Handover lock cleanup
+
+A handover removes empty lock directories after it transfers resources. It removes only directories that the transfer touched. It keeps non-empty directories and the data directory’s `locks` root.
+
+## Harness change markers
+
+Run `herdr-boss harness check` or `herdr-boss harness sync` to record changed harness facts. The first run saves a baseline. Later runs add markers for version, model list, or sandbox changes to the Analytics denial chart. Version facts come from the last `herdr-boss tools check`. A missing reading keeps the last known fact. A dry run writes no marker or baseline. Automatic markers contain no paths or setting values. Herdr Boss keeps at most 200 rows and 64 KiB in the marker file. A recording error prints one warning with no path. Check and sync keep their result and exit code. Herdr Boss saves the baseline before it writes markers. A failed marker is not retried.
 
 ## Full-suite lock watchdog
 

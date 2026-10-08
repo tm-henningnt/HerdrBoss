@@ -3,14 +3,29 @@
 // that does not validate and never throws.
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { verifyMessageCaller } from './messages.js';
+import { withMutationLock } from './kit/locks.js';
 
 export const HARNESS_CHANGES_FILE = 'harness-changes.jsonl';
 export const CHANGE_HARNESSES = ['claude', 'codex', 'opencode', 'pi'];
 export const MAX_CHANGE_LINES = 200;
 export const MAX_CHANGE_BYTES = 64 * 1024;
 export const MAX_LABEL_LENGTH = 80;
+const heldGuards = new Set();
+
+// Fact snapshots and manual appends share one guard. A snapshot may append markers inside its guard.
+export function withHarnessChangeGuard(dataDir, operation) {
+  const directory = path.resolve(dataDir);
+  if (heldGuards.has(directory)) return operation();
+  fs.mkdirSync(directory, { recursive: true });
+  return withMutationLock(directory, () => {
+    heldGuards.add(directory);
+    try { return operation(); }
+    finally { heldGuards.delete(directory); }
+  }, { busyMessage: 'A harness change operation is already in progress. Retry when it finishes.' });
+}
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 // C0 and C1 control characters, the line and paragraph separators, and the bidi and zero-width format characters.
@@ -74,11 +89,37 @@ export function appendHarnessChange(dataDir, { harness, label, date } = {}) {
   if (!validDate(day)) throw new Error('The date must be a real day in the form YYYY-MM-DD.');
   const entry = parseHarnessChange({ date: day, harness, label });
   if (!entry) throw new Error(`The label must be 1 to ${MAX_LABEL_LENGTH} characters, without control characters.`);
-  fs.mkdirSync(dataDir, { recursive: true });
-  const file = path.join(dataDir, HARNESS_CHANGES_FILE);
-  fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
-  return entry;
+  return withHarnessChangeGuard(dataDir, () => {
+    const file = path.join(dataDir, HARNESS_CHANGES_FILE);
+    let separator = '';
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      const size = fs.fstatSync(fd).size;
+      if (size) {
+        const last = Buffer.alloc(1);
+        fs.readSync(fd, last, 0, 1, size - 1);
+        if (last[0] !== 10) separator = '\n';
+      }
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    finally { if (fd !== undefined) fs.closeSync(fd); }
+    fs.appendFileSync(file, `${separator}${JSON.stringify(entry)}\n`, { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+    const rows = readHarnessChanges(dataDir);
+    if (fs.statSync(file).size > MAX_CHANGE_BYTES || rows.length >= MAX_CHANGE_LINES) {
+      const lines = rows.map((row) => `${JSON.stringify(row)}\n`);
+      let bytes = lines.reduce((total, line) => total + Buffer.byteLength(line), 0);
+      while (bytes > MAX_CHANGE_BYTES && lines.length) bytes -= Buffer.byteLength(lines.shift());
+      const temp = `${file}.${process.pid}-${randomUUID()}.tmp`;
+      try {
+        fs.writeFileSync(temp, lines.join(''), { flag: 'wx', mode: 0o600 });
+        fs.renameSync(temp, file);
+      } finally {
+        try { fs.unlinkSync(temp); } catch { /* The successful rename removes it. */ }
+      }
+    }
+    return entry;
+  });
 }
 
 // Who may add a marker: a plain terminal (the Owner), the pane labeled boss, and a pane labeled orch. A worker pane is refused.

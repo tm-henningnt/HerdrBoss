@@ -20,6 +20,7 @@ export function validateUsage(e) {
   if (Number.isNaN(Date.parse(e.startedAt)) || Number.isNaN(Date.parse(e.endedAt))) errors.push('startedAt and endedAt must be ISO times.');
   if (e.id != null && (typeof e.id !== 'string' || e.id.length > 240)) errors.push('id must be a short string.');
   if (e.tokenSource != null && !['measured', 'unavailable'].includes(e.tokenSource)) errors.push('tokenSource must be null, measured, or unavailable.');
+  if (Object.hasOwn(e, 'defects') && (!Number.isInteger(e.defects) || e.defects < 0 || e.defects > 99)) errors.push('defects must be an integer from 0 to 99.');
   if (e.modelOutcome != null) {
     const outcome = e.modelOutcome;
     if (!isObject(outcome)) errors.push('modelOutcome must be null or an object.');

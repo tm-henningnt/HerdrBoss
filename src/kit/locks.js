@@ -689,19 +689,26 @@ export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR, now = Date.no
 // The function returns false when another process holds the guard. A rename onto an existing folder fails, so a claim never takes a live guard.
 function claimMutationGuard(guard, ownerText) {
   const staging = `${guard}.staging-${crypto.randomUUID()}`;
-  try {
-    fs.mkdirSync(staging, { mode: 0o700 });
-    fs.writeFileSync(path.join(staging, MUTATION_OWNER_FILE), ownerText, { mode: 0o600 });
-    if (fs.existsSync(guard)) return false;
-    fs.renameSync(staging, guard);
-    return true;
-  } catch (error) {
-    // macOS and Linux name the error of a rename onto an existing folder EEXIST, ENOTEMPTY, or ENOTDIR.
-    if (error.code === 'EEXIST' || error.code === 'ENOTEMPTY' || error.code === 'ENOTDIR') return false;
-    throw error;
-  } finally {
-    // The rename already moved the staging folder. This line only removes it after a failure or a killed claim.
-    try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.mkdirSync(staging, { mode: 0o700 });
+      fs.writeFileSync(path.join(staging, MUTATION_OWNER_FILE), ownerText, { mode: 0o600 });
+      if (fs.existsSync(guard)) return false;
+      fs.renameSync(staging, guard);
+      return true;
+    } catch (error) {
+      // Handover cleanup can remove the empty parent after lockContext created it. Retry once.
+      if (error.code === 'ENOENT' && attempt === 0) {
+        fs.mkdirSync(path.dirname(guard), { recursive: true, mode: 0o700 });
+        continue;
+      }
+      // macOS and Linux name the error of a rename onto an existing folder EEXIST, ENOTEMPTY, or ENOTDIR.
+      if (error.code === 'EEXIST' || error.code === 'ENOTEMPTY' || error.code === 'ENOTDIR') return false;
+      throw error;
+    } finally {
+      // The rename already moved the staging folder. This line only removes it after a failure or a killed claim.
+      try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
+    }
   }
 }
 
@@ -1402,22 +1409,27 @@ export function reownProjectLocks({ config, dataDir = DATA_DIR, fromPane, toPane
   const changed = { locks: [], tickets: [] };
   for (const scope of ['repository', 'machine']) {
     const { commonDir, directory } = lockContext(config, dataDir, scope);
-    withMutationLock(directory, () => {
-      for (const { file, record } of readAllLockRecords(directory, commonDir, scope)) {
-        if (record.ownerPane !== fromPane || record.project !== project) continue;
-        replaceRecord(file, { ...record, ownerPane: toPane });
-        changed.locks.push({ name: record.name, slot: record.slot, project: record.project, kind: record.kind });
-      }
-      if (scope !== 'machine') return;
-      // A waiting suite run also carries the pane of its caller.
-      const queue = path.join(directory, 'queue', FULL_SUITE_LOCK);
-      for (const ticket of readQueueTickets(directory, FULL_SUITE_LOCK)) {
-        if (ticket.pane !== fromPane || ticket.project !== project) continue;
-        const { legacy, ...raw } = ticket;
-        replaceRecord(path.join(queue, `${ticket.id}.json`), { ...raw, pane: toPane });
-        changed.tickets.push({ id: ticket.id, project: ticket.project, kind: ticket.kind });
-      }
-    });
+    try {
+      withMutationLock(directory, () => {
+        for (const { file, record } of readAllLockRecords(directory, commonDir, scope)) {
+          if (record.ownerPane !== fromPane || record.project !== project) continue;
+          replaceRecord(file, { ...record, ownerPane: toPane });
+          changed.locks.push({ name: record.name, slot: record.slot, project: record.project, kind: record.kind });
+        }
+        if (scope !== 'machine') return;
+        // A waiting suite run also carries the pane of its caller.
+        const queue = path.join(directory, 'queue', FULL_SUITE_LOCK);
+        for (const ticket of readQueueTickets(directory, FULL_SUITE_LOCK)) {
+          if (ticket.pane !== fromPane || ticket.project !== project) continue;
+          const { legacy, ...raw } = ticket;
+          replaceRecord(path.join(queue, `${ticket.id}.json`), { ...raw, pane: toPane });
+          changed.tickets.push({ id: ticket.id, project: ticket.project, kind: ticket.kind });
+        }
+      });
+    } finally {
+      // rmdir is atomic and refuses a live guard, a record, or any other content. Keep the locks root.
+      try { fs.rmdirSync(directory); } catch { /* Cleanup must not block the handover. */ }
+    }
   }
   return changed;
 }

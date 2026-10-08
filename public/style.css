@@ -2187,6 +2187,8 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 .viz-details > summary:hover, .viz-card .mh-details > summary:hover { color: var(--text); }
 .viz-details[open] > summary { margin-bottom: 8px; }
 .viz-details-body { display: grid; gap: 10px; min-width: 0; }
+.viz-card#scorecard .viz-details { min-width: 0; }
+.viz-card#scorecard .viz-details-body { grid-template-columns: minmax(0, 1fr); }
 .viz-details-body h4 { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .viz-card .denial-limits, .viz-card .denial-note { margin: 0; }
 .viz-card .denial-limits { color: var(--muted); font-size: 12px; }

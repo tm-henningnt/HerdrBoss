@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
 import { expandHome, sharedWorktreeRoot } from './kit/config.js';
+import { recordHarnessFacts } from './harness-facts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATES = path.join(ROOT, 'kit', 'templates', 'harness');
@@ -524,12 +525,18 @@ export function claudeLines(options = {}) {
   return lines;
 }
 
-export function syncHarness({ codexOnly = false, ...options } = {}) {
+function recordFactsSafely(options, recordFacts) {
+  try { recordFacts(options); }
+  catch { process.stderr.write('Warning: Could not record harness changes.\n'); }
+}
+
+export function syncHarness({ codexOnly = false, recordFacts = recordHarnessFacts, ...options } = {}) {
   const codex = syncCodex(options);
   const rules = syncCodexRules(options);
   // The roots decide, and a stop-own conflict also fails. A missing rules file stays a report line.
   const lines = [...codex.lines, ...rules.lines];
   if (!codexOnly) lines.push('', ...claudeLines(options));
+  if (!options.dryRun) recordFactsSafely({ home: homeDir(), dataDir: DATA_DIR, modelsFile: MODELS_FILE, ...options }, recordFacts);
   return { ...codex, ok: codex.ok && rules.ok, changed: codex.changed || rules.changed, lines };
 }
 
@@ -579,7 +586,7 @@ function hasFlags(args, flags) {
 
 // Return one finding per checked entry: { status: ok|missing|bad, area, item, text }.
 // item is a fixed label for the entry. It holds no path and no setting value.
-export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile = MODELS_FILE } = {}) {
+export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile = MODELS_FILE, recordFacts = recordHarnessFacts } = {}) {
   const findings = [];
   const add = (status, area, item, text) => findings.push({ status, area, item, text });
   const projects = readProjectRepos(dataDir);
@@ -678,6 +685,7 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     const args = models.value?.kinds?.[kind]?.launchArgs || [];
     for (const flags of flagSets) add(hasFlags(args, flags) ? 'ok' : 'missing', `models.json ${kind}`, LAUNCH_LABELS[kind], flags.join(' '));
   }
+  recordFactsSafely({ home, dataDir, modelsFile }, recordFacts);
   return findings;
 }
 
