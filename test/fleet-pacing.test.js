@@ -19,7 +19,7 @@ test('worker dispatch reads a newly lowered factory ceiling before the next rule
   fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), lanes: { codex: { state: 'open', factoryShareUsedPercent: 55, reading: { usedPercent: 25 } } } }));
   for (const share of [0, 20, 40]) {
     writeFleetFile(path.join(dir, 'fleet-guidance.json'), { shares: [{ accountKey: key, share }] });
-    assert.throws(() => startWorker('fleet-refused', { kind: 'codex', task: 'Sample task', allow: ['src/'], force: true, dryRun: true }, {
+    assert.throws(() => startWorker('fleet-refused', { kind: 'codex', task: 'Sample task', allow: ['src/'], force: true, reason: 'Verify the factory share refusal with an authorized override', dryRun: true }, {
       config: f.config, models: loadModels(), herdr: f.herdr, env: { ...f.env, HERDR_BOSS_DIR: dir }, rulesFile: f.rulesFile, output: () => {},
     }), /factory share/i);
     assert.ok(!f.calls.includes('agent start'));
@@ -77,7 +77,7 @@ test('dispatch fails closed with a plain share-check error for corrupt fleet dat
   const dir = path.join(f.root, 'factory-data');
   writeFleetFile(path.join(dir, 'fleet-accounts.json'), [localAccount]);
   fs.writeFileSync(path.join(dir, 'fleet-guidance.json'), '{PRIVATE broken');
-  assert.throws(() => startWorker('invalid-shares', { kind: 'codex', task: 'Sample task', allow: ['src/'], force: true, dryRun: true }, {
+  assert.throws(() => startWorker('invalid-shares', { kind: 'codex', task: 'Sample task', allow: ['src/'], force: true, reason: 'Verify the corrupt share refusal with an authorized override', dryRun: true }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: { ...f.env, HERDR_BOSS_DIR: dir }, rulesFile: f.rulesFile, output: () => {},
   }), /factory share check failed/i);
   assert.ok(!f.calls.includes('agent start'));

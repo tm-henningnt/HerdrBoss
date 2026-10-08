@@ -10,15 +10,15 @@ description: Use when coordinating delegated workers with Herdr Boss, writing wo
 
 ## Reference files
 
-Read each file in the skill folder when its step comes:
+Read each reference before its step:
 
-- [reference/herdr-control.md](reference/herdr-control.md): read before you start a worker or control Herdr panes and agents, when a worker state is not clear, and before browser work.
-- [reference/machine-and-quota.md](reference/machine-and-quota.md): read before you choose a lane, when a provider or the machine is at a limit, and for test thread flags.
-- [reference/handover.md](reference/handover.md): read when your harness quota threatens the orchestrator.
-- [reference/ledger-and-evidence.md](reference/ledger-and-evidence.md): read when you record a run or decide which evidence a gate needs.
-- [reference/git-and-worktrees.md](reference/git-and-worktrees.md): read before you dispatch work, integrate a change, or clean up a worktree.
-- [reference/review-tasks.md](reference/review-tasks.md): read before you dispatch a reviewer or a review subagent.
-- [The model lanes](../../models.md): read before you select a worker kind or model.
+- [reference/herdr-control.md](reference/herdr-control.md): read before dispatch, Herdr control, unclear worker states, or browser work.
+- [reference/machine-and-quota.md](reference/machine-and-quota.md): read before lane selection, provider or machine limits, or test flags.
+- [reference/handover.md](reference/handover.md): read before orchestrator quota handover.
+- [reference/ledger-and-evidence.md](reference/ledger-and-evidence.md): read before run records or gate evidence.
+- [reference/git-and-worktrees.md](reference/git-and-worktrees.md): read before dispatch, integration, or worktree cleanup.
+- [reference/review-tasks.md](reference/review-tasks.md): read before reviewer or review subagent dispatch.
+- [The model lanes](../../models.md): read before kind or model selection.
 - [The dedicated browser service](../../browser-service.md): read before browser work.
 
 ## What the orchestrator owns
@@ -60,7 +60,7 @@ Read each file in the skill folder when its step comes:
 ## Roles and escalation
 
 - The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
-- Settle implementation, product and design details, naming, thresholds, test design, scope inside the project, and review findings within project rules and Owner decisions in the memory file. Do not ask the Boss about them.
+- Decide implementation, product, design, naming, thresholds, tests, project scope, and review findings under project rules and recorded Owner decisions. Keep these decisions within the project.
 - Escalate only when project documents and available evidence cannot settle the next action.
 - Before you escalate, check `docs/orchestration/memory.md` for an Owner decision that already answers the question.
 - Ask the Boss only about a conflict between projects or a change that affects another project.

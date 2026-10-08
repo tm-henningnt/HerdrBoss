@@ -41,11 +41,21 @@ test('every policy machine key and top-level policy setting has an explanation',
 
 test('every lock lane policy key has a Locks group explanation', () => {
   const keys = [
-    'locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled',
-    'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent',
+    ...Object.keys(POLICY_DEFAULTS.locks).filter((key) => key !== 'guard').map((key) => `locks.${key}`),
+    ...Object.keys(POLICY_DEFAULTS.locks.guard).map((key) => `locks.guard.${key}`),
   ];
   assert.ok(SETTING_GROUPS.some((group) => group.id === 'locks' && group.title === 'Locks'));
   for (const key of keys) assert.equal(SETTING_HELP[key]?.group, 'locks', `${key} has a Locks explanation`);
+});
+
+test('lock watchdog help applies at the next engine tick', () => {
+  for (const key of ['locks.watchdogMultiplier', 'locks.watchdogCpuPercent']) {
+    assert.equal(SETTING_HELP[key].apply, 'policy', `${key} applies at the next engine tick`);
+    assert.match(settingPopupHtml(key), /next engine tick/);
+  }
+  const group = SETTING_GROUPS.find((item) => item.id === 'locks');
+  assert.match(group.controls, /lock watchdog/);
+  assert.match(group.restart, /watchdog.*next engine tick/);
 });
 
 test('every service setting has an explanation', () => {
@@ -150,7 +160,8 @@ test('the text follows the Simplified Technical English limits', () => {
 function usedIds() {
   const ids = new Set([...app.matchAll(/helpButton\('([^']+)'/g)].map((match) => match[1]).filter((id) => !id.endsWith('.')));
   for (const match of app.matchAll(/lockInput\('([^']+)'/g)) ids.add(match[1]);
-  for (const key of ['attachments.retentionDays', 'agentMessages.retentionDays', 'agentMessages.metaRetentionDays', 'locks.slots', 'locks.shortLimitMinutes', 'locks.guard.enabled', 'locks.guard.maxLoadPercent', 'locks.guard.maxSwapPercent', 'locks.guard.minFreeMemPercent']) ids.add(key);
+  for (const match of app.matchAll(/lockNumber\('(\w+)'/g)) ids.add(`locks.${match[1]}`);
+  for (const match of app.matchAll(/lockGuardNumber\('(\w+)'/g)) ids.add(`locks.guard.${match[1]}`);
   for (const match of app.matchAll(/machineNumber\('(\w+)'/g)) ids.add(`machine.${match[1]}`);
   for (const match of app.matchAll(/settingRow\('([^']+)'/g)) ids.add(match[1]);
   if (app.includes("helpButton('prices.' + field)")) for (const match of app.matchAll(/\['(input|output|cacheRead|cacheWrite|cacheWrite1h)', '/g)) ids.add(`prices.${match[1]}`);
@@ -166,6 +177,10 @@ test('the page asks for help only for settings that have a text', () => {
 
 test('every explained setting has an info button in the page code', () => {
   const ids = usedIds();
+  assert.match(app, /const lockNumber =[^\n]+lockInput\(`locks\.\$\{key\}`/);
+  assert.match(app, /const lockGuardNumber =[^\n]+lockInput\(`locks\.guard\.\$\{key\}`/);
+  const lockInput = app.slice(app.indexOf('const lockInput ='), app.indexOf('const lockNumber ='));
+  assert.match(lockInput, /return settingRow\(key, label,/);
   for (const id of Object.keys(SETTING_HELP)) assert.ok(ids.has(id), `${id} has no info button on a page`);
 });
 

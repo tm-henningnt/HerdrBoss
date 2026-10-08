@@ -81,7 +81,7 @@ test('worker start refuses a Pi model that the listing lacks, names the other pr
     assert.match(error.message, /--force cannot bypass this refusal\.$/);
     return true;
   });
-  assert.throws(() => f.start('pimisstwo', { kind: 'pi', model: 'opencode-go/space-bunny-free', force: true }, runner), /does not list it/);
+  assert.throws(() => f.start('pimisstwo', { kind: 'pi', model: 'opencode-go/space-bunny-free', force: true, reason: 'Verify that an authorized override cannot bypass the Pi listing' }, runner), /does not list it/);
   assert.equal(calls.length, 1, 'the process runs pi --list-models once for the same runner');
 });
 
