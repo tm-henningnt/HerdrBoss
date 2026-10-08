@@ -1,6 +1,6 @@
 // Invented Markdown messages with the shapes that broke on a phone: wide tables, code blocks, long lists, headings, long unbroken strings, status items.
 const LONG_PATH = '/Users/example/Projects/Sample/.herdr-wt/Sample/worker-one/src/very/deep/folder/structure/with/many/segments/report-final-v2.json';
-const LONG_TOKEN = 'tok_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; // herdr-boss: allow-test-token
+const LONG_TOKEN = 'tok_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const LONG_URL = 'https://example.com/a/very/long/path/that/keeps/going/and/going/with/query?alpha=1&beta=2&gamma=3&delta=4&epsilon=5&zeta=6&eta=7&theta=8';
 
 const table = (cols, rows) => [`| ${cols.join(' | ')} |`, `| ${cols.map(() => '---').join(' | ')} |`, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n');

@@ -2,11 +2,13 @@
 // The docs gate. A branch that changes a behavior path must also change the docs or the page help,
 // or record an exemption with a reason. The path rules are in scripts/docs-gate.config.json.
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'docs-gate.config.json');
+const TOKEN_CLASSES = new Set(['jwt', 'PEM private key block', 'license blob']);
 
 export function loadRules(file = CONFIG) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -30,31 +32,27 @@ export function classify(file, rules) {
 // A key name that holds a license or a token: license, license_key, LICENSE_KEY, licenseToken, access_token, license-key.
 // A word that only starts with the name, such as tokenizer, is not a key name.
 const KEY_NAME = '(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*?(?:licen[cs]e|token)(?:[_-]?(?:key|token|text|blob|data|value|code))*(?![A-Za-z0-9])';
-const BLOB = '[A-Za-z0-9+/=_-]{40,}';
+const BLOB_PATTERN = /[A-Za-z0-9+/=_-]{40,}/;
+const BLOB = BLOB_PATTERN.source;
 // A key at the end of a line, optionally followed by a YAML block marker. The value is on a later line.
 const KEY_ONLY_LINE = new RegExp(`${KEY_NAME}["']?\\s*[:=]\\s*(?:[|>][-+]?)?\\s*$`, 'i');
 const BLOB_ONLY_LINE = new RegExp(`^\\s*["']?${BLOB}["']?,?\\s*$`);
 
-// The token-shaped strings that the gate finds in a shipped artifact. Each entry is a class name and a pattern.
+// The token-shaped strings that the gate finds in a tracked file. Each entry is a class name and a pattern.
 // A JWT has three base64url parts, and its first part starts with eyJ.
 export const TOKEN_PATTERNS = [
   ['jwt', /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/],
   ['PEM private key block', /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/],
-  ['license blob', new RegExp(`${KEY_NAME}["']?\\s*[:=]\\s*["']?${BLOB}`, 'i')],
+  ['license blob', new RegExp(`${KEY_NAME}["']?\\s*[:=]\\s*["']?(${BLOB})`, 'i')],
 ];
-
-// A line with the allow marker keeps its fake test strings. The marker is the exact text below.
-export const ALLOW_MARKER = 'herdr-boss: allow-test-token';
 
 // A line with a public verification key or a certificate holds no secret. These lines stay allowed.
 const PUBLIC_KEY_LINE = /-----BEGIN (?:[A-Z0-9 ]+ )?(?:PUBLIC KEY|CERTIFICATE)-----/;
 
-// The token classes of one text, without the values. A line with the allow marker, a public verification key,
-// or a certificate gives no class. A blob on the line after a license key gives the class license blob.
-// An empty array means the text holds no token-shaped string. The scan reads every line.
-export function scanTokenText(text) {
-  const classes = [];
-  const add = (name) => { if (!classes.includes(name)) classes.push(name); };
+// Return token classes and exact matched strings. Callers must not print the values.
+export function scanTokenMatches(text) {
+  const found = [];
+  const add = (tokenClass, value) => found.push({ tokenClass, value });
   const source = String(text);
   let keyOnly = false;
   for (let start = 0; start <= source.length;) {
@@ -63,12 +61,55 @@ export function scanTokenText(text) {
     const line = source.slice(start, end);
     start = end + 1;
     if (!line.trim()) continue;
-    if (line.includes(ALLOW_MARKER) || PUBLIC_KEY_LINE.test(line)) { keyOnly = false; continue; }
-    for (const [name, pattern] of TOKEN_PATTERNS) if (pattern.test(line)) add(name);
-    if (keyOnly && BLOB_ONLY_LINE.test(line)) add('license blob');
+    if (PUBLIC_KEY_LINE.test(line)) { keyOnly = false; continue; }
+    for (const [tokenClass, pattern] of TOKEN_PATTERNS) {
+      const globalPattern = new RegExp(pattern.source, `${pattern.flags}g`);
+      for (const match of line.matchAll(globalPattern)) {
+        add(tokenClass, tokenClass === 'license blob' ? match[1] : match[0]);
+      }
+    }
+    if (keyOnly && BLOB_ONLY_LINE.test(line)) {
+      const value = BLOB_PATTERN.exec(line)?.[0];
+      if (value) add('license blob', value);
+    }
     keyOnly = KEY_ONLY_LINE.test(line);
   }
-  return classes;
+  return found;
+}
+
+// Keep the class-only helper for callers that do not need the matched values.
+export function scanTokenText(text) {
+  return [...new Set(scanTokenMatches(text).map(({ tokenClass }) => tokenClass))];
+}
+
+function readTokenAllowlist(root, head, rules, includeWorktree) {
+  if (!rules.tokenAllowlist) return [];
+  const file = path.resolve(root, rules.tokenAllowlist);
+  const relative = path.relative(root, file);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('The token allowlist path must stay inside the repository.');
+  }
+  const content = includeWorktree ? fs.readFileSync(file, 'utf8') : git(root, ['show', `${head}:${rules.tokenAllowlist}`]);
+  const entries = JSON.parse(content);
+  if (!Array.isArray(entries)) throw new Error('The token allowlist must be a JSON array.');
+  const seen = new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Each token allowlist entry must be an object.');
+    const keys = Object.keys(entry).sort();
+    if (keys.join(',') !== 'class,path,reason,sha256') throw new Error('Each token allowlist entry must have only path, class, reason, and sha256.');
+    if (typeof entry.path !== 'string' || !entry.path || path.posix.normalize(entry.path) !== entry.path || entry.path.startsWith('/') || entry.path === '..' || entry.path.startsWith('../') || entry.path.includes('\\')) {
+      throw new Error('Each token allowlist path must be a normalized repository-relative path.');
+    }
+    if (!TOKEN_CLASSES.has(entry.class)) throw new Error('Each token allowlist entry must name a known token class.');
+    if (typeof entry.reason !== 'string' || !entry.reason.trim() || entry.reason.trim().length > 160) {
+      throw new Error('Each token allowlist entry must have a short reason of at most 160 characters.');
+    }
+    if (typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error('Each token allowlist entry must have a lowercase SHA-256 hash.');
+    const key = `${entry.path}\0${entry.class}\0${entry.sha256}`;
+    if (seen.has(key)) throw new Error('The token allowlist has a duplicate path, class, and hash.');
+    seen.add(key);
+  }
+  return entries;
 }
 
 function git(root, args) {
@@ -96,14 +137,20 @@ function fileEntries(root, mergeBase, head, file) {
 // with includeWorktree. A deleted file and a binary file give no class.
 function tokenFindings(root, head, files, rules, includeWorktree) {
   const findings = [];
+  const allowlist = readTokenAllowlist(root, head, rules, includeWorktree);
   for (const file of files.filter((name) => matches(name, rules.tokens || []))) {
     let content;
     try {
       content = includeWorktree ? fs.readFileSync(path.join(root, file), 'utf8') : git(root, ['show', `${head}:${file}`]);
     } catch { continue; }
     if (/\0/.test(content)) continue;
-    const classes = scanTokenText(content);
-    if (classes.length) findings.push({ file, classes });
+    const classes = new Set();
+    for (const match of scanTokenMatches(content)) {
+      const sha256 = createHash('sha256').update(match.value).digest('hex');
+      const allowed = allowlist.some((entry) => entry.path === file && entry.class === match.tokenClass && entry.sha256 === sha256);
+      if (!allowed) classes.add(match.tokenClass);
+    }
+    if (classes.size) findings.push({ file, classes: [...classes] });
   }
   return findings;
 }
@@ -153,10 +200,10 @@ export function checkDocsGate(options = {}) {
   const rules = options.rules ?? loadRules();
   const tokens = tokenFindings(options.root ?? process.cwd(), options.head ?? 'HEAD', docs_.files, rules, Boolean(options.includeWorktree));
   const tokenLines = tokens.flatMap((finding) => [
-    'Token gate failed: a shipped artifact of the branch holds a token-shaped string.',
+    'Token gate failed: a tracked file holds a token-shaped string.',
     ...finding.classes.map((name) => `  token: ${finding.file}: ${name}`),
-    'Remove the license text, token, key text, or licensed state from the artifact. Keep a public verification key.',
-    'For a fake test string that must stay, put the allow marker on the same line: herdr-boss: allow-test-token.',
+    'Remove the token-shaped string or licensed state from the file. Keep a public verification key.',
+    `For a documented synthetic sample, add its path, class, reason, and SHA-256 to ${rules.tokenAllowlist || 'the token allowlist'}. Do not store the matched string in the allowlist.`,
   ]);
   return { ...docs_, tokens, ok: docs_.ok && !tokens.length, lines: [...docs_.lines, ...tokenLines] };
 }

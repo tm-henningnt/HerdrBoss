@@ -28,6 +28,7 @@ function fixture(t) {
   write(root, 'src/engine.js', 'export const a = 1;\n');
   write(root, 'docs/guide.md', '# Guide\n');
   write(root, 'test/engine.test.js', '// test\n');
+  write(root, 'scripts/docs-gate-allowlist.json', '[]\n');
   git(root, ['add', '-A']);
   git(root, ['commit', '-q', '-m', 'Start']);
   git(root, ['checkout', '-q', '-b', 'feature']);
