@@ -127,9 +127,12 @@ function startLockWaiter(t, f, pane, panes, { waitSeconds = 30, noticesFile = nu
   const script = path.join(f.base, `${pane.replaceAll(':', '-')}.mjs`);
   const locksUrl = pathToFileURL(path.resolve('src/kit/locks.js')).href;
   const configUrl = pathToFileURL(path.resolve('src/kit/config.js')).href;
+  const lifecycleUrl = pathToFileURL(path.resolve('src/kit/lifecycle.js')).href;
   fs.writeFileSync(script, `
     import { acquireProjectLock, releaseProjectLock } from ${JSON.stringify(locksUrl)};
     import { loadProjectConfig } from ${JSON.stringify(configUrl)};
+    import { initializeLifecyclePort } from ${JSON.stringify(lifecycleUrl)};
+    initializeLifecyclePort();
     const panes = ${JSON.stringify(panes)};
     const fs = await import('node:fs');
     const noticesFile = ${JSON.stringify(noticesFile)};

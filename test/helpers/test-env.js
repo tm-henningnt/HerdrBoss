@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { before } from 'node:test';
 
 export const TEST_GIT_IDENTITY = Object.freeze({
   GIT_AUTHOR_NAME: 'Test User',
@@ -43,5 +44,7 @@ if (!allPathsAreTemporary || !dataDir || pointsAtRealDataDir(dataDir) || pointsA
   process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
 }
 
-const { initializeLifecyclePort } = await import('../../src/kit/lifecycle.js');
-initializeLifecyclePort();
+before(async () => {
+  const { initializeLifecyclePort } = await import('../../src/kit/lifecycle.js');
+  initializeLifecyclePort();
+});

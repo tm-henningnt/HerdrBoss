@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { initializeLifecyclePort } from './kit/lifecycle.js';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS } from './collect.js';
@@ -571,6 +572,7 @@ export class Engine extends EventEmitter {
   unleasedListeners = new Map();
   constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
     super();
+    initializeLifecyclePort();
     this.cfg = cfg;
     this.clock = clock;
     const guardReasons = [];
