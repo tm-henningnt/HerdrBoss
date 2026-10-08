@@ -37,6 +37,21 @@ const snapshot = () => ({
   quotas: [{ provider: 'claude', windows: [{ key: 'secondary', label: 'Weekly', usedPercent: 88, willLast: false, etaSeconds: 3000, resetsAt: '2026-09-25T00:00:00Z' }] }],
 });
 
+test('a versionless policy with core fields loads defaults for newer fields', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-old-shape-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const oldShape = { maxWorkers: 3, projects: { alpha: { mode: 'active' } } };
+  fs.writeFileSync(file, JSON.stringify(oldShape));
+
+  const loaded = loadPolicy({ file, models, warn: () => {} });
+
+  assert.equal(loaded.maxWorkers, 3);
+  assert.equal(loaded.machine.guardEnabled, POLICY_DEFAULTS.machine.guardEnabled);
+  assert.deepEqual(loaded.attachments, POLICY_DEFAULTS.attachments);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), oldShape, 'reading the old shape does not rewrite it');
+});
+
 test('engine state includes configured quota thresholds', (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-engine-quota-thresholds-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
