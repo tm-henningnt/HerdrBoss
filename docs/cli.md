@@ -1393,13 +1393,13 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 - Controls: A read-only table that shows if each agent app entry that orchestration needs is present. A project switch controls Codex access to each registered project's common Git directory.
 - Effect: The table only reports. The switch changes Codex writable roots and the Git pin checks that push and suite use.
-- Safe to change: Nothing to change in the table. Turn the switch off to remove its root on the next harness sync.
-- Restart: No restart for the service. Select Apply policy. Run harness sync, then restart Codex.
+- Safe to change: Nothing to change in the table. Turn the switch off to remove its root on the next herdr-boss harness sync.
+- Restart: No restart for the service. Select Apply policy. Run herdr-boss harness sync, then restart Codex.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Readiness table | `harness.readiness` | Shows for each agent app entry if it is ok, missing, or bad. The table shows no path and no value. | Not applicable | Table | Read-only | Not applicable. | Not applicable. | The change takes effect at once. |
-| Codex shared Git | `projects.SLUG.codexSharedGit` | Adds the project's common Git directory to Codex writable roots. Codex can write hooks, config, refs, objects, HEAD, info, and worktrees. Push and suite refuse changed pins. | On; off for HerdrBoss until live verification | Switch for each registered project in Advanced | On or off | Turning it on lets Codex workers write shared Git metadata. Pin checks can stop push and suite. | Turning it off omits its Git root and removes that exact entry on harness sync. | Select Apply policy. The change takes effect at the next engine tick. |
+| Codex shared Git | `projects.SLUG.codexSharedGit` | Adds the project's common Git directory to Codex writable roots. Codex can write hooks, config, refs, objects, HEAD, info, and worktrees. Push and suite refuse changed pins. | On; off for HerdrBoss until live verification | Switch for each registered project in Advanced | On or off | Turning it on lets Codex workers write shared Git metadata. Pin checks can stop push and suite. | Turning it off omits its Git root and removes that exact entry on herdr-boss harness sync. | Select Apply policy. The change takes effect at the next engine tick. |
 
 <!-- settings-reference:end -->
 
