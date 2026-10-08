@@ -10,6 +10,7 @@ import { PassThrough } from 'node:stream';
 import { factoryCommand } from '../src/factory-host.js';
 import { configSafetyError } from '../src/factory-core.js';
 import { updateFleet } from '../src/factory-store.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 import { createDockerTransport } from '../src/factory-transport.js';
 import { validateFile } from './factory/schema-check.js';
 
@@ -91,6 +92,7 @@ test('new starts a factory with four labeled volumes, loopback ports and bounded
   const f = fixture();
   try {
     assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assertPollerRegistry(f.io.env);
     assert.equal(f.volumes.size, 4);
     const create = f.calls.find(({ args }) => args[0] === 'container' && args[1] === 'create').args;
     for (const value of ['herdr-factory=demo', 'herdr-factory-spike=fa1', '127.0.0.1:4478:4477', '127.0.0.1:2222:22', '4', '4g', '1g', '512', 'max-size=10m', 'max-file=3']) assert.ok(create.includes(value), value);
@@ -109,6 +111,38 @@ test('new starts a factory with four labeled volumes, loopback ports and bounded
     const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
     assert.equal(flow.state, 'service-ready');
     assert.ok(f.calls.some(({ args }) => args.includes('Host: demo.localhost')));
+  } finally { f.cleanup(); }
+});
+
+test('factory new keeps a rejected registry row intact', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const rejected = { factoryId: 'bad-row', name: 'bad-row', hostId: 'unknown-host', profile: 'personal', dashboardUrl: 'http://bad.localhost:4478',
+      version: 'invalid-value', kitRevision: 'abcdef012345', kind: 'native' };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [], factories: [rejected] }));
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).factories.find((row) => row.name === 'bad-row'), rejected);
+  } finally { f.cleanup(); }
+});
+
+test('factory new refuses a name that collides with a rejected row before Docker work', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const rejected = { factoryId: 'old-demo', name: 'demo', hostId: 'unknown-host', profile: 'personal', dashboardUrl: 'http://demo.localhost:4478',
+      version: 'invalid-value', kitRevision: 'abcdef012345', kind: 'native' };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [], factories: [rejected] }));
+
+    await assert.rejects(factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), (error) => {
+      assert.equal(error.message, 'The change conflicts with registry row demo.');
+      assert.equal(error.message.includes('old-demo'), false);
+      assert.equal(error.message.includes('4478'), false);
+      return true;
+    });
+    assert.equal(f.calls.length, 0);
   } finally { f.cleanup(); }
 });
 
@@ -154,6 +188,7 @@ test('status, list, stop and start control only the labeled factory and report m
     assert.equal(await factoryCommand(['stop', 'demo'], f.io), 0);
     assert.equal(f.container.State.Running, false);
     assert.equal(await factoryCommand(['start', 'demo'], f.io), 0);
+    assertPollerRegistry(f.io.env);
     assert.equal(f.container.State.Running, true);
     f.container.Config.Labels = {};
     const before = f.calls.length;
@@ -194,6 +229,7 @@ test('a remote factory uses a private context through a public connection refere
     let selected;
     f.io.transportFactory = (host) => { selected = host; return f.docker; };
     await factoryCommand(['new', 'demo', '--host', 'host-a', '--image', 'example-factory:test'], f.io);
+    assertPollerRegistry(f.io.env);
     assert.equal(selected.dockerContext, 'example-context');
     assert.equal(selected.transport, 'docker-context');
     const fleet = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json'), 'utf8'));
@@ -311,6 +347,7 @@ test('configure records checked steps, resumes a failed service and waits once f
     failService = false;
     f.output.length = 0;
     assert.equal(await factoryCommand(['configure', 'demo', '--resume'], f.io), 3);
+    assertPollerRegistry(f.io.env);
     assert.ok(f.output.join('').includes('OpenCode: not logged in in factory demo. Run `herdr-boss factory login demo opencode` at an Owner terminal.\n'));
     flow = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.deepEqual(flow.steps.slice(0, 4).map((step) => step.name), ['container', 'volumes', 'herdr', 'service']);
@@ -517,8 +554,26 @@ test('list retains the legacy fleet forms and rejects missing identifiers', asyn
     const invalid = structuredClone(original);
     delete invalid.factories[0].factoryId;
     fs.writeFileSync(file, JSON.stringify(invalid));
-    await assert.rejects(factoryCommand(['list'], f.io), /invalid/);
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['list', '--json'], f.io), 0);
+    const listed = JSON.parse(f.output.find((line) => line.startsWith('{')));
+    assert.deepEqual(listed.factories.map((row) => row.name), invalid.factories.slice(1).map((row) => row.name));
+    assert.ok(f.output.some((line) => /registry row factory-zero: factoryId is required/.test(line)));
     assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(invalid));
+
+    const hostile = structuredClone(original);
+    const container = hostile.factories.find((row) => row.kind === 'container');
+    assert.ok(container);
+    container['SECRET-KEY-xyz'] = 'private row value';
+    container.image['SECRET-KEY-xyz'] = 'private nested value';
+    fs.writeFileSync(file, JSON.stringify(hostile));
+    const errors = [];
+    f.io.stderr = { write: (line) => errors.push(line) };
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['list'], f.io), 0);
+    assert.ok(errors.some((line) => line.includes(`registry row ${container.name}: <unknown field> is not allowed`)));
+    assert.ok(errors.some((line) => line.includes(`registry row ${container.name}: image.<unknown field> is not allowed`)));
+    assert.doesNotMatch(errors.join(''), /SECRET-KEY-xyz|private row value|private nested value/);
   } finally { f.cleanup(); }
 });
 
@@ -620,6 +675,15 @@ test('build refuses an existing image tag that this tool did not build', async (
     assert.equal(await factoryCommand(['build', 'demo', '--image', 'example-factory:test'], g.io), 0);
     assert.ok(g.calls.some(({ args }) => args[0] === 'buildx' && args[1] === 'build'));
   } finally { g.cleanup(); }
+});
+
+test('factory build leaves a registered fleet in the poller schema', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assert.equal(await factoryCommand(['build', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    assertPollerRegistry(f.io.env);
+  } finally { f.cleanup(); }
 });
 
 test('the BuildKit container is bounded and its image comes from the pins file', async () => {

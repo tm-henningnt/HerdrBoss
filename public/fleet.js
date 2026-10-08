@@ -491,6 +491,11 @@ function findReference(rows, viewFactories, role) {
 function collectAlerts(rows) {
   return rows.flatMap((row) => Array.isArray(row.alerts) ? row.alerts : []);
 }
+function registryErrorSummary(error) {
+  if (typeof error !== 'string') return error;
+  const diagnostics = error.split('; ');
+  return diagnostics.length > 3 ? `${diagnostics.slice(0, 3).join('; ')} (${diagnostics.length - 3} more)` : error;
+}
 
 export function fleetView(data, settings, message = '', shares) {
   if (!data) return '<header class="page-head"><h1>Fleet</h1></header><p role="status">Loading the fleet…</p>';
@@ -502,7 +507,7 @@ export function fleetView(data, settings, message = '', shares) {
   // The head keeps its fact line and its Add a host control side by side, so the phone header
   // costs one row instead of two, and the action is a 44 by 44 target at every width.
   const head = `<header class="page-head fleet-head"><h1>Fleet</h1><div class="fleet-head-row"><p class="muted">${rows.length} factories · poll every ${esc(String(data.pollSeconds || 30))} seconds${roleView(data.role, viewFactories.concat(rows))}</p><a class="fleet-add-host" data-fleet-add-host href="/fleet/add-host">Add a host</a></div></header>`;
-  const registryError = data.registryError ? `<p role="alert" class="fleet-registry-error">Fleet data unavailable: ${esc(data.registryError)}. Check the fleet registry.</p>` : '';
+  const registryError = data.registryError ? `<p role="alert" class="fleet-registry-error">Fleet registry: ${esc(registryErrorSummary(data.registryError))}. Check the fleet registry.</p>` : '';
   const rollupError = !rollup && data.rollupError ? `<p role="alert" class="fleet-registry-error">${esc(data.rollupError)}</p>` : '';
   return `<div class="fleet-page">${head}${registryError}${rollupError}`
     + `${fleetTotals(rollup?.totals)}${fleetAlerts(alerts)}${fleetComparison(rows, reference)}`

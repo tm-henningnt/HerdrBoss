@@ -173,6 +173,111 @@ test('a bad version or dashboard URL never replaces the accepted summary', async
   }
 });
 
+test('the registry rejects only bad factory rows and reports safe field diagnostics', async () => {
+  const { factoryRecords, readFactoryRegistry } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'partial-registry.json');
+  const container = { factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', profile: 'personal',
+    dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', containerName: 'hf-win1',
+    hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 }, image: { builtAt: '2026-10-07T10:59:22.928Z', pinsHash: 'a'.repeat(64) } };
+  const badVersion = { ...factory('bad-version', 'http://bad.localhost:4479'), version: 'invalid-value' };
+  registry(registryFile, [container, badVersion, factory('factory-good', 'http://good.localhost:4478')]);
+  const before = fs.readFileSync(registryFile, 'utf8');
+  const result = readFactoryRegistry(registryFile);
+  const records = factoryRecords(registryFile);
+  assert.deepEqual(records.map((row) => row.name), ['factory-good']);
+  assert.deepEqual(records.diagnostics, result.diagnostics);
+  assert.deepEqual(result.factories.map((row) => row.name), ['factory-good']);
+  assert.deepEqual(result.diagnostics, [
+    'registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ',
+    'registry row bad-version: version must be a version number',
+  ]);
+  assert.equal(fs.readFileSync(registryFile, 'utf8'), before, 'a read must not rewrite the registry');
+});
+
+test('hostile row keys never appear in poller diagnostics', async () => {
+  const { createFleetPoller, factoryRecords, readFactoryRegistry } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'hostile-key-registry.json');
+  const hostile = 'SECRET-KEY-xyz';
+  const bad = { ...factory('win1', 'http://win1.localhost:4478'), [hostile]: 'private row value' };
+  bad.kind = 'container';
+  bad.containerName = 'hf-win1';
+  bad.hostname = 'win1.localhost';
+  bad.ports = { dashboard: 4478, ssh: 2222 };
+  bad.image = { builtAt: '2026-10-07T10:59:22Z', pinsHash: 'a'.repeat(64), [hostile]: 'private nested value' };
+  registry(registryFile, [bad]);
+  const expected = [
+    'registry row win1: <unknown field> is not allowed',
+    'registry row win1: image.<unknown field> is not allowed',
+  ];
+  assert.deepEqual(readFactoryRegistry(registryFile).diagnostics, expected);
+  assert.deepEqual(factoryRecords(registryFile).diagnostics, expected);
+  const poller = createFleetPoller({ dir: path.join(root, 'hostile-key-cache'), registryFile,
+    localSummary: async () => ({ ...fixture, factoryId: 'factory-zero', name: 'factory-zero' }) });
+  try {
+    assert.equal(poller.view().registryError, expected.join('; '));
+    assert.doesNotMatch(poller.view().registryError, /SECRET-KEY-xyz|private row value|private nested value/);
+  } finally { await poller.stop(); }
+});
+
+test('file-level registry errors still reject the whole file', async () => {
+  const { factoryRecords, readFactoryRegistry } = await import('../src/fleet-poller.js');
+  assert.deepEqual(factoryRecords(path.join(root, 'missing-registry.json')), []);
+  const registryFile = path.join(root, 'invalid-registry.json');
+  registry(registryFile, [factory('duplicate', 'http://one.localhost'), factory('duplicate', 'http://two.localhost')]);
+  assert.throws(() => readFactoryRegistry(registryFile), /registry-invalid/);
+  const body = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+  body.factories = [];
+  body.schema = 2;
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.throws(() => readFactoryRegistry(registryFile), /registry-invalid/);
+  body.schema = 1;
+  body.contractVersion = '2.0.0';
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.throws(() => readFactoryRegistry(registryFile), /registry-invalid/);
+  body.contractVersion = '1.0.0';
+  body.factories = {};
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.throws(() => readFactoryRegistry(registryFile), /registry-invalid/);
+  body.factories = [];
+  fs.writeFileSync(registryFile, '{broken json');
+  assert.throws(() => readFactoryRegistry(registryFile), /registry-invalid/);
+});
+
+test('the poller limits file-level errors to the registry envelope and duplicate names', async () => {
+  const { factoryRecords, readFactoryRegistry } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'legacy-envelope-registry.json');
+  const body = { schema: 1, contractVersion: '1.0.0', hosts: [], extraMetadata: 'ignored', factories: [] };
+  registry(registryFile, []);
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.deepEqual(readFactoryRegistry(registryFile).factories, []);
+  assert.deepEqual(factoryRecords(registryFile), []);
+  body.hosts = [{ hostId: 'INVALID HOST' }];
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.deepEqual(readFactoryRegistry(registryFile).factories, []);
+  delete body.extraMetadata;
+  delete body.hosts;
+  delete body.minimumFactoryVersion;
+  fs.writeFileSync(registryFile, JSON.stringify(body));
+  assert.deepEqual(readFactoryRegistry(registryFile).factories, []);
+  assert.deepEqual(factoryRecords(registryFile), []);
+});
+
+test('the Fleet poller keeps good rows and shows each rejected row in its error line', async (t) => {
+  const { createFleetPoller } = await import('../src/fleet-poller.js');
+  const registryFile = path.join(root, 'partial-poller-registry.json');
+  const bad = { factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', profile: 'personal',
+    dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', containerName: 'hf-win1',
+    hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 }, image: { builtAt: '2026-10-07T10:59:22.928Z', pinsHash: 'a'.repeat(64) } };
+  const badVersion = { ...factory('bad-version', 'http://bad.localhost:4479'), version: 'invalid-value' };
+  registry(registryFile, [bad, badVersion, factory('factory-good', 'http://good.localhost:4478')]);
+  const poller = createFleetPoller({ dir: path.join(root, 'partial-poller-cache'), registryFile,
+    localSummary: async () => ({ ...fixture, factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'http://localhost:4477' }) });
+  t.after(() => poller.stop());
+  assert.equal(poller.view().registryError, 'registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ; registry row bad-version: version must be a version number');
+  await poller.poll();
+  assert.equal(poller.view().registryError, 'registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ; registry row bad-version: version must be a version number');
+});
+
 test('stopping the poller aborts its active request and leaves no new timer', async () => {
   const { createFleetPoller } = await import('../src/fleet-poller.js');
   const registryFile = path.join(process.env.HERDR_FACTORIES_DIR, 'abort-fleet.json');

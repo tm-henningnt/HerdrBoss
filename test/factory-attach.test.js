@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { factoryCommand, updateRegistry } from '../src/factory-host.js';
 import { writeFleet, writePrivate, factoryFile } from '../src/factory-store.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 
 const PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaExampleKeyOnly mac-user';
 function fixture(t, { authorized = '' } = {}) {
@@ -55,6 +56,7 @@ const text = (f) => f.output.join('');
 test('attach writes a mode 600 include file with the jump and the factory host, and prints no private value', async (t) => {
   const f = fixture(t);
   assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  assertPollerRegistry(f.env);
   const file = path.join(f.ssh, 'herdr-boss.d', 'hf-win1.conf');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const config = fs.readFileSync(file, 'utf8');
@@ -115,6 +117,17 @@ test('attach runs herdr machine add with the label and the alias, once', async (
   assert.equal(adds.length, 1);
   assert.deepEqual(adds[0].args, ['machine', 'add', '--label', 'win1', 'hf-win1']);
   assert.ok(f.calls.some((call) => call.type === 'run' && call.args[0] === 'machine' && call.args[1] === 'status'));
+});
+
+test('attach keeps a rejected registry row intact', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json');
+  const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rejected = { ...registry.factories[0], name: 'bad-row', factoryId: 'bad-row', version: 'invalid-value' };
+  registry.factories.push(rejected);
+  fs.writeFileSync(file, JSON.stringify(registry));
+  assert.equal(await factoryCommand(['attach', 'win1'], f.io), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).factories.find((row) => row.name === 'bad-row'), rejected);
 });
 
 test('attach exits 1, names the failed step, and shows the masked stderr of the failing command', async (t) => {

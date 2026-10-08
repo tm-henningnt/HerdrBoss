@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { loadRegistry } from './factory-host.js';
 import { createDockerTransport, isHostUnreachable, hostUnreachable } from './factory-transport.js';
-import { assertName, assertVersion, effectiveMinimum, factoryFile, readFleet, readPrivate, updateFleet, writePrivate, VOLUMES } from './factory-store.js';
+import { assertName, assertNoRejectedRowConflict, assertVersion, effectiveMinimum, factoryFile, readFleet, readPrivate, updateFleet, writePrivate, VOLUMES } from './factory-store.js';
 
 export const FACTORY_ROOT = fileURLToPath(new URL('../factory/', import.meta.url));
 export const FACTORY_LABEL = 'herdr-factory';
@@ -242,9 +242,11 @@ async function newFactory(args, io) {
   if ((flags['--profile'] || 'personal') !== 'personal') throw new Error(host.personalOnly ? 'This runtime permits personal factories only.' : 'Client factory creation is not available.');
   const fleet = readFleet(io.env);
   if (fleet.factories.some((record) => record.name === name)) throw new Error('The factory already exists. Use factory start or factory configure.');
+  assertNoRejectedRowConflict(fleet, { name, factoryId: name, hostId: host.hostId });
   const file = factoryFile(io.env, name);
   const previous = readPrivate(file, null);
   const record = previous || { schema: 1, name, hostId: host.hostId, profile: 'personal', ports: allocatePorts(fleet, host.hostId, flags), imageTag: flags['--image'] || defaultFactoryImage(), stage: 'creating' };
+  assertNoRejectedRowConflict(fleet, { name, factoryId: name, hostId: host.hostId, ports: record.ports });
   const spikeLabel = record.resourceOwner ? `herdr-factory-spike=${record.resourceOwner}` : SPIKE_LABEL;
   if (record.resourceOwner) assertName(record.resourceOwner);
   if (record.name !== name || record.hostId !== host.hostId || (flags['--image'] && flags['--image'] !== record.imageTag)) throw new Error('The pending factory has different creation settings.');
@@ -345,6 +347,7 @@ export async function factoryCoreCommand(args, io) {
     if (positional.length) throw new Error('Factory list takes no argument.');
     const fleet = readFleet(io.env);
     io.stdout.write(flags['--json'] ? `${JSON.stringify(publicFleet(fleet, io.env))}\n` : `${fleet.factories.map((record) => `${record.name}  ${record.kind}  ${record.profile}  ${record.version}`).join('\n') || 'No factories.'}\n`);
+    for (const diagnostic of fleet.diagnostics || []) io.stderr.write(`${diagnostic}\n`);
     return 0;
   }
   throw new Error('Unknown factory command.');

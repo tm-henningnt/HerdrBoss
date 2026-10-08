@@ -190,6 +190,48 @@ test('doctor adds Docker checks only on an explicit factory host request', async
   assert.equal(requests.filter((request) => request.command === 'docker').length, 2);
 });
 
+test('doctor reports invalid factory rows without printing their values', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-registry-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const factories = path.join(root, 'factories');
+  fs.mkdirSync(factories);
+  fs.writeFileSync(path.join(factories, 'fleet.json'), JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [
+    { hostId: 'example-host', runtime: 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: 'local' },
+  ], factories: [
+    { factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', profile: 'personal', dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', containerName: 'hf-win1', hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 }, image: { builtAt: '2026-10-07T10:59:22.928Z', pinsHash: 'a'.repeat(64) } },
+    { factoryId: 'factory-good', name: 'factory-good', hostId: 'example-host', kind: 'native', profile: 'personal', dashboardUrl: 'http://good.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345' },
+  ] }));
+  const lines = [];
+  const env = { HOME: root, HERDR_FACTORIES_DIR: factories, HERDR_BOSS_DIR: path.join(root, 'boss') };
+  assert.equal(await doctorCommand([], { home: HOME, env, runner: fake(), output: (line) => lines.push(line) }), 0);
+  assert.ok(lines.includes('warning: registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ'));
+  assert.doesNotMatch(lines.join('\n'), /10:59:22\.928/);
+  const json = [];
+  assert.equal(await doctorCommand(['--json'], { home: HOME, env, runner: fake(), output: (line) => json.push(line) }), 0);
+  assert.ok(JSON.parse(json[0]).warnings.includes('registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ'));
+});
+
+test('doctor diagnostics hide hostile registry field names', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-hostile-registry-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const factories = path.join(root, 'factories');
+  fs.mkdirSync(factories);
+  const hostile = 'SECRET-KEY-xyz';
+  const row = { factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', profile: 'personal',
+    dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', containerName: 'hf-win1',
+    hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 },
+    image: { builtAt: '2026-10-07T10:59:22Z', pinsHash: 'a'.repeat(64), [hostile]: 'private nested value' }, [hostile]: 'private row value' };
+  fs.writeFileSync(path.join(factories, 'fleet.json'), JSON.stringify({ schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [
+    { hostId: 'example-host', runtime: 'orbstack', personalOnly: true, codexSandbox: 'user-namespaces', transport: 'local' },
+  ], factories: [row] }));
+  const lines = [];
+  const env = { HOME: root, HERDR_FACTORIES_DIR: factories, HERDR_BOSS_DIR: path.join(root, 'boss') };
+  assert.equal(await doctorCommand([], { home: HOME, env, runner: fake(), output: (line) => lines.push(line) }), 0);
+  assert.ok(lines.includes('warning: registry row win1: <unknown field> is not allowed'));
+  assert.ok(lines.includes('warning: registry row win1: image.<unknown field> is not allowed'));
+  assert.doesNotMatch(lines.join('\n'), /SECRET-KEY-xyz|private row value|private nested value/);
+});
+
 test('doctor prints a warning for an outside factory project without failing the checks', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-doctor-factory-'));
   const dataDir = path.join(root, 'data');

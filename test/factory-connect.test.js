@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { factoryCommand, updateRegistry } from '../src/factory-host.js';
 import { writeFleet, writePrivate, factoryFile, updateFleet } from '../src/factory-store.js';
 import { fleetCommand } from '../src/fleet-cli.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 
 const fixtureSummary = JSON.parse(fs.readFileSync(new URL('../docs/contracts/examples/fleet-summary.valid.personal.json', import.meta.url)));
 const token = `hf_read_${'a'.repeat(64)}`;
@@ -69,7 +70,9 @@ test('connect uses private provisioning and a tailnet proxy, and repeated calls 
   const f = fixture(t);
   delete f.io.importCredential;
   assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
+  assertPollerRegistry(f.env);
   assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
+  assertPollerRegistry(f.env);
   const fleet = JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json')));
   assert.equal(fleet.factories.length, 1);
   assert.equal(fleet.factories[0].factoryId, 'factory-win1');
@@ -79,6 +82,17 @@ test('connect uses private provisioning and a tailnet proxy, and repeated calls 
   assert.ok(f.calls.some((call) => call.type === 'host' && call.args.includes('--http=4478') && call.args.includes('http://127.0.0.1:4478')));
   assert.equal(f.calls.some((call) => call.type === 'docker' && ['rm', 'stop', 'create'].includes(call.args[0])), false);
   assert.doesNotMatch(JSON.stringify(f.calls), /0\.0\.0\.0|"::"|funnel/);
+});
+
+test('connect keeps a rejected registry row intact while it updates the registration', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json');
+  const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rejected = { ...registry.factories[0], name: 'bad-row', factoryId: 'bad-row', version: 'invalid-value' };
+  registry.factories.push(rejected);
+  fs.writeFileSync(file, JSON.stringify(registry));
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).factories.find((row) => row.name === 'bad-row'), rejected);
 });
 
 test('connect resumes a failed private import without a second factory record', async (t) => {
@@ -223,6 +237,7 @@ test('connect --undo removes only what connect created and a second undo finds n
   writePrivate(remotes, { ...JSON.parse(fs.readFileSync(remotes)), 'other-factory': `hf_read_${'c'.repeat(64)}` });
   f.calls.length = 0; f.output.length = 0;
   assert.equal(await factoryCommand(['connect', '--undo', 'win1'], f.io), 0);
+  assertPollerRegistry(f.env);
   const hostCalls = f.calls.filter((call) => call.type === 'host').map((call) => call.args.join(' '));
   assert.deepEqual(hostCalls, ['tailscale serve --http=4478 off']);
   assert.ok(f.calls.some((call) => call.type === 'docker' && call.args.some((arg) => arg.includes('connect-undo') && arg.includes('allowedHosts'))));

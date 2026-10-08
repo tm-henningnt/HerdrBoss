@@ -8,6 +8,7 @@ import { createFleetGuidance } from '../src/fleet-guidance.js';
 import { createFleetShares } from '../src/fleet-shares.js';
 import { readFleetFile, writeFleetFile } from '../src/fleet-store.js';
 import { createFleetGuideAccess } from '../src/fleet-access.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 
 const root = process.env.HERDR_BOSS_DIR;
 const clock = () => Date.parse('2026-10-03T12:00:00Z');
@@ -165,20 +166,25 @@ test('the factories and the factory shares move from a reachable old holder; an 
   const shares = { accounts: [{ accountKey: 'a'.repeat(64), shares: [{ factoryId: 'factory-a', share: 30 }, { factoryId: 'factory-b', share: 70 }] }] };
   const give = (body) => ({ ...peerSet('factory-a', 1), 'factory-a': (entry) => entry.path.endsWith('/handover') ? { body: { schema: 1, contractVersion: '1.0.0', epoch: 1, ...body } } : reachable('factory-a', 1).handler(entry) });
   const moved = fixture({ peers: give({ factories: [projection('factory-a', 'second-host'), projection('factory-c'), projection('factory-d', 'second-host'), projection('factory-e')], shares }) });
+  const own = readFleetFile(moved.registryFile);
+  own.factories.push({ factoryId: 'factory-local-container', name: 'factory-local-container', hostId: 'example-host', profile: 'personal', dashboardUrl: 'http://factory-local-container.example.invalid:4490', version: '0.1.0', kitRevision: 'abcdef012345', kind: 'container', containerName: 'hf-factory-local-container', hostname: 'factory-local-container.localhost', ports: { dashboard: 4490, ssh: 4491 }, image: { builtAt: '2026-10-07T10:59:22.928Z', pinsHash: 'b'.repeat(64) } });
+  writeFleetFile(moved.registryFile, own);
   const result = await moved.api.promote();
   assert.equal(result.handover, 'received');
   assert.deepEqual(result.missingHosts, ['second-host'], 'a missing host stays missing');
   assert.deepEqual(readFleetFile(path.join(moved.dir, 'fleet-shares.json')), shares);
   const merged = readFleetFile(moved.registryFile);
-  assert.deepEqual(merged.factories.map((row) => row.factoryId).sort(), ['factory-a', 'factory-b', 'factory-c', 'factory-e']);
+  assertPollerRegistry({ HERDR_FACTORIES_DIR: path.dirname(moved.registryFile) });
+  assert.equal(merged.factories.find((row) => row.factoryId === 'factory-local-container').image.builtAt, '2026-10-07T10:59:22Z');
+  assert.deepEqual(merged.factories.map((row) => row.factoryId).sort(), ['factory-a', 'factory-b', 'factory-c', 'factory-e', 'factory-local-container']);
   assert.equal(merged.factories.find((row) => row.factoryId === 'factory-e').kind, 'native');
   assert.equal(merged.hosts.length, 1, 'no host is copied');
   const kept = fixture({ peers: { 'factory-c': reachable('factory-a', 1).handler } });
   writeFleetFile(path.join(kept.dir, 'fleet-shares.json'), { accounts: [] });
-  const own = fs.readFileSync(kept.registryFile, 'utf8');
+  const keptOwn = fs.readFileSync(kept.registryFile, 'utf8');
   const second = await kept.api.promote({ force: true });
   assert.equal(second.handover, 'kept-own-copy'); assert.equal(second.handoverReason, 'unreachable');
-  assert.equal(fs.readFileSync(kept.registryFile, 'utf8'), own);
+  assert.equal(fs.readFileSync(kept.registryFile, 'utf8'), keptOwn);
   assert.deepEqual(readFleetFile(path.join(kept.dir, 'fleet-shares.json')), { accounts: [] });
 });
 

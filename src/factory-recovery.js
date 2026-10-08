@@ -7,6 +7,7 @@ import { FACTORY_LABEL, managedFactory, transportFor, inspect, dockerCall, confi
 import { assertName, factoryFile, readPrivate, writePrivate, readFleet, updateFleet, VOLUMES, assertVersion, effectiveMinimum } from './factory-store.js';
 import { factoriesDir, maskLine } from './factory-host.js';
 import { archiveScript, readBackup } from './factory-archive.js';
+import { wholeSeconds } from './factory-timestamp.js';
 import { redactSecrets } from './redact.js';
 
 const OWNER_LABEL = 'herdr-factory-spike';
@@ -15,7 +16,6 @@ const DAY = 24 * 3600_000;
 export function isInteractiveLoginCommand(command = []) {
   return /(?:^|\s)auth\s+login(?:\s|$)/.test(command.join(' ')) || command.some((token) => token === 'login' || token === '/login');
 }
-const wholeSeconds = (value) => new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z');
 function parse(args, options = [], switches = []) {
   const positional = [], flags = {};
   for (let index = 0; index < args.length; index += 1) {

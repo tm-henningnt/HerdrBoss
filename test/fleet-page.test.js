@@ -2,6 +2,7 @@ import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createDocument, find } from './fake-dom.js';
 import { buildFleetRollup } from '../src/fleet-rollup.js';
 
@@ -56,10 +57,10 @@ function inventedFactories() {
 const settings = { factoryId: 'factory-zero', name: 'factory-zero', dashboardUrl: 'https://factory.example', headOffice: true, shareItemTitles: true, accounts: [] };
 const shares = { accounts: [{ harness: 'claude', accountKey, scope: ['factory-zero'], shares: [{ factoryId: 'factory-zero', share: 100 }] }] };
 
-async function render(factories = inventedFactories(), roleOverride = role) {
+async function render(factories = inventedFactories(), roleOverride = role, registryError = null) {
   const { fleetView } = await import('../public/fleet.js');
   const rollup = buildFleetRollup(factories, { now, role: roleOverride });
-  return { html: fleetView({ factories, pollSeconds: 30, rollup, role: roleOverride }, settings, '', shares), rollup };
+  return { html: fleetView({ factories, pollSeconds: 30, rollup, role: roleOverride, registryError }, settings, '', shares), rollup };
 }
 
 function visibleTotal(html, key) {
@@ -90,6 +91,38 @@ test('the Fleet page renders the T5 DOM hooks for the totals, alerts, comparison
   assert.ok(find(root, (node) => node.getAttribute('data-fleet-totals') !== null));
   assert.ok(find(root, (node) => node.getAttribute('data-fleet-card') !== null));
   assert.ok(find(root, (node) => node.getAttribute('data-fleet-alert-toggle') !== null));
+});
+
+test('the Fleet page shows row diagnostics while keeping the valid factory list visible', async () => {
+  const diagnostic = 'registry row win1: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ';
+  const { html } = await render(inventedFactories(), role, diagnostic);
+  assert.match(html, /Fleet registry: registry row win1: image\.builtAt must be YYYY-MM-DDTHH:MM:SSZ\./);
+  assert.match(html, /Check the fleet registry/);
+  assert.doesNotMatch(html, /Fleet data unavailable: registry row/);
+  assert.match(html, /data-fleet-factory="factory-zero"/);
+});
+
+test('the Fleet page limits registry errors to three diagnostics and counts the rest', async () => {
+  const diagnostics = [1, 2, 3, 4, 5].map((row) => `registry row win${row}: image.builtAt must be YYYY-MM-DDTHH:MM:SSZ`).join('; ');
+  const { html } = await render(inventedFactories(), role, diagnostics);
+  assert.match(html, /registry row win1: image\.builtAt must be YYYY-MM-DDTHH:MM:SSZ; registry row win2: image\.builtAt must be YYYY-MM-DDTHH:MM:SSZ; registry row win3: image\.builtAt must be YYYY-MM-DDTHH:MM:SSZ \(2 more\)\. Check the fleet registry/);
+  assert.doesNotMatch(html, /registry row win4|registry row win5/);
+});
+
+test('the Fleet page shows poller diagnostics without hostile registry field names', async () => {
+  const { readFactoryRegistry } = await import('../src/fleet-registry.js');
+  const file = path.join(process.env.HERDR_BOSS_DIR, 'hostile-page-registry.json');
+  const hostile = 'SECRET-KEY-xyz';
+  const row = { factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', profile: 'personal',
+    dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', containerName: 'hf-win1',
+    hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 },
+    image: { builtAt: '2026-10-07T10:59:22Z', pinsHash: 'a'.repeat(64), [hostile]: 'private nested value' }, [hostile]: 'private row value' };
+  fs.writeFileSync(file, JSON.stringify({ schema: 1, contractVersion: '1.0.0', factories: [row] }));
+  const diagnostic = readFactoryRegistry(file).diagnostics.join('; ');
+  const { html } = await render(inventedFactories(), role, diagnostic);
+  assert.match(html, /&lt;unknown field&gt; is not allowed/);
+  assert.match(html, /Check the fleet registry/);
+  assert.doesNotMatch(html, /SECRET-KEY-xyz|private row value|private nested value/);
 });
 
 test('the compact comparison carries every hand-computed fact for each factory', async () => {
