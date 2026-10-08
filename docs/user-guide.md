@@ -53,4 +53,4 @@ The Doctor disk line reports free space at the Herdr Boss data folder and the co
 
 When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
 
-For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).
+For persisted record rules, see the [record inventory](architecture-records.md). For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

@@ -5,9 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-// Every file is in a temporary data directory. The tests read no real project and prompt no real pane.
+// Every file is in temporary data and home directories. The tests read no real project and prompt no real pane.
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-stale-status-'));
+const HOME = path.join(DATA, 'home');
+fs.mkdirSync(HOME);
 process.env.HERDR_BOSS_DIR = DATA;
+process.env.HOME = HOME;
 process.on('exit', () => fs.rmSync(DATA, { recursive: true, force: true }));
 const { Engine } = await import('../src/engine.js');
 const { evaluate, renderBulletin, staleStatuses, staleTextStatuses, staleTextAlerts, STALE_STATUS_NOTICE_AFTER_MINUTES } = await import('../src/rules.js');
@@ -186,6 +189,17 @@ test('published time uses the newer of the status record and file modification t
   fs.utimesSync(file, new Date(newerFileTime), new Date(newerFileTime));
   [project] = listProjects().filter((item) => item.slug === 'alpha');
   assert.equal(Date.parse(project.publishedAt), newerRecordTime, 'a newer recorded publish time wins');
+});
+
+test('the project reader accepts an older status with only its required field', () => {
+  const projectsDir = path.join(DATA, 'projects');
+  fs.mkdirSync(projectsDir, { recursive: true });
+  fs.writeFileSync(path.join(projectsDir, 'legacy.json'), JSON.stringify({ project: 'Legacy project' }));
+
+  const [project] = listProjects().filter((item) => item.slug === 'legacy');
+  assert.equal(project.project, 'Legacy project');
+  assert.equal(project.errors, undefined);
+  assert.equal(project.status, undefined);
 });
 
 test('a stale status notice joins the pane digest after 30 minutes and repeats no sooner than 2 hours', async () => {
