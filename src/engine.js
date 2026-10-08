@@ -47,6 +47,7 @@ import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-sa
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
 import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
+import { deriveTickReadings } from './engine-tick.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
 import { ACTION_REFRESH_MS, capFinished, cleanScreen, maskText, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
 
@@ -841,6 +842,10 @@ export class Engine extends EventEmitter {
       .finally(() => { this.memory.memoryInFlight = false; });
   }
 
+  // Tick phases:
+  // - collect source readings
+  // - derive state from readings and fallbacks
+  // - act on policy when enabled
   async tick() {
     if (this.running) return this.state;
     this.running = true;
@@ -863,21 +868,20 @@ export class Engine extends EventEmitter {
       // Pi lists only the models it can use. A failed run keeps the last good result; no result means availability is unknown.
       const refreshPiModels = !Number.isFinite(this.piModelsCheckedAt) || now - this.piModelsCheckedAt >= PI_MODELS_INTERVAL_MS;
       if (refreshPiModels) this.piModelsCheckedAt = now;
-      let currentHerdrSnapshot = false;
-      let currentPaneList = false;
-      let processesKnown = false;
-      const [herdr, machine, procs] = await Promise.all([
-        this.collectors.collectHerdr(this.cfg.orchestratorLabel).then((snapshot) => {
-          currentHerdrSnapshot = true;
-          currentPaneList = Array.isArray(snapshot?.panes);
-          return currentPaneList ? snapshot : null;
-        }).catch((e) => { errors.push(`herdr: ${e.message}`); return this.state?.herdr || null; }),
-        this.collectors.collectMachine(DATA_DIR).catch((e) => { errors.push(`machine: ${e.message}`); return null; }),
-        this.collectors.collectProcesses().then((table) => { processesKnown = true; return table; }).catch((e) => { errors.push(`ps: ${e.message}`); return new Map(); }),
+      const [herdrRead, machineRead, processRead] = await Promise.all([
+        this.collectors.collectHerdr(this.cfg.orchestratorLabel)
+          .then((value) => ({ ok: true, value }), (error) => { errors.push(`herdr: ${error.message}`); return { ok: false, error }; }),
+        this.collectors.collectMachine(DATA_DIR)
+          .then((value) => ({ ok: true, value }), (error) => { errors.push(`machine: ${error.message}`); return { ok: false, error }; }),
+        this.collectors.collectProcesses()
+          .then((value) => ({ ok: true, value }), (error) => { errors.push(`ps: ${error.message}`); return { ok: false, error }; }),
         refreshPiModels ? this.collectors.collectPiModels({ now }).then((result) => {
           if (Array.isArray(result?.models)) this.memory.piModels = { at: Number.isFinite(result.at) ? result.at : now, models: [...result.models] };
         }).catch(() => {}) : null,
       ]);
+      const { herdr, machine, procs, currentHerdrSnapshot, currentPaneList, processesKnown } = deriveTickReadings({
+        herdrRead, machineRead, processRead, lastHerdr: this.state?.herdr,
+      });
       this.communicationHerdr = currentHerdrSnapshot && currentPaneList ? herdr : null;
       this.communicationRuns = readActiveWorkerRuns();
       this.communicationProjects = listProjects();
