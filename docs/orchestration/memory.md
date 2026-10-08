@@ -702,3 +702,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - Released 2026-10-08: r23 on main b609e82, pushed and live (suite clean on integrate-r23 after arch6fix; `suite --reuse`; service restarted; /api/state 200; diff scan clean): ARCH-5 (pure tick reading phase), ARCH-6 (lifecycle port breaks the locks, workers, leases cycle; the Engine and the test helper set the port), ARCH-7 (docs/architecture-records.md). The first r23 suite failed 41 tests because the port was unset in tests that bypass test-env and because the helper set the port before the test set its data paths; arch6fix repaired both. FS1 pack v3 is with the Owner (Mailbox m-muyv3tq1-ccd1ccad). RL2 and r22 are live (see above).
 - Next: live checks of `browser console` and `tools promote`; ARCH 8 and 10; BH2 after the Owner accepts its pack; PR1 S3, MSG2, MSG3 on the shared layer; FB2 live on win1 and win2 after a factory update.
+
+## Release checkpoint 2026-10-08 — integrate-r24 (ARCH-10)
+
+- Released before this checkpoint: main b609e82 (r23, pushed) plus a local memory commit.
+- Planned branch: arch10 7e96388 (docs/reference/supervisor-contract.md and fake-supervisor tests; no src change; independent review: ready, two nits, the wording nit repaired, the missing darwin restart test accepted). BH2 did not start: the Claude pace guard refused (41% used against 25% expected), and BH2 needs a browser, which Codex cannot launch; it waits until Claude is back on pace (about 27 hours after 2026-10-08 04:00).
+- Not yet verified: full suite on this tree, main fast-forward, push.
