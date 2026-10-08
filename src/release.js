@@ -21,7 +21,7 @@ const REJECTED = /^\s*(rejected|reject|denied|deny|no)\b/i;
 
 // The fixed texts of a refusal. Each maps to one check in the publish path.
 export const REFUSALS = {
-  'repo-not-allowed': 'This repository is not in the releases.repos setting.',
+  'repo-not-allowed': 'This repository is not in the releases.repos setting. Add it in Settings → Advanced → Service settings → Releases.',
   'no-approval': 'No approval item exists for this repository and tag.',
   'wrong-approval': 'The approval item is for another repository or tag.',
   'closed': 'The approval item is closed. Request a new approval.',

@@ -298,3 +298,7 @@ Shorten the orchestrator skill and preserve its rules and reference links.
 ## 6e5e9c2624b3
 Impact: useful
 Summary: Workers never run impeccable ignores or edit .impeccable/config.json; worker collect treats .impeccable/ as out of scope; worker collect --exclude-path PATH --reason TEXT.
+
+## 4384c4db2e96
+Impact: useful
+Summary: Scope Haiku 5.5 to bounded captures and keep its support and benchmark facts; record its results and Luna fit; name stop-own in Codex Luna briefs.

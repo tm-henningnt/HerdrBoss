@@ -203,6 +203,45 @@ function inside(child, parent) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function realGitDirectory(directory) {
+  try {
+    const real = fs.realpathSync(directory);
+    if (!fs.statSync(real).isDirectory() || !fs.existsSync(path.join(real, 'HEAD'))) return null;
+    return real;
+  } catch { return null; }
+}
+
+function commonGitDir(repo, slug, onWarning) {
+  const dotGit = path.join(repo, '.git');
+  let gitDir = dotGit;
+  try {
+    const stat = fs.statSync(dotGit);
+    if (stat.isFile()) {
+      const pointer = /^gitdir:\s*(.+)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+      if (!pointer) throw new Error('Invalid gitdir pointer');
+      gitDir = path.resolve(repo, pointer[1].trim());
+      const common = fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim();
+      if (!common) throw new Error('Missing common Git directory');
+      gitDir = path.resolve(gitDir, common);
+    } else if (stat.isDirectory()) {
+      try {
+        const common = fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim();
+        if (common) gitDir = path.resolve(gitDir, common);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    } else throw new Error('Invalid .git entry');
+    const resolved = realGitDirectory(gitDir);
+    if (resolved) return resolved;
+  } catch { /* Try the repository .git path as a fallback below. */ }
+
+  const fallback = realGitDirectory(dotGit);
+  onWarning?.(fallback
+    ? 'Warning: could not resolve the shared Git directory for project ' + slug + '; using its .git directory.'
+    : 'Warning: could not resolve a valid Git directory for project ' + slug + '; no project Git root was added.');
+  return fallback;
+}
+
 // Parse one TOML array body of plain strings. Return null for anything else, such as a comment.
 function parseStringArray(body) {
   const items = [];
@@ -255,8 +294,9 @@ export function parseCodexRoots(text) {
   return { lines, first, last, indent: open[1], items };
 }
 
-export function requiredRoots({ home = homeDir(), dataDir = DATA_DIR } = {}) {
-  const projects = readProjectRepos(dataDir).map((row) => ({ path: path.join(row.repo, '.git'), slug: row.slug }))
+export function requiredRoots({ home = homeDir(), dataDir = DATA_DIR, onWarning } = {}) {
+  const projects = readProjectRepos(dataDir).map((row) => ({ path: commonGitDir(row.repo, row.slug, onWarning), slug: row.slug }))
+    .filter((root) => root.path)
     .sort((a, b) => a.path.localeCompare(b.path));
   return [{ path: path.join(home, '.herdr-boss'), slug: null }, { path: sharedWorktreeRoot(home, dataDir), slug: null }, ...projects];
 }
@@ -287,8 +327,9 @@ function stamp(date = new Date()) { return date.toISOString().replace(/[-:]/g, '
 // Add the missing writable roots to ~/.codex/config.toml. Keep every other line.
 export function syncCodex({ home = homeDir(), dataDir = DATA_DIR, dryRun = false, now = new Date() } = {}) {
   const file = codexConfigFile(home);
-  const wanted = requiredRoots({ home, dataDir });
-  const out = [];
+  const warnings = [];
+  const wanted = requiredRoots({ home, dataDir, onWarning: (warning) => warnings.push(warning) });
+  const out = [...warnings];
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch {
     out.push(`No Codex config at ${file}. Nothing was changed. Add these lines to it:`, ...addLines(wanted.map((root) => root.path)));
@@ -601,8 +642,10 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
     add(roots.some((root) => samePath(root, worktrees)) ? 'ok' : 'missing', 'codex writable_roots', 'Worker worktrees root', `${worktrees} (worker worktrees)`);
     // Workers commit through the .git folder of the main repository.
     for (const project of projects) {
-      const git = path.join(project.repo, '.git');
-      add(roots.some((root) => samePath(root, git)) ? 'ok' : 'missing', 'codex writable_roots', 'Project git root', `${git} (${project.slug})`);
+      const git = commonGitDir(project.repo, project.slug);
+      const present = git && roots.some((root) => samePath(root, git));
+      const detail = git ? git + ' (' + project.slug + ')' : 'No valid Git directory for ' + project.slug + '; run herdr-boss harness sync';
+      add(present ? 'ok' : 'missing', 'codex writable_roots', 'Project git root', detail);
     }
   }
 
