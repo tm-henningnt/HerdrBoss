@@ -13,6 +13,7 @@ Use these pages for technical details.
 - [Orchestrator handover](handover.md)
 - [Project browsers](browsers.md)
 - [Factories and Fleet](factories.md)
+- [Factory dashboard tokens](factory-token.md)
 - [Locks and leases](locks.md)
 - [Docs section](docs-section.md)
 - [Quota reset planner](../quota-plan.md)
