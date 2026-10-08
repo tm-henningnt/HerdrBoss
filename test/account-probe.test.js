@@ -49,7 +49,7 @@ test('Owner probe reports login shape, modes and names without any values', asyn
   assert.equal(await accountProbeCommand(['probe'], f.io), 0);
   const report = f.report();
   assert.deepEqual(report.loginFiles[0], {
-    path: f.auth[0], exists: 'yes', mode: '0600', ownerOnly: 'yes', readable: 'yes', validJson: 'yes', objectRoot: 'yes',
+    path: f.auth[0], exists: 'yes', mode: '0600', ownerOnly: 'yes', symlink: 'no', readable: 'yes', validJson: 'yes', objectRoot: 'yes',
     topLevelKeys: ['opencode-go'], entries: [{ name: 'opencode-go', object: 'yes', keys: [{ name: 'key', string: 'yes', object: 'no' }, { name: 'type', string: 'yes', object: 'no' }], candidateIdentityKeys: [] }],
   });
   assert.equal(report.loginFiles[1].ownerOnly, 'no');
@@ -308,4 +308,19 @@ test('probe keeps login bytes, modes and modification times unchanged and writes
     assert.equal(fs.statSync(file).mtimeMs, before[index].mtime);
   });
   assert.equal(fs.existsSync(f.env.HERDR_BOSS_DIR), false);
+});
+
+test('Owner probe shows a symbolic link as a link and reads no content through it', async (t) => {
+  const { accountProbeCommand } = await import('../src/account-probe.js');
+  const f = fixture(t);
+  const target = path.join(path.dirname(f.auth[0]), 'target-login.json');
+  f.write(target, { 'opencode-go': { type: 'api', key: PRIVATE } }, 0o644);
+  fs.rmSync(f.auth[0], { force: true });
+  fs.symlinkSync(target, f.auth[0]);
+  assert.equal(await accountProbeCommand(['probe'], f.io), 0);
+  const entry = f.report().loginFiles[0];
+  assert.equal(entry.symlink, 'yes');
+  assert.equal(entry.mode, 'unverified');
+  assert.equal(entry.ownerOnly, 'unverified');
+  assert.equal(JSON.stringify(f.report()).includes(PRIVATE), false);
 });

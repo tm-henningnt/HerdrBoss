@@ -57,9 +57,10 @@ export function listToolProcesses(tool, { uid = process.getuid?.(), run = spawnS
 function metadata(file, filesystem, uid) {
   try {
     const stat = filesystem.lstatSync(file);
-    return { path: file, exists: 'yes', mode: (stat.mode & 0o7777).toString(8).padStart(4, '0'), ownerOnly: yesNo(stat.uid === uid && (stat.mode & 0o077) === 0), regular: stat.isFile() };
+    if (stat.isSymbolicLink()) return { path: file, exists: 'yes', mode: 'unverified', ownerOnly: 'unverified', symlink: 'yes', regular: false };
+    return { path: file, exists: 'yes', mode: (stat.mode & 0o7777).toString(8).padStart(4, '0'), ownerOnly: yesNo(stat.uid === uid && (stat.mode & 0o077) === 0), symlink: 'no', regular: stat.isFile() };
   } catch (error) {
-    return { path: file, exists: error.code === 'ENOENT' ? 'no' : 'unverified', mode: 'unverified', ownerOnly: 'unverified', regular: false };
+    return { path: file, exists: error.code === 'ENOENT' ? 'no' : 'unverified', mode: 'unverified', ownerOnly: 'unverified', symlink: 'unverified', regular: false };
   }
 }
 
