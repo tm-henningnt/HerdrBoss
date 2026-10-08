@@ -54,7 +54,7 @@ test('handoff plan and prepare refuse every Opus spelling without --force', (t) 
   for (const action of ['plan', 'prepare']) for (const alias of aliases) {
     const result = runCli(f, ['handoff', action, 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', alias]);
     assert.notEqual(result.status, 0, `${action} ${alias} must be refused`);
-    assert.ok(result.stderr.includes(`claude-opus-5-5 needs the Owner's approval. Ask the Owner, then ${action} with --force.`));
+    assert.ok(result.stderr.includes(`claude-opus-5-5 needs the Owner's approval. Ask the Owner, then ${action} with --force --reason TEXT.`));
   }
 });
 
@@ -62,14 +62,17 @@ test('forced Opus prepare records force and alerts the Boss using the worker ale
   const f = handoffFixture(t);
   preferClaudeOpus(f);
   const env = { ...f.env, TEST_BOSS_PANE: 'ws:boss' };
-  const planResult = runCli(f, ['handoff', 'plan', 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', 'opus', '--force'], env);
+  const missingReason = runCli(f, ['handoff', 'plan', 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', 'opus', '--force'], env);
+  assert.notEqual(missingReason.status, 0);
+  assert.match(missingReason.stderr, /--force needs --reason TEXT/);
+  const planResult = runCli(f, ['handoff', 'plan', 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', 'opus', '--force', '--reason', 'owner approved Opus api_key="sample"'], env);
   assert.equal(planResult.status, 0, planResult.stderr);
   const plan = JSON.parse(planResult.stdout);
   assert.equal(plan.model, 'claude-opus-5-5');
   assert.equal(plan.modelSource, 'flag');
   assert.equal(plan.force, true);
 
-  const result = runCli(f, ['handoff', 'prepare', 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', 'opus', '--force'], env);
+  const result = runCli(f, ['handoff', 'prepare', 'ws:p1', '--to', 'claude', '--mode', 'fresh', '--model', 'opus', '--force', '--reason', 'owner approved Opus api_key="sample"'], env);
 
   assert.equal(result.status, 0, result.stderr);
   const record = JSON.parse(result.stdout);
@@ -83,6 +86,10 @@ test('forced Opus prepare records force and alerts the Boss using the worker ale
   const event = JSON.parse(fs.readFileSync(path.join(f.root, 'events.jsonl'), 'utf8').trim());
   assert.equal(event.type, 'worker-opus');
   assert.equal(event.text, alert);
+  const forced = fs.readFileSync(path.join(f.root, 'action-audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(forced.length, 2);
+  assert.ok(forced.every((entry) => entry.command.startsWith('handoff ') && entry.project === 'project' && entry.workerName === null && entry.refusalKind === 'opus-approval'));
+  assert.ok(forced.every((entry) => entry.reason === 'owner approved Opus api_key=[REDACTED]'));
 });
 
 test('handoff prepare also uses the kit default when policy prefers Opus', (t) => {

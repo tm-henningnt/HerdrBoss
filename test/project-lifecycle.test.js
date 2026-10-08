@@ -162,11 +162,17 @@ test('the open cap refuses by default and --force overrides only the cap', async
   const other = record('another-project', { state: 'open' });
   writeRegister({ version: 1, projects: [f.project, other] }, f.dataDir);
   assert.equal(await run(f, ['open', 'acme-web']), 1);
+  assert.match(f.messages.at(-1), /--force --reason TEXT/);
   assert.equal(f.result().projects[0].state, 'parked');
-  assert.equal(await run(f, ['open', 'acme-web', '--force']), 0);
+  assert.equal(await run(f, ['open', 'acme-web', '--force']), 1);
+  assert.match(f.messages.at(-1), /--force needs --reason TEXT/);
+  assert.equal(await run(f, ['open', 'acme-web', '--force', '--reason', 'owner approved cap override api_key="sample"']), 0);
   assert.equal(f.result().projects[0].state, 'open');
+  const forced = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'action-audit.jsonl'), 'utf8').trim());
+  assert.deepEqual([forced.command, forced.project, forced.workerName, forced.refusalKind], ['project open', 'acme-web', null, 'open-project-cap']);
+  assert.equal(forced.reason, 'owner approved cap override api_key=[REDACTED]');
   const archived = fixture(t, { state: 'archived', lifecycle: { cap: 1 } });
-  assert.equal(await run(archived, ['open', 'acme-web', '--force']), 1);
+  assert.equal(await run(archived, ['open', 'acme-web', '--force', '--reason', 'owner approved cap override']), 1);
   assert.equal(archived.result().projects[0].state, 'archived');
 });
 

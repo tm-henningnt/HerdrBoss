@@ -10,7 +10,7 @@ import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProj
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker as startWorkerImpl, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { enableModel, markModelUnavailable } from '../src/kit/model-unavailable.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { withMutationLock } from '../src/kit/locks.js';
@@ -24,6 +24,12 @@ import { renderBulletin } from '../src/rules.js';
 import { readWorkerFacts, gitIsMerged } from '../src/task-state.js';
 import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 import { ALL_READY_SCREENS, CLAUDE_READY_SCREEN, CODEX_READY_SCREEN, git, setupFixture, temporaryRepo, TEST_HOME, tiers, validReport, validRun } from './helpers/kit-fixture.js';
+
+const startWorker = (name, options, deps = {}) => startWorkerImpl(name, options, {
+  freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
+  serviceConfig: { worktrees: { minFreeGb: 8 } },
+  ...deps,
+});
 
 test('worker collect --record uses the provider recorded at start, including null routes', () => {
   for (const [name, route, expected, failUsage, modelResult] of [['collect-routed', 'claude', 'claude', false, 'rework'], ['collect-free', null, null, false, null], ['collect-failure', 'claude', 'claude', true, null]]) {
@@ -2545,7 +2551,7 @@ test('a forced Claude Opus start logs an event and sends one line to the Boss pa
   };
   const output = [];
 
-  const run = startWorker('opus-worker', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP1', allow: ['src/'], noWorktree: true, force: true }, {
+  const run = startWorker('opus-worker', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP1', allow: ['src/'], noWorktree: true, force: true, reason: 'owner approved Opus' }, {
     config: f.config, models: loadModels(), herdr, env, rulesFile: f.rulesFile, output: (line) => output.push(line),
   });
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
@@ -2561,7 +2567,7 @@ test('a forced Claude Opus start logs an event and sends one line to the Boss pa
   assert.equal(run.model, 'claude-opus-5-5');
 
   const missingBossOutput = [];
-  startWorker('opus-no-boss', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP3', allow: ['src/'], noWorktree: true, force: true }, {
+  startWorker('opus-no-boss', { kind: 'claude', model: 'claude-opus-5-5', task: 'x', taskId: 'OP3', allow: ['src/'], noWorktree: true, force: true, reason: 'owner approved Opus' }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env, rulesFile: f.rulesFile, output: (line) => missingBossOutput.push(line),
   });
   assert.ok(missingBossOutput.includes('Opus worker: opus-no-boss runs claude-opus-5-5 (forced).'));
@@ -2615,7 +2621,7 @@ test('an Opus refusal logs silently, and other worker models do not alert the Bo
       return f.herdr(args);
     };
     const output = [];
-    const run = startWorker(name, { kind, ...(model ? { model } : {}), task: 'x', taskId: 'T3', allow: ['src/'], noWorktree: true, force: true }, {
+    const run = startWorker(name, { kind, ...(model ? { model } : {}), task: 'x', taskId: 'T3', allow: ['src/'], noWorktree: true, force: true, reason: 'owner approved dispatch' }, {
       config: f.config, models: loadModels(), herdr, env: { ...f.env, HERDR_BOSS_DIR: dataDir }, rulesFile: f.rulesFile, output: (line) => output.push(line),
     });
     assert.equal(run.model, model ?? 'gpt-6-luna');

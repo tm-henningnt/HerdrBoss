@@ -90,7 +90,7 @@ Read each file in the skill folder when its step comes:
 - Run interaction checks yourself. Include before and after screenshots as evidence. Put one shared-space test app per scenario, named after its item.
 - Give each item a two-line description (what and why), exact steps, expected result, and app/sheet link. Set verifiedBy to agent-verified and list image refs in evidence, or use needs-you. Give every decision item accept and deny in ask.
 - Send only items needing a human decision to the Owner: taste, business meaning, or a final call.
-- Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with --force when the Owner asked. Record passed, issues, or not-run in designPass.
+- Before shipping, get an independent reviewer to run a design pass: gpt-6.1-sol, or claude-opus-5-5 with `--force --reason TEXT` when the Owner asked. Record passed, issues, or not-run in designPass.
 - For a behavior change, add a `file` or `diff` item for the docs change, or a `markdown` item with the `Docs-Exempt: <reason>`. See [the docs rules](reference/ledger-and-evidence.md#evidence-tiers).
 - Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
 - Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
@@ -121,8 +121,8 @@ Read each file in the skill folder when its step comes:
 - Read `~/.herdr-boss/bulletin.md` before each new dispatch, including its machine load.
 - Follow the current global worker cap and your project's effective slots in the bulletin. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Slots marked `free for others` stay yours. Start workers up to your effective slots.
 - Obey the bulletin's preferred and avoided kinds. Do not start work that the bulletin marks as avoided unless you use an allowed override.
-- Use `--force` only for an authorized quota or capacity override, or when the bulletin blocks a kind and the work must continue. It cannot enable globally disabled kinds or models.
-- Record why you overrode an avoided kind.
+- Use `--force --reason TEXT` only for an authorized quota, capacity, pause, pace, disk, Opus approval, or avoided-kind override. Use `--force-swap --reason TEXT` for a worker-start swap refusal. Give a reason from 1 to 300 characters. Herdr Boss redacts the reason and records the override in the action audit file. This rule covers worker start, project open, handoff plan, and handoff prepare. It does not cover `publish`, browser tab close, handoff cancel, or hub promote. It cannot enable globally disabled kinds or models.
+- Record why you overrode an avoided kind in the reason.
 - Choose a worker kind from task fit, current availability, quota, and evidence needs.
 - Do not route work to a model that the machine allow-list does not contain.
 - Record the failed attempt before you redispatch unfinished work.

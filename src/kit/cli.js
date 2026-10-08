@@ -64,8 +64,9 @@ Options:
   --orch PANE               Set the verified project lead pane.
   --no-worktree             Use the current checkout.
   --dry-run                 Print the start plan without changing state.
-  --force                   Override allowed quota, capacity, or pause refusals.
-  --force-swap              Override the swap refusal.
+  --force                   Override an allowed refusal; requires --reason TEXT.
+  --reason TEXT             Explain an authorized --force or --force-swap override (1 to 300 characters).
+  --force-swap              Override the swap refusal; add --reason TEXT.
   --read-only               Allow changes only in the worker folder.
   --planner                 Create a planner session for the worker pane.
   -h, --help                Print this usage and exit.`,
@@ -425,7 +426,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         return { help: true };
       }
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.start);
-      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'reviewworktree', 'orch', 'noworktree', 'dryrun', 'force', 'forceswap', 'readonly', 'planner']);
+      knownFlags(flags, ['kind', 'model', 'effort', 'issue', 'taskid', 'task', 'taskfile', 'allow', 'copy', 'lease', 'base', 'reviewworktree', 'orch', 'noworktree', 'dryrun', 'force', 'reason', 'forceswap', 'readonly', 'planner']);
       try { return startWorker(positional[0], {
         kind: flags.kind,
         model: flags.model,
@@ -444,10 +445,11 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         readOnly: flags.readonly,
         dryRun: flags.dryrun,
         force: flags.force,
+        reason: flags.reason,
         forceSwap: flags.forceswap,
         planner: flags.planner,
       }, {
-        config, models: modelConfig, herdr, env, output, rulesFile, piModelLister: runPiListing,
+        config, serviceConfig: injectedServiceConfig ?? loadConfig(), freeSpaceReader, models: modelConfig, herdr, env, output, rulesFile, piModelLister: runPiListing,
         projectStatus: flags.taskid == null && flags.issue == null
           ? listProjects().find((project) => project.slug === config.slug) || null
           : null,

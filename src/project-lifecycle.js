@@ -13,6 +13,7 @@ import { projectTransferRefusal, readProjectTransferLock } from './project-trans
 import { runProjectStep, readFlowState } from './project-new.js';
 import { checkProject, formatCheck } from './project-new-check.js';
 import { verifyProjectCaller } from './project-caller.js';
+import { appendForcedAction, forceReason } from './force-audit.js';
 import { SLUG, appendAudit, localFactory, readRegister, withRegisterLock, writeRegister } from './project-register.js';
 
 const OPEN_STEPS = ['folder', 'kit', 'policy', 'register', 'workspace', 'harness'];
@@ -26,7 +27,7 @@ const paneOf = (row) => row?.pane_id ?? row?.paneId ?? row?.id ?? null;
 const agentOf = (row) => row?.name ?? row?.agent_name ?? row?.agentName ?? null;
 
 function usage(action) {
-  if (action === 'open') return 'Usage: project open SLUG [--start] [--force] [--dry-run]';
+  if (action === 'open') return 'Usage: project open SLUG [--start] [--force --reason TEXT] [--dry-run]';
   if (action === 'park') return 'Usage: project park SLUG [--prepare] [--dry-run]';
   return `Usage: project ${action} SLUG [--dry-run]`;
 }
@@ -35,19 +36,29 @@ function parseArgs(action, args) {
   const allowed = action === 'open' ? ['--start', '--force', '--dry-run']
     : action === 'park' ? ['--prepare', '--dry-run'] : ['--dry-run'];
   const flags = new Set();
+  let reason;
   const positional = [];
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (!arg.startsWith('--')) { positional.push(arg); continue; }
+    if (action === 'open' && arg === '--reason') {
+      if (reason !== undefined) throw new Error(`--reason may be used only once. ${usage(action)}`);
+      reason = args[++index];
+      if (reason === undefined || reason.startsWith('--')) throw new Error(`--reason needs text. ${usage(action)}`);
+      continue;
+    }
     if (!allowed.includes(arg)) throw new Error(`Unknown option: ${arg}. ${usage(action)}`);
     if (flags.has(arg)) throw new Error(`${arg} may be used only once. ${usage(action)}`);
     flags.add(arg);
   }
   if (positional.length !== 1) throw new Error(`Give exactly one slug. ${usage(action)}`);
   if (!SLUG.test(positional[0])) throw new Error(`The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters. ${usage(action)}`);
+  const safeReason = action === 'open' ? forceReason(flags.has('--force'), reason) : null;
   return {
     slug: positional[0],
     start: flags.has('--start'),
     force: flags.has('--force'),
+    reason: safeReason,
     prepare: flags.has('--prepare'),
     dryRun: flags.has('--dry-run'),
   };
@@ -216,8 +227,17 @@ function openProject(parsed, options) {
       && (capCountsPinned || !item.pinned)).length;
     if (!parsed.force && open >= cap) {
       const current = projects.filter((item) => item.state === 'open').map((item) => item.slug);
-      throw new Error(`The open project cap is ${cap}. Open projects: ${current.join(', ')}. Park one project or use --force.`);
+      throw new Error(`The open project cap is ${cap}. Open projects: ${current.join(', ')}. Park one project or use --force --reason TEXT for an authorized override.`);
     }
+    if (parsed.force && open >= cap && !parsed.dryRun) appendForcedAction({
+      dataDir,
+      time: new Date(options.now()).toISOString(),
+      command: 'project open',
+      project: slug,
+      workerName: null,
+      refusalKind: 'open-project-cap',
+      reason: parsed.reason,
+    });
 
     const first = checkProjectForOpen(slug, options, parsed.start);
     logCheck(first, log);

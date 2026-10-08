@@ -45,14 +45,14 @@ Read this file before you choose a lane for a new kind of task, when `herdr-boss
 - A window longer than 7 days can use a trickle lane when it is ahead of pace. The daily allowance is `(100 - used percent) / days left`. Herdr Boss uses at least 1 day for this calculation and rounds the displayed allowance to one decimal place.
 - Herdr Boss measures today's use from the first matching quota record after 00:00 UTC. After a reset, it uses the first record after that reset. No record for today means 0% use.
 - A short window of 7 days or less that is ahead of pace still closes the lane. An exhausted or near-exhaustion window also closes it.
-- `worker start` allows a trickle lane below its daily allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force` to bypass this refusal.
+- `worker start` allows a trickle lane below its daily allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force --reason TEXT` for an authorized override.
 - Automatic handover can use a trickle lane below its daily allowance.
 - The bulletin, `herdr-boss lanes`, and the Overview quota card show the allowance and today's use.
 - The lanes output has an always-open unmetered lane. Prefer an unmetered model for bounded, well-specified work while a metered provider is ahead of pace. Reserve metered models for work that needs judgment.
 - A worker-start refusal or least-over notice lists your project's unmetered alternatives first.
 - Prefer an open provider.
 - Ignore quota mode disables pacing below 100% but does not make an exhausted provider usable.
-- `worker start` refuses an exhausted provider unless you use the explicit `--force` override.
+- `worker start` refuses an exhausted provider unless you use the explicit `--force --reason TEXT` override.
 - When every metered provider is ahead of pace, `worker start` allows the least-over provider without `--force`. Keep that task small.
 - A quota window whose reset time has passed shows "reset, not yet measured" until the next reading. Do not use its old percentage as a reason for `--force`.
 

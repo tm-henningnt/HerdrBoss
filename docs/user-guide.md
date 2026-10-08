@@ -51,6 +51,14 @@ Run `herdr-boss worktree prune --clean-build` to list rebuildable output in work
 
 The Doctor disk line reports free space at the Herdr Boss data folder and the configured worktree root. It uses the lower value when they are on different file systems. It gives a note below 15 GB. It gives an error below 5 GiB.
 
+### Worker-start disk floor
+
+Worker start checks the free space on the volume that holds the worker worktree folder and on the volume that holds the Herdr Boss data directory. The lower value must meet `worktrees.minFreeGb`. The floor defaults to 8 GB. Set it from 1 to 500 GB in Settings under Service. If either volume is below the floor, worker start refuses. The refusal names both volumes, their free space, the floor, and the cleanup commands.
+
+The refusal records a timestamped diagnosis in the bulletin and the audit file. It lists the five largest directories and the five newest temporary directories that are at least 50 MiB. It scans only six fixed roots. It reads directory entries and file metadata, not file contents. Each root gets part of a 2.5-second budget. A slow root does not use the later roots' time. The diagnosis lists paths and sizes only. A scan failure does not block the refusal. The bulletin hides the diagnosis when both volumes meet the floor or the record is more than six hours old.
+
+Use `--force --reason TEXT` for an authorized override. Give a reason from 1 to 300 characters. Herdr Boss redacts secrets and writes the override to `action-audit.jsonl`.
+
 When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
 
 For persisted record rules, see the [record inventory](architecture-records.md). For supervisor steps and gaps, see the [supervisor contract](reference/supervisor-contract.md). For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

@@ -9,6 +9,7 @@ import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
+import { readDiskDiagnosis } from './disk-diagnosis.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
@@ -1385,7 +1386,7 @@ export class Engine extends EventEmitter {
       }
       for (const h of handoffCandidates(control).filter((candidate) => candidate.window)) {
         const model = h.target ? normalizeModel(h.target.model) : null;
-        const opusForce = h.target && isOpusModel(model) ? ' --force' : '';
+        const opusForce = h.target && isOpusModel(model) ? ' --force --reason "Owner approved Opus"' : '';
         const effort = h.target?.effort ? ` --effort ${h.target.effort}` : '';
         evaluation.alerts.push({
           key: `handoff:${h.workspace}:${h.provider}:${h.window.resetsAt}`,
@@ -1516,6 +1517,10 @@ export class Engine extends EventEmitter {
       snap.push = this.push;
       // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
+      snap.diskDiagnosis = readDiskDiagnosis(DATA_DIR, {
+        now,
+        minFreeGb: this.cfg.worktrees?.minFreeGb ?? 8,
+      });
       fs.writeFileSync(BULLETIN_FILE, renderBulletin(snap, evaluation, this.cfg));
       if (this.act) await this.deliver(evaluation.alerts, herdr, now, snap.night, heldWorkspaces(snap.projects, snap.control, herdr));
       if (this.act && this.push) await this.deliverLockTakeoverNotices(herdr);
@@ -2104,7 +2109,7 @@ export class Engine extends EventEmitter {
           writeJson(MEMORY_FILE, this.memory);
           const model = normalizeModel(h.target.model);
           const effort = h.target.effort ? ` --effort ${h.target.effort}` : '';
-          const notice = `[herdr-boss] Automatic handover for ${h.label || h.project} did not prepare ${h.target.kind} ${model}. Owner approval is needed. After approval, run: herdr-boss handoff prepare ${h.pane} --to ${h.target.kind} --model ${model} --force${effort}.`;
+          const notice = `[herdr-boss] Automatic handover for ${h.label || h.project} did not prepare ${h.target.kind} ${model}. Owner approval is needed. After approval, run: herdr-boss handoff prepare ${h.pane} --to ${h.target.kind} --model ${model} --force --reason "Owner approved Opus"${effort}.`;
           try {
             await this.promptService(boss.id, notice, { herdr, now });
             this.log('handoff', `Sent Boss an Owner-approval notice for the Opus handover from ${h.pane}`, { project: h.project, pane: boss.id });

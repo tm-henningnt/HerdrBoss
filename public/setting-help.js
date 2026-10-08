@@ -337,7 +337,7 @@ export const SETTING_HELP = Object.fromEntries([
   S('machine', 'machine.swapRefuseEnabled', 'Refuse new work at high swap', {
     what: 'When on, a worker start, a suite, or a push with a pre-push suite fails while swap is at or above the refusal percent. Work that the Owner or the Boss starts is never refused.',
     default: 'Off', unit: 'Switch', range: 'On or off',
-    raise: 'Turning it on protects a machine that swaps from more load. Use --force-swap, or HERDR_BOSS_FORCE_SWAP=1 for suite and push, to override.',
+    raise: 'Turning it on protects a machine that swaps from more load. Use --force-swap --reason TEXT for worker start, or HERDR_BOSS_FORCE_SWAP=1 for suite and push, to override.',
     lower: 'Turning it off lets work start at any swap level. The swap warning still applies.',
     apply: 'policy',
   }),
@@ -564,14 +564,14 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'opus.allowWithoutForce', 'Allow Opus without --force', {
-    what: 'Lets `herdr-boss worker start` start a Claude Opus worker without `--force`. Turn it on only when the Owner approves Opus for workers. The Boss gets an alert for each Opus start. A refused start names this setting.',
+    what: 'Lets `herdr-boss worker start` start a Claude Opus worker without `--force --reason TEXT`. Turn it on only when the Owner approves Opus for workers. Otherwise each forced start needs `--force --reason TEXT`. The Boss gets an alert for each Opus start. A refused start names this setting.',
     default: 'Off', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on lets each Opus start pass while the number of running Opus workers is below the limit.',
-    lower: 'Turning it off means each Opus start needs `--force` and the Owner\'s approval.',
+    lower: 'Turning it off means each Opus start needs `--force --reason TEXT` and the Owner\'s approval.',
     apply: 'policy',
   }),
   S('capacity', 'opus.maxConcurrent', 'Running Opus workers at most', {
-    what: 'The most Opus workers that can run at the same time when Opus starts without `--force`. A start at the limit is refused and names this setting. `--force` skips the limit.',
+    what: 'The most Opus workers that can run at the same time when Opus starts without `--force`. A start at the limit is refused and names this setting. `--force --reason TEXT` skips the limit.',
     default: '2', unit: 'Workers', range: '1 to 8',
     raise: 'A higher value allows more Opus workers at the same time and uses the Opus usage limit faster.',
     lower: 'A lower value refuses an Opus start sooner. Running Opus workers continue.',
@@ -731,6 +731,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: 'On', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on removes safe, merged worktrees after collection.',
     lower: 'Turning it off keeps worktrees for herdr-boss worktree prune.',
+    apply: 'service',
+  }),
+  S('service', 'worktrees.minFreeGb', 'Minimum free worktree space', {
+    what: 'The minimum free space in GB required on both the worker worktree volume and the Herdr Boss data-directory volume. Worker start refuses when either volume is below this value unless you use --force with --reason TEXT.',
+    default: '8', unit: 'GB', range: '1 to 500',
+    raise: 'A higher value refuses worker starts sooner when free space falls.',
+    lower: 'A lower value lets worker starts use the disk longer.',
     apply: 'service',
   }),
   S('service', 'workers.uncollectedNoticeMinutes', 'Uncollected worker notice minutes', {
