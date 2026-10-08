@@ -1,6 +1,6 @@
 # FS1 design note: secret store and login rotation
 
-Status: design only. This note holds no product code. Step 2 starts after the Owner accepts the decisions in the last section.
+Status: step 2 is in progress. The Owner accepted pack v3, decisions D1 to D6, on 2026-10-08. Slice 1 adds the login probe. Later slices implement the store, swap, rotation, and dashboard rules in this note.
 
 Scope: the secret store, the commands `herdr-boss secret` and `herdr-boss account`, quota-driven rotation of the OpenCode Go login, the head office view, and the dashboard Settings.
 
@@ -21,13 +21,13 @@ Each term has one meaning in this note.
 
 The Owner has two OpenCode Go subscriptions and swaps the login in opencode and pi by hand. Source: the Owner spec for FS1, which is not in the repository. One subscription is in use. The other resets about 5 days 11 hours after 2026-10-06 11:30 local time.
 
-Five facts are not verified. Step 2, slice 1 verifies them before it writes code.
+The Owner verified facts 1 and 2 at his terminal on 2026-10-08. He reported key names only. Slice 1 supplies one command for the remaining checks.
 
-- The key names inside the opencode login file. The file is known only from its public documentation.
-- The pi login location.
-- Whether a running tool reads its login file again during a run. Decision 5 depends on this fact. Until slice 1 verifies it, treat the claim "a running worker keeps the old login" as unverified.
-- Whether an environment variable, `XDG_DATA_HOME`, or an `apiKey` field in a tool configuration file overrides the login file.
-- Whether an entry has a stable non-secret identity field: a field that keeps its value when the tool refreshes the login, for example an account id. The write-back in section 3 depends on this fact.
+1. Verified by the Owner: `~/.local/share/opencode/auth.json` is a JSON object. Its only top-level key is `opencode-go`. The entry is an object with the keys `type` and `key`. The file mode is unverified until the Owner runs the probe.
+2. Verified by the Owner: `~/.pi/agent/auth.json` has the same structure and key names. The file mode is unverified until the Owner runs the probe.
+3. Unverified: whether a running tool reads its login file again during a run. The Owner must run the probe while a tool runs. A passive access-time check cannot prove which process read a file. No access-time change means `cannot tell`. Keep the re-read fact `unverified` when the check cannot decide. Keep Decision 5: rotation waits for running processes.
+4. Unverified until the Owner runs the probe: which environment variables and configuration fields are present. The probe reports names only. Their precedence over the login file stays unverified. It does not start a tool to test an override.
+5. Verified for these auth entries: neither entry has an account id, email, or other identity field. No stable identity field is verified. Slice 4 must implement the refusal path in section 3 or use a key-hash identity. A key hash must stay in memory or in the private store. It must not reach a report.
 
 The code that reads the `opencodego` quota is not traced. Slice 6 traces it first.
 
@@ -39,22 +39,40 @@ The code that reads the `opencodego` quota is not traced. Slice 6 traces it firs
 - The file is a JSON object. Each top-level key is a provider name. Each value holds the login data of that provider. Source: the same page.
 - The documentation names no environment variable that moves the file.
 - Opencode Go models use the model prefix `opencode-go/`. Source: `src/control.js:43` and `src/control.js:576`.
-- Not verified: the provider key for OpenCode Go, the field names of an entry, and the file mode.
+- Verified by the Owner on 2026-10-08: the provider key is `opencode-go`. The entry has the keys `type` and `key`. The entry has no identity field. The file mode is unverified until the Owner runs the probe.
 
 ### pi
 
 - The pi data directory is `~/.pi/agent/`. Source: `docs/ideas/gui-settings-audit.md:84` names `~/.pi/agent/extensions/herdr-guard.ts`.
-- Not verified: the login file name, its key names, its format, and its mode.
+- Verified by the Owner on 2026-10-08: the login file is `~/.pi/agent/auth.json`. It is a JSON object with one top-level key, `opencode-go`. The entry is an object with the keys `type` and `key`. The entry has no identity field. The file mode is unverified until the Owner runs the probe.
 
 ### Discovery step for the Owner
 
-Step 2, slice 1 adds a read-only command: `herdr-boss account probe`. The Owner runs it at a terminal. It prints only file paths, file modes, and key names. It never prints a value. It refuses in an agent pane. Slice 1 decides the method that detects an agent pane. All refusing commands use that method. The slice records the result in `docs/harness-setup.md`.
+Run one command at an Owner terminal, from the project folder:
 
-The probe also prints the names, never the values, of these items:
+```sh
+herdr-boss account probe
+```
 
-- environment variables that match `OPENCODE`, `_API_KEY`, or `XDG_DATA_HOME`
-- `apiKey` fields in the opencode and pi configuration files
-- the candidate identity fields of each login entry, as key names
+If the service or CLI is not installed, run the standalone copy from the repository:
+
+```sh
+node scripts/account-probe.mjs
+```
+
+Both commands print the same JSON report. The standalone script needs only Node. It imports no other Herdr Boss file. The report holds paths, modes, key names, type checks, process counts and PIDs, and fixed status words. It never holds a login or configuration value. The command writes no file. Content reads can update access time through the file system.
+
+The report checks these items:
+
+- For each login file: existence, mode, owner-only access, readable JSON, an object root, top-level key names, and entry key names. Each entry key gets a string and object type check.
+- Candidate identity key names: `id`, `account`, `accountId`, `account_id`, `email`, `user`, `name`, `org`, and `sub`.
+- Other files directly in `~/.pi/agent`: paths and modes only. The probe does not read their contents unless they are one of the named configuration files below.
+- Environment variable names that match `OPENCODE`, `_API_KEY`, `XDG_DATA_HOME`, or `PI_`. Each name gets `set` or `unset`. The report includes known candidate names when they are unset.
+- `apiKey` and `api_key` field names in `opencode.json` and `opencode.jsonc` under `~/.config/opencode` and in the current project folder. It also checks `settings.json` and `models.json` under `~/.pi/agent`. It checks nested fields. It excludes JSONC comments. It reports the file path and matching field names only.
+- Current-user processes: count and PIDs only. The probe checks the executable names `opencode` and `pi`. A PID-only match also covers direct tool paths and known Node launchers. The pi match covers `node /path/pi` and the `pi-coding-agent/dist/cli.js` entry under `@earendil-works` or `@mariozechner`. The probe prints no arguments and reads no process environment. Custom wrappers stay unverified.
+- Access time and modification time before and after a 10-second wait when a named tool runs. The baseline follows the probe's own content reads. No content read runs during or after the wait. The report gives change checks only. It does not print timestamp values. Even a changed access time does not identify the reader. The re-read result stays `unverified`, with `cannot tell`. Rotation keeps the wait rule.
+
+Record the Owner report in `docs/harness-setup.md`. Until then, modes, override presence, and running-tool behavior stay unverified.
 
 Agents do not run the probe against the real login files.
 
@@ -114,7 +132,9 @@ Risk to solve in slice 2: the macOS `security` command can take a secret as an a
 
 A command never takes a secret as an argument.
 
-`secret set`, `secret remove`, `secret export`, `secret check`, `account use`, and `account probe` refuse in an agent pane. `secret check` and `account probe` read the private directory or the login files. `secret list` and `account list` print metadata only and do not refuse. The Owner runs the refused commands at a terminal. Slice 1 decides the method that detects an agent pane.
+`secret set`, `secret remove`, `secret export`, `secret check`, `account use`, and `account probe` refuse in an agent pane. `secret check` and `account probe` read the private directory or the login files. `secret list` and `account list` print metadata only and do not refuse. The Owner runs the refused commands at a terminal.
+
+Slice 1 caller rule for `account probe`: reuse `verifyNightCaller`, as `factory token` does. Require the Owner role and TTYs on stdin and stdout. Refuse the Boss, orchestrators, and workers before login reads. Also refuse when `HERDR_ENV`, `HERDR_PANE`, a `HERDR_PANE_*` variable, `HERDR_WORKSPACE_ID`, or `HERDR_WORKTREE` is present, even with an empty value. The standalone script checks the same variables and TTYs without Herdr. This guard prevents accidents and pane leaks. It does not stop a hostile process of the same OS user. Later Owner-only account commands must use this rule.
 
 ### Secret commands
 

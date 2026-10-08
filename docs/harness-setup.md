@@ -4,6 +4,19 @@ Herdr Boss orchestration needs settings in each agent harness on the machine. Th
 
 `herdr-boss harness check` reads the live settings and reports each missing entry. It checks the release request and publish permissions in the Claude and Codex settings. `herdr-boss harness sync` adds missing Codex writable roots, adds the missing `stop-own` rule when the rules file holds no exact forbidden rule for it, and prints only the Claude lines that differ. The commands are in [cli.md](cli.md#harness-settings).
 
+## Check the OpenCode Go login files
+
+The Owner verified these facts at his terminal on 2026-10-08. He reported paths and key names only. Agents did not read the login files.
+
+| Tool | Login file | Verified structure | Mode and owner-only access |
+|---|---|---|---|
+| opencode | `~/.local/share/opencode/auth.json` | JSON object. One top-level key: `opencode-go`. The entry is an object with `type` and `key`. No identity field. | Unverified. Fill from the Owner probe report. |
+| pi | `~/.pi/agent/auth.json` | JSON object. One top-level key: `opencode-go`. The entry is an object with `type` and `key`. No identity field. | Unverified. Fill from the Owner probe report. |
+
+Run `herdr-boss account probe` once at an Owner terminal, from the project folder. Run it while a tool is active for the passive access-time check. If the CLI is not installed, run `node scripts/account-probe.mjs` from this repository. It needs only Node and works without the service. Both commands print the same report. See [Account probe](cli.md#account-probe) for its fields and caller guard.
+
+The report prints paths, modes, key names, type checks, process counts and PIDs, and fixed status words. It prints no values. It lists other files directly in `~/.pi/agent` by metadata only. It reports environment names and the presence of `apiKey` or `api_key` fields in the named configuration files. Mode checks, override presence, and running-tool behavior stay unverified until the Owner runs the probe. A timestamp check cannot identify the reader, so the re-read fact can remain `unverified` after the run. Rotation then keeps the rule that it waits for running processes.
+
 ## Placeholders
 
 The templates use only these placeholders. `harness sync` fills them when it prints a template.
