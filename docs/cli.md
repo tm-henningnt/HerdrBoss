@@ -1731,6 +1731,7 @@ When a task names `serve:live` and the `serve-ports` pool exists, `worker start`
 |---|---|
 | `ledger append --entry FILE [--file LEDGER]` | Validate and append one run entry. |
 | `ledger check [--runs] [--file LEDGER]` | Validate the ledger. `--runs` also fails for each run record without a ledger entry. |
+| `node scripts/docs-gate.js [--base REF] [--head REF] [--root DIR] [--include-worktree]` | Check docs for behavior changes and scan changed files for token-shaped strings. The scan includes test files and fixture folders. Record a documented synthetic sample in `scripts/docs-gate-allowlist.json` by path, class, reason, and exact-string SHA-256. Do not store the matched string. |
 | `check --report FILE` | Validate a worker report (`report.json`). |
 | `check --run FILE` | Validate one ledger entry. |
 | `check --worktree DIR --allow PATH...` | Check that the worktree changes only allowed paths. |

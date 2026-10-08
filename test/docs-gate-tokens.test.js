@@ -1,6 +1,7 @@
 import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +34,7 @@ function fixture(t) {
   git(root, ['init', '-q', '-b', 'main']);
   write(root, 'public/app.js', 'export const a = 1;\n');
   write(root, 'docs/guide.md', '# Guide\n');
+  write(root, 'scripts/docs-gate-allowlist.json', '[]\n');
   commit(root, 'Start');
   git(root, ['checkout', '-q', '-b', 'feature']);
   return root;
@@ -53,6 +55,15 @@ function bundle(root, name, text) {
   write(root, name, text);
   write(root, 'docs/guide.md', '# Guide\n\nMore text.\n');
   commit(root, 'Ship a bundle');
+}
+
+function allowToken(root, file, token, tokenClass = 'jwt') {
+  write(root, 'scripts/docs-gate-allowlist.json', `${JSON.stringify([{
+    path: file,
+    class: tokenClass,
+    reason: 'Synthetic token sample for the docs gate test.',
+    sha256: createHash('sha256').update(token).digest('hex'),
+  }], null, 2)}\n`);
 }
 
 test('the gate fails when a bundle holds a JWT', (t) => {
@@ -88,9 +99,10 @@ test('the gate passes for a public verification key in a bundle', (t) => {
   assert.equal(result.code, 0, result.out);
 });
 
-test('the gate passes for a test string with the allow marker', (t) => {
+test('the gate passes for an allowlisted synthetic test string', (t) => {
   const root = fixture(t);
-  bundle(root, 'public/app.js', `const token = '${JWT}'; // herdr-boss: allow-test-token\n`);
+  allowToken(root, 'test/sample.test.js', JWT);
+  bundle(root, 'test/sample.test.js', `const token = '${JWT}';\n`);
   const result = gate(root);
   assert.equal(result.code, 0, result.out);
 });
@@ -102,11 +114,34 @@ test('the gate passes for a bundle with no token-shaped string', (t) => {
   assert.equal(result.code, 0, result.out);
 });
 
-test('the gate does not scan a unit test file for tokens', (t) => {
+test('the gate fails when a direct test file holds a JWT', (t) => {
   const root = fixture(t);
   bundle(root, 'test/engine.test.js', `const fake = '${JWT}';\n`);
   const result = gate(root);
-  assert.equal(result.code, 0, result.out);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /test\/engine\.test\.js/);
+  assert.match(result.out, /jwt/i);
+});
+
+test('the gate fails when a nested fixture folder holds a JWT', (t) => {
+  const root = fixture(t);
+  bundle(root, 'test/helpers/fixtures/sample.json', `{"sample":"${JWT}"}\n`);
+  const result = gate(root);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /test\/helpers\/fixtures\/sample\.json/);
+  assert.match(result.out, /jwt/i);
+});
+
+test('the gate fails when an allowlisted string changes but its hash does not', (t) => {
+  const root = fixture(t);
+  const changed = `${JWT.slice(0, -1)}${JWT.endsWith('A') ? 'B' : 'A'}`;
+  allowToken(root, 'test/sample.test.js', JWT);
+  bundle(root, 'test/sample.test.js', `const token = '${changed}';\n`);
+  const result = gate(root);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /test\/sample\.test\.js/);
+  assert.match(result.out, /jwt/i);
+  assert.ok(!result.out.includes(changed), 'the gate printed the token');
 });
 
 test('the token check runs without a docs change', (t) => {
@@ -124,7 +159,7 @@ test('the token scanner names the classes of a text', async () => {
   assert.deepEqual(scanTokenText(`const t = '${JWT}';\n`), ['jwt']);
   assert.deepEqual(scanTokenText(`${PRIVATE_KEY}\n`), ['PEM private key block']);
   assert.deepEqual(scanTokenText(`licenseKey: ${LICENSE_BLOB}\n`), ['license blob']);
-  assert.deepEqual(scanTokenText(`const t = '${JWT}'; // herdr-boss: allow-test-token\n`), []);
+  assert.deepEqual(scanTokenText(`const t = '${JWT}'; // herdr-boss: allow-test-token\n`), ['jwt']);
   assert.deepEqual(scanTokenText(`${PUBLIC_KEY}\n`), []);
 });
 
@@ -150,7 +185,6 @@ test('the token scanner finds a license blob on the line after the key', async (
   assert.deepEqual(scanTokenText(`license:\n  ${LICENSE_BLOB}\n`), ['license blob']);
   assert.deepEqual(scanTokenText(`access_token: |\n  ${LICENSE_BLOB}\n`), ['license blob']);
   assert.deepEqual(scanTokenText(`license:\n\n  "${LICENSE_BLOB}"\n`), ['license blob']);
-  assert.deepEqual(scanTokenText(`license:\n  ${LICENSE_BLOB} # herdr-boss: allow-test-token\n`), []);
   assert.deepEqual(scanTokenText(`license:\n  name: MIT\n`), []);
 });
 
@@ -198,8 +232,9 @@ test('the gate reads the working tree content of a modified file with --include-
 test('the token globs cover the source, kit, script, example, and root files', async () => {
   const { loadRules } = await import('../scripts/docs-gate.js');
   const { tokens } = loadRules();
-  for (const glob of ['src/**', 'kit/**', 'scripts/**', 'examples/**', '*']) assert.ok(tokens.includes(glob), glob);
-  assert.ok(!tokens.some((glob) => glob.startsWith('test/') && !glob.startsWith('test/fixtures') && !glob.startsWith('test/apps') && !glob.startsWith('test/demos')));
+  for (const glob of ['src/**', 'kit/**', 'scripts/**', 'examples/**', '*', 'test/*.test.js', '**/fixture/**', '**/fixtures/**', '**/__fixtures__/**']) {
+    assert.ok(tokens.includes(glob), glob);
+  }
 });
 
 test('the gate fails when a source file or a root file holds a JWT', (t) => {
@@ -213,9 +248,10 @@ test('the gate fails when a source file or a root file holds a JWT', (t) => {
   }
 });
 
-test('the tracked tree of this repository passes the token check outside test files', async () => {
-  const { scanTokenText, loadRules } = await import('../scripts/docs-gate.js');
+test('every token in the tracked tree has an exact allowlist entry', async () => {
+  const { scanTokenMatches, loadRules } = await import('../scripts/docs-gate.js');
   const rules = loadRules();
+  const allowlist = JSON.parse(fs.readFileSync(path.join(repo, rules.tokenAllowlist), 'utf8'));
   const files = git(repo, ['ls-files']).split('\n').filter(Boolean);
   const globs = rules.tokens.map((glob) => new RegExp(`^${glob.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*')}$`));
   const found = [];
@@ -223,7 +259,11 @@ test('the tracked tree of this repository passes the token check outside test fi
     let text;
     try { text = fs.readFileSync(path.join(repo, file), 'utf8'); } catch { continue; }
     if (text.includes('\0')) continue;
-    if (scanTokenText(text).length) found.push(file);
+    for (const match of scanTokenMatches(text)) {
+      const sha256 = createHash('sha256').update(match.value).digest('hex');
+      const allowed = allowlist.some((entry) => entry.path === file && entry.class === match.tokenClass && entry.sha256 === sha256 && entry.reason);
+      if (!allowed) found.push(`${file}: ${match.tokenClass}`);
+    }
   }
   assert.deepEqual(found, []);
 });

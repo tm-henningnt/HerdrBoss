@@ -109,7 +109,7 @@ Do not weaken acceptance criteria or remove an existing test to get a pass.
 
 Keep each change inside the allowed paths.
 
-A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a file that the docs gate scans fails the gate. The gate does not scan test/*.test.js, so the rule holds there without a check.
+A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a tracked file fails the docs gate.
 
 The task can list decisions already made. Do not reopen them.
 

@@ -58,7 +58,7 @@ test('pinnedVersion reads the pins file that the caller passes', () => {
 });
 
 test('a failing step prints the fixed line, never throws, and prints no container output', async () => {
-  const invented = 'herdr-boss: allow-test-token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature';
+  const invented = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature';
   for (const docker of [transport({ code: 1, stdout: invented, stderr: 'boom\nsecond' }), transport(() => { throw new Error('The factory host is unreachable.'); }), transport(word('surprise'))]) {
     const output = io();
     assert.equal(await ensureCodexbar(docker, 'demo', output), 'failed');

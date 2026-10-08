@@ -2,7 +2,7 @@
 
 The docs gate checks that a change of behavior comes with a change of the docs. It stops a branch that changes behavior and changes no docs.
 
-The gate also checks the shipped artifacts of the branch. It stops a branch whose artifact holds a token-shaped string, for example a license token.
+The gate also scans each changed tracked file that matches the token rules. It stops a branch when a file holds a token-shaped string, for example a license token.
 
 ## Command
 
@@ -23,8 +23,8 @@ The command compares `--head` (default `HEAD`) with the merge base of `--base` (
 | Exit code | Meaning |
 |---|---|
 | 0 | The gate passes. |
-| 1 | The branch changes behavior and changes no docs and has no exemption, or a shipped artifact holds a token-shaped string. |
-| 2 | The command cannot compare, for example when the base does not exist. |
+| 1 | The branch changes behavior and changes no docs and has no exemption, or a changed file holds a token-shaped string that is not allowlisted. |
+| 2 | The command cannot compare or read its rules, for example when the base or allowlist is invalid. |
 
 The gate passes on `main` with no branch diff, because the diff is empty.
 
@@ -43,9 +43,9 @@ A change to `test/`, `scripts/`, or `package.json` is not a behavior change.
 
 ## Token check
 
-A license is never inline. A release, a bundle, a demo, a fixture, or a test app holds no license text, no license token, no key text, and no licensed state. The check reads each changed artifact in the `tokens` globs and stops the branch on a token-shaped string. The check reads every line of a file. With `--include-worktree`, the check reads the working tree content of an uncommitted file. A unit test file is not a shipped artifact, so the gate does not scan `test/*.test.js`. Binary files, such as archives, are not scanned. A test may create a throwaway key pair and sign a token in memory at run time. It never writes the key or the token to a file.
+A license is never inline. A release, a bundle, a demo, a fixture, or a test app holds no license text, no license token, no key text, and no licensed state. The check scans every line in each changed file that matches the `tokens` globs. It scans `test/*.test.js` and fixture folders named `fixture`, `fixtures`, or `__fixtures__` at any depth. With `--include-worktree`, it reads the working tree content of each changed file, including an untracked file. Binary files, such as archives, are not scanned. A test may create a throwaway key pair and sign a token in memory at run time. It never writes the key or the token to a file.
 
-The `tokens` key in `scripts/docs-gate.config.json` holds the globs. They cover `src/`, `kit/`, `scripts/`, `examples/`, the files in the repository root, `public/`, `bin/`, `factory/`, `release/`, `releases/`, `dist/`, `build/`, `demo/`, `demos/`, `fixture/`, `fixtures/`, `test-app/`, `test-apps/`, and the artifact folders `test/fixtures/`, `test/apps/`, and `test/demos/`.
+The `tokens` key in `scripts/docs-gate.config.json` holds the globs. It covers `src/`, `kit/`, `scripts/`, `examples/`, the files in the repository root, `public/`, `bin/`, `factory/`, `release/`, `releases/`, `dist/`, `build/`, `demo/`, and `demos/`. It also covers fixture folders at any depth, `test/*.test.js`, and the test artifact folders `test/fixtures/`, `test/apps/`, and `test/demos/`.
 
 | Token class | Meaning |
 |---|---|
@@ -56,9 +56,9 @@ The `tokens` key in `scripts/docs-gate.config.json` holds the globs. They cover 
 Two things stay allowed:
 
 - A public verification key. A line with a `PUBLIC KEY` or a `CERTIFICATE` block gives no finding.
-- A fake test string. Put the allow marker on the same line as the string: `herdr-boss: allow-test-token`.
+- A documented synthetic sample. Add an entry to the JSON array in `scripts/docs-gate-allowlist.json`. Each entry has `path`, `class`, `reason`, and `sha256` fields. Use a repository-relative path and a short reason. Set `sha256` to the hash of the exact matched string. Do not put the matched string in the file. The gate allows a match only when its path, class, and hash all match.
 
-A finding names the file and the class. The gate never prints the value that it found.
+A finding names the file and the class. The gate never prints the value that it found. The allowlist replaces the older inline marker. It scopes each exception to one file and one exact string hash.
 
 ## Exemption
 

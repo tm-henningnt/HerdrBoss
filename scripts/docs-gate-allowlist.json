@@ -1,0 +1,80 @@
+[
+  {
+    "path": "test/browser-output.test.js",
+    "class": "jwt",
+    "reason": "Synthetic JWT used to test browser output masking.",
+    "sha256": "5110a3a0e0d4b437915463857a7b2849d3e89f1336e2172302012a358b58f9ce"
+  },
+  {
+    "path": "test/browser-security.test.js",
+    "class": "jwt",
+    "reason": "Synthetic JWT used to test browser security redaction.",
+    "sha256": "5110a3a0e0d4b437915463857a7b2849d3e89f1336e2172302012a358b58f9ce"
+  },
+  {
+    "path": "test/cli-browser-mask.test.js",
+    "class": "jwt",
+    "reason": "Synthetic JWT used to test CLI browser masking.",
+    "sha256": "5110a3a0e0d4b437915463857a7b2849d3e89f1336e2172302012a358b58f9ce"
+  },
+  {
+    "path": "test/docs-gate-tokens.test.js",
+    "class": "jwt",
+    "reason": "Synthetic HS256 sub sample used by docs-gate tests.",
+    "sha256": "0af5c3c66802736d0a403dd94d73425db0dcd656600642ecae840759db7c8af9"
+  },
+  {
+    "path": "test/docs-gate-tokens.test.js",
+    "class": "PEM private key block",
+    "reason": "Synthetic private key sample used by docs-gate tests.",
+    "sha256": "8bcac7908eb950419537b91e19adc83ce2c9cbfdacf4f81157fdadfec11f7017"
+  },
+  {
+    "path": "test/docs-gate-tokens.test.js",
+    "class": "license blob",
+    "reason": "Synthetic license sample used by docs-gate tests.",
+    "sha256": "ef13f9348dfd3c530a1bce089d26c8bfcc04f011608a19a2ed1683e1196f27c1"
+  },
+  {
+    "path": "test/factory-codexbar-install.test.js",
+    "class": "jwt",
+    "reason": "Synthetic JWT used to test credential redaction.",
+    "sha256": "9cea4754e26298f91be8507654669a5373d13585beccd7795a53aac37a06c36a"
+  },
+  {
+    "path": "test/fixtures/long-messages.js",
+    "class": "license blob",
+    "reason": "Synthetic license sample in a long-message fixture.",
+    "sha256": "55587532e505b8a61ae2afb56caf9b1fd804c6292a78b08d9a4d3e2b32c761cb"
+  },
+  {
+    "path": "test/host-guide-fields.test.js",
+    "class": "PEM private key block",
+    "reason": "Synthetic PEM marker used by host guide tests.",
+    "sha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+  },
+  {
+    "path": "test/host-guide.test.js",
+    "class": "PEM private key block",
+    "reason": "Synthetic PEM marker used by host guide tests.",
+    "sha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+  },
+  {
+    "path": "test/preview-access.test.js",
+    "class": "license blob",
+    "reason": "Synthetic license sample used by preview access tests.",
+    "sha256": "c7699a84e6c258fc93b3029d9394f926839fc241a2de1a85f8958b4e75e9bd23"
+  },
+  {
+    "path": "test/project-new-api.test.js",
+    "class": "license blob",
+    "reason": "Synthetic license sample used by project API tests.",
+    "sha256": "03aafb028d538b06c4341bf8cf2a692a3c6d1f36e34e0e0b376f407c6117a246"
+  },
+  {
+    "path": "test/release.test.js",
+    "class": "PEM private key block",
+    "reason": "Synthetic PEM marker used by release tests.",
+    "sha256": "3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d"
+  }
+]
