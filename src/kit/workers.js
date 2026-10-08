@@ -2314,7 +2314,7 @@ export function recordFlagErrors(options, reportJson = {}) {
     missing.push(`--outcome done|partial|failed (${hint})`);
   }
   if (options.gatePassed === options.gateFailed) missing.push('exactly one of --gate-passed or --gate-failed (the result of your own run of the acceptance commands)');
-  if (!Number.isSafeInteger(options.defects ?? 0) || (options.defects ?? 0) < 0) missing.push('--defects as a non-negative integer');
+  if (options.defects !== undefined && (!Number.isInteger(options.defects) || options.defects < 0 || options.defects > 99)) missing.push('--defects as an integer from 0 to 99');
   if (!Number.isSafeInteger(options.rework ?? 0) || (options.rework ?? 0) < 0) missing.push('--rework as a non-negative integer');
   return missing;
 }
@@ -2633,6 +2633,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         changedPaths: recordedPaths,
         independentGate: { passed: !!options.gatePassed, command: 'Independent gate result supplied by orchestrator; command and evidence are in the worker report and review.' },
         defectsFound: Array.from({ length: options.defects ?? 0 }, (_value, index) => `defect ${index + 1}`),
+        ...(options.defects === undefined ? {} : { defects: options.defects }),
         rework: Array.from({ length: options.rework ?? 0 }, (_value, index) => `rework ${index + 1}`),
         evidenceTier: reportJson.evidenceTier,
         scopeExtensions: run.scopeExtensions ?? [],
@@ -2649,6 +2650,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
         inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null,
         cachedTokens: usage.cachedTokens ?? null, cost: usage.cost ?? null,
         modelOutcome: entry.modelOutcome,
+        ...(entry.defects === undefined ? {} : { defects: entry.defects }),
       });
       if (recorded.errors.length) usageWarning = `Warning: usage was not recorded: ${recorded.errors.join(' ')}`;
       appendDelegatedRun(config.ledgerPath, entry, { evidenceTiers: config.evidenceTiers });

@@ -84,7 +84,7 @@ Options:
   --gate-passed             Record that the independent gate passed.
   --gate-failed             Record that the independent gate failed.
   --keep-pane               Keep the worker pane open.
-  --defects COUNT           Record the number of defects found.
+  --defects COUNT           Record an optional defect count from 0 to 99.
   --rework COUNT            Record the number of repair rounds.
   --model-result VALUE      Set first-time, rework, or failed.
   --model-reason TEXT       Explain the model result.
@@ -477,6 +477,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.collect);
       knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'excludepath', 'reason']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
+      if (flags.defects !== undefined && (!/^\d+$/.test(flags.defects) || Number(flags.defects) > 99)) fail('--defects must be an integer from 0 to 99.');
       if (flags.reason != null && flags.acceptscope == null && flags.excludepath == null) fail('--reason needs --accept-scope FILE[,FILE] or --exclude-path PATH[,PATH].');
       if (flags.acceptscope != null && !flags.reason?.trim()) fail('--accept-scope needs --reason TEXT.');
       if (flags.excludepath != null && !flags.reason?.trim()) fail('--exclude-path needs --reason TEXT (1 to 300 characters).');
@@ -499,7 +500,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         outcome: flags.outcome,
         gatePassed: flags.gatepassed,
         gateFailed: flags.gatefailed,
-        defects: flags.defects == null ? 0 : Number(flags.defects),
+        defects: flags.defects === undefined ? undefined : Number(flags.defects),
         rework: flags.rework == null ? 0 : Number(flags.rework),
         modelResult: flags.modelresult || null,
         modelReason: flags.modelreason || null,

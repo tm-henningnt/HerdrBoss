@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { activationFixture } from './helpers/handoff-fixture.js';
 import { loadProjectConfig } from '../src/kit/config.js';
-import { acquireProjectLock, releaseProjectLock } from '../src/kit/locks.js';
+import { acquireProjectLock, releaseProjectLock, withMutationLock } from '../src/kit/locks.js';
 
 // The fixture gives every pane a temporary data dir. This gives the fixture project a Git root and the project
 // slug alpha, so the handoff finds the locks of its own project.
@@ -53,6 +53,70 @@ function lockFiles(dataDir) {
 }
 
 const owners = (dataDir) => Object.fromEntries(lockFiles(dataDir).map((file) => [path.basename(file), JSON.parse(fs.readFileSync(file, 'utf8')).ownerPane]));
+
+test('lock acquisition recreates a parent removed just before the mutation claim', (t) => {
+  const f = activationFixture(t);
+  const config = projectWithGitRoot(f);
+  const mkdir = fs.mkdirSync;
+  let removed = false;
+  let claims = 0;
+  t.mock.method(fs, 'mkdirSync', (directory, options) => {
+    if (path.basename(directory).startsWith('.mutation.staging-')) {
+      claims++;
+      if (!removed) {
+        fs.rmdirSync(path.dirname(directory));
+        removed = true;
+      }
+    }
+    return mkdir(directory, options);
+  });
+  const source = acquire(config, f.root, 'deploy', 'ws:p1');
+  assert.equal(removed, true, 'simulate handover rmdir after lockContext creates the directory');
+  assert.equal(claims, 2, 'retry the claim once');
+  assert.deepEqual(owners(f.root), { 'deploy.json': 'ws:p1' });
+  releaseProjectLock('deploy', { ...source.options, expectedRecord: source.record });
+});
+
+test('mutation claims retry a missing parent only once', (t) => {
+  const f = activationFixture(t);
+  const directory = path.join(f.root, 'locks', 'removed');
+  fs.mkdirSync(directory, { recursive: true });
+  const mkdir = fs.mkdirSync;
+  let claims = 0;
+  t.mock.method(fs, 'mkdirSync', (file, options) => {
+    if (path.basename(file).startsWith('.mutation.staging-')) {
+      claims++;
+      fs.rmdirSync(path.dirname(file));
+    }
+    return mkdir(file, options);
+  });
+  assert.throws(() => withMutationLock(directory, () => assert.fail('the claim never succeeds')), { code: 'ENOENT' });
+  assert.equal(claims, 2);
+});
+
+test('activation removes empty lock directories it touched and keeps the locks root', (t) => {
+  const f = activationFixture(t);
+  projectWithGitRoot(f);
+  // Lease transfer also touches the machine guard when a lease store exists.
+  fs.writeFileSync(path.join(f.root, 'leases.json'), JSON.stringify({ leases: [] }));
+  const unrelated = path.join(f.root, 'locks', 'unrelated');
+  fs.mkdirSync(unrelated, { recursive: true });
+  f.activate();
+  assert.deepEqual(fs.readdirSync(path.join(f.root, 'locks')), ['unrelated']);
+  assert.equal(fs.existsSync(unrelated), true, 'an untouched empty directory stays');
+});
+
+test('activation keeps a touched lock directory with an unrelated file', (t) => {
+  const f = activationFixture(t);
+  const config = projectWithGitRoot(f);
+  const source = acquire(config, f.root, 'deploy', 'ws:p1');
+  const directory = path.dirname(lockFiles(f.root)[0]);
+  releaseProjectLock('deploy', { ...source.options, expectedRecord: source.record });
+  const marker = path.join(directory, 'keep.txt');
+  fs.writeFileSync(marker, 'keep');
+  f.activate();
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'keep');
+});
 
 test('activation re-owns the locks of the source pane and leaves the locks of other panes', (t) => {
   const f = activationFixture(t);

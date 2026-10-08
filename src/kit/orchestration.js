@@ -150,6 +150,7 @@ export function validateDelegatedRun(run, { evidenceTiers = [] } = {}) {
   stringList(run.changedPaths, 'changedPaths', errors);
   if (Array.isArray(run.changedPaths)) run.changedPaths.forEach((item, index) => relativePath(item, `changedPaths[${index}]`, errors));
   for (const field of ['defectsFound', 'rework']) stringList(run[field], field, errors);
+  if (Object.hasOwn(run, 'defects') && (!Number.isInteger(run.defects) || run.defects < 0 || run.defects > 99)) errors.push('defects must be an integer from 0 to 99.');
   if (!isObject(run.independentGate) || typeof run.independentGate.passed !== 'boolean') errors.push('independentGate must be an object with boolean passed.');
   tiers(run.evidenceTier, errors, evidenceTiers);
   scopeExtensions(run.scopeExtensions, errors);
