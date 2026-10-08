@@ -612,7 +612,7 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
   catch { add('bad', 'git pins', 'Shared Git integrity', 'Cannot read private Git pins. Ask the Boss. Do not run the hook.'); }
   for (const project of pinProjects) {
     const pin = checkProjectPin(project, { dataDir, home, env: { ...process.env, HOME: home }, allowBaseline: true });
-    add(pin.ok ? 'ok' : 'bad', 'git pins', 'Shared Git integrity', `${safeGitPinName(project.slug)}: ${pin.baseline ? 'recorded a baseline' : pin.ok ? 'pins match' : `${pin.error || `changed ${gitPinChangesText(pin)}`}. Ask the Boss. Do not run the hook.`}`);
+    add(pin.ok ? 'ok' : 'bad', 'git pins', `Shared Git integrity: ${safeGitPinName(project.slug)}`, `${safeGitPinName(project.slug)}: ${pin.baseline ? 'recorded a baseline' : pin.ok ? 'pins match' : `${pin.error || `changed ${gitPinChangesText(pin)}`}. Ask the Boss. Do not run the hook.`}`);
   }
 
   const configFile = codexConfigFile(home);

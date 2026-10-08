@@ -646,10 +646,13 @@ test('the Opus settings render and accept a policy edit', async () => {
 
 test('Settings shows and edits the shared Git policy per project with its schema and warning', async () => {
   const app = await views(); app.setModels({ codex: catalog, claude: catalog });
-  const s = fixture(); s.policy.projects.alpha.codexSharedGit = false; app.setState(s);
+  const s = fixture(); s.policy.projects.alpha.codexSharedGit = false;
+  s.harness.findings.push({ status: 'ok', area: 'git pins', item: 'Shared Git integrity: registered' });
+  app.setState(s);
   const html = app.settingsView(s);
   assert.match(html, /projects\.SLUG\.codexSharedGit/);
   assert.match(html, /data-codex-shared-git="alpha"/);
+  assert.match(html, /data-codex-shared-git="registered"/);
   assert.doesNotMatch(html, /data-codex-shared-git="alpha"[^>]*checked/);
   assert.match(html, /hooks\/.*config.*refs\/.*objects\/.*HEAD.*info\/.*worktrees\//);
   const handler = app.context.handlers.get('change').find((fn) => fn.toString().includes('el.dataset.codexSharedGit'));

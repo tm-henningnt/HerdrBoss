@@ -2063,9 +2063,11 @@ test('the harness state holds status, area, and item only and carries no text or
   const home = path.join(root, 'home');
   const data = path.join(root, 'data');
   const live = path.join(root, 'live');
+  fs.mkdirSync(data, { recursive: true });
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   fs.writeFileSync(path.join(home, '.codex', 'config.toml'),
     `[sandbox_workspace_write]\nwritable_roots = [\n  "${path.join(home, '.config')}",\n]\n`);
+  fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([{ slug: 'alpha/registered', repo: path.join(root, 'repo') }]));
   const engineUrl = new URL('../src/engine.js', import.meta.url).href;
   const configUrl = new URL('../src/config.js', import.meta.url).href;
   const harnessUrl = new URL('../src/harness.js', import.meta.url).href;
@@ -2095,6 +2097,7 @@ process.stdout.write(JSON.stringify({ harness: state.harness, findings }));
   const { harness, findings } = JSON.parse(result.trim());
   assert.ok(findings.length > 0);
   assert.ok(findings.some((finding) => finding.text.includes(home)), 'the fixture reports a home path in a finding text');
+  assert.ok(findings.some((finding) => finding.area === 'git pins' && finding.item === 'Shared Git integrity: alpha?registered'), 'the pin finding uses a sanitized project label as its item');
   assert.deepEqual(Object.keys(harness).sort(), ['checkedAt', 'findings']);
   assert.ok(harness.findings.length > 0);
   for (const finding of harness.findings) assert.deepEqual(Object.keys(finding).sort(), ['area', 'item', 'status']);

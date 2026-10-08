@@ -109,10 +109,10 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'readiness', title: 'Agent app readiness', advanced: true,
-    controls: 'A read-only table that shows if each agent app entry that orchestration needs is present.',
-    affects: 'Nothing. The table only reports.',
-    safe: 'Nothing to change. Run herdr-boss harness sync to see what to fix.',
-    restart: 'No restart.',
+    controls: 'A read-only table that shows if each agent app entry that orchestration needs is present. A project switch controls Codex access to each registered project\'s common Git directory.',
+    affects: 'The table only reports. The switch changes Codex writable roots and the Git pin checks that push and suite use.',
+    safe: 'Nothing to change in the table. Turn the switch off to remove its root on the next harness sync.',
+    restart: 'No restart for the service. Select Apply policy. Run harness sync, then restart Codex.',
   },
 ];
 
@@ -987,6 +987,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: 'Not applicable', unit: 'Table', range: 'Read-only',
     raise: 'Not applicable.', lower: 'Not applicable.',
     apply: 'now',
+  }),
+  S('readiness', 'projects.SLUG.codexSharedGit', 'Codex shared Git', {
+    what: 'Adds the project\'s common Git directory to Codex writable roots. Codex can write hooks, config, refs, objects, HEAD, info, and worktrees. Push and suite refuse changed pins.',
+    default: 'On; off for HerdrBoss until live verification', unit: 'Switch for each registered project in Advanced', range: 'On or off',
+    raise: 'Turning it on lets Codex workers write shared Git metadata. Pin checks can stop push and suite.',
+    lower: 'Turning it off omits its Git root and removes that exact entry on harness sync.',
+    apply: 'policy',
   }),
 ]);
 
