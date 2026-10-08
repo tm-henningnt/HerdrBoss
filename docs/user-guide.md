@@ -91,9 +91,21 @@ For persisted record rules, see the [record inventory](architecture-records.md).
 
 ## Harness sync and release settings
 
-Run `herdr-boss harness sync` after you register projects or change the worktree root. The command adds each registered project's common Git directory to Codex `writable_roots`. This lets Codex write shared Git metadata for linked worktrees. The command prints each path it adds and saves a backup before it edits the Codex config.
+Run `herdr-boss harness sync` after you register projects or change the worktree root. The command adds each enabled project's common Git directory to Codex `writable_roots`. This lets Codex write shared Git metadata for linked worktrees. The command prints each path it adds and saves a backup before it edits the Codex config.
 
-WARNING: The shared `.git` root gives Codex write access to refs, config, and hooks of the main repository.
+WARNING: The common `.git` directory gives Codex write access to `hooks/`, `config`, `refs/`, `objects/`, `HEAD`, `info/`, and `worktrees/` of the main repository. A changed hook can run code at the next Git command.
+
+Herdr Boss stores pins in `~/.config/herdr-boss/git-pins/`, in the private directory beside the access token. The pins, the record that a project was pinned, and notice dedupe stay outside the data directory and the repository. Each pin file stores its project slug and repository path. Push and suite check the private records even when `project-repos.json` is missing.
+
+Herdr Boss hashes hook names and contents, the whole repo `config`, `config.worktree` for the main checkout, each `worktrees/NAME/config.worktree`, `info/attributes`, and the files in the folder named by `core.hooksPath`. Check names only changed files. Remote URL and push URL changes name only the remote. Check prints no contents or values. Each output name has at most 64 characters. Only letters, digits, `.`, `_`, `@`, and `-` remain. Other characters become `?`. Output lists at most 10 names and the remaining count.
+
+A project with no prior pin can get a baseline through harness check, harness sync, or harness pin. Push and suite do not create baselines. A deleted or unreadable pin for a previously pinned project fails closed. Ask the orchestrator to ask the Boss. A later Git difference fails the check and queues one Boss notice per change set. The private pin stores the last notified ID. Delivery removes the transient notice from the data directory.
+
+Push and suite refuse a pin difference before they take a lock or reuse a pass. The refusal says: `Ask the Boss. Do not run the hook.` After review, the Owner terminal, Boss, or that project lead can run `herdr-boss harness pin PROJECT --reason TEXT`. The reason is required and audited. The Owner terminal needs a TTY on stdin and stdout. If the private directory is not writable, pin refuses before it changes pins or writes an audit line. Only the verified Boss can override push or suite with `--force --reason TEXT`. The reason is required and audited. The Git state cache lasts at most 10 seconds. A deleted or corrupt private trust record fails at once. Harness check reads fresh state.
+
+The caller check is not a security boundary against a same-user process. The protection against a Codex worker is the private pin folder, which the Codex sandbox cannot write. Keep that folder outside Codex writable roots. Caller checks and the Owner TTY requirement prevent routine misuse. They do not stop another process of the same user.
+
+In Settings, open Advanced and Codex shared Git. The project switch sets `projects.SLUG.codexSharedGit` in `policy.json`. The default is on. The shipped HerdrBoss default is off until K60 has live verification. Select Apply policy. Run `harness sync` and restart Codex. Sync removes a disabled project's exact Git root entry. Check reports it as intentionally off. A broader root that still gives access fails the check. The project lead commits HerdrBoss Codex worker changes with `worker commit`.
 
 If the command cannot verify a common Git directory, it tries the repository `.git` path and prints a warning. It skips that project root if neither path is a valid Git directory.
 

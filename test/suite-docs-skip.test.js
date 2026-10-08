@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { pinProject } from '../src/git-pins.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -47,6 +48,7 @@ function fixture(t) {
   const script = path.join(base, 'suite.mjs');
   fs.writeFileSync(script, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(runsLog)}, 'run\\n');\n`);
   const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  pinProject({ slug: config.slug, repo: root }, { env });
   const lines = [];
   const suite = (flags = []) => runKitCommand('suite', [...flags, '--', process.execPath, script], {
     config, lockDataDir: dataDir, env, herdr, pidAlive: (pid) => pid === 601, output: (line) => lines.push(line), suiteStdio: 'ignore',

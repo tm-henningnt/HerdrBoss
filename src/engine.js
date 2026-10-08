@@ -11,6 +11,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectC
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
 import { readDiskDiagnosis } from './disk-diagnosis.js';
 import { listProjects } from './projects.js';
+import { sharedGitEnabled } from './git-pins.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
@@ -1840,6 +1841,7 @@ export class Engine extends EventEmitter {
     // Drop the text. It holds file paths and setting values.
     this.harness = {
       checkedAt: new Date(now).toISOString(),
+      projects: readProjectRepos(DATA_DIR).map(({ slug }) => ({ slug, codexSharedGit: sharedGitEnabled(slug) })),
       findings: findings.map(({ status, area, item }) => ({ status, area, item })),
     };
     return this.harness;
@@ -3125,7 +3127,7 @@ export class Engine extends EventEmitter {
           { role: 'project', pane: notice.ownerPane },
           { role: 'boss', pane: bossPane?.id },
         ].filter((target) => !notice.deliveredTo.includes(target.role) && target.pane)
-        : [{ role: notice.type === 'slow-holder' ? 'boss' : 'project', pane: notice.type === 'slow-holder' ? bossPane?.id : notice.ownerPane }];
+        : [{ role: ['slow-holder', 'git-pins'].includes(notice.type) ? 'boss' : 'project', pane: ['slow-holder', 'git-pins'].includes(notice.type) ? bossPane?.id : notice.ownerPane }];
       const grouped = new Map();
       for (const target of targets) {
         if (!target.pane || !panes.has(target.pane)) continue;

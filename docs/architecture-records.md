@@ -2,6 +2,8 @@
 
 This table names records that source code reads or writes in the data directory. `factory backup` copies the data volume. `factory restore` restores it. On a Mac, no app command backs up or restores the full data directory. The operator owns an external backup and restore (**gap**). Rows for transient records name their own rule.
 
+The Git pin records below are in the private config directory. They are not in the repository or the data directory.
+
 | Record | Writer | Reader | Migration rule | Backup owner | Restore owner |
 |---|---|---|---|---|---|
 | `config.json`; legacy `sessions.json` | `config.js` | `config.js`, `messages.js`, `browser-pool.js` | Merge defaults and migrate old watch keys. Move legacy sessions to the private directory. No file schema (**gap**). | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |
@@ -14,6 +16,7 @@ This table names records that source code reads or writes in the data directory.
 | `project-register.json` | `project-register.js` | `project-register.js`, its CLI and lifecycle code | Require version 1. Reject another version. No migration. | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |
 | `project-audit.jsonl` | `project-register.js` | No data-directory reader found | Append audit rows. No migration or version. | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |
 | `project-repos.json` and `.bak` copies | `harness.js` | `harness.js`, project register import | Read the existing row list. No schema migration (**gap**). Unregister makes a dated backup. | `harness.js` on unregister; factory tool | Operator can copy a `.bak` file; factory tool restores the data volume |
+| `~/.config/herdr-boss/git-pins/` in the private directory | `git-pins.js` through harness check, sync, and pin | Harness checks; push and suite guards | Pin schema 2 stores slug, repository path, hashes, and last notified change-set ID. Index schema 1 retains the was-pinned record. Missing or unreadable trust records fail closed. No automatic migration from data-directory pins. Review before an explicit refresh. | Mac operator; factory operator backs up the private config volume | Operator restores the private records. Never restore pins from the writable data directory. |
 | `projects/<slug>.json` | `projects.js` | `projects.js`, engine and project lifecycle code | Validate known fields. Older rows may omit optional fields. No migration or version. | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |
 | `flows/<slug>.json`, `.request.json` | Project flow code and `project-new-api.js` | Project flow and check code | Replace flow state as it advances. No schema migration (**gap**). | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |
 | `setup.json` | `setup.js` | `setup.js` | Require `herdr-boss.setup/1`; add a revision. Ignore another shape. No migration. | Factory tool; Mac operator | Factory tool; Mac operator (**gap**) |

@@ -14,10 +14,11 @@ import { pruneWorktrees, worktreeDisk } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
 import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChangesSince, kitRequiredBehind, kitRevision, kitRevisionState, KIT_FILE, KIT_STATES, rulesPolicy } from './agents-check.js';
-import { loadConfig } from '../config.js';
+import { DATA_DIR, loadConfig } from '../config.js';
 import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
-import { forceReason } from '../force-audit.js';
+import { assertPinCaller } from '../git-pin-caller.js';
+import { appendForcedAction, forceReason } from '../force-audit.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
@@ -30,8 +31,8 @@ const USAGE = `Kit commands:
   worker allow <name> <path>... --reason TEXT
   worker scope add <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list
-  push [git push arguments]
-  suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] [--no-notify] -- <command...> | suite --list-passes
+  push [--force --reason TEXT] [git push arguments]
+  suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] [--no-notify] [--force --reason TEXT] -- <command...> | suite --list-passes
   worktree prune [--apply] [--no-archive] [--clean-build]
   worktree disk [--json]
   ledger append --entry FILE | ledger check [--runs]
@@ -188,6 +189,16 @@ function herdrList(result, key) {
 function herdrAgentName(agent) { return agent?.name ?? agent?.agent_name ?? null; }
 function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.id ?? null; }
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
+
+function pinOverride(command, flags, { config, env, herdr, dataDir, now = Date.now }) {
+  // A Boss push carries the reviewed reason to its re-entrant suite hook. Verify the Boss again.
+  const inherited = command === 'suite' && !flags.force && env.HERDR_BOSS_LOCK_TOKEN && env.HERDR_BOSS_GIT_PIN_REASON;
+  const reason = forceReason(flags.force || Boolean(inherited), flags.reason ?? (inherited || undefined));
+  if (!reason) return false;
+  assertPinCaller([], { env, herdr, dataDir, bossOnly: true });
+  appendForcedAction({ dataDir: dataDir ?? DATA_DIR, time: new Date(now()).toISOString(), command, project: config.slug, refusalKind: 'git-pins', reason });
+  return reason;
+}
 
 function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, du, freeSpaceReader, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
   initializeLifecyclePort();
@@ -401,25 +412,34 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     fail('Usage: lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list');
   }
   if (command === 'push') {
-    // All arguments go to git push unchanged.
-    return pushWithLock(argv, { config, env, herdr, dataDir: lockDataDir, output, now, pause, pidAlive, stdio: pushStdio, rulesFile });
+    // Reserve the Boss override pair. Keep all other git push options unchanged.
+    const flags = {}, args = [];
+    for (let i = 0; i < argv.length; i += 1) {
+      if (argv[i] === '--force') flags.force = true;
+      else if (argv[i] === '--reason') { flags.reason = argv[++i]; if (flags.reason === undefined || flags.reason.startsWith('--')) fail('--force needs --reason TEXT.'); }
+      else args.push(argv[i]);
+    }
+    const gitPinOverride = pinOverride('push', flags, { config, env, herdr, dataDir: lockDataDir, now });
+    return pushWithLock(args, { gitPinOverride, config, env, herdr, dataDir: lockDataDir, output, now, pause, pidAlive, stdio: pushStdio, rulesFile });
   }
   if (command === 'suite') {
     // The options come before --. Everything after -- is the command.
-    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] [--no-notify] -- <command...> | suite --list-passes';
+    const usage = 'Usage: suite [--wait SECONDS] [--keep NAME]... [--reuse] [--skip-docs] [--no-notify] [--force --reason TEXT] -- <command...> | suite --list-passes';
     if (argv[0] === '--list-passes') {
       if (argv.length !== 1) fail(usage);
       return listSuitePasses({ dataDir: lockDataDir, output, herdr, pidAlive, now });
     }
     const separator = argv.indexOf('--');
     if (separator < 0 || separator === argv.length - 1) fail(usage);
-    const { positional, flags } = parseArgs(argv.slice(0, separator), { boolean: ['--reuse', '--skip-docs', '--no-notify'], repeat: ['--keep'] });
+    const { positional, flags } = parseArgs(argv.slice(0, separator), { boolean: ['--reuse', '--skip-docs', '--no-notify', '--force'], repeat: ['--keep'] });
     if (positional.length) fail(usage);
-    knownFlags(flags, ['wait', 'keep', 'reuse', 'skipdocs', 'nonotify']);
+    knownFlags(flags, ['wait', 'keep', 'reuse', 'skipdocs', 'nonotify', 'force', 'reason']);
     if (flags.wait !== undefined && !/^\d+$/.test(flags.wait)) fail('--wait must be a whole non-negative number of seconds.');
     const waitSeconds = flags.wait === undefined ? SUITE_WAIT_SECONDS : Number(flags.wait);
     if (!Number.isSafeInteger(waitSeconds)) fail('--wait must be a whole non-negative number of seconds.');
+    const gitPinOverride = pinOverride('suite', flags, { config, env, herdr, dataDir: lockDataDir, now });
     return runSuite(argv.slice(separator + 1), {
+      gitPinOverride,
       config, env, herdr, dataDir: lockDataDir, waitSeconds, keep: flags.keep ?? [], reuse: flags.reuse ?? false, skipDocs: flags.skipdocs ?? false, notify: flags.nonotify !== true, output, now, pause, pidAlive, stdio: suiteStdio, rulesFile,
     });
   }
