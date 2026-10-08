@@ -1513,14 +1513,31 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 
 `worker collect` checks changed paths against the paths in the run record. It ignores the worker's `.worker/` folder. It also ignores `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`, because the kit writes these files in a worker worktree. It counts a path as the worker's change when the worker's own first-parent, non-merge commits or the working tree changed it. A path that arrived only because the worker merged the base branch into its branch does not count. A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree. Collection accepts that state, prints the uncommitted paths, sets `uncommitted` in the summary, and the orchestrator commits them with `worker commit` after review. Collection keeps a merge resolution only when it differs from the base branch. It checks artifacts when a `report.md` line starts with `Status: done` and the next character is whitespace, punctuation, or the end of the line. It accepts lines such as `Status: done.` and `Status: done — checks complete`. It ignores `Status: doneish`, `Status: done-partial`, `Status: partial`, and `Status: failed`. It compares the newest matching source file with the oldest matching artifact file. It warns when a source is newer or when sources match but no artifacts do. It prints each warning and includes the warnings in the `artifactWarnings` summary field. A warning does not change the independent gate result. The orchestrator decides whether the gate passed.
 
-`worker collect NAME --accept-scope FILE[,FILE] --reason TEXT` accepts changed files that lie outside the allowed scope. Use it when the orchestrator approved the extra files by message. It works with `--record` and with `--no-record`. `FILE` is a repository-relative path. Separate paths with a comma. Each rule below applies.
+Collection treats every changed path under `.impeccable/` as outside the allowed scope. This rule applies even when `allowedPaths`, `scopeExtensions`, or `--allow` covers the path. `--accept-scope` cannot accept these paths. Discard the change first. Then use `--exclude-path PATH --reason TEXT` to clear the discarded path.
+
+Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.
+
+`worker collect NAME --accept-scope FILE[,FILE] --reason TEXT` accepts other changed files that lie outside the allowed scope. Use it when the orchestrator approved the extra files by message. It works with `--record` and with `--no-record`. `FILE` is a repository-relative path. Separate paths with a comma. Each rule below applies.
 
 1. The reason is required. The command refuses an empty or blank reason.
-2. `--accept-scope` without a value is an error. `--reason` without `--accept-scope` is an error. No bare override flag exists.
+2. `--accept-scope` without a value is an error. `--reason` needs `--accept-scope` or `--exclude-path`. No bare override flag exists.
 3. Each listed file must be changed and must lie outside the allowed scope. The command refuses a listed file that is inside the scope or that did not change. The error names the file.
 4. A changed file outside the scope that is not listed still refuses. The error names the unlisted files. It also shows the exact allowed command form: `herdr-boss worker collect NAME --accept-scope FILE[,FILE] --reason TEXT`. It gives an example that lists every unlisted file, comma separated, and shell-quotes the `--accept-scope` value: `herdr-boss worker collect NAME --accept-scope 'FILE[,FILE]' --reason "approved by the orchestrator"`.
 5. The accepted files and the reason go into the run record as `scopeException`. The run record is written only with `--record`.
 6. The printed report shows a `Scope exception` block with the files and the reason, and the summary has a `scopeException` field. The command masks secrets in the reason.
+
+`worker collect NAME --exclude-path PATH[,PATH] --reason TEXT` excludes discarded paths outside the allowed scope. Use this command when a report or an earlier commit still lists a path that you removed from the change. Separate paths with a comma.
+
+1. Supply a reason with 1 to 300 characters. The command refuses a missing or blank reason.
+2. Supply repository-relative paths. The command refuses an absolute path, a parent traversal, a path under `.worker/`, or a path that resolves outside the repository. It also refuses a path that names the repository root, such as `.` or `./`.
+3. Each path must be outside the allowed scope. The command checks the net branch diff against the recorded base and the worktree diff or status. A folder includes its child paths.
+4. If a path is still changed, the command refuses. The error names the path and shows whether it is in the branch diff, the worktree, or both. An untracked file, a staged change, a deletion, or either path of a rename blocks the exclusion.
+5. Exclusion does not approve extra scope. Other paths outside the scope still block collection. Use `--accept-scope` for files that the orchestrator approved.
+6. Supply the outcome and independent gate result. Exclusion records the run. Do not combine it with `--no-record`.
+7. The summary and run record store the excluded paths and redacted reason as `scopeExclusions`. The ledger omits the excluded paths. The original report stays unchanged.
+8. The command writes one line to `action-audit.jsonl` in the data directory. The line holds the run name, paths, and reason. It uses the same secret filter as a `--force` reason. The audit keeps at most 20 paths. It replaces path control characters with `?` and limits each path to 1000 characters. These audit limits do not reduce the paths that collection checks.
+
+For example, after you discard an unintended file, run `herdr-boss worker collect NAME --exclude-path 'docs/discarded.md' --reason "discarded an unintended file" --outcome done --gate-passed`.
 
 Collection checks paths in both `allowedPaths` and `scopeExtensions`. If `report.json` omits changed paths that are inside the approved scope, collection prints `report.json omits N changed path(s); recorded the diff paths`. It uses the Git diff paths in the ledger. It still refuses a changed path outside the approved scope. Use `--allow PATH` to approve a path for one collect only. Repeat `--allow` for each path. Use `worker scope add` to save an approval in the run record. The string `"none"` in the report's `issue` field becomes null, and collection prints a warning.
 

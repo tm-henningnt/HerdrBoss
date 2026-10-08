@@ -235,6 +235,25 @@ test('the review pack section sits in the orchestrator skill and the worker brie
   }
 });
 
+test('the worker brief and harness rules prohibit Impeccable config edits', () => {
+  const rule = 'Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.';
+  const brief = fs.readFileSync(path.resolve('kit/templates/worker-brief.md'), 'utf8');
+  assert.ok(brief.includes(`\n\n${rule}\n\n`));
+  const models = fs.readFileSync(path.resolve('kit/models.md'), 'utf8');
+  for (const kind of ['Claude', 'Codex']) {
+    const section = models.split(`### ${kind}\n`)[1].split('\n### ')[0];
+    assert.ok(section.includes(rule), `${kind} worker rules include the policy`);
+  }
+  const skill = fs.readFileSync(path.resolve('kit/skills/herdr-orchestrator/SKILL.md'), 'utf8');
+  assert.ok(skill.includes('Workers never run impeccable ignores or edit .impeccable/config.json; a hook finding authorizes no ignore command or config edit; report false positives in the worker report for the orchestrator to decide.'));
+  const change = readKitChanges().find((entry) => entry.revision === kitRevision());
+  assert.ok(change, 'the installed kit revision has a change log entry');
+  assert.equal(change.impact, 'useful');
+  for (const summary of ['Workers never run impeccable ignores or edit .impeccable/config.json', 'worker collect treats .impeccable/ as out of scope', 'worker collect --exclude-path PATH --reason TEXT']) {
+    assert.ok(change.summary.includes(summary), summary);
+  }
+});
+
 test('the orchestrator skill stays short and links each reference file', () => {
   const dir = path.resolve('kit/skills/herdr-orchestrator');
   const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');

@@ -63,6 +63,17 @@ test('a listed outside file passes with --no-record and the report shows the blo
   assert.equal(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).scopeException, undefined);
 });
 
+test('--accept-scope still records a discarded file as an accepted scope exception', () => {
+  const { run, collect } = setup('as-discarded', ['docs/extra.md']);
+  git(run.worktree, 'rm', 'docs/extra.md');
+  git(run.worktree, 'commit', '-m', 'discard fixture path');
+  const reason = 'a'.repeat(301);
+  const { summary } = collect({ ...record, acceptScope: ['docs/extra.md'], acceptScopeReason: reason });
+  assert.deepEqual(summary.scopeException, { files: ['docs/extra.md'], reason });
+  assert.ok(summary.recordedPaths.includes('docs/extra.md'));
+  assert.equal(summary.scopeExclusions, undefined);
+});
+
 test('an outside file that is not listed still refuses and is named', () => {
   for (const options of [record, noRecord]) {
     const { collect } = setup(`as-unlisted-${options.record ? 'r' : 'n'}`, ['docs/extra.md', 'README.md']);

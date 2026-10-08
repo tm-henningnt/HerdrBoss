@@ -97,6 +97,8 @@ Use the task below as the complete work order:
 
 ## Work rules
 
+Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.
+
 For code changes, write a regression test before changing behavior.
 
 Run the new test against the current code and record its failure.

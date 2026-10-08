@@ -17,6 +17,7 @@ import { agentsBlock, checkAgentsFile, installedKitRevision, installKit, kitChan
 import { loadConfig } from '../config.js';
 import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
+import { forceReason } from '../force-audit.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
@@ -84,7 +85,8 @@ Options:
   --model-result VALUE      Set first-time, rework, or failed.
   --model-reason TEXT       Explain the model result.
   --accept-scope FILES      Accept comma-separated out-of-scope files.
-  --reason TEXT             Give the reason for --accept-scope.
+  --exclude-path PATHS      Exclude discarded out-of-scope paths when recording.
+  --reason TEXT             Explain --accept-scope or --exclude-path (1 to 300 characters for exclusions).
   -h, --help                Print this usage and exit.`,
   commit: `Usage: worker commit <name> -m MESSAGE
 Options:
@@ -469,19 +471,25 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'], repeat: ['--allow'] });
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.collect);
-      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'reason']);
+      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'excludepath', 'reason']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
-      if (flags.reason != null && flags.acceptscope == null) fail('--reason needs --accept-scope FILE[,FILE].');
+      if (flags.reason != null && flags.acceptscope == null && flags.excludepath == null) fail('--reason needs --accept-scope FILE[,FILE] or --exclude-path PATH[,PATH].');
       if (flags.acceptscope != null && !flags.reason?.trim()) fail('--accept-scope needs --reason TEXT.');
+      if (flags.excludepath != null && !flags.reason?.trim()) fail('--exclude-path needs --reason TEXT (1 to 300 characters).');
       const acceptScope = flags.acceptscope == null ? undefined : flags.acceptscope.split(',').map((item) => item.trim()).filter(Boolean);
       if (acceptScope && !acceptScope.length) fail('--accept-scope needs at least one repository-relative path.');
+      const excludePaths = flags.excludepath == null ? undefined : flags.excludepath.split(',').map((item) => item.trim()).filter(Boolean);
+      if (excludePaths && !excludePaths.length) fail('--exclude-path needs at least one repository-relative path.');
+      if (excludePaths) forceReason(true, flags.reason, '--exclude-path');
       const serviceConfig = injectedServiceConfig ?? loadConfig();
       const summary = collectWorker(positional[0], {
         record: flags.record,
         noRecord: flags.norecord,
         allow: flags.allow ?? [],
         acceptScope,
-        acceptScopeReason: flags.reason,
+        acceptScopeReason: acceptScope ? flags.reason : undefined,
+        excludePaths,
+        excludeReason: excludePaths ? flags.reason : undefined,
         keepPane: flags.keeppane,
         paneCloseDelayMinutes: serviceConfig.workers?.paneCloseDelayMinutes ?? 2,
         outcome: flags.outcome,

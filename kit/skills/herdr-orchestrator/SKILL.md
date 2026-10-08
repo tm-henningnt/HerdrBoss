@@ -23,14 +23,15 @@ Read each reference before its step:
 
 ## What the orchestrator owns
 
-- The orchestrator owns the complete work sequence.
+- The orchestrator owns the work sequence.
 - Keep one active frontier unless the project contract permits a bounded batch.
 - Read issue dependencies and work only the first unblocked item.
 - Delegate one bounded task at a time. Do not hand the entire roadmap to one worker.
-- Give each worker a clear role, exact paths, evidence, and a stopping point.
+- Give each worker a role, exact paths, evidence, and stop point.
 - Do not delegate roadmap or product direction.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
 - Workers do not commit, merge, rebase, push, deploy, or publish unless the brief names an exception.
+- Workers never run impeccable ignores or edit .impeccable/config.json; a hook finding authorizes no ignore command or config edit; report false positives in the worker report for the orchestrator to decide.
 - Preserve user work before any edit, checkout, or cleanup.
 - Inspect every worker result before accepting it.
 - Run the required acceptance commands yourself.
@@ -41,7 +42,7 @@ Read each reference before its step:
 
 ## Project memory
 
-- Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start and at resume, before you choose work.
+- Read `docs/orchestration/herdr-boss.md` and `docs/orchestration/memory.md` at start and resume before choosing work.
 - If the file does not exist, create it from `kit/templates/project-memory.md`.
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
 - Commit the file with your next commit.
@@ -51,7 +52,7 @@ Read each reference before its step:
 ## Context and cost
 
 - Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions.
-- Take back only findings with file and line evidence. Verify a finding at the source before you act.
+- Require file and line evidence for findings. Verify a finding at the source before acting.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
 - As a backup, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
@@ -62,7 +63,7 @@ Read each reference before its step:
 - The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
 - Decide implementation, product, design, naming, thresholds, tests, project scope, and review findings under project rules and recorded Owner decisions. Keep these decisions within the project.
 - Escalate only when project documents and available evidence cannot settle the next action.
-- Before you escalate, check `docs/orchestration/memory.md` for an Owner decision that already answers the question.
+- Before escalation, check `docs/orchestration/memory.md` for an Owner decision that answers the question.
 - Ask the Boss only about a conflict between projects or a change that affects another project.
 - Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
 - Do not edit the Herdr Boss kit or its skills from another project. Send a change request to the Boss. The HerdrBoss orchestrator decides whether to relay it.
@@ -156,7 +157,7 @@ Always give `--task-id` with the published task id.
 
 Start `--task` or the task file with a plain title: what the worker does and for which ticket, for example `FT15 Factory updates`. The Agents page shows it.
 
-- Read [the Herdr control surface](reference/herdr-control.md) for the options of `worker start`.
+- Read [the Herdr control surface](reference/herdr-control.md) for `worker start` options.
 - Verify the name, branch, worktree, pane, and brief.
 - Check that the worker's pane uses the intended worktree before sending more instructions.
 
@@ -190,9 +191,9 @@ Start `--task` or the task file with a plain title: what the worker does and for
 - Answer it with `herdr agent prompt <name> "..."`. Put missing files into the worker worktree; do not point the worker outside it.
 - Approve extra scope with `herdr-boss worker scope add <name> <path>... --reason TEXT`. `worker allow` remains an alias. A prompt or message alone does not change the approved paths.
 - The verified `orch` or `boss` pane must approve scope. The run records the caller, reason, time, and paths.
-- When the question is a product decision, decide it yourself. Ask the Boss only when it conflicts with a recorded Owner decision.
+- Decide product questions yourself. Ask the Boss only about conflicts with recorded Owner decisions.
 - Add the answer to the next brief of the same kind, so the next worker does not need to ask.
-- Require the worker to save both report files before sending its completion message.
+- Require both report files before the worker sends its completion message.
 - Require the worker to send its message without `--wait`. The message must name the worker, result, and report path:
 
 ```sh
@@ -200,7 +201,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 ```
 
 - Do not wait for the orchestrator pane to become idle before the worker reports.
-- Read the full report from the worker worktree after receiving the message.
+- Read the full worktree report after the message.
 - If a worker forgets to report, inspect its pane after a specific wait expires.
 - Do not accept an empty pane, exit code, or prose claim as a report.
 

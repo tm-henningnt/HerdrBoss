@@ -49,7 +49,7 @@ function safeDiagnosis(value) {
   };
 }
 
-export function appendForcedAction({ dataDir, time = new Date().toISOString(), command, project = null, workerName = null, refusalKind, reason, diagnosis }) {
+export function appendForcedAction({ dataDir, time = new Date().toISOString(), command, project = null, workerName = null, refusalKind, reason, diagnosis, paths }) {
   const safeReason = normalizeForceReason(reason);
   const safeDiagnostic = safeDiagnosis(diagnosis);
   const row = {
@@ -60,6 +60,7 @@ export function appendForcedAction({ dataDir, time = new Date().toISOString(), c
     refusalKind: redactSecrets(String(refusalKind || 'none')).slice(0, 160),
     reason: safeReason,
     ...(safeDiagnostic ? { diagnosis: safeDiagnostic } : {}),
+    ...(paths ? { paths: paths.slice(0, 20).map((item) => redactSecrets(String(item)).replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 1000)) } : {}),
   };
   if (!row.command || !row.refusalKind) throw new Error('A forced action needs a command and refusal kind.');
   const dir = path.resolve(dataDir);
