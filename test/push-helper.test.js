@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { pinProject } from '../src/git-pins.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -116,15 +117,19 @@ function fixture(t, prefix) {
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const lines = [];
-  const options = (pane = 'ws:orch', paneConfig = config) => ({
-    config: paneConfig,
-    lockDataDir: dataDir,
-    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
-    herdr,
-    pidAlive: (pid) => pid === 601,
-    output: (line) => lines.push(line),
-    pushStdio: 'ignore',
-  });
+  const options = (pane = 'ws:orch', paneConfig = config) => {
+    // The test has finished its controlled hook/config edits. Review that fixture state before push.
+    pinProject({ slug: paneConfig.slug, repo: paneConfig.root }, { home: base, env: { ...process.env, HOME: base } });
+    return {
+      config: paneConfig,
+      lockDataDir: dataDir,
+      env: { HOME: base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
+      herdr,
+      pidAlive: (pid) => pid === 601,
+      output: (line) => lines.push(line),
+      pushStdio: 'ignore',
+    };
+  };
   const lockFile = path.join(dataDir, 'locks', 'machine', 'full-suite.json');
   // The hook records if the machine lock exists while it runs, then exits with the given code.
   const writeHook = (dir, exitCode = 0) => {

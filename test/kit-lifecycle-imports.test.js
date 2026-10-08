@@ -12,6 +12,7 @@ import { lifecyclePort, setLifecyclePort } from '../src/kit/lifecycle-port.js';
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url));
 const LIFECYCLE_MODULES = new Set([
+  'git-pins.js',
   'kit/locks.js',
   'kit/workers.js',
   'leases.js',
@@ -111,7 +112,7 @@ test('import graph finds imports, re-exports, dynamic imports, and self-cycles',
   assert.deepEqual(displayCycles(findCycles(selfCycle)), ['a.js -> a.js'], 'self-cycle');
 });
 
-test('module imports do not cycle through locks, workers, and leases', () => {
+test('module imports do not cycle through Git pins, locks, workers, and leases', () => {
   const graph = importGraph();
   const modules = new Set([...LIFECYCLE_MODULES].map((file) => path.resolve(SRC, file)));
   for (const module of modules) assert.ok(graph.has(module), `${path.relative(SRC, module)} must exist`);

@@ -643,3 +643,28 @@ test('the Opus settings render and accept a policy edit', async () => {
   change({ policyOpusBool: 'allowWithoutForce' }, { checked: false });
   assert.deepEqual(app.getDraft().opus, { allowWithoutForce: false, maxConcurrent: 4 });
 });
+
+test('Settings shows and edits the shared Git policy per project with its schema and warning', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture(); s.policy.projects.alpha.codexSharedGit = false; app.setState(s);
+  const html = app.settingsView(s);
+  assert.match(html, /projects\.SLUG\.codexSharedGit/);
+  assert.match(html, /data-codex-shared-git="alpha"/);
+  assert.doesNotMatch(html, /data-codex-shared-git="alpha"[^>]*checked/);
+  assert.match(html, /hooks\/.*config.*refs\/.*objects\/.*HEAD.*info\/.*worktrees\//);
+  const handler = app.context.handlers.get('change').find((fn) => fn.toString().includes('el.dataset.codexSharedGit'));
+  handler({ target: { dataset: { codexSharedGit: 'alpha' }, checked: true, closest: () => ({}), matches: () => false } });
+  assert.equal(app.getDraft().projects.alpha.codexSharedGit, true);
+});
+
+test('shared Git edits update the policy action row when an earlier price action row exists', async () => {
+  const app = await views(); app.setModels({ codex: catalog, claude: catalog }); const s = fixture(); app.setState(s); app.settingsView(s);
+  const status = { textContent: '' }, button = { disabled: true };
+  const policyActions = { classList: { add() {} }, querySelector: (selector) => selector === '[data-policy-status]' ? status : button };
+  status.closest = () => policyActions;
+  const priceActions = { classList: { add() {} }, querySelector: () => null };
+  app.context.document = { querySelector: (selector) => selector === '.control-actions' ? priceActions : selector === '[data-policy-status]' ? status : null };
+  const handler = app.context.handlers.get('change').find((fn) => fn.toString().includes('el.dataset.codexSharedGit'));
+  assert.doesNotThrow(() => handler({ target: { dataset: { codexSharedGit: 'alpha' }, checked: false, closest: () => ({}), matches: () => false } }));
+  assert.match(status.textContent, /Unsaved changes/); assert.equal(button.disabled, false);
+});

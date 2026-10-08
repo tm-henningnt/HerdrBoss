@@ -249,8 +249,8 @@ const USAGE = `herdr-boss <command>
   lease bind POOL ITEM --pid PID  Bind a lease to the server process that uses its port.
   lease release POOL ITEM  Release a lease of your project; the Boss can release any lease.
   lease list [POOL]     Print the pool items and their leases as JSON.
-  push [git push arguments]  Run git push. Take the full-suite lock when a pre-push hook exists.
-  suite [--wait SECONDS] [--keep NAME]... [--no-notify] -- <command...>  Run a full test suite inside the full-suite lock, without tokens in its environment.
+  push [--force --reason TEXT] [git push arguments]  Check Git pins, then push. Only the Boss can override pins.
+  suite [--wait SECONDS] [--keep NAME]... [--no-notify] [--force --reason TEXT] -- <command...>  Check Git pins, then run a full test suite in the lock. Only the Boss can override pins.
   worktree prune        List safe worktree removals; --apply removes them and archives worker reports. --clean-build lists or removes rebuildable output in kept worktrees.
   worktree disk         Print sizes for this project's worktrees and the free disk space.
   ledger ...            Append or check delegated-run records.
@@ -259,6 +259,7 @@ const USAGE = `herdr-boss <command>
   check kit             List each published project with its loaded kit revision.
   harness check [--live-codex]  Check the harness settings that orchestration needs. Exit 1 on a missing entry.
                         --live-codex also runs one codex exec to check the worker shell variables.
+  harness pin [PROJECT] --reason TEXT  Refresh shared Git pins after review.
   harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and the stop-own rule, and print the Claude autoMode lines.
   harness change <harness> <label> [--date YYYY-MM-DD]  Mark a harness fix on the denial chart of the Analytics page.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
@@ -1350,6 +1351,30 @@ async function main() {
         const result = syncHarness({ dryRun: flags.includes('--dry-run'), codexOnly: flags.includes('--codex-only'), url: dashboardUrl(cfg) });
         for (const line of result.lines) console.log(line);
         if (!result.ok) process.exitCode = 1;
+      } else if (action === 'pin') {
+        const { readProjectRepos } = await import('./harness.js');
+        const { assertPinCaller } = await import('./git-pin-caller.js');
+        const { pinProject, assertPinDirectoryWritable } = await import('./git-pins.js');
+        const { appendForcedAction, normalizeForceReason } = await import('./force-audit.js');
+        const { createHerdrRunner } = await import('./kit/workers.js');
+        let slug, reason;
+        for (let i = 0; i < flags.length; i += 1) {
+          if (flags[i] === '--reason') reason = normalizeForceReason(flags[++i]);
+          else if (!flags[i].startsWith('--') && slug === undefined) slug = flags[i];
+          else throw new Error('Usage: harness pin [PROJECT] --reason TEXT');
+        }
+        if (reason === undefined) throw new Error('harness pin needs --reason TEXT (1 to 300 characters).');
+        let projects = readProjectRepos().filter((project) => slug === undefined || project.slug === slug);
+        if (slug !== undefined && !projects.length) throw new Error('Unknown registered project for harness pin.');
+        const caller = assertPinCaller(slug === undefined ? [] : projects, { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR });
+        if (slug === undefined && caller.role === 'orch') projects = projects.filter((project) => project.slug === caller.project);
+        if (!projects.length) throw new Error('No registered project for harness pin.');
+        assertPinDirectoryWritable();
+        assertDataWritable();
+        for (const project of projects) {
+          pinProject(project, { beforeWrite: () => appendForcedAction({ dataDir: DATA_DIR, command: 'harness pin', project: project.slug, refusalKind: 'pin-refresh', reason }) });
+          console.log(`Git pins: ${project.slug} recorded or refreshed the baseline.`);
+        }
       } else if (action === 'change') {
         // The label is every word that is not the harness or the --date option, so an unquoted label works.
         const words = [];
@@ -1369,7 +1394,7 @@ async function main() {
         assertDataWritable();
         const entry = appendHarnessChange(DATA_DIR, { harness, label: label.join(' '), date });
         console.log(`Recorded the harness change: ${entry.date} ${entry.harness} ${entry.label}`);
-      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only] | harness change <harness> <label> [--date YYYY-MM-DD]');
+      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only] | harness pin [PROJECT] --reason TEXT | harness change <harness> <label> [--date YYYY-MM-DD]');
       break;
     }
     case 'install': {

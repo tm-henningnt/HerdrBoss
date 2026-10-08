@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { pinProject } from '../src/git-pins.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -66,6 +67,7 @@ function fixture(t, prefix) {
     DB_PASSWORD: SECRET_VALUES[4],
   };
   const lines = [];
+  pinProject({ slug: config.slug, repo: root }, { env });
   const options = (extra = {}) => ({
     config,
     lockDataDir: dataDir,
@@ -210,7 +212,7 @@ function lockOptions(f, pane, panes, extra = {}) {
     config: f.config,
     dataDir: f.dataDir,
     lockDataDir: f.dataDir,
-    env: { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
+    env: { HOME: f.base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: pane },
     herdr,
     output: () => {},
     ...extra,

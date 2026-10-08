@@ -839,3 +839,24 @@ test('each Pi guard refusal names the allowed form', async (t) => {
     assert.notEqual(guardCause(reason), 'guard:other', reason);
   }
 });
+
+test('harness check reports shared Git baseline and later drift without accepting it on sync', (t) => {
+  const f = fixture(t), alpha = gitRepo(f, 'Alpha');
+  registry(f, [{ slug: 'alpha', repo: alpha }]); healthy(f, [alpha]);
+  const first = run(f, ['harness', 'check']); assert.match(first.stdout, /git pins: alpha: recorded a baseline/);
+  const hook = path.join(alpha, '.git', 'hooks', 'pre-push'); fs.writeFileSync(hook, 'private fixture body');
+  const check = run(f, ['harness', 'check']); assert.equal(check.status, 1); assert.match(check.stdout, /git pins: alpha: changed pre-push/); assert.doesNotMatch(check.stdout, /private fixture body/);
+  assert.equal(run(f, ['harness', 'sync', '--codex-only']).status, 0);
+  assert.match(run(f, ['harness', 'check']).stdout, /git pins: alpha: changed pre-push/);
+});
+
+test('harness pin from an Owner terminal refreshes all registered projects', (t) => {
+  const f = fixture(t), alpha = gitRepo(f, 'Alpha'), beta = gitRepo(f, 'Beta');
+  registry(f, [{ slug: 'alpha', repo: alpha }, { slug: 'beta', repo: beta }]);
+  const env = { ...process.env, HOME: f.home, HERDR_BOSS_DIR: f.dataDir };
+  for (const key of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_WORKTREE']) delete env[key];
+  const args = [process.execPath, CLI, 'harness', 'pin', '--reason', 'reviewed fixture hooks'];
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `process.stdin.isTTY = true; process.stdout.isTTY = true; process.argv = ${JSON.stringify(args)}; await import(${JSON.stringify(CLI)});`], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /alpha.*baseline/); assert.match(result.stdout, /beta.*baseline/);
+  assert.equal(fs.readdirSync(path.join(f.home, '.config', 'herdr-boss', 'git-pins')).filter((name) => name !== 'index.json').length, 2);
+});

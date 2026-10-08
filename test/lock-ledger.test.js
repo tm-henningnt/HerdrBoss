@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { pinProject } from '../src/git-pins.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,6 +33,7 @@ function fixture(t) {
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
+  pinProject({ slug: config.slug, repo: root }, { env });
   let clock = Date.parse('2026-09-29T10:00:00Z');
   const options = { config, env, herdr, dataDir, output: () => {}, pidAlive: () => true, now: () => clock };
   return { root, dataDir, options, advance: (ms) => { clock += ms; }, tree: git(root, 'rev-parse', 'HEAD^{tree}') };

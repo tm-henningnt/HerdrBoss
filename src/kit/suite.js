@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { assertProjectGitPins } from '../git-pins.js';
 import { DATA_DIR } from '../config.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { createHerdrRunner } from './workers.js';
@@ -60,6 +61,7 @@ function noteHookSuite(env, command) {
 
 export function runSuite(command, {
   config,
+  gitPinOverride = false,
   env = process.env,
   herdr = createHerdrRunner(),
   dataDir = DATA_DIR,
@@ -77,6 +79,7 @@ export function runSuite(command, {
   rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
   if (!Array.isArray(command) || !command.length) throw new Error('suite needs a command after --.');
+  assertProjectGitPins({ config: config ?? { root: cwd }, env, dataDir, output, now, gitPinOverride });
   const repoRoot = config?.root ?? cwd;
   const commandArray = [...command];
   const untested = config?.suiteUntested ?? DEFAULT_SUITE_UNTESTED;

@@ -339,6 +339,7 @@ export function validatePolicy(value, models) {
   if (!value.projects || typeof value.projects !== 'object' || Array.isArray(value.projects)) errors.push('projects must be an object.');
   else for (const [slug, project] of Object.entries(value.projects)) {
     if (!SLUG.test(slug) || !project || typeof project !== 'object' || Array.isArray(project)) { errors.push(`invalid project: ${slug}.`); continue; }
+    if (project.codexSharedGit !== undefined && typeof project.codexSharedGit !== 'boolean') errors.push(`${slug}.codexSharedGit must be true or false.`);
     if (!Number.isInteger(project.share) || project.share < 0 || project.share > 100) errors.push(`${slug}.share must be 0..100.`);
     if (!['auto', 'active', 'idle', 'paused'].includes(project.mode)) errors.push(`${slug}.mode must be auto, active, idle, or paused.`);
     subset(project.excludedKinds, KINDS, `${slug}.excludedKinds`, errors);

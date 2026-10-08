@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { pinProject } from '../src/git-pins.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -233,6 +234,7 @@ function swapFixture(t, { rules = swapRules(), label = 'orch', hook = false } = 
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_BOSS_DIR: dataDir, HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:p' };
+  pinProject({ slug: loadProjectConfig({ cwd: root }).slug, repo: root }, { env });
   const marker = path.join(base, 'ran');
   const script = path.join(base, 'suite.mjs');
   fs.writeFileSync(script, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);

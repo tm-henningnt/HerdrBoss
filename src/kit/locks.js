@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { assertProjectGitPins } from '../git-pins.js';
 import { DATA_DIR } from '../config.js';
 import { POLICY_DEFAULTS } from '../control.js';
 import { quietHoursActive, readNight } from '../night.js';
@@ -647,9 +648,12 @@ export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
       && Array.isArray(notice.deliveredTo) && notice.deliveredTo.every((item) => ['project', 'boss'].includes(item))
       && typeof notice.text === 'string' && notice.text.startsWith('Lock watchdog: ')
       && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
+    const validGitNotice = notice?.type === 'git-pins' && typeof notice.project === 'string'
+      && typeof notice.text === 'string' && notice.text.startsWith('Git pins: ')
+      && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
     const validExpiryNotice = !notice?.type && notice?.text === LOCK_NOTICE_TEXT;
     if (!notice || notice.id !== path.basename(file, '.json') || notice.severity !== 'warn'
-      || typeof notice.ownerPane !== 'string' || !(validSlowNotice || validWatchdogNotice || validExpiryNotice)
+      || typeof notice.ownerPane !== 'string' || !(validSlowNotice || validWatchdogNotice || validGitNotice || validExpiryNotice)
       || /[\r\n]/.test(notice.text)
       || typeof notice.createdAt !== 'string' || !Number.isFinite(Date.parse(notice.createdAt))) {
       throw new Error(`Lock notice ${path.basename(file)} is invalid.`);
@@ -1590,6 +1594,7 @@ function readHookSuites(file) {
 
 export function pushWithLock(args, {
   config,
+  gitPinOverride = false,
   env = process.env,
   herdr = createHerdrRunner(),
   dataDir = DATA_DIR,
@@ -1601,6 +1606,7 @@ export function pushWithLock(args, {
   stdio = 'inherit',
   rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
+  assertProjectGitPins({ config, env, dataDir, output, now, gitPinOverride });
   const caller = callerFor(env, herdr);
   const hook = findPrePushHook(config.root);
   const push = (reuseSuitePass = false, lockToken = null, suitesFile = null) => {
@@ -1609,6 +1615,7 @@ export function pushWithLock(args, {
     if (reuseSuitePass) childEnv.HERDR_BOSS_SUITE_REUSE = '1';
     if (lockToken) childEnv.HERDR_BOSS_LOCK_TOKEN = lockToken;
     if (suitesFile) childEnv.HERDR_BOSS_PUSH_SUITES = suitesFile;
+    if (gitPinOverride && lockToken) childEnv.HERDR_BOSS_GIT_PIN_REASON = gitPinOverride;
     const result = spawnSync('git', ['push', ...args], { cwd: config.root, env: childEnv, stdio });
     if (result.error) throw new Error(`Cannot run git push: ${result.error.message}`);
     return result.status ?? 1;
