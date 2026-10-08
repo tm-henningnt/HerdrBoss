@@ -42,6 +42,7 @@ test('project and worktree roots are visible path settings with the current defa
 test('service settings accept each documented range and reject values outside it', (t) => {
   for (const [key, minimum, maximum] of [
     ['machine.memFreeWarnPercent', 1, 50],
+    ['worktrees.minFreeGb', 1, 500],
     ['staleStatusMinutes', 5, 1440],
     ['workers.staleIdleMinutes', 5, 1440],
     ['browsers.orphanDaemonMinAgeSeconds', 60, 86400],
@@ -79,6 +80,12 @@ test('service settings accept each documented range and reject values outside it
     assertRejectedSetting(t, key, '30');
     assertRejectedSetting(t, key, null);
   }
+});
+
+test('worker worktree free-space floor defaults to 8 GB and is visible as a service setting', () => {
+  assert.deepEqual(serviceSettingsView({}).find(({ setting }) => setting === 'worktrees.minFreeGb'), {
+    group: 'Workers', setting: 'worktrees.minFreeGb', value: 8, source: 'default',
+  });
 });
 
 test('quota plan settings have defaults, documented ranges, and a bounded horizon form', (t) => {

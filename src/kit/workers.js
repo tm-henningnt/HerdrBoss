@@ -29,6 +29,8 @@ import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-vi
 import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
 import { LOCKFILE_NAMES } from './suite-passes.js';
 import { effortSettingsForModel } from './config.js';
+import { appendForcedAction, forceReason } from '../force-audit.js';
+import { clearDiskDiagnosisBulletin, scanDiskUsage, writeDiskDiagnosis } from '../disk-diagnosis.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -556,7 +558,7 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   if (lane?.state === 'trickle') {
     const usedToday = lane.usedTodayPercent || 0;
     if (usedToday < lane.allowancePercent) return {};
-    if (force) return { warning: `Warning: --force overrides the quota guard: ${describeLane(provider, lane, now)}.` };
+    if (force) return { warning: `Warning: --force --reason TEXT overrides the quota guard: ${describeLane(provider, lane, now)}.` };
     return { error: `${provider} trickle used for today: ${usedToday.toFixed(1)}% of about ${lane.allowancePercent.toFixed(1)}%/day; the next allowance starts at 00:00 UTC.` };
   }
   const isHaiku = provider === 'claude' && String(model || '').toLowerCase() === 'claude-haiku-5-5';
@@ -565,8 +567,8 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   if (isHaiku && Number.isFinite(paceLead) && paceLead > haikuTolerance) {
     const roundedLead = Math.round(paceLead * 100) / 100;
     const points = String(roundedLead > haikuTolerance ? roundedLead : paceLead);
-    const reason = `Claude model ${model} is ${points} points ahead of pace; paceHaikuTolerancePoints is ${haikuTolerance} points. Use --force only for an authorized override.`;
-    if (force) return { warning: `Warning: --force overrides the quota guard: ${reason}` };
+    const reason = `Claude model ${model} is ${points} points ahead of pace; paceHaikuTolerancePoints is ${haikuTolerance} points. Use --force --reason TEXT only for an authorized override.`;
+    if (force) return { warning: `Warning: --force --reason TEXT overrides the quota guard: ${reason}` };
     return { error: reason };
   }
   if (isHaiku && Number.isFinite(paceLead) && rules.avoidProviders?.includes(provider)) return {};
@@ -574,11 +576,11 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   const detail = lane ? describeLane(provider, lane, now) : `${provider} is ahead of quota pace or near exhaustion`;
   const alternatives = unmeteredAlternatives(rules, project, allowedModels);
   const lead = alternatives ? ` ${alternatives}` : '';
-  if (force) return { warning: `Warning: --force overrides the quota guard: ${detail}.${lead}` };
+  if (force) return { warning: `Warning: --force --reason TEXT overrides the quota guard: ${detail}.${lead}` };
   if (lane?.state === 'exhausted') {
     const open = Object.entries(rules.lanes || {}).filter(([, value]) => !value.unmetered && value.state === 'open').map(([name]) => name);
     const next = open.length ? `Open providers: ${open.join(', ')}.` : 'No metered provider is open; free models do not count against a quota.';
-    return { error: `${detail}.${lead} ${next} Use --force only for an authorized override.` };
+    return { error: `${detail}.${lead} ${next} Use --force --reason TEXT only for an authorized override.` };
   }
   if (lane?.state === 'pace' && rules.leastOverProvider === provider) {
     return { warning: `Notice: every metered provider is over pace. ${detail}.${lead} It is the least over, so the worker starts. Keep the task small and record the reason in the run.` };
@@ -587,7 +589,7 @@ export function providerGate(provider, rules, { force = false, now = Date.now(),
   const next = open.length ? `Open providers: ${open.join(', ')}.`
     : rules.leastOverProvider ? `Every metered provider is over pace; ${rules.leastOverProvider} is the least over and starts without --force.`
       : 'No metered provider is open; free models do not count against a quota.';
-  return { error: `${detail}.${lead} ${next} Use --force only for an authorized override.` };
+  return { error: `${detail}.${lead} ${next} Use --force --reason TEXT only for an authorized override.` };
 }
 
 function machineGuardState(machine, now = Date.now()) {
@@ -1518,8 +1520,22 @@ export function startWorker(name, options, deps = {}) {
   }
 }
 
+function existingPath(directory) {
+  let current = path.resolve(directory);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
 function startWorkerOnce(name, options, {
   config,
+  serviceConfig = null,
+  freeSpaceReader = (file) => fs.statfsSync(file),
+  diagnosticScan = scanDiskUsage,
+  diagnosisWrite = writeDiskDiagnosis,
   models,
   herdr = createHerdrRunner(),
   env = process.env,
@@ -1541,7 +1557,64 @@ function startWorkerOnce(name, options, {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
   const caller = verifyCallerPane(env, herdr, options.orch);
+  const reason = forceReason(options.force || options.forceSwap, options.reason, options.forceSwap && !options.force ? '--force-swap' : '--force');
   if (config?.slug) assertProjectTransferAllowsWorker(config.slug, { dataDir: env.HERDR_BOSS_DIR || DATA_DIR });
+  const settings = serviceConfig ?? loadConfig();
+  const minimumFreeGb = Number.isSafeInteger(settings.worktrees?.minFreeGb) && settings.worktrees.minFreeGb >= 1 && settings.worktrees.minFreeGb <= 500
+    ? settings.worktrees.minFreeGb : 8;
+  const worktreeVolumePath = existingPath(config.worktreeParent || config.worktreeRoot || config.root);
+  const dataDir = env.HERDR_BOSS_DIR || DATA_DIR;
+  const dataDirVolumePath = existingPath(dataDir);
+  let worktreeFreeBytes;
+  let dataDirFreeBytes;
+  try {
+    const worktreeStat = freeSpaceReader(worktreeVolumePath);
+    const dataDirStat = freeSpaceReader(dataDirVolumePath);
+    worktreeFreeBytes = Number(worktreeStat?.bavail) * Number(worktreeStat?.bsize);
+    dataDirFreeBytes = Number(dataDirStat?.bavail) * Number(dataDirStat?.bsize);
+    if (!Number.isFinite(worktreeFreeBytes) || worktreeFreeBytes < 0 || !Number.isFinite(dataDirFreeBytes) || dataDirFreeBytes < 0) throw new Error('invalid free space');
+  } catch {
+    throw new Error('Could not read free disk space for the worker worktree volume and the Herdr Boss data-directory volume. Worker start stopped.');
+  }
+  const worktreeFreeGb = worktreeFreeBytes / (1024 ** 3);
+  const dataDirFreeGb = dataDirFreeBytes / (1024 ** 3);
+  const belowDiskFloor = Math.min(worktreeFreeBytes, dataDirFreeBytes) < minimumFreeGb * (1024 ** 3);
+  const overrideKinds = new Set();
+  const refusal = `Worker start needs at least ${minimumFreeGb} GB free on both the worker worktree volume and the Herdr Boss data-directory volume. The worker worktree volume has ${worktreeFreeGb.toFixed(1)} GB free; the Herdr Boss data-directory volume has ${dataDirFreeGb.toFixed(1)} GB free. Change worktrees.minFreeGb in Settings, or remove merged worktrees with herdr-boss worktree prune --apply and check space with herdr-boss worktree disk.`;
+  if (belowDiskFloor) {
+    if (!options.force) {
+      if (!options.dryRun) {
+        let diagnosis = null;
+        try {
+          diagnosis = {
+            ...diagnosticScan({ home: os.homedir(), tempRoot: os.tmpdir(), dataDir }),
+            recordedAt: new Date(now).toISOString(),
+            minFreeGb: minimumFreeGb,
+            volumePaths: { worktree: worktreeVolumePath, dataDir: dataDirVolumePath },
+          };
+          diagnosisWrite(diagnosis, { dataDir });
+        } catch { /* A diagnostic failure must not hide the disk refusal. */ }
+        try {
+          appendForcedAction({
+            dataDir,
+            time: new Date(now).toISOString(),
+            command: 'worker start',
+            project: config.slug,
+            workerName: name,
+            refusalKind: 'disk-space',
+            reason: `Worker start refused because the lower free space across the worktree and data-directory volumes is below the ${minimumFreeGb} GB worktrees.minFreeGb floor.`,
+            diagnosis,
+          });
+        } catch { /* The refusal stays clear when a local audit write fails. */ }
+      }
+      throw new Error(`${refusal} Use --force --reason TEXT only for an authorized override.`);
+    }
+    overrideKinds.add('disk-space');
+    output(`Warning: --force --reason TEXT overrides the disk-space guard. ${refusal}`);
+  } else if (!options.dryRun) {
+    try { clearDiskDiagnosisBulletin({ dataDir }); }
+    catch { /* A stale bulletin block must not block a start after the volumes recover. */ }
+  }
   const herdrCommands = workerBriefHerdrCommands(env);
   const modelConfig = models ?? JSON.parse(fs.readFileSync(new URL('../../kit/models.json', import.meta.url), 'utf8'));
   const rulesPath = rulesFile ?? path.join(env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss'), 'rules.json');
@@ -1566,13 +1639,16 @@ function startWorkerOnce(name, options, {
   if (kitLine) output(kitLine);
   const overload = loadWarning(rules);
   if (overload) throw new Error(overload);
-  const swapText = options.forceSwap || swapExempt(env, herdr) ? null : swapRefusal(rules, { now, override: 'Pass --force-swap to override. --force cannot bypass this refusal.' });
-  if (swapText) throw new Error(swapText);
+  const swapExemptCaller = swapExempt(env, herdr);
+  const swapText = swapExemptCaller ? null : swapRefusal(rules, { now, override: 'Pass --force-swap --reason TEXT to override. --force --reason TEXT cannot bypass this refusal.' });
+  if (swapText && !options.forceSwap) throw new Error(swapText);
+  if (swapText && options.forceSwap) overrideKinds.add('swap');
   if (!options.kind) throw new Error('--kind is required.');
   if (rules.avoidKinds !== undefined && !Array.isArray(rules.avoidKinds)) throw new Error(`Herdr Boss rules avoidKinds must be an array: ${rulesPath}`);
   if ((rules.avoidKinds ?? []).includes(options.kind)) {
-    if (!options.force) throw new Error(`Herdr Boss rules avoid ${options.kind}; pass --force to override.`);
-    output(`Warning: --force overrides Herdr Boss rules for ${options.kind}.`);
+    if (!options.force) throw new Error(`Herdr Boss rules avoid ${options.kind}; pass --force --reason TEXT to override.`);
+    overrideKinds.add('policy-kind');
+    output(`Warning: --force --reason TEXT overrides Herdr Boss rules for ${options.kind}.`);
   }
   const policy = rules.policy;
   // Local extra models from the policy join the harness allow-list and use its launch arguments.
@@ -1582,6 +1658,12 @@ function startWorkerOnce(name, options, {
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
   const { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0, rules.lanes);
+  if (options.force && isOpus(model)) {
+    const opus = policy?.opus;
+    const limit = Number.isInteger(opus?.maxConcurrent) ? opus.maxConcurrent : 2;
+    if (opus?.allowWithoutForce !== true) overrideKinds.add('opus-approval');
+    if ((rules.control?.runningOpus ?? 0) >= limit) overrideKinds.add('opus-capacity');
+  }
   if (modelRoute) output(`routed to ${modelRoute.lane}: ${modelRoute.usedPercent}% used against ${modelRoute.expectedPercent}% expected`);
   // A v2 OpenCode TUI rejects --model and --agent. Select the model and the worker agent in a project config file instead.
   const openCodeConfig = options.kind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
@@ -1594,14 +1676,18 @@ function startWorkerOnce(name, options, {
     if (policy.excludedModels?.includes(model)) throw new Error(`${model} is disabled globally by Herdr Boss.`);
     if (!modelEnabled(options.kind, model, policy)) throw new Error(`${model} is disabled for ${options.kind} by Herdr Boss.`);
     if (projectPolicy?.excludedKinds?.includes(options.kind) || projectPolicy?.excludedModels?.includes(model)) throw new Error(`${options.kind}/${model} is excluded for project ${config.slug}.`);
-    if (projectPolicy?.mode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
+    if (projectPolicy?.mode === 'paused') {
+      if (!options.force) throw new Error(`Project ${config.slug} is paused. Use --force --reason TEXT only for an authorized override.`);
+      overrideKinds.add('project-pause');
+    }
   }
   const provider = providerFor(options.kind, model, policy);
   const laneName = provider || 'unmetered';
   const nightLaneCap = rules.night?.maxWorkersByLane?.[laneName];
   if (rules.night?.active === true && Number.isInteger(nightLaneCap) &&
-      (rules.control?.runningByLane?.[laneName] || 0) >= nightLaneCap && !options.force) {
-    throw new Error(`Watch worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot to open.`);
+      (rules.control?.runningByLane?.[laneName] || 0) >= nightLaneCap) {
+    if (!options.force) throw new Error(`Watch worker lane limit (${nightLaneCap}) for ${laneName} is reached; wait for a slot or use --force --reason TEXT for an authorized override.`);
+    overrideKinds.add('watch-capacity');
   }
   const freeGate = unmeteredGate(options.kind, model, rules);
   if (freeGate.error) throw new Error(freeGate.error);
@@ -1613,10 +1699,19 @@ function startWorkerOnce(name, options, {
   }
   const gate = providerGate(provider, rules, { force: options.force, now, project: config.slug, allowedModels: config.allowedModels, factoryShare, model });
   if (gate.error) throw new Error(gate.error);
+  if (options.force && gate.warning?.includes('--reason TEXT overrides the quota guard')) {
+    overrideKinds.add(rules.lanes?.[provider]?.state === 'pace' || gate.warning.toLowerCase().includes('ahead of pace') ? 'pace' : 'quota');
+  }
   if (gate.warning) output(gate.warning);
-  if (rules.control?.runningWorkers >= rules.control?.maxWorkers && !options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force.`);
+  if (rules.control?.runningWorkers >= rules.control?.maxWorkers) {
+    if (!options.force) throw new Error(`Global worker limit (${rules.control.maxWorkers}) is reached; wait or use --force --reason TEXT for an authorized override.`);
+    overrideKinds.add('worker-capacity');
+  }
   const projectSlots = rules.control?.projects?.[config.slug];
-  if (projectSlots?.effectiveMode === 'paused' && !options.force) throw new Error(`Project ${config.slug} is paused. Use --force only for an authorized override.`);
+  if (projectSlots?.effectiveMode === 'paused') {
+    if (!options.force) throw new Error(`Project ${config.slug} is paused. Use --force --reason TEXT only for an authorized override.`);
+    overrideKinds.add('project-pause');
+  }
   const summary = allocationSummary(rules, config.slug);
   if (summary) output(summary);
   if (projectSlots && projectSlots.running >= projectSlots.slots && !options.force) output(`Notice: ${config.slug} uses ${projectSlots.running}/${projectSlots.slots} effective slots. This share is advisory; global limit still applies.`);
@@ -1722,6 +1817,15 @@ function startWorkerOnce(name, options, {
   // Read and check the brief template first, so a bad template cannot fail the start after the leases are taken.
   const template = fs.readFileSync(config.briefTemplatePath, 'utf8');
   renderBrief(template, {});
+  if (options.force || options.forceSwap) appendForcedAction({
+    dataDir,
+    time: new Date(now).toISOString(),
+    command: 'worker start',
+    project: config.slug,
+    workerName: name,
+    refusalKind: [...overrideKinds].sort().join(',') || 'none',
+    reason,
+  });
   // Take the leases before the worktree or the pane exists, so an empty pool stops the start with no side effect.
   const leases = [];
   // The port values of a pool (for example a client id) go only into the pane environment. They are never in leases, the run record, the brief, or the output.

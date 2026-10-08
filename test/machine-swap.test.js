@@ -232,12 +232,12 @@ function swapFixture(t, { rules = swapRules(), label = 'orch', hook = false } = 
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
-  const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:p' };
+  const env = { PATH: process.env.PATH, HOME: base, TMPDIR: base, HERDR_ENV: '1', HERDR_BOSS_DIR: dataDir, HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:p' };
   const marker = path.join(base, 'ran');
   const script = path.join(base, 'suite.mjs');
   fs.writeFileSync(script, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
   const options = (extra = {}) => ({
-    config: loadProjectConfig({ cwd: root }), lockDataDir: dataDir, rulesFile, env, herdr, now: () => NOW, pidAlive: (pid) => pid === 601,
+    config: loadProjectConfig({ cwd: root }), serviceConfig: { worktrees: { minFreeGb: 8 } }, freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }), lockDataDir: dataDir, rulesFile, env, herdr, now: () => NOW, pidAlive: (pid) => pid === 601,
     output: (line) => lines.push(line), suiteStdio: 'ignore', pushStdio: 'ignore', ...extra,
   });
   return { base, root, git, dataDir, rulesFile, lines, env, options, marker, script, ran: () => fs.existsSync(marker) };
@@ -247,17 +247,24 @@ test('worker start refuses at high swap, and --force does not bypass it', (t) =>
   const f = swapFixture(t);
   const start = (...extra) => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only', ...extra], f.options({ now: NOW }));
   assert.throws(() => start(), /97%.*3\.9 GB[\s\S]*--force-swap/);
-  assert.throws(() => start('--force'), /--force-swap/, '--force is not enough');
+  assert.throws(() => start('--force', '--reason', 'test authorized override'), /--force-swap/, '--force is not enough');
 });
 
 test('worker start does not refuse the boss pane, --force-swap, or a policy with the option off', (t) => {
   const refused = /Swap|swap is at/;
   const boss = swapFixture(t, { label: 'boss' });
-  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only'], boss.options({ now: NOW })), (error) => !refused.test(error.message));
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only'], boss.options({ now: NOW })), (error) => !refused.test(error.message));
   const forced = swapFixture(t);
-  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only', '--force-swap'], forced.options({ now: NOW })), (error) => !refused.test(error.message));
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only', '--force-swap'], forced.options({ now: NOW })), /--force-swap needs --reason TEXT/);
+  const forcedWithReason = swapFixture(t);
+  let forcedFailure = '';
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only', '--force-swap', '--reason', 'Owner approved swap override'], forcedWithReason.options({ now: NOW })), (error) => { forcedFailure = error.message; return !refused.test(error.message); });
+  assert.ok(fs.existsSync(path.join(forcedWithReason.dataDir, 'action-audit.jsonl')), forcedFailure);
+  const forcedAction = JSON.parse(fs.readFileSync(path.join(forcedWithReason.dataDir, 'action-audit.jsonl'), 'utf8').trim());
+  assert.equal(forcedAction.refusalKind, 'swap');
+  assert.equal(forcedAction.reason, 'Owner approved swap override');
   const off = swapFixture(t, { rules: swapRules({ swapRefuseEnabled: false }) });
-  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--task', 'x', '--read-only'], off.options({ now: NOW })), (error) => !refused.test(error.message));
+  assert.throws(() => runKitCommand('worker', ['start', 'w1', '--kind', 'claude', '--task', 'x', '--read-only'], off.options({ now: NOW })), (error) => !refused.test(error.message));
 });
 
 test('suite refuses at high swap before it runs the command or takes the lock', (t) => {

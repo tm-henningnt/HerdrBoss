@@ -166,7 +166,7 @@ const DEFAULTS = {
   browser: { idleCloseMinutes: 20, allowVisible: false },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
   // Remove a clean worker worktree and its merged branch after collection.
-  worktrees: { pruneAtCollect: true },
+  worktrees: { minFreeGb: 8, pruneAtCollect: true },
   analytics: { actionsMinutes: true },
   // Install the Claude usage helper in the factory image home. The factory reads this key at each container start.
   factories: { claudeUsageHelper: true },
@@ -214,6 +214,7 @@ const SERVICE_SETTINGS = [
   ['Workers', 'workers.uncollectedNoticeMinutes'],
   ['Workers', 'workers.leaseGraceMinutes'],
   ['Workers', 'worktrees.pruneAtCollect'],
+  ['Workers', 'worktrees.minFreeGb'],
   ['Workers', 'watch.maxWorkers'],
   ['Workers', 'watch.maxWorkersByLane'],
   ['Watch', 'watch.quietHours'],
@@ -444,6 +445,7 @@ export function serviceSettingsView(cfg) {
 
 const SERVICE_SETTING_RANGES = new Map([
   ['machine.memFreeWarnPercent', [1, 50]],
+  ['worktrees.minFreeGb', [1, 500]],
   ['quota.warnPercent', [50, 99]],
   ['quota.criticalPercent', [51, 100]],
   ['quota.opencodeStatsDays', [1, 90]],

@@ -9,7 +9,7 @@ import { unregisterProjectRepo } from './harness.js';
 export const PROJECT_NEW_USAGE = 'Usage: project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]';
 export const PROJECT_CHECK_USAGE = 'Usage: project check <slug> [--fix STEP [--start]]';
 export const PROJECT_UNREGISTER_USAGE = 'Usage: project unregister <slug>';
-export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}\n${PROJECT_UNREGISTER_USAGE}\nUsage: project open SLUG [--start] [--force] [--dry-run]\nUsage: project park SLUG [--prepare] [--dry-run]\nUsage: project archive|unarchive SLUG [--dry-run]`;
+export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}\n${PROJECT_UNREGISTER_USAGE}\nUsage: project open SLUG [--start] [--force --reason TEXT] [--dry-run]\nUsage: project park SLUG [--prepare] [--dry-run]\nUsage: project archive|unarchive SLUG [--dry-run]`;
 export function verifyProjectCaller(env, herdr, command = 'project new') {
   return verifyCaller(env, herdr, command);
 }

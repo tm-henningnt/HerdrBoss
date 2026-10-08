@@ -179,7 +179,7 @@ const USAGE = `herdr-boss <command>
                         Create a project folder with the kit files and the first commit.
                         Exit 0 done, 1 usage or refusal, 2 not built, 3 waiting for the Owner.
   project check <slug> [--fix STEP [--start]]  Check a project set-up. Exit 4 when an item is missing.
-  project open <slug> [--start] [--force] [--dry-run]  Open a registered project. --start starts its project lead.
+  project open <slug> [--start] [--force --reason TEXT] [--dry-run]  Open a registered project. --start starts its project lead.
   project park <slug> [--prepare] [--dry-run]  Check and park a project. Park never closes a browser.
   project archive|unarchive <slug> [--dry-run]  Hide or restore a parked project.
   project paths [--json]  Print the registered paths of other projects.
@@ -232,8 +232,8 @@ const USAGE = `herdr-boss <command>
   browser bookmarks SLUG start URL|none [--full]  Set or clear the start page of the next launch.
   --full prints real URLs and stored bookmark names. Use it only as the Owner at a terminal.
   browser sweep-clones [--dry-run]  Delete orphaned Chrome code-sign clones now; --dry-run only lists them.
-  handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
-  handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]
+  handoff plan PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force --reason TEXT]
+  handoff prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force --reason TEXT]
   handoff cancel ID [--force]  Cancel a prepared successor; --force closes a working successor.
   handoff activate ID --confirmed
   handoff repair ID [--dry-run]  Promote a preparing record whose successor pane is idle or done.
@@ -1118,7 +1118,7 @@ async function main() {
       }
       const value = (flag, fallback) => { const i = args.indexOf(flag); return i < 0 ? fallback : args[i + 1]; };
       const to = value('--to');
-      if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force]');
+      if (!target || !to || !['plan', 'prepare'].includes(action)) throw new Error('Usage: handoff plan|prepare PANE --to KIND [--mode migrate|fresh] [--model MODEL] [--effort EFFORT] [--force --reason TEXT]');
       // The JSON result goes to stdout, so the kit line goes to stderr.
       try {
         const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -1126,7 +1126,7 @@ async function main() {
         const kitLine = top && kitBehindLine(top);
         if (kitLine) console.error(kitLine);
       } catch {}
-      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), auto: args.includes('--auto'), choiceReason: value('--choice-reason', null) };
+      const options = { mode: value('--mode', 'migrate'), model: value('--model', null), effort: value('--effort', null), force: args.includes('--force'), reason: value('--reason', undefined), auto: args.includes('--auto'), choiceReason: value('--choice-reason', null) };
       console.log(JSON.stringify(action === 'plan' ? planHandoff(target, to, options) : prepareHandoff(target, to, options), null, 2));
       break;
     }

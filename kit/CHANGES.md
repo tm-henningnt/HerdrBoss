@@ -290,6 +290,6 @@ Summary: Add Claude Haiku 5.5 for bounded worker and read-only research tasks, w
 Impact: useful
 Summary: Clarify the license rule: tests may sign tokens in memory with a throwaway key pair; nothing signed or key-shaped is committed, shipped or written to a fixture, and a token-shaped string in a file that the docs gate scans fails the gate (unit test files are not scanned).
 
-## 7a6e12fa7945
+## 784634641f22
 Impact: useful
-Summary: Scan changed test files and fixture folders for token-shaped strings; allow documented synthetic samples only by path, class, reason, and exact-string SHA-256.
+Summary: Scan changed test files and fixture folders for token-shaped strings, with a hash allowlist for documented samples; require a redacted reason for forced overrides; guard worker starts on free disk space on the worktree and data volumes with a bounded diagnosis.

@@ -68,7 +68,7 @@ export const STEPS = [
   { id: 'quota', title: 'Usage limits and lanes', parts: ['quota', 'service', 'workers'], text: [
     'Every 5 minutes, the service reads the usage limit of each provider.',
     'It gives each provider a lane: open, ahead of pace, near exhaustion, or exhausted.',
-    'The command worker start refuses a lane that is not open, unless the agent uses --force.',
+    'The command worker start refuses a lane that is not open, unless the agent uses --force --reason TEXT.',
   ] },
   { id: 'policy', title: 'Policy and the bulletin', parts: ['policy', 'quota', 'service'], text: [
     'You set the policy on the Settings and Allocation pages. The policy has, for example, the global cap of working agents and the shares of the projects.',

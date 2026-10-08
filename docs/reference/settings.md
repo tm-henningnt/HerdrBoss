@@ -7,7 +7,7 @@
 | A quota window reaches the critical percentage in `config.json` | Critical notice in the bulletin only. The bulletin tells orchestrators to avoid that kind. |
 | A quota window reaches the warning percentage in `config.json` | Warning notice in the bulletin only. |
 | A quota window that had a warning resets below the warning percentage in `config.json` | `Quota restriction cleared` notice in the bulletin only. |
-| A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force`. |
+| A live quota window is at 100% or more | The provider lane is exhausted until the latest reset among its exhausted windows. `worker start` refuses it unless you use `--force --reason TEXT`. |
 | A window has a use of at least the minimum use, and its use is more than the pace tolerance above the goal-adjusted pace | The provider lane is "ahead of pace". `worker start` refuses it. |
 | Free memory is below 15% | Warning notice. |
 | Active machine CPU limit or enabled 5-minute load backstop is exceeded | Stop new workers and full test suites. `worker start` refuses the dispatch, including with `--force`. |
@@ -258,8 +258,8 @@ The start notice to the orchestrators and the Boss carries the instructions in o
 - **open**: use it. A lane that is above its expected use but inside the pace tolerance shows as `on pace`, with its use, its expected use, and the tolerance.
 - **ahead of pace**: a live window has a use of at least the minimum use, and its use is more than the pace tolerance above its goal-adjusted expected use. The lane shows when it is back on pace if it is not used.
 - **trickle**: a window longer than 7 days is ahead of pace. The lane shows the daily allowance and today's use. You can start workers while today's use is below the allowance.
-- **near exhaustion**: the quota is inside the reserve. Only `--force` can use it.
-- **exhausted**: a live window is at 100% or more. The lane shows its label and reset time. Only `--force` can use it.
+- **near exhaustion**: the quota is inside the reserve. Only `--force --reason TEXT` can use it.
+- **exhausted**: a live window is at 100% or more. The lane shows its label and reset time. Only `--force --reason TEXT` can use it.
 
 A provider is open only when every live, measured window is on pace and no live window is exhausted. Extra windows, such as a model-only window, do not count. A short window of 7 days or less still closes a trickle lane when it is ahead of pace. An exhausted or near-exhaustion window also closes the lane.
 
@@ -271,7 +271,7 @@ Codex uses its planned curve for lane guidance when quota history or a reset cre
 
 Herdr Boss gives a trickle lane a daily allowance. With a goal end in the future, it divides the gap to the goal percent by the days left to that end. After the goal end, it divides the unused quota percent by the days left to reset. Without a goal end, it divides the gap to the goal percent by the days left to reset. The goal percent defaults to 100%. It counts today's use from the first quota record after 00:00 UTC. After a reset, it starts from the first record after that reset. With no record for today, it counts 0% use.
 
-The bulletin and `herdr-boss lanes` show the allowance, today's use, and the goal. The Overview quota card shows the goal in each window row. It also shows the goal in the trickle footer. Each goal uses the form `goal: 100% by Thu 8 Oct`. The text shows the time for a one-off end within 48 hours. `worker start` allows a trickle lane below its allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force` to bypass this refusal. Automatic handover can use a trickle lane below its allowance.
+The bulletin and `herdr-boss lanes` show the allowance, today's use, and the goal. The Overview quota card shows the goal in each window row. It also shows the goal in the trickle footer. Each goal uses the form `goal: 100% by Thu 8 Oct`. The text shows the time for a one-off end within 48 hours. `worker start` allows a trickle lane below its allowance. At or above the allowance, it refuses until 00:00 UTC. Use `--force --reason TEXT` to bypass this refusal. Automatic handover can use a trickle lane below its allowance.
 
 When several windows are ahead of pace, the lane names the worst one: the window with the most use above its goal-adjusted expected use. A window without an expected value ranks by its used percentage. When several windows are exhausted, the lane shows the one with the latest reset.
 
@@ -364,7 +364,7 @@ The alert text is advice. It gives the swap percent and the GB in use. It says t
 
 The swap refusal is off by default. Turn it on with the switch "Refuse new work at high swap" in the Machine section. When the switch is on and swap is at or above `swapRefusePercent` with at least `swapMinUsedGB` in use, an orchestrator or a worker cannot run `worker start`, `herdr-boss suite`, or `herdr-boss push` with a pre-push hook. The message shows the swap percent and the GB in use. A blank `swapRefusePercent` switches the refusal off.
 
-Work that the Owner or the Boss starts is never refused. Rules older than 3 minutes never refuse. To override, add `--force-swap` to `worker start`, or set `HERDR_BOSS_FORCE_SWAP=1` for `suite` and `push`. `--force` does not override the refusal. `suite --reuse` returns 0 when it reuses a passing tree.
+Work that the Owner or the Boss starts is never refused. Rules older than 3 minutes never refuse. To override, add `--force-swap --reason TEXT` to `worker start`, or set `HERDR_BOSS_FORCE_SWAP=1` for `suite` and `push`. `--force --reason TEXT` does not override the refusal. `suite --reuse` returns 0 when it reuses a passing tree.
 
 Policy settings take precedence over legacy `config.json` values. The old `machine.loadWarnFactor` field does not control machine guards. The legacy top-level `alertCooldownSeconds` field is unused. Notice delivery reads `machine.alertCooldownSeconds`.
 
@@ -382,7 +382,7 @@ A model with the **trial** tag is new and has fewer than 5 scorecard results. Th
 
 To add a model, type its string in the harness section and select **Add model**. A model string has 1 to 128 characters. It starts with a letter or a digit. It holds only letters, digits, dots (`.`), underscores (`_`), slashes (`/`), and hyphens (`-`). The server refuses whitespace and shell or control characters. A new model shows the **local** tag and starts unmetered. Select **Remove** to delete a local model. Remove also deletes its route, its disabled entry, its preferred-model choice, and its orchestrator succession choices.
 
-Choose **Manage pace** to apply quota pacing for worker dispatch. Choose **Ignore quota** to stop quota pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota windows in every provider mode. A live window at 100% or more still exhausts the provider until its reset. Worker start refuses an exhausted provider unless you use `--force`.
+Choose **Manage pace** to apply quota pacing for worker dispatch. Choose **Ignore quota** to stop quota pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live quota windows in every provider mode. A live window at 100% or more still exhausts the provider until its reset. Worker start refuses an exhausted provider unless you use `--force --reason TEXT`.
 
 Set a **quota pacing goal** for each measured window. The field shows the provider and the window label, such as `Codex Weekly goal %`. A blank field means 100%. Enter a whole percentage from 0 through 100. Select the end type and enter its value when needed. Use your local date and time for a one-off end. Enter a positive whole number of hours for a recurring end. The page checks the current time and the live window before it saves. An invalid end shows an error and keeps your draft. `pacingGoals` in `policy.json` stores the value by provider and by the window key (`primary`, `secondary`, or `tertiary`). Old integer values stay valid. Clearing the field removes that goal and restores 100%.
 
@@ -529,4 +529,3 @@ Select **Add pool** to create a pool. Enter ports, ranges such as `8000-8009`, o
 The Settings page has the same pools editor. See [Resource pools](#resource-pools-on-the-settings-page).
 
 `worker start` prints one allocation line for the project: the running workers, the effective slots, the borrowed, lent, or free count, the global use, and the 5-minute load. When the project uses all its effective slots, `worker start` also prints an advisory notice. The notice does not stop the start.
-

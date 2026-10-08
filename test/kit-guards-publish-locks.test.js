@@ -10,7 +10,7 @@ import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProj
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker as startWorkerImpl, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
@@ -19,6 +19,12 @@ import { renderBulletin } from '../src/rules.js';
 import { readWorkerFacts, gitIsMerged } from '../src/task-state.js';
 import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 import { ALL_READY_SCREENS, CLAUDE_READY_SCREEN, CODEX_READY_SCREEN, git, setupFixture, temporaryRepo, TEST_HOME, tiers, validReport, validRun } from './helpers/kit-fixture.js';
+
+const startWorker = (name, options, deps = {}) => startWorkerImpl(name, options, {
+  freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
+  serviceConfig: { worktrees: { minFreeGb: 8 } },
+  ...deps,
+});
 
 test('worker start reports off and paused machine guards and ignores their CPU/load limits', () => {
   const future = new Date(Date.now() + 3600000).toISOString();
@@ -49,7 +55,7 @@ test('worker start refuses machine limits before a reached night lane cap even w
     control: { runningWorkers: 0, maxWorkers: 16, runningByLane: { codex: 1 }, projects: {} },
   }));
   const output = [];
-  assert.throws(() => startWorker('machine-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+  assert.throws(() => startWorker('machine-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true, reason: 'test authorized override' }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: (line) => output.push(line),
   }), /--force cannot bypass this refusal/);
   assert.match(output.join('\n'), /Owner present; CPU 71\.0% \/ limit 70%/);
@@ -83,7 +89,7 @@ test('worker start refuses a reached provider lane cap while the watch is active
 test('worker start refuses the enabled load backstop even with --force', () => {
   const f = setupFixture(null);
   fs.writeFileSync(f.rulesFile, JSON.stringify({ updatedAt: new Date().toISOString(), machine: { owner: 'present', cpuPercent: 20, cpuLimit: 70, fiveMinute: 25, loadLimit: 24 } }));
-  assert.throws(() => startWorker('load-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+  assert.throws(() => startWorker('load-refused', { kind: 'codex', task: 'x', allow: ['src/'], force: true, reason: 'test authorized override' }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   }), /--force cannot bypass this refusal/);
   assert.ok(!f.calls.includes('agent start'));
@@ -337,6 +343,17 @@ test('worker start gate puts unmetered alternatives before least-over guidance',
   const least = providerGate('opencodego', rules, { now, project: 'herdrboss' }).warning;
   assert.match(least, /Unmetered alternatives/);
   assert.doesNotMatch(providerGate('codex', rules, { now, project: 'other' }).error, /Unmetered alternatives/);
+});
+
+test('quota refusals and force warnings name the required reason flag', async () => {
+  const { providerGate } = await import('../src/kit/workers.js');
+  const now = Date.parse('2026-10-08T10:00:00Z');
+  const rules = {
+    avoidProviders: ['codex'],
+    lanes: { codex: { state: 'exhausted', window: 'Weekly', usedPercent: 100, resetsAt: '2026-10-09T00:00:00Z' } },
+  };
+  assert.match(providerGate('codex', rules, { now }).error, /--force --reason TEXT/);
+  assert.match(providerGate('codex', rules, { now, force: true }).warning, /--force --reason TEXT/);
 });
 
 test('lanes prints the unmetered alternatives lane', () => {

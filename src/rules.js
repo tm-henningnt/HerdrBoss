@@ -8,6 +8,7 @@ import { kitRevision } from './kit/agents-check.js';
 import { leaseBulletinLines } from './leases.js';
 import { watchUntilPhrase } from './night.js';
 import { mismatchText, NO_WORKER_MINUTES, projectStatusFreshness, taskMismatches } from './task-state.js';
+import { formatDiskDiagnosisMarkdown } from './disk-diagnosis.js';
 
 const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', opencodego: 'OpenCode Go' };
 export const STALE_STATUS_NOTICE_AFTER_MINUTES = NO_WORKER_MINUTES;
@@ -577,6 +578,7 @@ export function renderBulletin(snap, evaluation, cfg) {
     for (const c of snap.denials.rising) L.push(`- Denials and permission prompts: ${c.cause} has ${c.recent} events in the last 24 hours against a 6-day mean of ${c.mean} a day.`);
     L.push(`- ${snap.denials.note}`);
   }
+  if (snap.diskDiagnosis) L.push('', formatDiskDiagnosisMarkdown(snap.diskDiagnosis), '');
   L.push('', '## Quotas', '', '| Provider | Window | Used | Expected | Resets |', '|---|---|---|---|---|');
   for (const q of snap.quotas || []) {
     if (!hasQuotaData(q)) continue;

@@ -14,6 +14,7 @@ import { handoverBootstrapText } from './handoff-bootstrap.js';
 import { EXIT_CODES as GOAL_EXIT_CODES, setGoal } from './goal-set.js';
 import { reownProjectLocks } from './kit/locks.js';
 import { reownLeases } from './leases.js';
+import { appendForcedAction, forceReason } from './force-audit.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -267,7 +268,7 @@ export function handoffTarget(toKind, { model = null, effort = null, force = fal
   if (!policy.allowedKinds.includes(toKind)) throw new Error('Target is disabled by global policy.');
   if (!cfg.allowedModels.includes(targetModel)) throw new Error('Target model is not in the allow-list.');
   if (isOpus(targetModel) && !force) {
-    throw new Error(`${targetModel} needs the Owner's approval. Ask the Owner, then ${command} with --force.`);
+    throw new Error(`${targetModel} needs the Owner's approval. Ask the Owner, then ${command} with --force --reason TEXT.`);
   }
   if ((policy.excludedModels || []).includes(targetModel)) throw new Error('Target is disabled by global policy.');
   if (!modelEnabled(toKind, targetModel, policy)) throw new Error(`Target model is disabled for ${toKind}.`);
@@ -332,7 +333,8 @@ function quotaNote(provider, state, now) {
   };
 }
 
-export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort = null, force = false, command = 'plan' } = {}) {
+export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort = null, force = false, reason, command = 'plan' } = {}) {
+  const safeReason = forceReason(force, reason);
   if (!TARGETS.has(toKind)) throw new Error(`Unsupported target kind: ${toKind}.`);
   if (!['migrate', 'fresh'].includes(mode)) throw new Error('mode must be migrate or fresh.');
   const pane = sourcePane(id, { allowStopped: mode === 'fresh' });
@@ -347,7 +349,7 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
   const settings = boss ? null : policy.projects[slug];
   if (settings?.excludedKinds?.includes(toKind) || settings?.excludedModels?.includes(targetModel)) throw new Error('Target is excluded for this project.');
   const { provider } = target;
-  if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force.`);
+  if (!force && provider && state.control?.risks?.[provider]) throw new Error(`${provider} is near exhaustion; use another target or --force --reason TEXT.`);
   const sessionId = pane.agent_session?.kind === 'id' ? pane.agent_session.value : null;
   const result = { sourcePane: id, workspace: pane.workspace_id, cwd: pane.cwd, project: slug, label: pane.label, displayLabel: boss ? 'Boss' : project?.label || slug, boss, fromKind: pane.agent, sessionId, toKind, model: targetModel, modelSource: target.modelSource, ...(target.force ? { force: true } : {}), effort: target.effort, mode, provider, migration: null, ...quotaNote(provider, state, Date.now()) };
   if (mode === 'migrate') {
@@ -376,6 +378,17 @@ export function planHandoff(id, toKind, { mode = 'migrate', model = null, effort
     }
     if (!result.migration.available) result.migration.next = `Prepare will use fresh mode automatically. The Owner can also use --mode fresh: herdr-boss handoff prepare ${id} --to ${toKind} --mode fresh.`;
   }
+  const refusalKinds = [];
+  if (force && isOpus(targetModel)) refusalKinds.push('opus-approval');
+  if (force && provider && state.control?.risks?.[provider]) refusalKinds.push('provider-risk');
+  if (refusalKinds.length) appendForcedAction({
+    dataDir: DATA_DIR,
+    command: `handoff ${command}`,
+    project: slug,
+    workerName: null,
+    refusalKind: refusalKinds.sort().join(','),
+    reason: safeReason,
+  });
   return result;
 }
 
@@ -445,6 +458,7 @@ function openCodeLaunchError(item, { wait = pause, timeoutMs = OPEN_CODE_FLAG_TI
 }
 
 export function prepareHandoff(id, toKind, options = {}, { waitForPane = waitForWorkerPane, wait, env = process.env, browserLookup, tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags } = {}) {
+  forceReason(options.force, options.reason);
   // Refuse a caller value that Codex cannot receive before any record or tab changes.
   if (toKind === 'codex') successorAgentArgs({ toKind }, [], env);
   const currentPanes = expireMissingSuccessors();
