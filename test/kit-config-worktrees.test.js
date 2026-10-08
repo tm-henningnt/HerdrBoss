@@ -20,6 +20,27 @@ import { readWorkerFacts, gitIsMerged } from '../src/task-state.js';
 import { kitRevision, parseKitImpact, projectKit, readKitChanges, kitChangesSince } from '../src/kit/agents-check.js';
 import { ALL_READY_SCREENS, CLAUDE_READY_SCREEN, CODEX_READY_SCREEN, git, setupFixture, temporaryRepo, TEST_HOME, tiers, validReport, validRun } from './helpers/kit-fixture.js';
 
+test('kit revision stays valid without optional model guidance', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-legacy-revision-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const write = (relative, text) => {
+    const file = path.join(root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  };
+  write('kit/templates/project-kit.md', 'canonical body');
+  write('kit/skills/herdr-orchestrator/SKILL.md', 'skill');
+  write('kit/models.json', '{}');
+  const revision = kitRevision(root);
+  assert.match(revision, /^[0-9a-f]{12}$/);
+  write('kit/models.md', 'model guidance');
+  assert.notEqual(kitRevision(root), revision, 'model guidance changes the revision when present');
+  fs.rmSync(path.join(root, 'kit/models.md'));
+  assert.equal(kitRevision(root), revision, 'removing optional guidance restores the earlier revision');
+  fs.rmSync(path.join(root, 'kit/models.json'));
+  assert.equal(kitRevision(root), null, 'a missing required model catalog still invalidates the revision');
+});
+
 test('kit revision follows installed kit assets and ignores product code', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-revision-'));
   const write = (relative, text) => {
@@ -32,6 +53,7 @@ test('kit revision follows installed kit assets and ignores product code', () =>
     write('kit/templates/agents-stub.md', 'other template');
     write('kit/skills/herdr-orchestrator/SKILL.md', 'skill');
     write('kit/skills/herdr-orchestrator/reference/handover.md', 'reference');
+    write('kit/models.md', 'model guidance');
     write('kit/models.json', '{}');
     write('src/engine.js', 'service');
     write('public/app.js', 'dashboard');
@@ -39,6 +61,7 @@ test('kit revision follows installed kit assets and ignores product code', () =>
 
     write('docs/orchestration/herdr-boss.md', '<!-- herdr-boss kit v=old -->\nold note\n\nold generated body');
     const revision = kitRevision(root);
+    assert.match(revision, /^[0-9a-f]{12}$/);
     write('kit/templates/agents-stub.md', 'changed stub template');
     assert.notEqual(kitRevision(root), revision, 'an installed template changes the revision');
     write('kit/templates/agents-stub.md', 'other template');
@@ -48,6 +71,9 @@ test('kit revision follows installed kit assets and ignores product code', () =>
     write('kit/models.json', '{"changed":true}');
     assert.notEqual(kitRevision(root), revision, 'the model catalog changes the revision');
     write('kit/models.json', '{}');
+    write('kit/models.md', 'changed model guidance');
+    assert.notEqual(kitRevision(root), revision, 'model guidance changes the revision');
+    write('kit/models.md', 'model guidance');
     write('kit/templates/project-kit.md', 'changed canonical body');
     assert.notEqual(kitRevision(root), revision, 'the canonical template changes the revision');
     write('kit/templates/project-kit.md', 'canonical body');
@@ -1268,7 +1294,7 @@ test('worker start validates the caller pane and uses it for placement and repor
   const result = startWorker('caller-valid', { kind: 'codex', task: 'x', allow: ['src/'] }, {
     config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
-  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.\n\nStop it with `herdr-boss worker stop-own caller-valid --pid <pid>`. Never run `kill`, `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`.\n\nCodex worker commit rule: do not run `git add` or `git commit`. Leave the change in the working tree. Say in your report that the change is uncommitted. The orchestrator commits the change with `herdr-boss worker commit caller-valid -m MESSAGE`.');
+  assert.equal(fs.readFileSync(path.join(result.worktree, '.worker', 'brief.md'), 'utf8'), 'Report target: ws:orch\n\n## Worker start details\n\nScreenshot budget: 10 screenshots. The project setting overrides the kit default.\n\nIn a Codex shell, run `setopt NO_BG_NICE` before a background command.\nReport a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source. For an eligible leftover process in this worker, run `herdr-boss worker stop-own caller-valid --pid <pid>`.\n\nStop it with `herdr-boss worker stop-own caller-valid --pid <pid>`. Never run `kill`, `pkill`, `killall`, or `kill` with a name pattern such as `kill $(pgrep …)`.\n\nCodex worker commit rule: do not run `git add` or `git commit`. Leave the change in the working tree. Say in your report that the change is uncommitted. The orchestrator commits the change with `herdr-boss worker commit caller-valid -m MESSAGE`.');
   assert.ok(calls.some((args) => args.join(' ') === 'tab list --workspace ws'));
   assert.ok(calls.some((args) => args.join(' ') === 'pane get ws:orch'));
 

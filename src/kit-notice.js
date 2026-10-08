@@ -4,12 +4,13 @@ import { CHANGES_FILE, kitRevision, parseKitImpact, readKitChanges } from './kit
 
 // 'kit' includes kit/templates/project-kit.md and kit/templates/agents-stub.md.
 export const KIT_PATHS = Object.freeze(['kit', 'src/kit', 'docs/orchestrator-instructions.md']);
-// The installed kit assets that kitRevision() hashes. A commit that changes one of them is a kit
-// release. Keep this list in step with the revision inputs in src/kit/agents-check.js.
+// The shared guidance and installed assets that kitRevision() hashes. A commit that changes one of
+// them is a kit release. Keep this list in step with the revision inputs in src/kit/agents-check.js.
 export const KIT_REVISION_PATHS = Object.freeze([
   'kit/templates',
   'kit/skills/herdr-orchestrator/SKILL.md',
   'kit/skills/herdr-orchestrator/reference',
+  'kit/models.md',
   'kit/models.json',
   'kit/watch',
 ]);

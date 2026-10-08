@@ -57,7 +57,8 @@ export function kitRevision(root = KIT_ROOT) {
       ...kitFiles(root, 'kit/templates'),
       'kit/skills/herdr-orchestrator/SKILL.md',
       ...kitFiles(root, 'kit/skills/herdr-orchestrator/reference'),
-      'kit/models.md',
+      // Older kit roots can lack model guidance. Keep their revision valid, but hash it when present.
+      ...(fs.existsSync(path.join(root, 'kit/models.md')) ? ['kit/models.md'] : []),
       'kit/models.json',
       ...kitFiles(root, 'kit/watch'),
     ].sort();
