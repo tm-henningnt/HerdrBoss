@@ -25,6 +25,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory restore FILE [--host HOST]',
   '       factory destroy NAME',
   '       factory shell NAME [-- COMMAND...]',
+  '       factory token NAME [--rotate]',
   '       factory logs NAME [--tail COUNT]',
   '       factory freeze NAME [--off]',
 ].join('\n');
@@ -335,6 +336,10 @@ export async function factoryCommand(args, io = {}) {
   const { isInsideContainer } = await import('./factory-core.js');
   if ((context.isContainer || isInsideContainer)()) throw new Error('The factory host tool cannot run inside a container.');
   const [sub, ...rest] = args;
+  if (sub === 'token') {
+    const { factoryTokenCommand } = await import('./factory-token.js');
+    return factoryTokenCommand(rest, context);
+  }
   if (['backup', 'restore', 'destroy', 'shell', 'logs', 'freeze'].includes(sub)) {
     const { factoryRecoveryCommand } = await import('./factory-recovery.js');
     return factoryRecoveryCommand(args, context);

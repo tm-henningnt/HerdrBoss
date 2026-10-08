@@ -128,7 +128,7 @@ export function isHerdrPane(env) {
 // Only the Boss pane, the Owner in a plain terminal, or the dashboard may start or stop the
 // watch. An orchestrator or a worker gets a refusal with the reason. The pane check is the same
 // as the other Boss-only commands, for example mail close.
-async function verifyNightCaller(env, herdr) {
+export async function verifyNightCaller(env, herdr) {
   // A plain terminal is the Owner. No pane check runs there.
   // Any Herdr pane variable means a pane, which must pass the pane check. Only a shell with none is the Owner.
   if (env.HERDR_ENV !== '1' && !env.HERDR_PANE_ID && !env.HERDR_WORKSPACE_ID) return { role: 'owner' };
@@ -191,6 +191,7 @@ const USAGE = `herdr-boss <command>
   factory new|build|start|stop|status|list  Create and control container factories from the host. The minimum factory version is 0.1.0.
   factory configure NAME [--resume] [--step STEP]  Check the container, volumes, Herdr server, and service. Exit 3 waits for Owner logins.
   factory login NAME claude|codex|opencode  Sign in the agent app at the Owner terminal, then check the login.
+  factory token NAME [--rotate]  Read or rotate the dashboard token at an Owner terminal. Boss rotation prints no token.
   factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]  Start or check the factory Boss session.
   factory connect [--check|--undo] NAME  Connect a registered factory to Fleet. Check prints name, state, and age only. Undo reverses the connection.
   factory host add|list|remove  Keep private host connections. Use --docker-context CONTEXT for Docker. Run factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
