@@ -11,7 +11,6 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectC
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
 import { readDiskDiagnosis } from './disk-diagnosis.js';
 import { listProjects } from './projects.js';
-import { sharedGitEnabled } from './git-pins.js';
 import { checkHarness, readProjectRepos } from './harness.js';
 import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
@@ -1841,7 +1840,6 @@ export class Engine extends EventEmitter {
     // Drop the text. It holds file paths and setting values.
     this.harness = {
       checkedAt: new Date(now).toISOString(),
-      projects: readProjectRepos(DATA_DIR).map(({ slug }) => ({ slug, codexSharedGit: sharedGitEnabled(slug) })),
       findings: findings.map(({ status, area, item }) => ({ status, area, item })),
     };
     return this.harness;

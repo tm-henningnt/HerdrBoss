@@ -62,6 +62,13 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
+test('Codex shared Git has a schema row and one page help button', () => {
+  const setting = 'projects.SLUG.codexSharedGit';
+  assert.equal(SETTING_HELP[setting]?.group, 'readiness');
+  assert.match(SETTING_HELP[setting]?.what || '', /common Git directory.*writable roots/);
+  assert.match(app, /helpButton\('projects\.SLUG\.codexSharedGit'\)/);
+});
+
 test('the release repository setting explains the approval rule in Settings and Help', () => {
   const item = SETTING_HELP['releases.repos'];
   assert.ok(item, 'releases.repos has a help row');

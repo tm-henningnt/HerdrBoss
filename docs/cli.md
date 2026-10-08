@@ -1279,7 +1279,6 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Project lead succession | `succession.ladder` | The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable usage limits, and global or project exclusions. | The list in policy.json | List of choices | Up to 20 choices | A longer list gives automatic handover more successors to try. | A shorter list can leave no successor. A choice outside the list is never selected automatically. | Select Apply policy. The change takes effect at the next engine tick. |
 | Workspace projects | `workspace.exclusion` | Decides which live workspaces count as projects. Clear a workspace switch to include it as a project. The Boss workspace stays excluded while its pane is labelled boss. | Every workspace is a project, except the Boss workspace | Switch for each workspace | On or off | Switching a workspace on removes it from the projects and from the shares. | Switching a workspace off makes it a project that takes part in the shares. | Select Apply policy. The change takes effect at the next engine tick. |
 | Project shares | `project.shares` | The share of the working agents for each project. Drag a boundary in the bar: only the projects to its right rebalance. The labels show the set share and the effective slots. Shares are advisory. The worker command enforces the global cap. Apply policy asks for a confirmation when 3 or more shares change, and asks again when the total is not 100. | The shares in policy.json | Percent of the working agents | 0 to 100, and all shares add up to 100 or less | A larger share gives the project more slots when the machine is busy. | A smaller share gives the project fewer slots. It can borrow idle shares of others when Borrow idle shares is on. | Select Apply policy. The change takes effect at the next engine tick. |
-| Codex shared Git | `projects.SLUG.codexSharedGit` | Adds the project's common Git directory to Codex writable roots. Pins stay in the private directory. Push and suite refuse changed pins. | On; off for herdrboss until live verification | Switch for each registered project in Advanced | On or off | On permits writes to shared hooks, config, refs, objects, HEAD, info, and worktrees. | Off omits the root and removes its exact entry on sync. | Select Apply policy. Run harness sync. Restart Codex. |
 
 #### Resource pools
 
@@ -1392,14 +1391,15 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Agent app readiness (Advanced)
 
-- Controls: A read-only table that shows if each agent app entry that orchestration needs is present.
-- Effect: Nothing. The table only reports.
-- Safe to change: Nothing to change. Run herdr-boss harness sync to see what to fix.
-- Restart: No restart.
+- Controls: A read-only table that shows if each agent app entry that orchestration needs is present. A project switch controls Codex access to each registered project's common Git directory.
+- Effect: The table only reports. The switch changes Codex writable roots and the Git pin checks that push and suite use.
+- Safe to change: Nothing to change in the table. Turn the switch off to remove its root on the next harness sync.
+- Restart: No restart for the service. Select Apply policy. Run harness sync, then restart Codex.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Readiness table | `harness.readiness` | Shows for each agent app entry if it is ok, missing, or bad. The table shows no path and no value. | Not applicable | Table | Read-only | Not applicable. | Not applicable. | The change takes effect at once. |
+| Codex shared Git | `projects.SLUG.codexSharedGit` | Adds the project's common Git directory to Codex writable roots. Codex can write hooks, config, refs, objects, HEAD, info, and worktrees. Push and suite refuse changed pins. | On; off for HerdrBoss until live verification | Switch for each registered project in Advanced | On or off | Turning it on lets Codex workers write shared Git metadata. Pin checks can stop push and suite. | Turning it off omits its Git root and removes that exact entry on harness sync. | Select Apply policy. The change takes effect at the next engine tick. |
 
 <!-- settings-reference:end -->
 
