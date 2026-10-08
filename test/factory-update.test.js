@@ -7,6 +7,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { factoryCommand } from '../src/factory-host.js';
 import { readFleet, writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft15' };
 const image = { Id: 'sha256:tag-image', Config: { Labels: {
@@ -332,6 +333,7 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     try { result = await factoryCommand(['update', 'demo', '--tier', 'service'], f.io); }
     catch (error) { throw new Error(`${error.message}\n${f.calls.map(({ args }) => args.slice(0, 6).join(' ')).join('\n')}`); }
     assert.equal(result, 0);
+    assertPollerRegistry(f.env);
     assert.equal(f.container.Id, f.originalId);
     assert.equal(f.container.State.Running, true);
     assert.equal(f.serviceUp, true);
@@ -345,6 +347,19 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.match(f.output.join(''), /updated factory demo service/i);
     assert.doesNotMatch(f.output.join(''), /Boss pane is gone/i);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json')), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update keeps a rejected registry row intact', async () => {
+  const f = updateFixture();
+  try {
+    const file = path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json');
+    const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const rejected = { ...registry.factories[0], name: 'bad-row', factoryId: 'bad-row', version: 'invalid-value' };
+    registry.factories.push(rejected);
+    fs.writeFileSync(file, JSON.stringify(registry));
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).factories.find((row) => row.name === 'bad-row'), rejected);
   } finally { f.cleanup(); }
 });
 
@@ -412,6 +427,7 @@ test('image update replaces only the labeled container and keeps all four labele
       { slug: 'project', workspace: 'workspace:1', pane: 'pane:1', kind: 'codex', mode: 'auto', role: 'project' },
     ] };
     assert.equal(await factoryCommand(['update', 'demo', '--tier', 'image', '--allow-boss-restart'], f.io), 0);
+    assertPollerRegistry(f.env);
     assert.notEqual(f.container.Id, f.originalId);
     assert.equal(f.container.Config.Labels['herdr-factory'], 'demo');
     assert.equal(f.container.Config.Labels['herdr-factory-spike'], 'ft15');
@@ -428,6 +444,20 @@ test('image update replaces only the labeled container and keeps all four labele
     assert.doesNotMatch(freshStart.args.at(-2), /fresh Herdr Boss/);
     assert.match(f.output.join(''), /The Boss pane is gone\. Run 'herdr-boss factory boss start demo' to start the Boss in the factory\./);
   } finally { f.cleanup(); }
+});
+
+test('image update writes image timestamps without milliseconds', async () => {
+  const createdAt = image.Config.Labels['org.opencontainers.image.created'];
+  image.Config.Labels['org.opencontainers.image.created'] = '2026-10-07T10:59:22.928Z';
+  const f = updateFixture();
+  try {
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'image', '--allow-boss-restart'], f.io), 0);
+    const registry = assertPollerRegistry(f.env);
+    assert.equal(registry.factories[0].image.builtAt, '2026-10-07T10:59:22Z');
+  } finally {
+    image.Config.Labels['org.opencontainers.image.created'] = createdAt;
+    f.cleanup();
+  }
 });
 
 test('image update requires the newly built pinned image and makes no Docker changes when it is missing', async () => {

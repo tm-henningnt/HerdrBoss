@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { factoryCommand } from '../src/factory-host.js';
 import { writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
+import { assertPollerRegistry } from './helpers/factory-registry.js';
 
 const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', herdrReachable: true };
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft14' };
@@ -91,8 +92,10 @@ for (const remote of [false, true]) test(`backup and restore preserve SQLite, da
     assert.equal(fs.statSync(path.dirname(f.file)).mode & 0o777, 0o700);
     assert.equal(f.container.State.Running, true);
     assert.equal(await factoryCommand(['destroy', 'demo'], f.io), 0);
+    assertPollerRegistry(f.env);
     f.io.stdin = Object.assign(Readable.from(['demo\n']), { isTTY: true });
     assert.equal(await factoryCommand(['restore', f.file, ...(remote ? ['--host', 'host-a'] : [])], f.io), 0);
+    assertPollerRegistry(f.env);
     assert.equal(fs.readFileSync(path.join(f.volumePaths.data, 'config.json'), 'utf8'), '{"invented":true}');
     assert.deepEqual(fs.readFileSync(path.join(f.volumePaths.work, 'binary.bin')), Buffer.from([0, 255, 128, 10]));
     assert.equal(fs.readFileSync(path.join(f.volumePaths.home, 'login.fixture'), 'utf8'), 'invented-private-value');
@@ -323,6 +326,7 @@ test('a failed restore removes only the new labeled resources and permits a retr
     };
     f.io.stdin = Object.assign(Readable.from(['demo\n']), { isTTY: true });
     await assert.rejects(factoryCommand(['restore', f.file], f.io), /restore|Docker/i);
+    assertPollerRegistry(f.env);
     assert.equal(f.volumes.size, 0);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'factory.json')), false);
     f.io.stdin = Object.assign(Readable.from(['demo\n']), { isTTY: true });

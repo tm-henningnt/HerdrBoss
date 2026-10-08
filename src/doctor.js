@@ -13,6 +13,7 @@ import { claudeRateLimitsDir } from './claude-statusline.js';
 import { DATA_DIR, ROOT_DEFAULTS, resolveRootPath } from './config.js';
 import { toolsDoctorUpdates } from './tools-check.js';
 import { FACTORY_HOME, FACTORY_PROJECT_GROUP, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
+import { readFactoryRegistry } from './fleet-registry.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
@@ -52,6 +53,13 @@ function doctorDiskPaths(home, env) {
     worktreeRoot = resolveRootPath(value, home);
   } catch { worktreeRoot = resolveRootPath(ROOT_DEFAULTS.worktreeRoot, home); }
   return [...new Set([path.resolve(dataDir), worktreeRoot])];
+}
+
+function factoryRegistryWarnings(home, env) {
+  const file = path.join(env.HERDR_FACTORIES_DIR || path.join(home, '.herdr-factories'), 'fleet.json');
+  if (!fsSync.existsSync(file)) return [];
+  try { return readFactoryRegistry(file).diagnostics; }
+  catch { return ['registry-invalid']; }
 }
 
 async function readFreeSpace(file) {
@@ -369,11 +377,14 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
     items.push({ id: check.id, stepId: check.stepId, name: check.name, status: good ? 'green' : 'red', ...(diskSeverity ? { severity: diskSeverity } : {}), ...(diskBytes !== null && Number.isFinite(diskBytes) ? { freeBytes: diskBytes } : {}), message, fix: good ? null : fix });
   }
   const ok = items.every((item) => item.status === 'green');
-  const warnings = factory
-    ? listProjectPaths({ dataDir: env.HERDR_BOSS_DIR, cwd: path.join(FACTORY_HOME, 'herdr-boss') })
-      .filter((project) => !isTrustedFactoryProjectPath(project.path, { workRoot: factoryProjectGroup }))
-      .map(factoryProjectWarning)
-    : [];
+  const warnings = [
+    ...factoryRegistryWarnings(home, env),
+    ...(factory
+      ? listProjectPaths({ dataDir: env.HERDR_BOSS_DIR, cwd: path.join(FACTORY_HOME, 'herdr-boss') })
+        .filter((project) => !isTrustedFactoryProjectPath(project.path, { workRoot: factoryProjectGroup }))
+        .map(factoryProjectWarning)
+      : []),
+  ];
   return { schema: 'herdr-boss.doctor/1', ok, exitCode: ok ? 0 : 4, items, warnings };
 }
 

@@ -7,6 +7,7 @@ import { readFleetFile, writeFleetFile } from './fleet-store.js';
 import { FLEET_GUIDE_TOKEN } from './fleet-access.js';
 import { factoryRecords, fleetPollError } from './fleet-poller.js';
 import { validateFleet } from './factory-store.js';
+import { normalizeFleetBuiltAt } from './factory-timestamp.js';
 import { acquireLock } from './factory-host.js';
 
 const ROLE_SCHEMA_FILE = fileURLToPath(new URL('../docs/contracts/schema/head-office-role.v1.schema.json', import.meta.url));
@@ -98,7 +99,7 @@ export function createFleetRole({ dir, privateDir, settings, enableHeadOffice = 
       const incoming = factories.filter((factory) => !ids.has(factory.factoryId) && factory.factoryId !== local.factoryId);
       missingHosts = [...new Set(incoming.filter((factory) => !hostIds.has(factory.hostId)).map((factory) => factory.hostId))];
       const added = incoming.filter((factory) => hostIds.has(factory.hostId)).map((factory) => ({ ...Object.fromEntries(FACTORY_FIELDS.map((key) => [key, factory[key]])), kind: 'native' }));
-      merged = { ...mine, factories: [...mine.factories, ...added] };
+      merged = normalizeFleetBuiltAt({ ...mine, factories: [...mine.factories, ...added] });
       try { validateFleet(merged); } catch { throw handoverError('registry-rejected'); }
       if (!added.length) merged = null;
     }

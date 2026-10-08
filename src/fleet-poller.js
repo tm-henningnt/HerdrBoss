@@ -1,22 +1,22 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { acceptFleetSummary } from './fleet-contract.js';
-import { validate } from './fleet-schema.js';
 import { readFleetFile, writeFleetFile } from './fleet-store.js';
+import { readFactoryRegistry } from './fleet-registry.js';
 import { FLEET_READ_TOKEN } from './fleet-access.js';
 
 export const FLEET_POLL_MS = 30000;
 const MAX_SUMMARY_BYTES = 128 * 1024;
-const schemaFile = fileURLToPath(new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url));
-const registrySchema = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
+export { readFactoryRegistry };
+const factoryRecordsFromRows = (factories) => factories.map(({ factoryId, name, kind, dashboardUrl, version, kitRevision }) => ({
+  factoryId, name, kind, version, kitRevision, dashboardUrl: new URL(dashboardUrl).origin,
+}));
 export function factoryRecords(file) {
-  const body = readFleetFile(file, { schema: 1, contractVersion: '1.0.0', factories: [] });
-  if (body.schema !== 1 || body.contractVersion !== '1.0.0' || validate(body.factories, registrySchema.properties.factories, { schemaFile }).length) throw new Error('registry-invalid');
-  if (new Set(body.factories.map((row) => row.name)).size !== body.factories.length) throw new Error('registry-invalid');
+  const { factories, diagnostics } = readFactoryRegistry(file);
   // The poller needs no host connection record. Never read registry.json.
-  return body.factories.map(({ factoryId, name, kind, dashboardUrl, version, kitRevision }) => ({ factoryId, name, kind, version, kitRevision, dashboardUrl: new URL(dashboardUrl).origin }));
+  const records = factoryRecordsFromRows(factories);
+  Object.defineProperty(records, 'diagnostics', { value: diagnostics, enumerable: false });
+  return records;
 }
 const pollError = (code) => Object.assign(new Error(code), { code });
 export function fleetPollError(error) {
@@ -61,6 +61,7 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
   // Validate cached data before it reaches the dashboard. Never restore error bodies.
   try {
     records = factoryRecords(registryFile);
+    registryError = records.diagnostics.join('; ') || null;
     const saved = readFleetFile(cacheFile, []);
     for (const record of records) {
       const row = Array.isArray(saved) && saved.find((item) => item.name === record.name);
@@ -97,7 +98,10 @@ export function createFleetPoller({ dir, registryFile = path.join(process.env.HE
       for (const row of cache.values()) if (row.remote) { row.status = 'offline'; row.error = 'head-office-disabled'; }
       return;
     }
-    try { records = factoryRecords(registryFile); registryError = localFailed ? 'local-summary-unavailable' : null; }
+    try {
+      records = factoryRecords(registryFile);
+      registryError = [localFailed ? 'local-summary-unavailable' : null, ...records.diagnostics].filter(Boolean).join('; ') || null;
+    }
     catch { registryError = 'registry-invalid'; return; }
     if (self && records.some((record) => record.name === self.name && (record.factoryId !== self.factoryId || record.dashboardUrl !== new URL(self.dashboardUrl).origin))) {
       registryError = 'duplicate-factory-name'; return;
