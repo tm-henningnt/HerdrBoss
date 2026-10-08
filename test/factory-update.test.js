@@ -57,6 +57,17 @@ function fixture() {
 
 function updateFixture() {
   const f = fixture();
+  const supervisorBin = path.join(f.root, 'supervisor-bin');
+  const supervisorLog = path.join(f.root, 's6.jsonl');
+  fs.mkdirSync(supervisorBin);
+  for (const command of ['s6-svc', 's6-svstat']) {
+    const body = command === 's6-svc'
+      ? '#!/bin/sh\nprintf \'s6-svc\\t%s\\n\' \"$*\" >> \"$S6_LOG\"\nif [ \"$S6_FAIL_START\" = 1 ] && [ \"$1\" = -u ]; then exit 1; fi\n'
+      : '#!/bin/sh\nprintf \'s6-svstat\\t%s\\n\' \"$*\" >> \"$S6_LOG\"\nprintf \'%s\' \"$S6_UP\"\n';
+    const file = path.join(supervisorBin, command);
+    fs.writeFileSync(file, body, { mode: 0o755 });
+    fs.chmodSync(file, 0o755);
+  }
   const volumePaths = Object.fromEntries(Object.keys(VOLUMES).map((kind) => [kind, path.join(f.root, `volume-${kind}`)]));
   for (const dir of Object.values(volumePaths)) fs.mkdirSync(dir);
   fs.writeFileSync(path.join(volumePaths.home, 'login.fixture'), 'invented-login');
@@ -105,12 +116,26 @@ function updateFixture() {
       return ok({ updatedAt: f.state?.updatedAt ?? new Date(tickAt).toISOString(), workers: f.state?.workers ?? 0, locks: f.state?.locks ?? [], handoffs: f.state?.handoffs ?? [], errors: f.state?.errors ?? [], orchestrators: f.state?.orchestrators ?? [], bossPane: f.state?.bossPane ?? false });
     }
     if (args[0] === 'exec' && args.includes('/command/s6-svc')) {
-      if (args.includes('-u') && failServiceStart) return { code: 1, stdout: '', stderr: 'simulated service start failure' };
+      const commandIndex = args.indexOf('/command/s6-svc');
+      const fakeS6 = spawnSync('s6-svc', args.slice(commandIndex + 1), { env: {
+        PATH: `${supervisorBin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        S6_LOG: supervisorLog,
+        S6_FAIL_START: failServiceStart && args.includes('-u') ? '1' : '0',
+      }, encoding: 'utf8' });
+      if (fakeS6.status !== 0) return { code: fakeS6.status || 1, stdout: '', stderr: 'simulated s6 service start failure' };
       serviceUp = args.includes('-u');
       if (serviceUp) { tickAt = Date.now(); f.state = { ...f.state, updatedAt: new Date(tickAt).toISOString() }; }
       return ok();
     }
-    if (args[0] === 'exec' && args.includes('/command/s6-svstat')) return ok(serviceUp ? 'true' : 'false');
+    if (args[0] === 'exec' && args.includes('/command/s6-svstat')) {
+      const commandIndex = args.indexOf('/command/s6-svstat');
+      const fakeS6 = spawnSync('s6-svstat', args.slice(commandIndex + 1), { env: {
+        PATH: `${supervisorBin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        S6_LOG: supervisorLog,
+        S6_UP: serviceUp ? 'true' : 'false',
+      }, encoding: 'utf8' });
+      return { code: fakeS6.status || 0, stdout: fakeS6.stdout || '', stderr: fakeS6.stderr || '' };
+    }
     if (args[0] === 'exec' && args.includes('git')) {
       if (args.includes('config') && args.includes('--global')) {
         const key = args.includes('--get') ? args.at(-1) : args.at(-2);
@@ -175,7 +200,7 @@ function updateFixture() {
   f.io.transportFactory = () => docker;
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
-  return { ...f, docker, expectedOrigin, set helperReply(value) { helperReply = value; }, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
+  return { ...f, docker, expectedOrigin, s6Log: supervisorLog, set helperReply(value) { helperReply = value; }, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
     set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
@@ -310,6 +335,10 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.equal(f.container.Id, f.originalId);
     assert.equal(f.container.State.Running, true);
     assert.equal(f.serviceUp, true);
+    const supervisorCalls = fs.readFileSync(f.s6Log, 'utf8').trim().split('\n').filter(Boolean);
+    assert.ok(supervisorCalls.some((call) => call.startsWith('s6-svc\t-d ')));
+    assert.ok(supervisorCalls.some((call) => call.startsWith('s6-svc\t-u ')));
+    assert.ok(supervisorCalls.some((call) => call.startsWith('s6-svstat\t-o ')));
     assert.ok(f.calls.some(({ args }) => args.includes('merge') && args.includes('--ff-only')));
     assert.equal(f.calls.some(({ args }) => args[0] === 'container' && args[1] === 'rm' && args[2] === 'hf-demo'), false);
     assert.ok(f.calls.some(({ args }) => args[0] === 'run' && args.includes('herdr-factory=demo') && args.includes('herdr-factory-spike=ft15')));
@@ -662,6 +691,8 @@ test('service update prints a plain docker command for a local factory when the 
       assert.match(error.message, /herdr-boss factory status demo/);
       assert.doesNotMatch(error.message, /factory docker demo/);
       assert.equal(error.message.split(START).length - 1, 1, 'the hint appears once');
+      const supervisorCalls = fs.readFileSync(f.s6Log, 'utf8').trim().split('\n').filter(Boolean);
+      assert.ok(supervisorCalls.some((call) => call.startsWith('s6-svc\t-u ')));
       return true;
     });
   } finally { f.cleanup(); }

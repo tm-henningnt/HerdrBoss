@@ -21,6 +21,12 @@ const mounts = ['home', 'data', 'work', 'code'].map((kind) => ({ Type: 'volume',
 
 function fixture(name = 'demo') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-core-'));
+  const supervisorBin = path.join(root, 'supervisor-bin');
+  const supervisorLog = path.join(root, 's6.jsonl');
+  fs.mkdirSync(supervisorBin);
+  const fakeS6 = path.join(supervisorBin, 's6-svc');
+  fs.writeFileSync(fakeS6, '#!/bin/sh\nprintf \'%s\\n\' \"$*\" >> \"$S6_LOG\"\nif [ \"$S6_FAIL_START\" = 1 ] && [ \"$1\" = -u ]; then exit 1; fi\n', { mode: 0o755 });
+  fs.chmodSync(fakeS6, 0o755);
   const calls = [];
   const output = [];
   const volumes = new Map();
@@ -28,6 +34,8 @@ function fixture(name = 'demo') {
   const factoryMounts = mounts.map((mount) => ({ ...mount, Name: mount.Name.replace('hf-demo-', `hf-${name}-`) }));
   let container;
   let imageAvailable = true;
+  let failS6Start = false;
+  let failHealth = false;
   let buildSnapshot;
   const docker = { async run(args, options) {
     calls.push({ args, options });
@@ -52,9 +60,21 @@ function fixture(name = 'demo') {
       container = { Config: { Labels: factoryLabels }, HostConfig: { Privileged: false, CapAdd: null, SecurityOpt: securityOpt }, Mounts: factoryMounts, State: { Status: 'created', Running: false } };
       return json('example-container-id');
     }
-    if (args[0] === 'start') { container.State = { Status: 'running', Running: true, Health: { Status: 'healthy' } }; return json('hf-demo'); }
+    if (args[0] === 'start') {
+      const s6 = spawnSync('s6-svc', ['-u', '/run/service/herdr-boss-serve'], { env: {
+        PATH: `${supervisorBin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        S6_LOG: supervisorLog,
+        S6_FAIL_START: failS6Start ? '1' : '0',
+      }, encoding: 'utf8' });
+      if (s6.status !== 0) return { code: s6.status || 1, stdout: '', stderr: 'fake s6 service start failed' };
+      container.State = { Status: 'running', Running: true, Health: { Status: 'healthy' } };
+      return json('hf-demo');
+    }
     if (args[0] === 'stop') { container.State = { Status: 'exited', Running: false }; return json('hf-demo'); }
-    if (args[0] === 'exec' && args.includes('curl')) return args.includes('%{http_code}') ? { code: 0, stdout: '200', stderr: '' } : json(health);
+    if (args[0] === 'exec' && args.includes('curl')) {
+      if (failHealth) return { code: 22, stdout: '', stderr: 'fake health check failed' };
+      return args.includes('%{http_code}') ? { code: 0, stdout: '200', stderr: '' } : json(health);
+    }
     if (args[0] === 'exec' && args.includes('herdr')) return json({ result: { panes: [] } });
     if (args[0] === 'exec' && args.includes('node') && args.some((word) => word.includes('allowedKinds'))) return json({ codexWasAllowed: true });
     if (args[0] === 'exec' && args.includes('node')) return json({ workers: 0 });
@@ -64,7 +84,7 @@ function fixture(name = 'demo') {
   const io = { env: { HOME: root, HERDR_BOSS_DIR: path.join(root, 'data'), HERDR_FACTORIES_DIR: path.join(root, 'factories'), TMPDIR: root },
     isContainer: () => false, transportFactory: () => docker,
     stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => output.push(value) } };
-  return { root, calls, io, docker, volumes, output, get container() { return container; }, set imageAvailable(value) { imageAvailable = value; }, get buildSnapshot() { return buildSnapshot; }, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, calls, io, docker, volumes, output, supervisorLog, get container() { return container; }, set imageAvailable(value) { imageAvailable = value; }, set failS6Start(value) { failS6Start = value; }, set failHealth(value) { failHealth = value; }, get buildSnapshot() { return buildSnapshot; }, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('new starts a factory with four labeled volumes, loopback ports and bounded resources', async () => {
@@ -78,6 +98,7 @@ test('new starts a factory with four labeled volumes, loopback ports and bounded
     assert.equal(create.includes('--cap-add'), false);
     assert.equal(create.join(' ').includes('/var/run/docker.sock'), false);
     assert.equal(f.container.State.Running, true);
+    assert.equal(fs.readFileSync(f.supervisorLog, 'utf8').trim(), '-u /run/service/herdr-boss-serve');
     const fleetFile = path.join(f.io.env.HERDR_FACTORIES_DIR, 'fleet.json');
     const fleet = JSON.parse(fs.readFileSync(fleetFile, 'utf8'));
     assert.deepEqual(validateFile(fleet, new URL('../docs/contracts/schema/factory-registry.v1.schema.json', import.meta.url).pathname), []);
@@ -88,6 +109,26 @@ test('new starts a factory with four labeled volumes, loopback ports and bounded
     const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
     assert.equal(flow.state, 'service-ready');
     assert.ok(f.calls.some(({ args }) => args.includes('Host: demo.localhost')));
+  } finally { f.cleanup(); }
+});
+
+test('new stops when the fake s6 supervisor cannot start the service', async () => {
+  const f = fixture();
+  try {
+    f.failS6Start = true;
+    await assert.rejects(factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), /Docker operation failed/);
+    assert.equal(fs.readFileSync(f.supervisorLog, 'utf8').trim(), '-u /run/service/herdr-boss-serve');
+    assert.equal(f.calls.some(({ args }) => args[0] === 'exec' && args.includes('curl')), false);
+  } finally { f.cleanup(); }
+});
+
+test('new fails its ready check when the started service does not answer /api/health', async () => {
+  const f = fixture();
+  try {
+    f.failHealth = true;
+    await assert.rejects(factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), /Docker operation failed/);
+    assert.equal(fs.readFileSync(f.supervisorLog, 'utf8').trim(), '-u /run/service/herdr-boss-serve');
+    assert.ok(f.calls.some(({ args }) => args[0] === 'exec' && args.includes('curl') && String(args.at(-1)).endsWith('/api/health')));
   } finally { f.cleanup(); }
 });
 
