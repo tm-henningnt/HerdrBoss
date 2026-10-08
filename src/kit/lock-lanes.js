@@ -108,6 +108,13 @@ export function readLockLaneDurationPredictions({ dataDir = DATA_DIR, name, now 
   }));
 }
 
+// The watchdog reads recent holds for every project and kind.
+export function readLockWatchdogLedger({ dataDir = DATA_DIR, now = Date.now() } = {}) {
+  const current = typeof now === 'function' ? now() : now;
+  const nowMs = current instanceof Date ? current.getTime() : Number(current);
+  return readLedgerLines(dataDir, nowMs - 14 * DAY_MS, WAIT_LEDGER_MAX_BYTES);
+}
+
 // With ten holds, the lane uses the 90th percentile of the recent holds, not the median. With fewer, it uses the median. A key that is mostly fast but sometimes slow, such as
 // a push that reuses a pass and sometimes runs the full suite, must not hold the short slot during its slow runs.
 export function classifyLockLane(prediction, shortLimitMinutes) {

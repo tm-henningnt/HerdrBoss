@@ -1,7 +1,23 @@
 import './helpers/test-env.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectMachine, collectQuotas, collectWorktreeCounts } from '../src/collect.js';
+import { collectMachine, collectProcesses, collectQuotas, collectWorktreeCounts } from '../src/collect.js';
+
+test('collectProcesses parses cputime and process start from one ps sample', async () => {
+  const calls = [];
+  const processes = await collectProcesses({ runner: async (...args) => {
+    calls.push(args);
+    return '2468 1 00:01:30 80.0 00:00:12 Mon Sep 28 10:00:00 2026 2048 node --sample-argument\n';
+  } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'ps');
+  assert.match(calls[0][1].at(-1), /cputime=.*lstart=/);
+  assert.equal(calls[0][2].env.LC_ALL, 'C');
+  assert.deepEqual(processes.get(2468), {
+    pid: 2468, ppid: 1, age: 90, cpu: 80, cpuTimeMs: 12_000,
+    start: 'Mon Sep 28 10:00:00 2026', rssMB: 2, cmd: 'node --sample-argument',
+  });
+});
 
 test('machine snapshot measures free space on the supplied data filesystem', async () => {
   const machine = await collectMachine(process.cwd());

@@ -10,9 +10,9 @@ import { LINUX_READERS } from './quota-readers.js';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
-export function run(cmd, args, { timeout = 30000, killSignal = 'SIGTERM' } = {}) {
+export function run(cmd, args, { timeout = 30000, killSignal = 'SIGTERM', env = {} } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, killSignal, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH } }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout, killSignal, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH, ...env } }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; err.stdout = stdout; reject(err); } else resolve(stdout);
     });
   });
@@ -649,15 +649,40 @@ function parseEtime(s) {
   return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
-export async function collectProcesses() {
-  const out = await run('ps', ['-Ao', 'pid=,ppid=,etime=,pcpu=,rss=,command=']);
+function parseCpuTime(value) {
+  let text = String(value || '');
+  let days = 0;
+  if (text.includes('-')) {
+    const [dayText, rest] = text.split('-', 2);
+    days = Number(dayText);
+    text = rest;
+  }
+  const parts = text.split(':').map(Number);
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => !Number.isFinite(part) || part < 0)) return null;
+  const [hours, minutes, seconds] = parts.length === 3 ? parts : [0, parts[0], parts[1]];
+  return Math.round((days * 86400 + hours * 3600 + minutes * 60 + seconds) * 1000);
+}
+
+export function parseProcesses(output) {
   const procs = new Map();
-  for (const line of out.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(.*)$/.exec(line);
+  for (const line of String(output ?? '').split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\S+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\d+)\s+(.*)$/.exec(line);
     if (!m) continue;
-    procs.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), age: parseEtime(m[3]), cpu: Number(m[4]), rssMB: Math.round(Number(m[5]) / 1024), cmd: m[6] });
+    const cpuTimeMs = parseCpuTime(m[5]);
+    if (cpuTimeMs === null) continue;
+    procs.set(Number(m[1]), {
+      pid: Number(m[1]), ppid: Number(m[2]), age: parseEtime(m[3]), cpu: Number(m[4]),
+      cpuTimeMs, start: m[6].trim().replace(/\s+/g, ' '), rssMB: Math.round(Number(m[7]) / 1024), cmd: m[8],
+    });
   }
   return procs;
+}
+
+export async function collectProcesses({ runner = run } = {}) {
+  const out = await runner('ps', ['-Ao', 'pid=,ppid=,etime=,pcpu=,cputime=,lstart=,rss=,command='], {
+    env: { LC_ALL: 'C' },
+  });
+  return parseProcesses(out);
 }
 
 const CHROME_MAIN = /(Google Chrome|Chromium|chrome-headless-shell|Brave Browser|Microsoft Edge)(\.app\/Contents\/MacOS\/[^/]+)?(\s|$)/;

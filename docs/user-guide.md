@@ -53,4 +53,8 @@ The Doctor disk line reports free space at the Herdr Boss data folder and the co
 
 When the main checkout has `node_modules` and all detected lock files match the new worker worktree, `worker start` uses a copy-on-write clone on macOS. It uses the setup command or `npm ci` when the lock files differ or the clone fails.
 
+## Full-suite lock watchdog
+
+The lock watchdog checks a live `full-suite` lock after it runs longer than the multiplier times its predicted hold time. It sends one notice to the holder pane and the Boss when the process tree stays below the CPU limit in the Locks panel on Settings. The notice names the holder and child processes and tells you to inspect the pane. The Boss or holder pane can run `herdr-boss lock release`; the watchdog never releases the lock.
+
 For persisted record rules, see the [record inventory](architecture-records.md). For supervisor steps and gaps, see the [supervisor contract](reference/supervisor-contract.md). For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).

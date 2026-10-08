@@ -407,6 +407,20 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value sends more jobs to the long lane.',
     apply: 'lock-policy',
   }),
+  S('locks', 'locks.watchdogMultiplier', 'Lock watchdog multiplier', {
+    what: 'The number of predicted holds that a full-suite lock must exceed before the watchdog checks its CPU use. It uses a 10-minute minimum prediction until the ledger has five holds of the same kind.',
+    default: '3', unit: 'Times predicted hold', range: '1 to 20',
+    raise: 'A higher value waits longer before the watchdog sends a notice.',
+    lower: 'A lower value sends a notice sooner.',
+    apply: 'lock-policy',
+  }),
+  S('locks', 'locks.watchdogCpuPercent', 'Lock watchdog CPU limit', {
+    what: 'The maximum CPU use of the full-suite holder and its child processes in each of the last two process samples. The watchdog sends a notice only below this value.',
+    default: '1', unit: 'Percent', range: '1 to 100',
+    raise: 'A higher value sends notices when a busier holder runs.',
+    lower: 'A lower value sends notices only when the holder uses less CPU.',
+    apply: 'lock-policy',
+  }),
   S('locks', 'locks.guard.enabled', 'Guard for short jobs', {
     what: 'Checks machine load, swap use, and free memory before a short job starts beside a long job.',
     default: 'On', unit: 'Switch', range: 'On or off',

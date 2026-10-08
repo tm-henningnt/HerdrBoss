@@ -501,6 +501,9 @@ test('the Settings page renders all lock lane policy controls with setting help 
   assert.match(html, /<h2>Locks<\/h2>/);
   assert.match(html, /data-policy-lock="slots"/);
   assert.match(html, /data-policy-lock="shortLimitMinutes"/);
+  assert.match(html, /data-policy-lock="watchdogMultiplier"/);
+  assert.match(html, /data-policy-lock="watchdogCpuPercent"/);
+  assert.match(html, /checks each full-suite holder/);
   assert.match(html, /data-policy-lock-guard="enabled"/);
   for (const key of ['maxLoadPercent', 'maxSwapPercent', 'minFreeMemPercent']) {
     assert.ok(html.includes(`data-policy-lock-guard="${key}"`), `Locks has a control for ${key}`);
