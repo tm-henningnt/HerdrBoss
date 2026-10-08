@@ -32,6 +32,25 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss secret list` | Print secret names and metadata. It also works in an agent pane. |
 | `herdr-boss secret remove NAME` | Ask for the name again, then remove the sealed values. Run it in an Owner terminal. |
 | `herdr-boss secret check [NAME]` | Check each value and print `ok` or `failed`. Run it in an Owner terminal. |
+| `herdr-boss account probe` | Read login structure and configuration field names at an Owner terminal. Print no values. Write no files. |
+
+### Account probe
+
+Run `herdr-boss account probe` once at an Owner terminal, from the project folder. If the CLI is not installed, run `node scripts/account-probe.mjs` from this repository. The standalone copy needs only Node. Both commands print the same JSON report and work without the service. They accept no options or values in arguments.
+
+The report checks `~/.local/share/opencode/auth.json` and `~/.pi/agent/auth.json`. For each file, it prints existence, mode, owner-only access, readability, JSON validity, and key names. Owner-only means the current user owns the file and group and other users have no access bits. It names each top-level provider key and each entry key. It checks whether each entry value is a string or an object. It lists the candidate identity key names `id`, `account`, `accountId`, `account_id`, `email`, `user`, `name`, `org`, and `sub` when present. It prints no login value. An unreadable or missing file has `unverified` checks. A file over 1 MiB or a symbolic link is not read. The report shows it as `symlink: yes` with the mode `unverified`.
+
+The report lists other files directly in `~/.pi/agent` with their paths and modes. It reads no contents from those files, except the named configuration files. It lists environment variable names that match `OPENCODE`, `_API_KEY`, `XDG_DATA_HOME`, or `PI_`, with `set` or `unset`. Empty variables count as set. It includes known candidate names when they are unset. It never prints environment values.
+
+The configuration checks report `apiKey` and `api_key` field names by file path. They check `opencode.json` and `opencode.jsonc` under `~/.config/opencode` and in the current project folder. They also check `settings.json` and `models.json` under `~/.pi/agent`. They check nested fields. JSONC comments and string values do not count as fields. No configuration value is printed. The effect and precedence of overrides stay `unverified`.
+
+The process check prints only current-user tool counts and PIDs. It checks the executable names `opencode` and `pi`. It also uses a PID-only match for direct tool paths and known Node launchers. The pi match covers `node /path/pi` and the `pi-coding-agent/dist/cli.js` entry under `@earendil-works` or `@mariozechner`. It prints no arguments and reads no process environment. A custom wrapper can remain unidentified. A process-reader failure keeps known PIDs and gives `verified: no`. It does not prove a zero count.
+
+Run the probe while a tool is active for the passive check. After its content reads, the probe records each login file's access time and modification time. It waits 10 seconds. It then checks those times again without reading file contents. The report prints only whether each time changed. An unchanged access time means `cannot tell`. A changed access time shows access, but cannot identify its source. The re-read fact stays `unverified`. The design keeps the rule that rotation waits for running processes. The probe starts and stops no tool. It writes no file. Its content reads can cause the file system to update access time.
+
+The CLI reuses `verifyNightCaller`, as `factory token` does. It requires the Owner role and TTYs on stdin and stdout. It refuses the Boss and every agent pane before login reads. The guard also refuses any present `HERDR_ENV`, `HERDR_PANE`, `HERDR_PANE_*`, `HERDR_WORKSPACE_ID`, or `HERDR_WORKTREE` variable, even if empty. The standalone copy uses the same variable and TTY checks without Herdr. This prevents accidents and pane leaks. It does not stop a hostile process of the same OS user.
+
+Exit 0 means the report finished. It does not mean every check passed. Exit 1 means usage, TTY, or probe failure. Exit 3 means caller refusal. A failure prints fixed text with no raw file, parser, or process diagnostics.
 
 ### Secret commands
 

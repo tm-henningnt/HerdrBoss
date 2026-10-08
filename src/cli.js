@@ -207,6 +207,7 @@ const USAGE = `herdr-boss <command>
   secret list             Print names and metadata. Available in agent panes.
   secret remove NAME      Remove a value after you type the name again. Owner terminal only.
   secret check [NAME]     Check stored values. Owner terminal only.
+  account probe          Check login paths, modes and key names. Owner terminal only. Prints no values.
   browser request SLUG [--full] [--reserve] [--headless|--visible]  Reserve or launch a persistent project browser.
   browser size SLUG WIDTH HEIGHT  Save window size for the next browser launch.
   browser viewport SLUG --tab ID WIDTHxHEIGHT [--scale N] [--mobile]  Set one tab's device metrics.
@@ -567,6 +568,12 @@ async function main() {
   if (cmd === 'kit-path') {
     const { KIT_ROOT } = await import('./kit/config.js');
     console.log(KIT_ROOT);
+    return;
+  }
+  // The probe reads only at an Owner terminal and never calls loadConfig().
+  if (cmd === 'account') {
+    const { accountProbeCommand } = await import('./account-probe.js');
+    process.exitCode = await accountProbeCommand(args, { env: process.env, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
     return;
   }
   if (cmd === 'secret') {
