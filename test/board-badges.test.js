@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { FLOW, FLOW_LABEL, taskState, boardColumns, fleetItems, fleetColumns, visibleLanes, cardFacts, divergenceText, durationText, agoText } from '../public/board.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const css = ['theme.css', 'style.css'].map((name) => fs.readFileSync(new URL('../public/' + name, import.meta.url), 'utf8')).join('\n');
 
 const MIN = 60000;
 const NOW = Date.parse('2026-10-02T10:00:00.000Z');

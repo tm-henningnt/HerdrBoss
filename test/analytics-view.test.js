@@ -15,7 +15,7 @@ import { PAGE_READS } from '../public/store.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const css = ['theme.css', 'style.css'].map((name) => fs.readFileSync(new URL('../public/' + name, import.meta.url), 'utf8')).join('\n');
 const guide = readUserGuide();
 const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
 

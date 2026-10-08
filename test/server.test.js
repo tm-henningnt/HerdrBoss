@@ -857,7 +857,7 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.deepEqual(stored.extraModels, draft.extraModels);
   assert.deepEqual(stored.disabledModels, draft.disabledModels);
   assert.deepEqual(stored.harnessRoutes, draft.harnessRoutes);
-  assert.deepEqual(stored.modelProviders, draft.modelProviders, 'the legacy route stays');
+  assert.deepEqual(stored.modelProviders, { ...current.modelProviders, ...draft.modelProviders }, 'the legacy route stays beside the default routes');
   assert.equal(stored.autoHandoverForceContextTokens, draft.autoHandoverForceContextTokens);
   assert.equal(stored.machine.guardEnabled, false);
   assert.equal(stored.machine.guardPausedUntil, draft.machine.guardPausedUntil);
