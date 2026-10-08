@@ -68,7 +68,7 @@ test('worker start permits trickle use under the allowance and refuses it at the
   lane.usedTodayPercent = 2;
   assert.equal(providerGate('opencodego', rules, { now }).error,
     'opencodego trickle used for today: 2.0% of about 2.0%/day; the next allowance starts at 00:00 UTC.');
-  assert.match(providerGate('opencodego', rules, { now, force: true }).warning, /--force overrides the quota guard/);
+  assert.match(providerGate('opencodego', rules, { now, force: true }).warning, /--force --reason TEXT overrides the quota guard/);
 });
 
 test('a trickle lane under its allowance counts as usable for least-over selection', () => {

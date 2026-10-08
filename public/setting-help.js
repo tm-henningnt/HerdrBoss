@@ -39,10 +39,10 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'locks', title: 'Locks', advanced: false,
-    controls: 'Machine lock capacity, the short job limit, and the machine guard for a short job that starts beside a long job.',
+    controls: 'Machine lock capacity, the short job limit, and the lock watchdog. The machine guard checks a short job that starts beside a long job.',
     affects: 'All projects that use a machine lock. The long lane always holds at most one job.',
     safe: 'Unknown jobs use the long lane. A lower limit sends more jobs to the long lane.',
-    restart: 'No restart. Select Apply policy. The change applies to the next lock admission.',
+    restart: 'No restart. Select Apply policy. Capacity and guard changes apply to the next lock admission. The watchdog uses changes at the next engine tick.',
   },
   {
     id: 'attachments', title: 'Pictures', advanced: false,
@@ -412,14 +412,14 @@ export const SETTING_HELP = Object.fromEntries([
     default: '3', unit: 'Times predicted hold', range: '1 to 20',
     raise: 'A higher value waits longer before the watchdog sends a notice.',
     lower: 'A lower value sends a notice sooner.',
-    apply: 'lock-policy',
+    apply: 'policy',
   }),
   S('locks', 'locks.watchdogCpuPercent', 'Lock watchdog CPU limit', {
     what: 'The maximum CPU use of the full-suite holder and its child processes in each of the last two process samples. The watchdog sends a notice only below this value.',
     default: '1', unit: 'Percent', range: '1 to 100',
     raise: 'A higher value sends notices when a busier holder runs.',
     lower: 'A lower value sends notices only when the holder uses less CPU.',
-    apply: 'lock-policy',
+    apply: 'policy',
   }),
   S('locks', 'locks.guard.enabled', 'Guard for short jobs', {
     what: 'Checks machine load, swap use, and free memory before a short job starts beside a long job.',

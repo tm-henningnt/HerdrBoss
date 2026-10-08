@@ -1090,7 +1090,7 @@ test('worker start gate lets the least-over provider start and refuses the other
   assert.match(refused, /codex ahead of pace: 53% used against 43% expected in the Weekly window; back on pace in about 17 h if unused/);
   assert.match(refused, /opencodego is the least over/);
   assert.match(providerGate('claude', rules, { now }).error, /claude near exhaustion/);
-  assert.match(providerGate('claude', rules, { now, force: true }).warning, /--force overrides the quota guard/);
+  assert.match(providerGate('claude', rules, { now, force: true }).warning, /--force --reason TEXT overrides the quota guard/);
   assert.deepEqual(providerGate('pi', { avoidProviders: [] }, { now }), {});
 });
 
@@ -1489,7 +1489,7 @@ test('ignored quota exhaustion closes the lane and excludes it from dispatch and
   assert.match(bulletin, /exhausted until 2026-09-29T09:00:00Z/);
   const refusal = providerGate('opencodego', { avoidProviders: ['opencodego'], leastOverProvider: null, lanes }, { now }).error;
   assert.match(refusal, /exhausted until 2026-09-29T09:00:00Z/);
-  assert.match(providerGate('opencodego', { avoidProviders: ['opencodego'], lanes }, { now, force: true }).warning, /--force overrides/);
+  assert.match(providerGate('opencodego', { avoidProviders: ['opencodego'], lanes }, { now, force: true }).warning, /--force --reason TEXT overrides the quota guard/);
 
   const targetPolicy = policy({ orchestratorLadder: [
     { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' },

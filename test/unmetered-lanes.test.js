@@ -144,7 +144,7 @@ test('worker start refuses a Pi model that pi --list-models does not list, also 
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
   const refusal = (error) => /^pi cannot run fixturezen\/free-a: the last pi --list-models result does not list it\. Pi has no credential for the fixturezen provider\. --force cannot bypass this refusal\.$/.test(error.message);
   assert.throws(() => f.start('pione', { kind: 'pi', model: FIXTURE_PI_MODEL }), refusal);
-  assert.throws(() => f.start('pitwo', { kind: 'pi', model: FIXTURE_PI_MODEL, force: true }), refusal);
+  assert.throws(() => f.start('pitwo', { kind: 'pi', model: FIXTURE_PI_MODEL, force: true, reason: 'Verify that an authorized override cannot bypass the Pi listing' }), refusal);
   assert.throws(() => f.start('pinot', { kind: 'pi', model: 'opencode-go/space-bunny-free' }), /Pi does not list this model\. --force cannot bypass/);
   assert.doesNotThrow(() => f.start('pithree', { kind: 'pi', model: 'opencode-go/deepseek-v4.1-flash' }));
   assert.throws(() => f.start('pizen', { kind: 'pi', model: 'opencode/big-pickle' }), /not allowed for pi/, 'Pi refuses a free opencode/ model');

@@ -1334,7 +1334,7 @@ test('worker start refuses excluded caller workspace before creating worktree, t
   };
   let failure;
   try {
-    startWorker('excluded-caller', { kind: 'codex', task: 'x', allow: ['src/'], force: true }, {
+    startWorker('excluded-caller', { kind: 'codex', task: 'x', allow: ['src/'], force: true, reason: 'Verify the excluded workspace refusal with an authorized override' }, {
       config: f.config, models: loadModels(), herdr, env: { ...f.env, HERDR_WORKSPACE_ID: workspaceId }, rulesFile: f.rulesFile, output: () => {},
     });
   } catch (error) { failure = error; }
