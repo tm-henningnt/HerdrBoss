@@ -161,7 +161,7 @@ test('doctor prints late tools as notes and security releases as failures', (t) 
   fs.mkdirSync(late.data);
   fs.writeFileSync(path.join(late.data, 'tools-state.json'), JSON.stringify({
     schemaVersion: 1,
-    checkedAt: '2026-10-07T00:00:00.000Z',
+    checkedAt: new Date().toISOString(),
     tools: [{ id: 'opencode', name: 'OpenCode', trackedVersion: '1.18.34', latest: '1.18.35', ageDays: 17, risk: 'late' }],
   }));
   const lateResult = late.run(['doctor'], 'green');
@@ -172,7 +172,7 @@ test('doctor prints late tools as notes and security releases as failures', (t) 
   fs.mkdirSync(security.data);
   fs.writeFileSync(path.join(security.data, 'tools-state.json'), JSON.stringify({
     schemaVersion: 1,
-    checkedAt: '2026-10-07T00:00:00.000Z',
+    checkedAt: new Date().toISOString(),
     tools: [{ id: 'gh', name: 'GitHub CLI', trackedVersion: '2.101.0', latest: '2.102.0', ageDays: 2, risk: 'security' }],
   }));
   const securityResult = security.run(['doctor', '--json'], 'green');
