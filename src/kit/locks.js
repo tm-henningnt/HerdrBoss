@@ -8,7 +8,7 @@ import { quietHoursActive, readNight } from '../night.js';
 import { readMachineSamples } from '../machine-samples.js';
 import { DEFAULT_RULES_FILE, loadProjectConfig } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
-import { createHerdrRunner, verifyCallerPane } from './workers.js';
+import { lifecyclePort } from './lifecycle-port.js';
 import { DEFAULT_SUITE_UNTESTED, hookFileHash, hookRunsOnlySuites, reusablePushPass, writePushHookCommands } from './suite-passes.js';
 import { chooseLockSlot, classifyLockLane, isLegacyLockEntry, lockAdmissionCapacity, machineGuardReason, readLockDurationPrediction, readLockLaneDurationPredictions } from './lock-lanes.js';
 import { workflowPushesBranch } from '../ci-lint.js';
@@ -32,6 +32,14 @@ const LEDGER_EVENTS = new Set(['acquire', 'release', 'busy', 'timeout']);
 const LEDGER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
 const CI_DOCS_REMINDER = 'ci: this push changes only docs and the CI runs on a main push; use [skip ci] or batch the push.';
+
+function createHerdrRunner(...args) {
+  return lifecyclePort().createHerdrRunner(...args);
+}
+
+function verifyCallerPane(...args) {
+  return lifecyclePort().verifyCallerPane(...args);
+}
 
 function validateName(name) {
   if (typeof name !== 'string' || !LOCK_NAME.test(name)) {

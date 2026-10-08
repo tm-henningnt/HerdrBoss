@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Engine, standDownPlan } from './engine.js';
+import { initializeLifecyclePort } from './kit/lifecycle.js';
 import { checkMachineTools } from './collect.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, hostAllowedByList, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
@@ -222,6 +223,7 @@ export function assertPreviewHost(host) {
 }
 
 export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {}, docsSite = defaultDocsSite, hostGuide = {} } = {}) {
+  initializeLifecyclePort();
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();

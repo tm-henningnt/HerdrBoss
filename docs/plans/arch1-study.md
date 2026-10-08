@@ -312,6 +312,8 @@ Value measures impact across daily use, recovery, and future work. Cost measures
 
 The first three proposals form the shared GUI layer. New GUI pages wait for Owner acceptance of this pack. Existing service, CLI, and design work can continue under its current authority.
 
+**Current design.** The CLI and server set one lifecycle port at startup. The lock module uses it for Herdr calls and caller checks. The worker module uses it for lease operations.
+
 ### Build ordering: wait or go
 
 The Owner hold says to build no new GUI page until ARCH1 is accepted. It permits design notes and CLI work to continue (`docs/orchestration/memory.md:617`).

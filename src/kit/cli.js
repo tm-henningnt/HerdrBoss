@@ -9,6 +9,7 @@ import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedR
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
 import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
+import { initializeLifecyclePort } from './lifecycle.js';
 import { pruneWorktrees, worktreeDisk } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
 import { SUITE_WAIT_SECONDS, listSuitePasses, runSuite } from './suite.js';
@@ -182,6 +183,7 @@ function herdrPaneId(value) { return value?.pane_id ?? value?.paneId ?? value?.i
 function herdrWorkspace(value) { return value?.workspace_id ?? value?.workspaceId ?? value?.workspace ?? null; }
 
 function commandKit(command, argv, { output = console.log, env = process.env, herdr = null, config: injectedConfig = null, serviceConfig: injectedServiceConfig = null, schedulePaneCloseFn, listProcesses, listWorktreeProcesses, du, freeSpaceReader, rulesFile = DEFAULT_RULES_FILE, lockDataDir, now, pause, pidAlive, pushStdio, suiteStdio } = {}) {
+  initializeLifecyclePort();
   if (command === 'worker') {
     const [action, ...rest] = argv;
     if (Object.hasOwn(WORKER_COMMAND_USAGE, action)) {

@@ -42,3 +42,6 @@ if (!allPathsAreTemporary || !dataDir || pointsAtRealDataDir(dataDir) || pointsA
   process.env.HERDR_BOSS_LIVE_DIR = temporaryDataDir;
   process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
 }
+
+const { initializeLifecyclePort } = await import('../../src/kit/lifecycle.js');
+initializeLifecyclePort();

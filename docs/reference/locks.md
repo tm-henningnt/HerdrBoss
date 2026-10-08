@@ -217,6 +217,8 @@ The **Analytics** page shows the buckets in the block **Memory by class**. The c
 
 ### Worker startup and pane cleanup
 
+The CLI and service set one lifecycle port at startup. The lock module uses it for Herdr calls and caller checks. The worker module uses it for lease operations. This keeps static imports one way. Lock ownership, lease records, worker commands, and API responses stay the same.
+
 OpenCode starts share a machine-wide lock through brief delivery. Another start waits up to 300 seconds, including the time in the mutation guard. The lock checks the owner PID and process start time. It replaces a stale, unreadable, or invalid owner record. Startup sends the brief only after the TUI is idle or done and accepts interactive input. It can relaunch a failed TUI twice in the same pane. It leaves a busy or reassigned agent alone. The run record shows the number of launch attempts in `startAttempts`.
 
 After a final start failure, startup closes the failed pane only when ownership and a safe agent state are confirmed. It archives the brief, available reports, and run record in `.orchestration/reports/<worker name>/` in the main checkout. It removes the active run record after the archive succeeds. It removes the worktree and branch only when the worktree has no changes and no commits beyond the start base. The worker name can then be reused. The error states why it kept any resource.
