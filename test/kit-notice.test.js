@@ -8,11 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { heldWorkspaces } from '../src/engine.js';
 import { formatKitNotice, readKitNotice, pendingKitAlert, kitNoticeTargets, KIT_PATHS, KIT_REVISION_PATHS } from '../src/kit-notice.js';
-import { kitRevision, projectKit } from '../src/kit/agents-check.js';
+import { kitRevision } from '../src/kit/agents-check.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NOW = Date.parse('2026-09-27T10:00:00.000Z');
-const REV = projectKit().revision;
 const REQUIRED = 'Kit-Impact: required';
 
 function tmpDir(t, prefix) {
@@ -28,11 +27,11 @@ function gitSync(root, args) {
 // A project root that holds the same installed kit assets as the repository, so it is a real kit
 // root and its kit revision equals the kit revision of the repository. A commit that changes an
 // asset moves the fixture revision, so tests that change one compute the revision again.
-function makeRepo(t) {
+function makeRepo(t, extraRevisionPaths = []) {
   const root = tmpDir(t, 'herdr-kit-notice-');
   execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
   commit(root, 'README.md', 'Initial commit');
-  for (const relative of KIT_REVISION_PATHS) {
+  for (const relative of new Set([...KIT_REVISION_PATHS, ...extraRevisionPaths])) {
     const source = path.join(repo, relative);
     const target = path.join(root, relative);
     if (fs.existsSync(source) && fs.statSync(source).isFile()) {
@@ -106,7 +105,7 @@ test('the first start stores HEAD and sends nothing', async (t) => {
   const result = await readKitNotice({ root, stored: undefined, git: recordingGit(), now: NOW });
   assert.equal(result.alert, null);
   assert.equal(result.event, null);
-  assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV });
+  assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) });
 });
 
 test('an unchanged HEAD sends nothing and runs no git log', async (t) => {
@@ -132,11 +131,11 @@ test('the notice and the stored state take the kit revision of the given project
   }
   gitSync(root, ['add', '-A']);
   gitSync(root, ['commit', '-m', 'Add the fixture kit assets']);
+  const base = gitSync(root, ['rev-parse', 'HEAD']);
+  commit(root, 'kit/models.md', 'Change the kit', REQUIRED);
   const expected = kitRevision(root);
   assert.match(expected, /^[0-9a-f]{12}$/);
   assert.notEqual(expected, kitRevision(), 'the fixture root must not have the default kit revision');
-  const base = gitSync(root, ['rev-parse', 'HEAD']);
-  commit(root, 'kit/models.md', 'Change the kit', REQUIRED);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.equal(result.state.revision, expected);
   assert.ok(result.alert.text.startsWith(`[herdr-boss] Kit revision ${expected} (1 change(s)): `), result.alert.text);
@@ -197,7 +196,7 @@ test('only non-kit commits store HEAD and send nothing', async (t) => {
   const head = commit(root, 'src/server.js', 'Change the dashboard server');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   assert.equal(result.alert, null);
-  assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV });
+  assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) });
 });
 
 test('a useful or none kit trailer sends no notice and still stores HEAD and the revision', async (t) => {
@@ -208,7 +207,7 @@ test('a useful or none kit trailer sends no notice and still stores HEAD and the
     const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
     assert.equal(result.alert, null, impact);
     assert.equal(result.event, null, impact);
-    assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV }, impact);
+    assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) }, impact);
   }
 });
 
@@ -219,7 +218,7 @@ test('a mixed batch names only the required changes', async (t) => {
   commit(root, 'kit/models.md', 'A change that needs action', 'Kit-Impact: required');
   commit(root, 'kit/models.md', 'A cosmetic change', 'Kit-Impact: none');
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (1 change(s)): A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): A change that needs action. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('a missing, invalid, or ambiguous impact sends no notice', async (t) => {
@@ -235,7 +234,26 @@ test('a missing, invalid, or ambiguous impact sends no notice', async (t) => {
     const head = commit(root, 'kit/models.md', `Kit change with ${name}`, trailers);
     const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
     assert.equal(result.alert, null, name);
-    assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV }, name);
+    assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) }, name);
+  }
+});
+
+test('model guidance is a revision asset and uses its change log entry', async (t) => {
+  for (const impact of ['required', 'useful']) {
+    // Keep the fixture complete even when the notice asset list omits model guidance.
+    const root = makeRepo(t, ['kit/models.md']);
+    const base = gitSync(root, ['rev-parse', 'HEAD']);
+    const head = commit(root, 'kit/models.md', 'Change model guidance');
+    const file = changesFile(t, `## 111111111111\nImpact: required\nSummary: Earlier change.\n\n## 222222222222\nImpact: ${impact}\nSummary: Model guidance.\n`);
+    const result = await readKitNotice({
+      root, stored: { commit: base, revision: '111111111111', at: 0 }, git: recordingGit(), now: NOW, changesFile: file,
+    });
+    assert.equal(result.state.commit, head);
+    assert.equal(result.state.revision, kitRevision(root));
+    assert.equal(result.event, null);
+    if (impact === 'required') {
+      assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (1 change(s)): Change model guidance. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
+    } else assert.equal(result.alert, null);
   }
 });
 
@@ -398,7 +416,7 @@ test('more than 10 kit commits list the 10 newest and then and N more', async (t
   for (let i = 1; i <= 13; i += 1) commit(root, 'kit/models.md', `Kit change ${i}`, REQUIRED);
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git: recordingGit(), now: NOW });
   const subjects = Array.from({ length: 10 }, (_, i) => `Kit change ${13 - i}`).join('; ');
-  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${REV} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
+  assert.equal(result.alert.text, `[herdr-boss] Kit revision ${kitRevision(root)} (13 change(s)): ${subjects}; and 3 more. Run herdr-boss kit update, set kitRevision in the status to the v= value of docs/orchestration/herdr-boss.md, and publish. The command prints the current kit file.`);
 });
 
 test('the notice text stays under 1200 characters with long subjects', () => {
@@ -417,7 +435,7 @@ test('a git failure sends nothing, stores HEAD, and gives one event', async (t) 
   const git = (args) => (args.includes('log') ? Promise.reject(new Error('git log failed')) : real(args));
   const result = await readKitNotice({ root, stored: { commit: base, at: 0 }, git, now: NOW });
   assert.equal(result.alert, null);
-  assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV });
+  assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) });
   assert.match(result.event, /git log failed/);
 });
 
@@ -438,7 +456,7 @@ test('a stored commit that is not an ancestor of HEAD sends nothing and stores H
   const git = recordingGit();
   const result = await readKitNotice({ root, stored: { commit: side, at: 0 }, git, now: NOW });
   assert.equal(result.alert, null);
-  assert.deepEqual(result.state, { commit: head, at: NOW, revision: REV });
+  assert.deepEqual(result.state, { commit: head, at: NOW, revision: kitRevision(root) });
   assert.match(result.event, /not an ancestor/);
   assert.equal(git.calls.some((args) => args.includes('log')), false);
 });
@@ -656,7 +674,7 @@ test('the engine stores the kit notice state and logs the queued notice', { time
     ['-C', repo, 'rev-parse', 'HEAD'],
     ['-C', repo, 'merge-base', '--is-ancestor', base, head],
     ['-C', repo, 'log', '--format=%h%x1f%s%x1f%B%x00', `${base}..HEAD`, '--', 'kit', 'src/kit', 'docs/orchestrator-instructions.md'],
-    ['-C', repo, 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.json', 'kit/watch'],
+    ['-C', repo, 'log', '--format=%h%x00', `${base}..HEAD`, '--', 'kit/templates', 'kit/skills/herdr-orchestrator/SKILL.md', 'kit/skills/herdr-orchestrator/reference', 'kit/models.md', 'kit/models.json', 'kit/watch'],
   ]);
   assert.equal(out.memoryKitNotice.commit, head);
   assert.equal(out.memoryKitNotice.alert.key, 'kit:ccccccc');

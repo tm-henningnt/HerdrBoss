@@ -1803,6 +1803,8 @@ The label presets are data in `kit/label-presets.json`: a preset name and a list
 
 ### Kit change impact
 
+The kit revision includes `kit/models.md` when that file is present. An older kit root without this file keeps a valid revision. A change to model guidance follows the same notice impact rules as other kit assets.
+
 A commit that changes `kit/`, `src/kit/`, or `docs/orchestrator-instructions.md` needs a `Kit-Impact: required`, `Kit-Impact: useful`, or `Kit-Impact: none` trailer, or a change of `kit/CHANGES.md`. A kit change with neither has impact `useful` and sends no `Kit updated` notice. A paused or stood-down project gets no kit notice. A pane gets at most one kit digest in `machine.kitDigestMinutes` minutes (default 120), and none while it works. `test/kit-impact-trailer.test.js` checks the Git log.
 
 ### Kit file, `AGENTS.md` stub, and drift check
