@@ -94,7 +94,7 @@ export function browserSafetyNotices({ processes = new Map(), panes = [], projec
       notices.set(item.key, item);
     }
 
-    const startIdentity = safeBrowserStartIdentity(process.startIdentity);
+    const startIdentity = safeBrowserStartIdentity(process.startIdentity ?? process.start);
     let association = associations[process.pid];
     if (association?.startIdentity !== startIdentity) association = null;
     if (!association) {

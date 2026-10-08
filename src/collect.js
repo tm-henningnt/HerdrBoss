@@ -672,7 +672,7 @@ export function parseProcesses(output) {
     if (cpuTimeMs === null) continue;
     procs.set(Number(m[1]), {
       pid: Number(m[1]), ppid: Number(m[2]), age: parseEtime(m[3]), cpu: Number(m[4]),
-      cpuTimeMs, start: m[6].trim().replace(/\s+/g, ' '), startIdentity: m[6].trim().replace(/\s+/g, ' '), rssMB: Math.round(Number(m[7]) / 1024), cmd: m[8],
+      cpuTimeMs, start: m[6].trim().replace(/\s+/g, ' '), rssMB: Math.round(Number(m[7]) / 1024), cmd: m[8],
     });
   }
   return procs;

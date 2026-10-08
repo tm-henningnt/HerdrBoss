@@ -48,11 +48,11 @@ test('the process collector keeps a stable observed start identity from a fixtur
   const calls = [];
   const rows = await collectProcesses({ runner: async (command, args) => {
     calls.push([command, args]);
-    return '30 20 01:00 0.5 1024 Thu Oct  8 10:00:00 2026 Chromium --remote-debugging-pipe --headless\n';
+    return '30 20 01:00 0.5 00:01.50 Thu Oct  8 10:00:00 2026 1024 Chromium --remote-debugging-pipe --headless\n';
   } });
   assert.equal(calls.length, 1, 'use the fixture process reader');
-  assert.deepEqual(rows.get(30), { pid: 30, ppid: 20, age: 60, cpu: 0.5, rssMB: 1,
-    startIdentity: startedAt, cmd: 'Chromium --remote-debugging-pipe --headless' });
+  assert.deepEqual(rows.get(30), { pid: 30, ppid: 20, age: 60, cpu: 0.5, cpuTimeMs: 1500, rssMB: 1,
+    start: startedAt, cmd: 'Chromium --remote-debugging-pipe --headless' });
   assert.ok(calls[0][1].some((arg) => arg.includes('lstart=')));
 });
 
