@@ -708,3 +708,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Released before this checkpoint: main b609e82 (r23, pushed) plus a local memory commit.
 - Planned branch: arch10 7e96388 (docs/reference/supervisor-contract.md and fake-supervisor tests; no src change; independent review: ready, two nits, the wording nit repaired, the missing darwin restart test accepted). BH2 did not start: the Claude pace guard refused (41% used against 25% expected), and BH2 needs a browser, which Codex cannot launch; it waits until Claude is back on pace (about 27 hours after 2026-10-08 04:00).
 - Not yet verified: full suite on this tree, main fast-forward, push.
+
+## Release checkpoint 2026-10-08 — integrate-r25 (FPT5-FIX)
+
+- Released before this checkpoint: main 3a3e91c (r24: ARCH-10 supervisor contract, pushed; docs and tests only, no restart).
+- Planned branch: fpt5fix (the route builds the rollup from the rows that carry the attach state; the Fleet card shows `Attach: attached` or `not attached`; escaping tests for the coverage reason, dashboard URL, project, alert and lane fields). F1 was already repaired by 62e74cd; F3 (a browser check at 393 and 1280 px, light and dark, covering overflow, visible coverage names, the detail element by keyboard and touch) stays open. The server code changed: restart after the merge.
+- Not yet verified: full suite on this tree, main fast-forward, restart, push, the Fleet page in the project browser.
