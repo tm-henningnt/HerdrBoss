@@ -911,6 +911,11 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
+function hasLeaseStore(dataDir) {
+  try { fs.statSync(path.join(dataDir, 'leases.json')); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
 function rulesWarning(rules, now = Date.now()) {
   const updated = Date.parse(rules.updatedAt ?? '');
   return !Number.isFinite(updated) || now - updated > 10 * 60 * 1000;
@@ -2504,7 +2509,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (scopeException) run.scopeException = scopeException;
       writeJsonAtomic(file, run);
       // Give back every lease that names this worker, also a lease that the worker took after its start.
-      releasedLeases.push(...lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir }));
+      // A worker with no lease file does not need the lifecycle port.
+      if (hasLeaseStore(leaseDataDir)) {
+        releasedLeases.push(...lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir }));
+      }
     }
     if (omitted.length) output(`report.json omits ${omitted.length} changed path(s); recorded the diff paths`);
     // The collected worker is done, so its planner session ends. A later result goes to the orch pane.
@@ -2573,8 +2581,10 @@ export function parkWorker(name, { reason = null, unpark = false } = {}, { confi
   writeJsonAtomic(file, run);
   // A parked worker does not use its leases, so give them back. Unpark does not take them again.
   if (!unpark) {
-    const released = lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir });
-    for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
+    if (hasLeaseStore(leaseDataDir)) {
+      const released = lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir });
+      for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
+    }
   }
   return run;
 }

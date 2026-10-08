@@ -518,7 +518,8 @@ function startFixture() {
   };
   const leaseOptions = { dataDir, pools: pools() };
   const start = (name, options = {}, extra = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], lease: ['serve-ports'], ...options }, {
-    config, models: loadModels(), herdr, env: ORCH, rulesFile, wait: () => {}, output: () => {}, leaseOptions, ...extra,
+    config, models: loadModels(), herdr, env: ORCH, rulesFile, wait: () => {}, output: () => {}, leaseOptions,
+    readProcessStart: (pid) => new Date(Number(pid)).toISOString(), ...extra,
   });
   return { root, config, dataDir, calls, creates, start, leaseOptions, herdr };
 }

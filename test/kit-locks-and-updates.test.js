@@ -136,7 +136,10 @@ test('worker start gives the pane absolute TMPDIR and HERDR_WORKTREE paths and c
     throw new Error(`Unexpected Herdr call: ${args.join(' ')}`);
   };
   const env = { HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'ws', HERDR_PANE_ID: 'ws:orch' };
-  const start = (name, options) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, { config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: () => {} });
+  const start = (name, options) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], ...options }, {
+    config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: () => {},
+    readProcessStart: (pid) => new Date(Number(pid)).toISOString(),
+  });
   const envValues = (args) => Object.fromEntries(args.flatMap((arg, index) => (args[index - 1] === '--env' ? [arg.split(/=(.*)/s).slice(0, 2)] : [])));
 
   const run = start('abspaths', {});

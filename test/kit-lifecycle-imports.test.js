@@ -2,8 +2,11 @@ import './helpers/test-env.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initializeLifecyclePort } from '../src/kit/lifecycle.js';
 import { lifecyclePort, setLifecyclePort } from '../src/kit/lifecycle-port.js';
 
@@ -131,4 +134,44 @@ test('startup sets one lifecycle port for locks, workers, and leases', () => {
     'setLeasePane',
     'verifyCallerPane',
   ]);
+});
+
+test('test setup does not load config before a test sets its data directories', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const fixture = path.join(os.tmpdir(), `arch6-test-env-${randomUUID()}.test.js`);
+  const helper = pathToFileURL(path.join(root, 'test/helpers/test-env.js')).href;
+  const configUrl = pathToFileURL(path.join(root, 'src/config.js')).href;
+  const dataDir = path.join(os.tmpdir(), `arch6-data-${randomUUID()}`);
+  const liveDir = path.join(os.tmpdir(), `arch6-live-${randomUUID()}`);
+  fs.writeFileSync(fixture, `
+    import '${helper}';
+    import assert from 'node:assert/strict';
+    import test from 'node:test';
+    process.env.HERDR_BOSS_DIR = ${JSON.stringify(dataDir)};
+    process.env.HERDR_BOSS_LIVE_DIR = ${JSON.stringify(liveDir)};
+    const config = await import(${JSON.stringify(configUrl)});
+    test('the helper leaves per-file data paths available', () => {
+      assert.equal(config.DATA_DIR, process.env.HERDR_BOSS_DIR);
+      assert.equal(config.LIVE_DATA_DIR, process.env.HERDR_BOSS_LIVE_DIR);
+    });
+  `);
+  try {
+    const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2', fixture], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    fs.rmSync(fixture, { force: true });
+  }
+});
+
+test('an Engine initializes the lifecycle port for a direct caller', () => {
+  const source = `
+    import assert from 'node:assert/strict';
+    import { Engine } from './src/engine.js';
+    import { lifecyclePort } from './src/kit/lifecycle-port.js';
+    new Engine({ push: false }, { push: false, act: false });
+    assert.equal(typeof lifecyclePort().verifyCallerPane, 'function');
+  `;
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
