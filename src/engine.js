@@ -10,7 +10,7 @@ import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectC
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
-import { loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
+import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
 import { POLICY_DEFAULTS, pickSuccessorDetailed, modelTier, tierAllowsAutoActivation, autoCooldownSkips, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
@@ -2646,7 +2646,7 @@ export class Engine extends EventEmitter {
         entry.armed = false;
         continue;
       }
-      const allowedEfforts = this.models.kinds[orch.kind]?.allowedEfforts || [];
+      const allowedEfforts = effortSettingsForModel(this.models.kinds[orch.kind], model).allowedEfforts || [];
       const effort = allowedEfforts.includes(pane.effort) ? ['--effort', pane.effort] : [];
       let memoryUpdateStatus = memoryUpdate?.memoryUpdateStatus || null;
       let memoryUpdateCommit = memoryUpdate?.memoryUpdateCommit || null;

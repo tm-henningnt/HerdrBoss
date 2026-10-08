@@ -12,5 +12,5 @@ Watch check. The Owner is away and the Boss acts for the Owner. Keep the check c
 5. Run `herdr-boss check kit`. Nudge a project that is behind on a required kit change.
 6. Check that each orchestrator with a large context handed over at a task boundary.
 7. Watch the quotas. If a lane is near its limit for the week, shift work to the other lanes and tell the orchestrators once.
-8. If denials, stalls, or machine swap increase, look into the cause with a cheap read-only subagent.
+8. If denials, stalls, or machine swap increase, look into the cause with a cheap read-only subagent. You may use `claude-haiku-5-5` for a well-specified read-only task.
 9. Record each decision in the Boss memory file. If nothing needs action, end the check.

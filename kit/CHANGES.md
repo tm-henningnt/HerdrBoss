@@ -281,3 +281,7 @@ Summary: Keep project browsers headless by default and require every worker and 
 ## c9f04df63114
 Impact: useful
 Summary: Add `herdr-boss release cancel REPO TAG [--reason TEXT]` to settle an obsolete open release request; the orchestrator skill names it.
+
+## ca869d689e0f
+Impact: useful
+Summary: Add Claude Haiku 5.5 for bounded worker and read-only research tasks, with adjustable effort, Claude quota routing, and same-kind model comparisons.

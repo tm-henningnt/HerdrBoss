@@ -587,6 +587,26 @@ test('model scorecard computes runs, first-time, rework, failed, rework rate, an
   assert.equal(rows[1].medianMinutes, 15);
 });
 
+test('model scorecard reports Haiku beside Sonnet through the same Claude metrics', async () => {
+  const { buildModelScorecard } = await import('../src/engine.js');
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  const events = ['claude-sonnet-5-5', 'claude-haiku-5-5'].flatMap((model) => [
+    { kind: 'claude', model, startedAt: '2026-09-27T10:00:00Z', endedAt: '2026-09-27T10:20:00Z', modelOutcome: { result: 'first-time' } },
+    { kind: 'claude', model, startedAt: '2026-09-26T10:00:00Z', endedAt: '2026-09-26T10:40:00Z', modelOutcome: { result: 'rework' } },
+  ]);
+  const rows = buildModelScorecard(events, now);
+  assert.deepEqual(rows.map(({ kind, model }) => [kind, model]).sort(), [
+    ['claude', 'claude-haiku-5-5'], ['claude', 'claude-sonnet-5-5'],
+  ]);
+  for (const row of rows) {
+    assert.equal(row.runs, 2);
+    assert.equal(row.firstTime, 1);
+    assert.equal(row.rework, 1);
+    assert.equal(row.failed, 0);
+    assert.equal(row.medianMinutes, 30);
+  }
+});
+
 test('Analytics page includes the Model scorecard table', async () => {
   const fs = await import('fs');
   const appJs = fs.readFileSync('public/app.js', 'utf8');

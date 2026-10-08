@@ -276,3 +276,10 @@ test('browser measure refuses another project browser', (t) => {
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
 });
+
+test('browser console refuses another project browser', (t) => {
+  const fixture = browserCliFixture(t);
+  const result = fixture.run(['console', 'beta']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr.trim(), 'The beta browser belongs to project beta. This pane is in workspace Alpha (workspace-alpha), which belongs to project alpha. Only a pane in the beta workspace or the Boss can change it.');
+});

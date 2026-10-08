@@ -56,6 +56,7 @@ test('a claude start without --model passes the kit default model and records it
   const f = fixture(t);
   const plan = f.start('wmone', { kind: 'claude', dryRun: true });
   assert.equal(plan.model, 'claude-sonnet-5-5');
+  assert.equal(plan.effort, null);
   assert.equal(plan.modelSource, 'default');
   assert.equal(modelOf(plan.launchArgs), 'claude-sonnet-5-5');
   assert.ok(plan.agentArgs.includes('--model'));
@@ -67,6 +68,37 @@ test('an explicit sonnet model passes and its source is --model', (t) => {
   const plan = f.start('wmtwo', { kind: 'claude', model: 'claude-sonnet-5-5', dryRun: true });
   assert.equal(plan.modelSource, 'flag');
   assert.equal(modelOf(plan.launchArgs), 'claude-sonnet-5-5');
+});
+
+test('Haiku accepts each supported effort and passes it to Claude', (t) => {
+  const f = fixture(t);
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    const plan = f.start(`wmhaiku-${effort}`, { kind: 'claude', model: 'claude-haiku-5-5', effort, dryRun: true });
+    assert.equal(plan.model, 'claude-haiku-5-5');
+    assert.equal(plan.effort, effort);
+    assert.ok(plan.launchArgs.includes('--effort'));
+    assert.equal(plan.launchArgs[plan.launchArgs.indexOf('--effort') + 1], effort);
+  }
+});
+
+test('Haiku defaults to medium effort', (t) => {
+  const f = fixture(t);
+  const plan = f.start('wmhaiku-default', { kind: 'claude', model: 'claude-haiku-5-5', dryRun: true });
+  assert.equal(plan.effort, 'medium');
+  assert.equal(plan.effortSource, 'default');
+  assert.deepEqual(plan.launchArgs.slice(-2), ['--effort', 'medium']);
+});
+
+test('Haiku refuses an unknown effort before any side effect', (t) => {
+  const f = fixture(t);
+  assert.throws(() => f.start('wmhaiku-unknown', { kind: 'claude', model: 'claude-haiku-5-5', effort: 'ultra' }), /Effort ultra is not allowed for claude/);
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
+});
+
+test('Claude models without an effort setting keep refusing --effort', (t) => {
+  const f = fixture(t);
+  assert.throws(() => f.start('wmsonnet-effort', { kind: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }), /Effort medium is not allowed for claude/);
+  assert.deepEqual(f.sideEffects(), { worktrees: [], panes: [], records: [], branch: '' });
 });
 
 test('opus without --force fails before any side effect', (t) => {

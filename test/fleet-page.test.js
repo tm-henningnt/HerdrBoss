@@ -255,7 +255,7 @@ test('the combined Fleet settings panel carries the settings form wrapper', asyn
 
 // WCAG 2.1 relative luminance and contrast ratio, computed from the shipped token values.
 function tokenPair(theme) {
-  const style = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const style = fs.readFileSync(new URL('../public/theme.css', import.meta.url), 'utf8');
   const selector = theme === 'dark' ? ':root[data-theme="dark"] {' : ':root {';
   const block = style.slice(style.indexOf(selector), style.indexOf('}', style.indexOf(selector)));
   const tokens = Object.fromEntries([...block.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-f]{6})/g)].map((match) => [match[1], match[2]]));

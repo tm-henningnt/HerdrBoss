@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { readFactoryShares, FACTORY_SHARE_ERROR } from './fleet-pacing.js';
-import { loadModels } from './kit/config.js';
+import { effortSettingsForModel, loadModels } from './kit/config.js';
 import { goalTextError } from './goal.js';
 import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
@@ -21,6 +21,8 @@ export const POLICY_DEFAULTS = {
   reservePercent: 15,
   // A lane is ahead of pace only when its use is more than paceTolerancePoints above the expected use and at least paceMinUsePercent.
   paceTolerancePoints: 5,
+  // Haiku can start with a larger lead, up to this separate worker-start limit.
+  paceHaikuTolerancePoints: 15,
   paceMinUsePercent: 30,
   // Prefer a model of a lane that is far below its pace when no model is given. It never overrides --kind or --model.
   paceRouting: true,
@@ -49,7 +51,7 @@ export const POLICY_DEFAULTS = {
   providerModes: { codex: 'managed', claude: 'managed', opencodego: 'managed' },
   preferredModels: {},
   // A legacy route by model. A route in harnessRoutes for the same harness takes precedence.
-  modelProviders: {},
+  modelProviders: { 'claude-haiku-5-5': 'claude' },
   // Local model strings that the Owner adds to one harness, beside the kit/models.json catalog.
   extraModels: {},
   // Models that one harness does not use. excludedModels still disables a model for every harness.
@@ -141,7 +143,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
       presentCpuPercent: 95, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8,
     });
   }
-  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, handoff: { ...POLICY_DEFAULTS.handoff, ...(isObject(stored.handoff) ? stored.handoff : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: stored.modelProviders || {}, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
+  const policy = { ...POLICY_DEFAULTS, ...stored, machine, locks, attachments: { ...POLICY_DEFAULTS.attachments, ...(isObject(stored.attachments) ? stored.attachments : {}) }, agentMessages: { ...POLICY_DEFAULTS.agentMessages, ...(isObject(stored.agentMessages) ? stored.agentMessages : {}) }, opus: { ...POLICY_DEFAULTS.opus, ...(isObject(stored.opus) ? stored.opus : {}) }, goals: { ...POLICY_DEFAULTS.goals, ...(isObject(stored.goals) ? stored.goals : {}) }, handoff: { ...POLICY_DEFAULTS.handoff, ...(isObject(stored.handoff) ? stored.handoff : {}) }, quotaProbe: { ...POLICY_DEFAULTS.quotaProbe, ...(isObject(stored.quotaProbe) ? stored.quotaProbe : {}) }, providerModes: { ...POLICY_DEFAULTS.providerModes, ...stored.providerModes }, preferredModels: stored.preferredModels || {}, modelProviders: { ...POLICY_DEFAULTS.modelProviders, ...(isObject(stored.modelProviders) ? stored.modelProviders : {}) }, extraModels: stored.extraModels || {}, disabledModels: stored.disabledModels || {}, harnessRoutes: stored.harnessRoutes || {}, pacingGoals: stored.pacingGoals || {}, excludedWorkspaces: Array.isArray(stored.excludedWorkspaces) ? stored.excludedWorkspaces : [], projects: stored.projects || {} };
   if (!Object.hasOwn(stored, 'autoHandoverForceContextTokens')) {
     const maxContextTokens = 2000000;
     const contextStep = 10000;
@@ -264,7 +266,7 @@ export function validatePolicy(value, models) {
   { const goalError = goalTextError(value.defaultOrchestratorGoal); if (goalError) errors.push(`defaultOrchestratorGoal ${goalError}`); }
   if (typeof value.bossRules !== 'string') errors.push('bossRules must be a string.');
   else if (value.bossRules.length > BOSS_RULES_MAX) errors.push(`bossRules must be at most ${BOSS_RULES_MAX} characters.`);
-  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceMinUsePercent', 100]]) {
+  for (const [key, max] of [['idleMinutes', 1440], ['reservePercent', 80], ['handoffLeadMinutes', 10080], ['paceTolerancePoints', 50], ['paceHaikuTolerancePoints', 100], ['paceMinUsePercent', 100]]) {
     if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > max) errors.push(`${key} must be an integer from 0 to ${max}.`);
   }
   subset(value.allowedKinds, KINDS, 'allowedKinds', errors);
@@ -309,7 +311,8 @@ export function validatePolicy(value, models) {
     const seen = new Set();
     for (const [index, rung] of value.orchestratorLadder.entries()) {
       const cfg = models.kinds[rung?.kind];
-      if (!cfg?.allowedModels.includes(rung?.model) || (rung?.effort != null && !cfg.allowedEfforts.includes(rung.effort)) || (!cfg.allowedEfforts.length && rung?.effort != null)) errors.push(`Invalid orchestrator choice at rank ${index + 1}.`);
+      const effortConfig = cfg?.allowedModels.includes(rung?.model) ? effortSettingsForModel(cfg, rung.model) : null;
+      if (!effortConfig || (rung?.effort != null && !effortConfig.allowedEfforts.includes(rung.effort))) errors.push(`Invalid orchestrator choice at rank ${index + 1}.`);
       const key = `${rung?.kind}:${rung?.model}:${rung?.effort || ''}`;
       if (seen.has(key)) errors.push(`Duplicate orchestrator choice at rank ${index + 1}.`);
       seen.add(key);
@@ -623,6 +626,7 @@ function weeklyScore(candidate, weeklyUse) {
 
 // The cost order of the models that kit/models.md ranks, lowest tier first. Two models in one
 // tier cost the same.
+// claude-haiku-5-5 is left out on purpose: it is a cheap worker model, not an automatic successor.
 const MODEL_TIERS = {
   'opencode-go/deepseek-v4.1-flash': 2,
   'gpt-6-luna': 3,
@@ -832,6 +836,7 @@ export function adjustedExpectedPercent(policy, provider, window, now = Date.now
 
 // The pace tolerance in percentage points and the use below which no window is ahead of pace. Old policy files have neither key.
 export const paceTolerancePoints = (policy) => Number.isFinite(policy?.paceTolerancePoints) ? policy.paceTolerancePoints : POLICY_DEFAULTS.paceTolerancePoints;
+export const paceHaikuTolerancePoints = (policy) => Number.isFinite(policy?.paceHaikuTolerancePoints) ? policy.paceHaikuTolerancePoints : POLICY_DEFAULTS.paceHaikuTolerancePoints;
 export const paceMinUsePercent = (policy) => Number.isFinite(policy?.paceMinUsePercent) ? policy.paceMinUsePercent : POLICY_DEFAULTS.paceMinUsePercent;
 
 // A live window below the minimum use is never ahead of pace. A window that will not last to reset is ahead of pace

@@ -191,6 +191,7 @@ test('an unknown model ID and a copied model list give warnings', () => {
   const unknown = check(file('Use `claude-sonnet-9` for review.'));
   only(unknown, 'warn', /claude-sonnet-9.*not in the model list/);
   assert.deepEqual(check(file('Use `gpt-6-luna` for review.')), [], 'one allowed model is not a copied list');
+  assert.deepEqual(check(file('Use `claude-haiku-5-5` for bounded worker work.')), [], 'Haiku is a known worker model');
   assert.deepEqual(check(file('Use claude-code and the claude-api skill.')), [], 'a word without a version is not a model');
 
   const copied = check(file('- gpt-6-luna\n- gpt-6.1-sol\n- opencode/big-pickle'));

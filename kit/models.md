@@ -13,9 +13,10 @@ The observed order from lower to higher cost is:
 1. Free `opencode/` models, including Muse Spark and Mimo.
 2. `opencode-go/deepseek-v4.1-flash`.
 3. Codex `gpt-6-luna`.
-4. Claude `claude-sonnet-5-5`.
-5. Claude `claude-opus-5-5` and Codex `gpt-6.1-sol`.
-6. Codex Astra.
+4. Claude `claude-haiku-5-5`.
+5. Claude `claude-sonnet-5-5`.
+6. Claude `claude-opus-5-5` and Codex `gpt-6.1-sol`.
+7. Codex Astra.
 
 Treat this order as a routing hint.
 
@@ -44,6 +45,7 @@ In the vendor test, a model failed to report a broken search tool in these cases
 | Kind and model | Best fit | Limits |
 | --- | --- | --- |
 | `claude`, `claude-sonnet-5-5` | The default Claude worker: implementation, review, and browser checks. | Use it when an unmetered model is not enough for the task. |
+| `claude`, `claude-haiku-5-5` | The cheapest and fastest Haiku model. Use it for bounded tasks with a clear brief, hosted and browser capture runs, log and code surveys, summaries and retros, docs and fixture edits, and classification. Claude Code 2.1.293 supports it. Its effort values are `low`, `medium`, `high`, `xhigh`, and `max`. Haiku workers use `medium` by default. | Haiku costs about 75% less than Haiku 4.5. In OSWorld 2.1, Haiku scores 72.4% and Sonnet 5.5 scores 83.9%. In Terminal-Bench 4.0, they score 39.2% and 70.6%. In FrontierCode, they score 46.4% and 52.1%. Use another model for design judgment, final pack judging, hard debugging, or large refactors. |
 | `claude`, `claude-opus-5-5` | The hardest judgment work, and orchestrators. | Reserve it for work that `claude-sonnet-5-5` cannot do well. `worker start` refuses `claude-opus-5-5`, and its aliases `opus` and `claude-opus`, without `--force`. Ask the Owner first. `worker start` without `--model` always uses the kit default model, not the policy's preferred model. |
 | `codex`, `gpt-6-luna` | The default Codex worker for routine work: bounded implementation, tests, docs, and review fixes. | Review root causes and pixel claims. Long sessions can stop without a final report. |
 | `codex`, `gpt-6.1-sol` (trial) | Tougher programming tasks: cross-cutting fixes, algorithms, takeovers, and tasks where `gpt-6-luna` needed rework. Cost effective and close to Astra level. | Trial until the Analytics scorecard has about 10 runs for this model. Record `--model-result` for every run with `worker collect`, so rework and time can be compared with `gpt-6-luna`. |

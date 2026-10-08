@@ -32,6 +32,7 @@ import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, move
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
+import { listRowHtml, statusChipHtml } from './components.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -767,10 +768,11 @@ function controlBlock(s) {
   }).join('');
   const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
     const cfg = models[rung.kind] ? { ...models[rung.kind], allowedModels: kindModels(rung.kind, d) } : { allowedModels: [rung.model], allowedEfforts: [] };
+    const effortCfg = effortSettings(rung.kind, rung.model);
     return `<div class="succession-row"><span class="num">${i + 1}</span>
       <select data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${Object.keys(models).map((kind) => `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select>
       <select data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${cfg.allowedModels.map((model) => `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>
-      ${cfg.allowedEfforts.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${cfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || cfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">Default effort</span>'}
+      ${effortCfg.allowedEfforts?.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${effortCfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || effortCfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">No effort setting</span>'}
       <div class="succession-actions"><button type="button" class="quiet" data-ladder-up="${i}" aria-label="Move choice ${i + 1} up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="quiet" data-ladder-down="${i}" aria-label="Move choice ${i + 1} down" ${i === d.orchestratorLadder.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="quiet" data-ladder-remove="${i}" aria-label="Remove choice ${i + 1}" ${d.orchestratorLadder.length === 1 ? 'disabled' : ''}>Remove</button></div>
     </div>`;
   }).join('');
@@ -1002,6 +1004,10 @@ function kindModels(kind, d = policyDraft) {
   const base = models[kind]?.allowedModels || [];
   return [...base, ...(d?.extraModels?.[kind] || []).filter((model) => !base.includes(model))];
 }
+function effortSettings(kind, model) {
+  const cfg = models[kind] || {};
+  return cfg.modelEfforts?.[model] || cfg;
+}
 // The global exclusion list and the list of the harness each disable a model.
 function modelOn(kind, model, d = policyDraft) {
   return !(d?.excludedModels || []).includes(model) && !(d?.disabledModels?.[kind] || []).includes(model);
@@ -1230,7 +1236,7 @@ function settingsView(s) {
       return `<div class="setting-line goal-row"><label class="goal-field" for="${helpFid(`goal.${id}`)}"><span>${esc(PROVIDERS[provider] || provider)} ${esc(label)} goal %</span><input id="${helpFid(`goal.${id}`)}" type="number" min="0" max="100" step="1" placeholder="100" value="${percent ?? ''}" data-pacing-goal="${id}"></label><label class="goal-field" for="${helpFid(`goalend.${id}`)}"><span>Goal end</span><select id="${helpFid(`goalend.${id}`)}" data-pacing-end-type="${id}"><option value="reset" ${kind === 'reset' ? 'selected' : ''}>At reset</option><option value="at" ${kind === 'at' ? 'selected' : ''}>One-off local date and time</option><option value="hoursBeforeReset" ${kind === 'hoursBeforeReset' ? 'selected' : ''}>Hours before reset, every window</option></select></label>${kind === 'at' ? `<label class="goal-field"><span>Local date and time</span><input type="datetime-local" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : kind === 'hoursBeforeReset' ? `<label class="goal-field"><span>Whole hours before reset</span><input type="number" min="1" step="1" value="${esc(endValue)}" data-pacing-end-value="${id}"></label>` : ''}<span class="setting-help goal-note">Resets ${esc(resetWhen(resetsAt))}${end ? ` · Goal ${esc(percent)}% ${kind === 'at' ? `by ${esc(localDateTime(end.at) || 'choose a time')}` : `${esc(end.hours)} h before reset`}` : ''}</span></div>`;
     }).join('')
     : '<p class="setting-help">No measured usage limit window yet. A goal field appears after the next usage limit reading.</p>';
-  const quotaPanel = `<section class="panel"><h2>Provider usage limits</h2><h3>Usage limit mode${helpButton('quota.mode')}</h3>${providerRows}<h3 class="quota-goals">Pacing goals${helpButton('quota.goalPercent')}</h3>${goalRows}<h3 class="quota-goals">Pace tolerance</h3>${settingRow('paceTolerancePoints', 'Pace tolerance points', `<input id="${helpFid('paceTolerancePoints')}" type="number" min="0" max="50" step="1" value="${d.paceTolerancePoints}" data-policy-number="paceTolerancePoints">`)}${settingRow('paceMinUsePercent', 'Minimum use for ahead of pace %', `<input id="${helpFid('paceMinUsePercent')}" type="number" min="0" max="100" step="1" value="${d.paceMinUsePercent}" data-policy-number="paceMinUsePercent">`)}${settingRow('paceRouting', 'Route to a below-pace lane', `<input id="${helpFid('paceRouting')}" type="checkbox" data-policy-bool="paceRouting" ${d.paceRouting ? 'checked' : ''}>`)}<h3 class="quota-goals">Claude probe back-off</h3>${settingRow('quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', `<input id="${helpFid('quotaProbe.backoffAfterTimeouts')}" type="number" min="1" max="10" step="1" value="${d.quotaProbe?.backoffAfterTimeouts ?? 2}" data-policy-quota-probe="backoffAfterTimeouts">`)}${settingRow('quotaProbe.backoffMinutes', 'Claude back-off minutes', `<input id="${helpFid('quotaProbe.backoffMinutes')}" type="number" min="1" max="1440" step="1" value="${d.quotaProbe?.backoffMinutes ?? 20}" data-policy-quota-probe="backoffMinutes">`)}</section>`;
+  const quotaPanel = `<section class="panel"><h2>Provider usage limits</h2><h3>Usage limit mode${helpButton('quota.mode')}</h3>${providerRows}<h3 class="quota-goals">Pacing goals${helpButton('quota.goalPercent')}</h3>${goalRows}<h3 class="quota-goals">Pace tolerance</h3>${settingRow('paceTolerancePoints', 'Pace tolerance points', `<input id="${helpFid('paceTolerancePoints')}" type="number" min="0" max="50" step="1" value="${d.paceTolerancePoints}" data-policy-number="paceTolerancePoints">`)}${settingRow('paceHaikuTolerancePoints', 'Haiku pace tolerance points', `<input id="${helpFid('paceHaikuTolerancePoints')}" type="number" min="0" max="100" step="1" value="${d.paceHaikuTolerancePoints}" data-policy-number="paceHaikuTolerancePoints">`)}${settingRow('paceMinUsePercent', 'Minimum use for ahead of pace %', `<input id="${helpFid('paceMinUsePercent')}" type="number" min="0" max="100" step="1" value="${d.paceMinUsePercent}" data-policy-number="paceMinUsePercent">`)}${settingRow('paceRouting', 'Route to a below-pace lane', `<input id="${helpFid('paceRouting')}" type="checkbox" data-policy-bool="paceRouting" ${d.paceRouting ? 'checked' : ''}>`)}<h3 class="quota-goals">Claude probe back-off</h3>${settingRow('quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', `<input id="${helpFid('quotaProbe.backoffAfterTimeouts')}" type="number" min="1" max="10" step="1" value="${d.quotaProbe?.backoffAfterTimeouts ?? 2}" data-policy-quota-probe="backoffAfterTimeouts">`)}${settingRow('quotaProbe.backoffMinutes', 'Claude back-off minutes', `<input id="${helpFid('quotaProbe.backoffMinutes')}" type="number" min="1" max="1440" step="1" value="${d.quotaProbe?.backoffMinutes ?? 20}" data-policy-quota-probe="backoffMinutes">`)}</section>`;
   const lockPolicy = d.locks || {};
   const lockGuard = lockPolicy.guard || {};
   const lockInput = (key, label, value, min, max, dataset) => {
@@ -1363,8 +1369,9 @@ function handoffBlock(s, projectSlug = null) {
       const target = handoffTargets[h.pane] || (eligible.some(([kind]) => kind === h.target?.kind) ? h.target.kind : eligible[0]?.[0]) || '';
       const availableModels = eligible.find(([kind]) => kind === target)?.[1] || [];
       const model = availableModels.includes(handoffModels[h.pane]) ? handoffModels[h.pane] : availableModels.includes(h.target?.model) ? h.target.model : availableModels[0] || '';
-      const efforts = models[target]?.allowedEfforts || [];
-      const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : models[target]?.defaultEffort;
+      const effortCfg = effortSettings(target, model);
+      const efforts = effortCfg.allowedEfforts || [];
+      const effort = efforts.includes(handoffEfforts[h.pane]) ? handoffEfforts[h.pane] : efforts.includes(h.target?.effort) ? h.target.effort : effortCfg.defaultEffort;
       const mode = handoffModes[h.pane] || h.defaultMode || (['codex', 'claude'].includes(target) ? 'migrate' : 'fresh');
       const modeOptions = h.defaultMode === 'fresh'
         ? '<option value="fresh" selected>Fresh bootstrap</option>'
@@ -1988,7 +1995,13 @@ function fleetBlock(s) {
   return `<section class="fleet-section"><div class="section-head"><h2>Projects</h2><a href="/agents">Live agents →</a></div>${allocationSummary(s, { link: false })}${projectSelector(s, null)}<div class="fleet-table-wrap"><table class="fleet-table overview-projects"><thead><tr><th>Project</th><th>Project lead</th><th>Workers</th><th>Policy</th><th>Published status</th></tr></thead><tbody>${projects.map((p) => {
     const published = (s.projects || []).find((x) => x.slug === p.slug);
     const detail = `/projects/${p.slug}`;
-    return `<tr><td data-label="Project"><a href="${esc(detail)}"><strong>${esc(p.label)}</strong></a><small>${esc(p.workspace)}</small></td><td data-label="Project lead">${p.orch ? `<span class="status-inline"><span class="st ${esc(p.orch.status)}"></span>${esc(p.orch.kind)} · ${esc(p.orch.status)}</span>` : '<span class="text-crit">Missing</span>'}</td><td class="mono" data-label="Workers">${p.running} / ${p.slots}</td><td data-label="Policy">${esc(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`)}</td><td data-label="Published status">${published ? `${esc(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}${staleStatusTag(s, published)}</small>` : '<span class="muted">Not published</span>'}</td></tr>`;
+    return listRowHtml([
+      { label: 'Project', render: (escapeText) => `<a href="${escapeText(detail)}"><strong>${escapeText(p.label)}</strong></a><small>${escapeText(p.workspace)}</small>` },
+      { label: 'Project lead', render: (escapeText) => p.orch ? statusChipHtml({ state: p.orch.status, label: `${p.orch.kind} · ${p.orch.status}` }, escapeText) : '<span class="text-crit">Missing</span>' },
+      { label: 'Workers', className: 'mono', render: (escapeText) => `${escapeText(p.running)} / ${escapeText(p.slots)}` },
+      { label: 'Policy', render: (escapeText) => escapeText(p.effectiveMode === 'paused' ? 'Paused' : p.idle ? 'Idle · lending' : `${Math.round(p.share)}% share`) },
+      { label: 'Published status', render: (escapeText) => published ? `${escapeText(published.status || published.phase || 'Published')}<small>updated ${ago(published.updated)}${staleStatusTag(s, published)}</small>` : '<span class="muted">Not published</span>' },
+    ], esc);
   }).join('')}</tbody></table></div></section>`;
 }
 
@@ -6749,7 +6762,7 @@ const HELP = {
     <p>A model can be in more than one agent app. Each agent app keeps its own box and provider for it, so a change in one agent app does not change another.</p>
     <p>Pi also uses seven unmetered OpenCode Zen entries: <code>opencode/big-pickle</code>, <code>opencode/ling-3.0-flash-fin-free</code>, <code>opencode/mimo-v2.6-flash-free</code>, <code>opencode/muse-spark-1.2-contributor-free</code>, <code>opencode/muse-spark-1.3-contributor-free</code>, <code>opencode/nemotron-3-ultra-free</code>, and <code>opencode/nemotron-3.5-lightning-free</code>. They start unmetered and appear as Pi rows here. <code>opencode/space-bunny-free</code> has no Pi catalog entry, so Pi refuses it. Catalog support does not guarantee a configured account or live provider availability.</p>
     <h3>Add a model</h3><p>Type a model string in an agent app section and select <b>Add model</b>. Use letters, digits, dots, underscores, slashes, and hyphens. Spaces and shell characters are refused. A new model is marked <b>local</b>, starts unmetered, and is stored in the local policy, not in <code>kit/models.json</code>. Select <b>Remove</b> to delete a local model.</p>
-    <h3>Provider usage limits</h3><p>Usage limit colors use the warning and critical values from <code>config.json</code>. Settings shows both values. The pace tolerance and the minimum use set when a lane is ahead of pace: a lane is ahead of pace only when its use is at least the minimum use and more than the tolerance above its expected use. The <b>Route to a below-pace lane</b> switch lets worker start prefer a model of a lane that is far below its pace. The command prints the reason.</p>
+    <h3>Provider usage limits</h3><p>Usage limit colors use the warning and critical values from <code>config.json</code>. Settings shows both values. The pace tolerance and the minimum use set when a lane is ahead of pace: a lane is ahead of pace only when its use is at least the minimum use and more than the tolerance above its expected use. The <code>claude-haiku-5-5</code> model can start up to the separate <code>paceHaikuTolerancePoints</code> limit. Other Claude models keep the normal pace tolerance. The <b>Route to a below-pace lane</b> switch lets worker start prefer a model of a lane that is far below its pace. The command prints the reason.</p>
     <p>Choose <b>Manage pace</b> or <b>Ignore usage limit</b> for each provider. Ignore usage limit turns off pacing and pace warnings for worker dispatch. Handover risk and automatic handover still use live usage limit data. A live window at 100% or more still exhausts the provider until its reset, and worker start refuses it unless you use <code>--force</code>. Enter a whole pacing goal percent from 0 to 100. Leave it blank for 100%. Choose <b>At reset</b>, a one-off local date and time, or whole hours before each reset. A goal end must be after now, after the window start, and no later than reset. A one-off goal clears after its time or window reset. A recurring end stays in later windows.</p>
     <p>Under each goal, the Settings page shows the reset of the window in local time, for example <code>Resets Sat 3 Oct, 06:58</code>. The usage limit card, bulletin, and lanes show each goal as <code>goal: 100% by Thu 8 Oct</code>. The text shows the time for a one-off end within 48 hours. A trickle allowance uses the goal percent and days left to a future goal end. After that end, it uses the unused usage limit and days left to reset. Without a goal end, it uses the goal percent and days left to reset. For a timed end, runs-out advice estimates when the rate reaches the goal percent. It names the goal end when that happens before the end.</p>
     <p>The Machine section sets the guard, CPU limits, 5-minute load backstops, the Owner idle period, disk warning thresholds, the swap thresholds, and the notice cooldown. Turn the guard off to stop CPU and load warnings and worker-start blocks. Choose a pause length to suspend those rules until the expiry time. Select <b>Resume guard</b> to end a pause early. Memory, disk, and swap warnings stay on. The swap warning needs 3 samples in a row at or above the swap warning percent, with at least the minimum GB in use. It clears when swap is 5 points below the warning percent. Leave the swap warning percent blank to turn it off. The swap refusal is off by default. Turn it on with the switch <b>Refuse new work at high swap</b>. When the switch is on and swap is at or above the refusal percent with at least the minimum GB in use, worker start, suite, and push with a pre-push hook are refused. A blank refusal percent switches the refusal off.</p>
@@ -8302,16 +8315,18 @@ document.addEventListener('change', (e) => {
     if (e.target.dataset.ladderKind !== undefined) {
       rung.kind = e.target.value;
       rung.model = models[rung.kind].defaultModel;
-      rung.effort = models[rung.kind].defaultEffort || null;
-    } else if (e.target.dataset.ladderModel !== undefined) rung.model = e.target.value;
-    else rung.effort = e.target.value;
+      rung.effort = effortSettings(rung.kind, rung.model).defaultEffort || null;
+    } else if (e.target.dataset.ladderModel !== undefined) {
+      rung.model = e.target.value;
+      rung.effort = effortSettings(rung.kind, rung.model).defaultEffort || null;
+    } else rung.effort = e.target.value;
     policyDirty = true; saveMessage = ''; lastRender = ''; render(true);
     return;
   }
   if (e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort) {
     const pane = e.target.dataset.handoffTarget || e.target.dataset.handoffMode || e.target.dataset.handoffModel || e.target.dataset.handoffEffort;
     if (e.target.dataset.handoffTarget) { handoffTargets[pane] = e.target.value; delete handoffModels[pane]; delete handoffEfforts[pane]; }
-    else if (e.target.dataset.handoffModel) handoffModels[pane] = e.target.value;
+    else if (e.target.dataset.handoffModel) { handoffModels[pane] = e.target.value; delete handoffEfforts[pane]; }
     else if (e.target.dataset.handoffEffort) handoffEfforts[pane] = e.target.value;
     else handoffModes[pane] = e.target.value;
     delete handoffPlans[pane]; delete handoffMessages[pane];
@@ -9220,7 +9235,7 @@ document.addEventListener('click', async (e) => {
       if (!kind) return;
       const cfg = models[kind];
       const model = kindModels(kind).find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
-      list.push({ kind, model, effort: cfg.defaultEffort || null });
+      list.push({ kind, model, effort: effortSettings(kind, model).defaultEffort || null });
     } else {
       const i = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
       if (e.target.dataset.ladderRemove !== undefined) list.splice(i, 1);
