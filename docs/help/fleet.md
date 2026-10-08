@@ -46,7 +46,7 @@ Other Herdr panes are refused.
 The caller checks prevent accidents and pane leaks.
 A process of the same user can already read the token file.
 If rotation stops, follow [the recovery steps](../guide/factory.md#recover-an-incomplete-token-rotation).
-The factory guide also gives the manual fallback when the command is unavailable.
+See [the manual fallback](../reference/factory-token.md#rotate-the-token-by-hand) if the command is unavailable.
 
 ## Factory shares
 
