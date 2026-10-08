@@ -27,6 +27,8 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
 
+The Browsers page lists the last 50 independent browser launches. Each row shows the time, browser PID, first observed pane, launcher kind, and project. Herdr Boss keeps this association when a process becomes an orphan. The event log also holds the observed process start identity. A process gets one row for its PID and start identity. The launcher kind is `perf-harness`, `agent-browser`, `playwright`, or `unknown`. Raw arguments, URLs, environment values, and profile paths are not stored in these fields. Run `herdr-boss browser audit [PROJECT]` to read the list at a terminal.
+
 ## Check tool versions
 
 Run `herdr-boss tools check` to compare versions on this Mac and in the factory pins with public upstream releases. Every run checks upstream. The check saves its result and posts one read Mailbox item for each late or security tool version. An open item for the same tool and version is reused. A repeated check updates only its text. It keeps the item's read state. A failed Mailbox post prints a note and does not stop the other tool updates. A security item starts with `Security:` in the title and `Security release.` in the first body line. This command never upgrades a tool. It uses public HTTPS endpoints and does not use your GitHub CLI login.

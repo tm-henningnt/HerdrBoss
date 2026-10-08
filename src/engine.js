@@ -22,6 +22,7 @@ import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd, WATCH_SNAPSHOT_ID, watchSnapshotText } from './watch-routines.js';
 import { listBrowserSessions, cdpResponds, browserProcessCheck, browserOwner, closeBrowser, markBrowserHeadless, rememberBrowserTabs, restartBrowser } from './browser-pool.js';
 import { browserSafetyNotices, browserSafetyNoticeDelta, browserSafetyAlert, migrateVisibleBrowserSession } from './browser-safety.js';
+import { browserAuditRow, readBrowserAudit } from './browser-audit.js';
 import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { agentBrowserTabIds, browserCommandActivity } from './browser-activity.js';
 import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
@@ -704,6 +705,8 @@ export class Engine extends EventEmitter {
     try {
       this.events = fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').slice(-200).map((l) => maskDeep(JSON.parse(l)));
     } catch {}
+    this.browserLaunchAudit = [];
+    try { this.browserLaunchAudit = readBrowserAudit(); } catch {}
     this.running = false;
     this.models = loadModels();
     if (!actionsAllowed) this.log('guard', `Actions and push disabled: ${guardReasons.join('; ')}. Set HERDR_BOSS_ALLOW_ACTIONS=1 to override.`);
@@ -711,6 +714,11 @@ export class Engine extends EventEmitter {
 
   log(type, text, extra = {}) {
     const e = maskDeep({ at: new Date().toISOString(), type, text, ...extra });
+    const browserLaunch = browserAuditRow(e);
+    if (browserLaunch) {
+      this.browserLaunchAudit.unshift(browserLaunch);
+      this.browserLaunchAudit.length = Math.min(this.browserLaunchAudit.length, 50);
+    }
     this.events.push(e);
     if (this.events.length > 200) this.events.shift();
     try { fs.appendFileSync(EVENTS_FILE, JSON.stringify(e) + '\n'); } catch {}
@@ -1494,18 +1502,22 @@ export class Engine extends EventEmitter {
       const detectedBrowserSafety = processesKnown ? browserSafetyNotices({
         processes: procs, panes: herdr?.panes || [], projects: control.projects, sessions: browserSessions,
         allowVisible: this.cfg.browser?.allowVisible === true,
+        associations: this.memory.browserLaunchAssociations ||= {},
       }).filter((item) => !(item.kind === 'visible-project-browser' && restartedForHeadless.has(item.project))) : [];
       const previousBrowserSafety = this.memory.browserSafetyNotices ||= {};
       const browserSafetyDelta = processesKnown
-        ? browserSafetyNoticeDelta(detectedBrowserSafety, previousBrowserSafety)
+        ? browserSafetyNoticeDelta(detectedBrowserSafety, previousBrowserSafety, this.act ? (this.memory.browserLaunchSeen ||= {}) : {})
         : { active: previousBrowserSafety, added: [], removed: [] };
       this.memory.browserSafetyNotices = browserSafetyDelta.active;
       snap.browserSafetyNotices = detectedBrowserSafety;
       snap.browserHeadlessMigrations = browserHeadlessMigrations;
       for (const item of browserSafetyDelta.added) {
-        if (this.act) this.log('browser-safety', item.text, { project: item.project, warning: item.kind });
+        if (this.act) this.log('browser-safety', item.text, { project: item.project, warning: item.kind,
+          ...(item.kind === 'independent-browser-launch' ? { pid: item.pid, pane: item.pane,
+            startIdentity: item.startIdentity, launcherKind: item.launcherKind } : {}) });
       }
       for (const item of detectedBrowserSafety) evaluation.alerts.push(browserSafetyAlert(item));
+      snap.browserLaunchAudit = this.browserLaunchAudit.slice();
       // Record one safe diagnostic row for each health notice during the first week. Keep its start across service restarts.
       const healthNotices = this.act ? evaluation.alerts.filter((alert) => /^browser:managed-(?:unresponsive|down):/.test(alert.key)) : [];
       const healthMarks = this.memory.browserHealthNotices ||= {};
