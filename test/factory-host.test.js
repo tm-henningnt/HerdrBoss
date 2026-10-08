@@ -278,6 +278,43 @@ test('an unknown subcommand prints usage', async () => {
   } finally { f.cleanup(); }
 });
 
+test('factory token validates output, terminal, caller and exact name before transport', async () => {
+  const cases = [
+    { args: ['demo', '--json'], pattern: /option/i },
+    { args: ['demo', '--format', 'json'], pattern: /option/i },
+    { args: ['demo', '--rotate', '--rotate'], pattern: /option/i },
+    { args: ['demo', 'other'], pattern: /exactly one/i },
+    { args: [], pattern: /exactly one/i },
+    { inputTTY: false, pattern: /terminal|TTY/i },
+    { outputTTY: false, pattern: /terminal|TTY/i },
+    { pane: 'boss', pattern: /Boss.*rotate|rotate.*Boss/i },
+    { pane: 'orch', args: ['demo', '--rotate'], pattern: /Boss|boss/i },
+    { pane: 'worker', args: ['demo', '--rotate'], pattern: /Boss|boss/i },
+    { pane: 'boss', returnedId: 'other', args: ['demo', '--rotate'], pattern: /caller|verify/i },
+    { pane: 'boss', returnedWorkspace: 'other', args: ['demo', '--rotate'], pattern: /caller|verify/i },
+    { pane: 'boss', herdrFails: true, args: ['demo', '--rotate'], pattern: /caller|verify/i },
+    { worktreeOnly: true, args: ['demo', '--rotate'], pattern: /caller|pane/i },
+  ];
+  for (const entry of cases) {
+    const f = fixture();
+    try {
+      const io = f.io(fakeSpawn(f.calls), Object.assign(Readable.from(['demo\n']), { isTTY: entry.inputTTY !== false }));
+      io.env.HERDR_BOSS_DIR = path.join(f.root, 'boss');
+      io.stdout.isTTY = entry.outputTTY !== false;
+      io.isContainer = () => false;
+      io.transportFactory = () => { assert.fail('refused caller must not create a transport'); };
+      io.herdr = () => {
+        if (entry.herdrFails) throw new Error('invented private transport detail');
+        return { pane: { id: entry.returnedId || 'pane', workspace: entry.returnedWorkspace || 'space', label: entry.pane } };
+      };
+      if (entry.pane) Object.assign(io.env, { HERDR_ENV: '1', HERDR_PANE_ID: 'pane', HERDR_WORKSPACE_ID: 'space' });
+      if (entry.worktreeOnly) io.env.HERDR_WORKTREE = f.root;
+      await assert.rejects(factoryCommand(['token', ...(entry.args || ['demo'])], io), entry.pattern);
+      assert.equal(f.calls.length, 0);
+    } finally { f.cleanup(); }
+  }
+});
+
 test('ssh refuses a remote command that starts with a dash', async () => {
   const f = fixture();
   try {

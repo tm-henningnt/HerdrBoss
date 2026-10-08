@@ -25,11 +25,28 @@ Run factory login NAME claude, factory login NAME codex, or factory login NAME o
 
 ## Sign in to a factory dashboard
 
-1. In an Owner terminal on the Mac, run `herdr-boss factory shell NAME`.
-2. In the factory shell, run `cat "$HOME/.config/herdr-boss/access-token"`. If `access.tokenFile` is set, read that path instead.
-3. Select the token text in the terminal and copy it. Paste it into the factory dashboard. Keep it out of panes, chats, and reports.
+1. In an Owner terminal on the Mac, run `herdr-boss factory token NAME`.
+2. Type the exact factory name when the command asks.
+3. Select the printed token text and copy it. Paste it into the factory dashboard.
 
-To rotate the token by hand, follow [the factory guide](../guide/factory.md#sign-in-to-a-factory-dashboard).
+The command reads the configured `access.tokenFile` in the factory.
+It requires TTYs on stdin and stdout.
+It refuses `--json` and other output options.
+It has no clipboard option.
+Keep the token out of panes, chats, logs, and reports.
+
+Run `herdr-boss factory token NAME --rotate` to sign out all devices.
+Type the exact factory name.
+The command writes a new token with mode `0600` and removes sessions.
+It restarts only the dashboard service and waits for the new process and `/api/health`.
+It then prints the token once at the Owner terminal.
+The verified Boss pane may rotate, but it receives no token.
+Its result shows only the factory name, the time, and `signed out all devices`.
+Other Herdr panes are refused.
+The caller checks prevent accidents and pane leaks.
+A process of the same user can already read the token file.
+If rotation stops, follow [the recovery steps](../guide/factory.md#recover-an-incomplete-token-rotation).
+The factory guide also gives the manual fallback when the command is unavailable.
 
 ## Factory shares
 

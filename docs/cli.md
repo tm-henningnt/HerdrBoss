@@ -2266,6 +2266,49 @@ If removal fails, run destroy again with typed confirmation.
 It checks the labels of all remaining resources before it removes one.
 A command argument cannot replace typed confirmation.
 
+### Read or rotate a factory dashboard token
+
+```sh
+herdr-boss factory token NAME
+herdr-boss factory token NAME --rotate
+```
+
+Run the command on the host tool machine in an Owner terminal.
+The command requires TTYs on stdin and stdout.
+It refuses `--json` and other output options.
+Type the exact factory name when the command asks.
+The command reads the configured `access.tokenFile` inside the factory.
+The default is `/home/factory/.config/herdr-boss/access-token`.
+It prints one token line at the Owner terminal.
+Copy that text into the dashboard sign-in form.
+Keep it out of panes, chats, logs, and reports.
+The command has no clipboard option.
+
+`--rotate` writes a new token with mode `0600` through a temporary file and rename.
+Run rotation only when the factory and dashboard service are running.
+Resume a paused factory first.
+It removes the factory session file.
+It restarts only `herdr-boss-serve`.
+It waits up to 30 seconds for the new service process and `/api/health`.
+It prints the token only after that check passes.
+Rotation signs out all devices.
+
+The verified Boss pane may use `--rotate` after typed confirmation.
+It receives only the factory name, the time, and `signed out all devices`.
+The Boss cannot read a token.
+Other Herdr panes are refused.
+A plain shell with no Herdr variables is the Owner terminal.
+These caller checks prevent accidents and pane leaks.
+A process of the same user can already read the token file.
+
+The factory audit file is `/home/factory/.config/herdr-boss/factory-token-audit.jsonl`.
+It has mode `0600`.
+Each line holds the time, factory name, action, caller role, and result.
+It holds no token or token hash.
+A failed attempt audit stops rotation before the token changes.
+If rotation stops after a write, the error prints recovery steps without a token.
+Follow [the recovery steps](guide/factory.md#recover-an-incomplete-token-rotation).
+
 ### Repair a dead service
 
 Use these commands when the service cannot answer:
