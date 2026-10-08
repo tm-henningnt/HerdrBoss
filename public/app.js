@@ -2583,7 +2583,16 @@ function browsersView(s) {
   return [
     '<header class="page-intro"><div><h1>Project browsers</h1><p>Each project has a headless browser. Turn on Allow visible project browsers in Settings to allow a visible window.</p></div></header>',
     browserResources(s),
+    browserLaunchAuditBlock(s),
   ].join('');
+}
+
+function browserLaunchAuditBlock(s) {
+  const rows = (s.browserLaunchAudit || []).slice(0, 50);
+  return '<section data-key="browser-launch-audit"><h2>Independent browser launches</h2><p class="muted">Last 50 recorded launches, newest first. The pane and launcher show the first observation.</p>'
+    + (rows.length ? vizTable(['Time', 'PID', 'Pane', 'Launcher', 'Project'], rows.map((row) =>
+      [row.at, row.pid ?? '–', row.pane ?? '–', row.launcherKind, row.project].map(esc)))
+      : '<p class="muted">No independent browser launches recorded.</p>') + '</section>';
 }
 
 function analyticsView(s) {

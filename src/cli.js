@@ -214,6 +214,7 @@ const USAGE = `herdr-boss <command>
   browser release SLUG    Give back the port lease of a closed project browser.
   browser restart SLUG --headless|--visible [--no-restore]  Switch mode and restore the current page.
   browser list          List registered browser sessions.
+  browser audit [PROJECT]  List the last 50 independent browser launches. Read only.
   browser tabs SLUG [--full]  List the pages, their visibility, and whether an agent is attached.
   browser tab new SLUG [URL] [--full]  Open a tab in its own background window and print its ID.
   browser tab close SLUG --tab ID [--force]  Close a tab; refuses a tab an agent is attached to.
@@ -533,6 +534,18 @@ async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(USAGE);
+    return;
+  }
+  // The audit is read-only. Run it before loadConfig(), which creates and migrates data files.
+  if (cmd === 'browser' && args[0] === 'audit') {
+    if (args.length > 2 || (args[1] && !SLUG.test(args[1]))) throw new Error('Usage: browser audit [PROJECT]');
+    const { readBrowserAudit } = await import('./browser-audit.js');
+    const rows = readBrowserAudit({ project: args[1] });
+    if (!rows.length) console.log('No independent browser launches recorded.');
+    else {
+      console.log('Time\tPID\tPane\tLauncher\tProject');
+      for (const row of rows) console.log([row.at, row.pid ?? '-', row.pane ?? '-', row.launcherKind, row.project].join('\t'));
+    }
     return;
   }
   if (cmd === 'tools') {
@@ -1080,7 +1093,7 @@ async function main() {
         await verifyBrowserCaller(args[1]);
         printBrowserJson(await requestBrowser(args[1], { launch: !args.includes('--reserve'), headless: args.includes('--headless') ? true : args.includes('--visible') ? false : null }));
       }
-      else throw new Error('Usage: browser request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|measure|console|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
+      else throw new Error('Usage: browser audit|request|size|viewport|close|release|restart|list|tabs|tab new|tab close|screenshot|measure|console|navigate|click|hover|drag|text|key|bookmarks|sweep-clones. Run herdr-boss without arguments for details.');
       break;
     }
     case 'handoff': {

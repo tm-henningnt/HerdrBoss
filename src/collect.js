@@ -10,9 +10,9 @@ import { LINUX_READERS } from './quota-readers.js';
 
 const PATH = [path.join(os.homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH].join(':');
 
-export function run(cmd, args, { timeout = 30000, killSignal = 'SIGTERM' } = {}) {
+export function run(cmd, args, { timeout = 30000, killSignal = 'SIGTERM', env = {} } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, killSignal, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH } }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout, killSignal, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH, ...env } }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; err.stdout = stdout; reject(err); } else resolve(stdout);
     });
   });
@@ -649,13 +649,14 @@ function parseEtime(s) {
   return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
-export async function collectProcesses() {
-  const out = await run('ps', ['-Ao', 'pid=,ppid=,etime=,pcpu=,rss=,command=']);
+export async function collectProcesses({ runner = run } = {}) {
+  const out = await runner('ps', ['-Ao', 'pid=,ppid=,etime=,pcpu=,rss=,lstart=,command='], { env: { LC_ALL: 'C' } });
   const procs = new Map();
   for (const line of out.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(.*)$/.exec(line);
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
     if (!m) continue;
-    procs.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), age: parseEtime(m[3]), cpu: Number(m[4]), rssMB: Math.round(Number(m[5]) / 1024), cmd: m[6] });
+    procs.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), age: parseEtime(m[3]), cpu: Number(m[4]), rssMB: Math.round(Number(m[5]) / 1024),
+      startIdentity: m[6].replace(/\s+/g, ' '), cmd: m[7] });
   }
   return procs;
 }

@@ -1862,6 +1862,8 @@ An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. T
 
 Each project has one persistent Chrome profile on a port from 9223 to 9299. The port is a lease in the built-in pool `project-browsers`. See [Port leases](reference/browsers.md#port-leases). Add `--tab ID` to page commands when the browser has several tabs; `browser tabs` lists the IDs.
 
+Run `herdr-boss browser audit [PROJECT]` to list the last 50 independent browser launches. The command reads the event log and changes no file. It lists the time, browser PID, pane, launcher kind, and project, newest first. Add a project slug to filter the rows before the limit. The command keeps at most 50 rows and reads the log in 64 KB parts. It skips a malformed row or a row larger than 4 KB. Each new notice and audit row also holds the observed process start identity. Herdr Boss reads this identity from the process start time. It keeps the first pane and launcher association when a process becomes an orphan. A process with the same PID and start identity gets one audit row, including after it disappears and returns. A reused PID with a new start identity gets a new row. The launcher kind is `perf-harness`, `agent-browser`, `playwright`, or `unknown`. Herdr Boss checks ancestor executable and runtime script names only. A generic runtime with no known script name has kind `unknown`. These fields hold no raw arguments, URLs, environment values, or profile paths. Older rows can show `-` for a missing PID or pane and `unknown` for the launcher kind. The Browsers page shows the same list for all projects.
+
 For a browser task, create your own tab with `browser tab new`. Record its tab ID. Use only that tab. Close it when the task ends. Never use or change another tab. Never print cookies, storage, or tokens. Never run an evaluate command that reads `document.cookie` or `localStorage`. Use `herdr-boss browser screenshot` for each screenshot.
 New project browser requests and reservations use headless mode. Set `browser.allowVisible` to on to allow `browser request --visible` and `browser restart --visible`. It is off by default. The service changes a legacy visible session to headless on its next tick. It restarts Chrome only when the recorded process ID proves that Herdr Boss started it. It keeps an external browser running and saves headless mode for its next launch.
 
@@ -1917,6 +1919,7 @@ Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a proje
 | `browser bookmarks SLUG open INDEX [--new-tab] [--full]` | Open the bookmark in the current tab, or in a new tab with `--new-tab`. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser bookmarks SLUG start URL\|none [--full]` | Set the start page of the next launch, or clear it with `none`. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser sweep-clones [--dry-run]` | Delete orphaned Chrome code-sign clones now. Prints the count and the freed GiB. `--dry-run` lists each clone by name and age and deletes nothing. |
+| `browser audit [PROJECT]` | List the last 50 independent browser launches, newest first. Add a project slug to filter the list. Read only. |
 
 ```sh
 id=$(herdr-boss browser tab new example-app | jq -r .id)
