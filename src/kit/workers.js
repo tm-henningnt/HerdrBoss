@@ -11,7 +11,7 @@ import { DATA_DIR, loadConfig } from '../config.js';
 import { parsePiModels } from '../collect.js';
 import { readBoundedWorkerReport, workerStatusFromState } from '../worker-failures.js';
 import { checkAgentsFile, kitBehindLine, refreshKitIfRequired, safeRefreshKit } from './agents-check.js';
-import { acquireLeaseFor, dropLeases, portEnvStatus, setLeasePane } from '../leases.js';
+import { lifecyclePort } from './lifecycle-port.js';
 import { portEnvFor } from '../config.js';
 import { codexBrowserArgs, codexShellEnvArgs } from '../harness.js';
 import { TASK_ID } from '../task-state.js';
@@ -1162,7 +1162,7 @@ function releaseStartLeases(leases, name, config, leaseContext) {
   if (!leases.length) return;
   const taken = new Set(leases.map((lease) => `${lease.pool}\n${lease.item}`));
   try {
-    dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseContext.dataDir });
+    lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name && taken.has(`${lease.pool}\n${lease.item}`), { dataDir: leaseContext.dataDir });
   } catch {}
 }
 
@@ -1727,12 +1727,12 @@ function startWorkerOnce(name, options, {
   try {
     for (const poolName of leasePools) {
       const pool = leaseContext.pools.find((candidate) => candidate.name === poolName);
-      const lease = acquireLeaseFor(poolName, { project: config.slug, worker: name, pane: null, runFile: recordFile }, {
+      const lease = lifecyclePort().acquireLeaseFor(poolName, { project: config.slug, worker: name, pane: null, runFile: recordFile }, {
         pools: leaseContext.pools, dataDir: leaseContext.dataDir, probeTcp: leaseContext.probeTcp, now, log: leaseLog,
       });
       leases.push({ pool: poolName, item: lease.item, env: pool.env });
       leaseExtraEnv.push(...portEnvFor(pool, lease.item));
-      for (const status of portEnvStatus(pool, lease.item)) leaseEnvNotes.push(`${status.env} for port ${lease.item}: ${status.set ? 'set' : 'not set'}`);
+      for (const status of lifecyclePort().portEnvStatus(pool, lease.item)) leaseEnvNotes.push(`${status.env} for port ${lease.item}: ${status.set ? 'set' : 'not set'}`);
     }
   } catch (error) {
     releaseStartLeases(leases, name, config, leaseContext);
@@ -1861,7 +1861,7 @@ function startWorkerOnce(name, options, {
     }
     placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);
     paneId = placement.paneId;
-    for (const lease of leases) setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
+    for (const lease of leases) lifecyclePort().setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     // Answer nothing at a launch block. Mark the model, close the TUI, and stop this model.
     const markAndStop = (block) => {
       try {
@@ -2504,7 +2504,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (scopeException) run.scopeException = scopeException;
       writeJsonAtomic(file, run);
       // Give back every lease that names this worker, also a lease that the worker took after its start.
-      releasedLeases.push(...dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir }));
+      releasedLeases.push(...lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir }));
     }
     if (omitted.length) output(`report.json omits ${omitted.length} changed path(s); recorded the diff paths`);
     // The collected worker is done, so its planner session ends. A later result goes to the orch pane.
@@ -2573,7 +2573,7 @@ export function parkWorker(name, { reason = null, unpark = false } = {}, { confi
   writeJsonAtomic(file, run);
   // A parked worker does not use its leases, so give them back. Unpark does not take them again.
   if (!unpark) {
-    const released = dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir });
+    const released = lifecyclePort().dropLeases((lease) => lease.project === config.slug && lease.worker === name, { dataDir: leaseDataDir });
     for (const lease of released) output(`Released lease ${lease.pool} ${lease.item}.`);
   }
   return run;

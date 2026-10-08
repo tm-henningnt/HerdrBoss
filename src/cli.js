@@ -10,6 +10,7 @@ import { loadProjectConfig } from './kit/config.js';
 import { TRIAL_RESULT_TARGET, untilText } from './kit/model-unavailable.js';
 import { maskDeep, maskBrowserText, maskCliError, redactBrowserSecrets, repairWebUrl } from './browser-url-mask.js';
 import { planDeviationText, projectionText } from './quota-plan.js';
+import { initializeLifecyclePort } from './kit/lifecycle.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -528,6 +529,7 @@ async function verifyQuotaMutationCaller() {
 }
 
 async function main() {
+  initializeLifecyclePort();
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(USAGE);
