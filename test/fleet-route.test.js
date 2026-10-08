@@ -109,6 +109,7 @@ test('the Fleet route adds the rollup over the accepted summaries and keeps the 
   assert.equal(result.body.rollup.factories.length, 2);
   assert.equal(result.body.rollup.factories[0].freshness, 'fresh');
   assert.equal(result.body.rollup.factories[1].freshness, 'never seen');
+  assert.equal(result.body.rollup.factories[1].attach, 'not-attached', 'the rollup keeps the remote attach state');
 
   assert.equal(result.body.rollup.totals.workers.value, 5, 'the fresh worker count only');
   assert.match(result.body.rollup.totals.workers.coverage, /1 of 2 factories reporting/);

@@ -122,7 +122,21 @@ test('each total shows one short coverage line and keeps the long detail in a co
   assert.ok(details, 'a shared coverage detail element exists');
   assert.equal(details.tagName, 'DETAILS');
   assert.equal(details.hasAttribute('open'), false, 'the coverage detail starts collapsed');
+  const summary = find(details, (node) => node.tagName === 'SUMMARY');
+  assert.equal(summary.textContent, 'Coverage detail', 'the native summary opens the detail by keyboard or touch');
   assert.match(coverageDetail(html, 'spend').textContent, /selected spend days: factory-zero 2026-10-05, win1 latest factory day 2026-10-04/);
+});
+
+test('each remote factory card shows its attach state from the rollup', async () => {
+  const factories = inventedFactories();
+  factories[1] = { ...factories[1], remote: true, attach: 'attached' };
+  const { html, rollup } = await render(factories);
+  assert.equal(rollup.factories[1].attach, 'attached', 'the rollup carries the attach state');
+  const start = html.indexOf('data-fleet-card data-fleet-factory="win1"');
+  const card = html.slice(start, start + 800);
+  assert.match(card, /data-fleet-attach="attached">Attach: attached/);
+  const localStart = html.indexOf('data-fleet-card data-fleet-factory="factory-zero"');
+  assert.doesNotMatch(html.slice(localStart, localStart + 800), /data-fleet-attach/);
 });
 
 test('the alert strip is collapsed at every width and names each fix command', async () => {
@@ -180,17 +194,33 @@ test('a hostile rollup string is escaped in every rendered field', async () => {
   const rows = [
     factory('factory-zero', { summary: summary('factory-zero', { kind: 'native',
       workers: { running: 1, max: 8 },
-      quotas: [{ harness: hostile, accountKey: `${hostile}${'a'.repeat(64)}`, lane: hostile, usedPercent: 50, status: 'ok' }],
-      projects: [{ slug: hostile, phase: hostile, status: 'doing', statusAgeSeconds: 10, board: { doing: 1, review: 0, blocked: 0, done7d: 0 } }],
+      dashboardUrl: `https://factory.example/path/${encodeURIComponent(hostile)}`,
+      quotas: [
+        { harness: hostile, accountKey: `${hostile}${'a'.repeat(64)}`, lane: hostile, usedPercent: 50, status: 'ok' },
+        { harness: hostile, lane: hostile, usedPercent: 101, status: 'unknown' },
+      ],
+      projects: [{ slug: hostile, phase: hostile, status: 'doing', statusAgeSeconds: 10800, board: { doing: 1, review: 0, blocked: 0, done7d: 0 } }],
       pending: [{ step: hostile, since: hostile }],
       harnesses: [{ harness: hostile, login: 'expired' }] }) }),
     factory('win1', { drift: hostile, summary: null }),
   ];
-  const { html } = await render(rows, { ...role, neverTold: [hostile] });
-  // The alert label and fix, the lane harness and key, the project slug and phase, the pending step, the drift, and neverTold.
+  const { rollup } = await render(rows, { ...role, neverTold: [hostile] });
+  rollup.totals.workers.coverage = `1 of 2 factories reporting; unavailable: factory-zero (${hostile})`;
+  const { fleetView } = await import('../public/fleet.js');
+  const rendered = fleetView({ factories: rows, pollSeconds: 30, rollup, role: { ...role, neverTold: [hostile] } }, settings, '', shares);
+  const escaped = '&lt;img src=x onerror=alert(1)&gt;';
+  // Check each source field on its own so one escaped field cannot hide another.
+  assert.ok(rendered.includes(`data-fleet-coverage-detail="workers"><span class="fleet-k">Workers</span> 1 of 2 factories reporting; unavailable: factory-zero (${escaped})`), 'coverage reason is escaped');
+  assert.match(rendered, /class="fleet-dashboard" href="https:\/\/factory\.example"/, 'the host link keeps only its safe origin');
+  assert.doesNotMatch(rendered, /class="fleet-dashboard" href="https:\/\/factory\.example\/path/, 'the host path cannot add markup');
+  assert.ok(rendered.includes(`<span class="slug">${escaped} <span class="pill">${escaped}</span>`), 'project name and phase are escaped');
+  assert.ok(rendered.includes(`factory-zero ${escaped} login expired — sign in`), 'alert text is escaped');
+  assert.ok(rendered.includes(`<span class="who">${escaped} · ${escaped} <span class="muted small">shared`), 'lane names are escaped');
+  const html = rendered;
+  // The alert fix, pending step, drift, and role note also come from text fields.
   assert.doesNotMatch(html, /<img/);
   assert.doesNotMatch(html, /<script/);
-  assert.ok((html.match(/&lt;img/g) || []).length >= 6, 'each hostile field is escaped');
+  assert.ok((html.match(/&lt;img/g) || []).length >= 10, 'the other hostile text fields are escaped');
 });
 
 test('the card shows the cached-facts health with the summary age', async () => {

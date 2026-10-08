@@ -536,13 +536,14 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         // An empty view starts a poll at most once in 30 seconds.
         if (!fleetPoller.view().factories.length && (fleetClock() - lastRoutePoll >= FLEET_ROUTE_POLL_MS || lastRoutePoll === 0)) { lastRoutePoll = fleetClock(); await fleetPoller.poll(); }
         const view = fleetPoller.view();
+        const factories = view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row));
         let role = null;
         try { role = fleetRole.view(); } catch { /* The page shows no role when the settings are invalid. */ }
         // The rollup is one add-only field. Its failure must not fail the route, and its error must carry no stack or path.
         let rollup = null, rollupError = null;
-        try { rollup = buildFleetRollup(view.factories, { now: fleetClock, role }); }
+        try { rollup = buildFleetRollup(factories, { now: fleetClock, role }); }
         catch { rollupError = 'The fleet rollup is unavailable.'; }
-        return send(res, 200, { ...view, role, rollup, ...(rollupError ? { rollupError } : {}), factories: view.factories.map((row) => (row.remote ? { ...row, attach: attachState(process.env, row.name) } : row)) });
+        return send(res, 200, { ...view, role, rollup, ...(rollupError ? { rollupError } : {}), factories });
       }
       if (p === '/api/health' && req.method === 'GET') {
         const body = await health(engine);

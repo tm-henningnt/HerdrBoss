@@ -380,6 +380,11 @@ function actionsHtml(row, kind) {
     + `<button type="button" data-action="copy" data-copy="herdr-boss factory attach ${esc(name)}" data-copy-text="herdr-boss factory attach ${esc(name)}">Copy attach command</button>`
     + dashboardLink(row) + `</div>`;
 }
+function attachHtml(row) {
+  if (!row.remote || !['attached', 'not-attached'].includes(row.attach)) return '';
+  const state = row.attach === 'attached' ? 'attached' : 'not attached';
+  return `<span class="muted small" data-fleet-attach="${esc(row.attach)}">Attach: ${state}</span>`;
+}
 export function fleetFactoryCard(row, reference = null, role = null) {
   const name = String(row.name ?? UNKNOWN);
   const kind = kindText(row);
@@ -416,7 +421,7 @@ export function fleetFactoryCard(row, reference = null, role = null) {
   const seen = lastSeenInfo(row).text;
   const seenHtml = seen === 'never seen' ? 'never seen' : `last seen ${esc(seen)} ago`;
   return `<article class="card" data-fleet-card data-fleet-factory="${esc(name)}" data-key="fleet-card:${esc(name)}">`
-    + `<div class="card-head"><h2>${esc(name)}</h2><span class="role">${esc(roleLabel)}</span><span class="grow"></span>`
+    + `<div class="card-head"><h2>${esc(name)}</h2><span class="role">${esc(roleLabel)}</span>${attachHtml(row)}<span class="grow"></span>`
     + `<span class="state ${healthClass(row)}">● ${valueHtml(health)}</span><span class="muted small">${seenHtml}${stale}</span></div>`
     + pendingHtml(row)
     + `<div class="facts">${facts}</div>`
