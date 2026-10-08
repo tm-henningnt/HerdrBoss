@@ -73,7 +73,7 @@ test('the release repository setting explains the approval rule in Settings and 
   const nextPage = help.indexOf("\n  agents: ['Agents',", settingsStart);
   assert.ok(settingsStart >= 0 && nextPage > settingsStart, 'the Settings Help entry is present');
   const settingsHelp = help.slice(settingsStart, nextPage);
-  assert.match(settingsHelp, /In <b>Releases<\/b>, list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish\./);
+  assert.match(settingsHelp, /In <b>Releases<\/b>, set <code>releases\.repos<\/code> to list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish\./);
   assert.doesNotMatch(help, /release-approvals/);
 });
 
