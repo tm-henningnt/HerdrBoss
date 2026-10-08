@@ -46,7 +46,9 @@ import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightR
 import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveWorkerRun, activeUnavailableModels, extendModelUnavailability, workerModelCooldown, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
-import { FULL_SUITE_LOCK, lockLedgerSummary, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { clearLockWatchdogNotice, FULL_SUITE_LOCK, lockLedgerSummary, queueLockWatchdogNotice, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { readLockWatchdogLedger } from './kit/lock-lanes.js';
+import { inspectLockWatchdog } from './lock-watchdog.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
 import { deriveTickReadings } from './engine-tick.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
@@ -571,7 +573,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger } = {}) {
     super();
     initializeLifecyclePort();
     this.cfg = cfg;
@@ -680,6 +682,9 @@ export class Engine extends EventEmitter {
     this.actionsMinutesAt = null;
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
+    this.lockLedgerReader = lockLedgerReader;
+    this.lockWatchdogProcesses = null;
+    this.lockWatchdogLedgerCache = { at: null, lines: null };
     this.kitNoticeRead = false;
     this.state = maskBrowserState(readJson(STATE_FILE, null));
     this.messageStore = openMessageStore({ dir: DATA_DIR });
@@ -842,6 +847,21 @@ export class Engine extends EventEmitter {
       .then((text) => { appendMemorySample(sampleMemory(text, now), { dataDir: this.lockDataDir }); })
       .catch(() => {})
       .finally(() => { this.memory.memoryInFlight = false; });
+  }
+
+  inspectLockWatchdog({ holders = [], settings = {}, processReader = () => null, now = this.clock() } = {}) {
+    const watchdog = inspectLockWatchdog({
+      holders,
+      settings,
+      clock: now,
+      ledgerReader: () => this.lockLedgerReader({ dataDir: this.lockDataDir, now }),
+      processReader,
+      previousProcesses: this.lockWatchdogProcesses?.processes || null,
+      previousSampleAt: this.lockWatchdogProcesses?.at ?? null,
+      ledgerCache: this.lockWatchdogLedgerCache,
+    });
+    this.lockWatchdogProcesses = watchdog.processes ? { at: now, processes: watchdog.processes } : null;
+    return watchdog;
   }
 
   // Tick phases:
@@ -1262,6 +1282,33 @@ export class Engine extends EventEmitter {
         cooldownSkips: this.autoCooldownSkips(policy, now),
       });
       this.communicationControl = control;
+      if (currentPaneList) {
+        for (const lock of snap.locks) {
+          if (lock.name === FULL_SUITE_LOCK && lock.state === 'stale') {
+            try { clearLockWatchdogNotice(lock, { dataDir: this.lockDataDir }); }
+            catch (error) { errors.push(`lock watchdog cleanup: ${error.message}`); }
+          }
+        }
+      }
+      if (this.act && this.push && currentPaneList) {
+        try {
+          const watchdog = this.inspectLockWatchdog({
+            holders: snap.locks,
+            settings: policy.locks,
+            processReader: () => processesKnown ? procs : null,
+            now,
+          });
+          for (const candidate of watchdog.candidates) {
+            try { queueLockWatchdogNotice(candidate, { dataDir: this.lockDataDir, now: this.clock }); }
+            catch (error) { errors.push(`lock watchdog: ${error.message}`); }
+          }
+        } catch (error) {
+          this.lockWatchdogProcesses = null;
+          errors.push(`lock watchdog: ${error.message}`);
+        }
+      } else {
+        this.lockWatchdogProcesses = null;
+      }
       const profileWorkspaces = Object.fromEntries(managedBrowsers.map((b) => [b.profile, control.projects[b.project]?.workspace]).filter(([, ws]) => ws));
       snap.cpuUse = cpuUse(procs, herdr?.panes || [], profileWorkspaces);
       if (machine) {
@@ -3049,21 +3096,34 @@ export class Engine extends EventEmitter {
     let notices;
     try { notices = readLockTakeoverNotices({ dataDir: this.lockDataDir }); }
     catch (error) { this.log('error', `Could not read lock notices: ${error.message}`); return; }
-    const panes = new Set(herdr.panes.map((pane) => pane.id));
+    const panes = new Map(herdr.panes.map((pane) => [pane.id, pane]));
+    const bossPane = herdr.panes.find((pane) => pane.agent?.name === 'boss');
     for (const notice of notices) {
-      const targetPane = notice.type === 'slow-holder'
-        ? herdr.panes.find((pane) => pane.agent?.name === 'boss')?.id : notice.ownerPane;
-      if (!targetPane || !panes.has(targetPane)) continue;
-      const text = [
-        '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
-        `- ${notice.text}`,
-      ].join('\n');
-      try {
-        await this.promptService(targetPane, text, { herdr });
-        removeLockTakeoverNotice(notice.id, { dataDir: this.lockDataDir });
-        this.log('notify', notice.text, { severity: notice.severity, pane: targetPane });
-      } catch (error) {
-        this.log('error', `Lock notice to ${targetPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+      const targets = notice.type === 'lock-watchdog'
+        ? [
+          { role: 'project', pane: notice.ownerPane },
+          { role: 'boss', pane: bossPane?.id },
+        ].filter((target) => !notice.deliveredTo.includes(target.role) && target.pane)
+        : [{ role: notice.type === 'slow-holder' ? 'boss' : 'project', pane: notice.type === 'slow-holder' ? bossPane?.id : notice.ownerPane }];
+      const grouped = new Map();
+      for (const target of targets) {
+        if (!target.pane || !panes.has(target.pane)) continue;
+        const group = grouped.get(target.pane) || [];
+        group.push(target.role);
+        grouped.set(target.pane, group);
+      }
+      for (const [targetPane, recipients] of grouped) {
+        const text = [
+          '[herdr-boss] Resource notice. Act on it if it concerns your work. You do not need to reply to me.',
+          `- ${notice.text}`,
+        ].join('\n');
+        try {
+          await this.promptService(targetPane, text, { herdr });
+          removeLockTakeoverNotice(notice.id, { dataDir: this.lockDataDir, recipients });
+          this.log('notify', notice.text, { severity: notice.severity, pane: targetPane });
+        } catch (error) {
+          this.log('error', `Lock notice to ${targetPane} failed: ${String(error.stderr || error.message).slice(0, 200)}`);
+        }
       }
     }
   }

@@ -531,6 +531,13 @@ function slowHolderId(record) {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
 }
 
+function lockWatchdogId(record) {
+  const hash = crypto.createHash('sha256').update(JSON.stringify([
+    'lock-watchdog', record.name, record.slot ?? 'long', record.ownerPane, record.pid, record.pidStart ?? null, record.acquiredAt,
+  ])).digest('hex').slice(0, 32);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+}
+
 function holderWaitDetails(record, prediction, observedAt, processReader) {
   const ageMs = Math.max(0, observedAt - Date.parse(record.acquiredAt));
   const ageSeconds = Math.floor(ageMs / 1000);
@@ -572,11 +579,50 @@ function writeSlowHolderNotice(record, detail, dataDir, now) {
   });
 }
 
+export function queueLockWatchdogNotice(candidate, { dataDir = DATA_DIR, now = Date.now } = {}) {
+  const record = candidate?.record;
+  if (record?.name !== FULL_SUITE_LOCK || record.state !== 'live') return false;
+  const id = lockWatchdogId(record);
+  const children = (candidate.childProcesses || []).slice(0, 10).map((child) =>
+    `${oneLine(child.name).slice(0, 80) || 'unknown'} (PID ${child.pid})`);
+  const childText = children.length ? children.join(', ') : 'none';
+  const age = formatDuration(Math.floor(candidate.ageMs / 1000));
+  const predicted = formatDuration(Math.ceil(candidate.predictedMs / 1000));
+  const holder = {
+    name: record.name, slot: record.slot ?? 'long', lane: record.lane ?? 'long', project: record.project ?? null,
+    ownerPane: record.ownerPane, pid: record.pid, pidStart: record.pidStart ?? null, acquiredAt: record.acquiredAt, kind: record.kind,
+  };
+  const notice = {
+    id, type: 'lock-watchdog', severity: 'warn', ownerPane: record.ownerPane, holder,
+    deliveredTo: [],
+    text: `Lock watchdog: ${record.name} (${oneLine(record.kind)}) in project ${oneLine(record.project)}; holder pane ${oneLine(record.ownerPane)}, PID ${record.pid}; age ${age}; predicted hold ${predicted}; child processes: ${childText}. Look at pane ${oneLine(record.ownerPane)}. Herdr Boss or the owner pane can run herdr-boss lock release.`,
+    createdAt: new Date(timeValue(now)).toISOString(),
+  };
+  const directory = path.join(dataDir, 'locks', 'machine');
+  let created = false;
+  withMutationLock(directory, () => {
+    const current = readRecord(recordFile(directory, record.name, record.slot), '', 'machine');
+    if (!current || lockWatchdogId(current) !== id) return;
+    try { writeNewRecord(path.join(lockNoticesDirectory(dataDir), `${id}.json`), notice); created = true; }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  });
+  return created;
+}
+
+export function clearLockWatchdogNotice(record, { dataDir = DATA_DIR } = {}) {
+  if (!record || record.name !== FULL_SUITE_LOCK) return;
+  const file = path.join(dataDir, 'locks', 'machine', 'notices', `${lockWatchdogId(record)}.json`);
+  try { fs.unlinkSync(file); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
 function removeDeliveredSlowNotice(record, dataDir) {
-  const file = path.join(dataDir, 'locks', 'machine', 'notices', `${slowHolderId(record)}.json`);
-  try {
-    if (JSON.parse(fs.readFileSync(file, 'utf8')).deliveredAt) fs.unlinkSync(file);
-  } catch { /* A failed notice cleanup must not block a lock release or takeover. */ }
+  for (const [id, removePending] of [[slowHolderId(record), false], [lockWatchdogId(record), true]]) {
+    const file = path.join(dataDir, 'locks', 'machine', 'notices', `${id}.json`);
+    try {
+      if (removePending || JSON.parse(fs.readFileSync(file, 'utf8')).deliveredAt) fs.unlinkSync(file);
+    } catch { /* A failed notice cleanup must not block a lock release or takeover. */ }
+  }
 }
 
 export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
@@ -588,17 +634,23 @@ export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
     let notice;
     try { notice = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')); }
     catch (error) { throw new Error(`Cannot read lock notice ${path.basename(file)}: ${error.message}`); }
+    const validHolder = notice?.holder?.name === FULL_SUITE_LOCK && notice.holder.ownerPane === notice.ownerPane
+      && ['long', 'short'].includes(notice.holder.lane) && LOCK_KINDS.has(notice.holder.kind)
+      && Number.isSafeInteger(notice.holder.pid) && notice.holder.pid > 0
+      && Number.isFinite(Date.parse(notice.holder.acquiredAt));
+    const validSlowNotice = notice?.type === 'slow-holder' && validHolder
+      && slowHolderId(notice.holder) === notice.id
+      && typeof notice.text === 'string' && notice.text.startsWith(`Lock ${FULL_SUITE_LOCK}: holder is slow; `)
+      && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
+    const validWatchdogNotice = notice?.type === 'lock-watchdog' && validHolder
+      && lockWatchdogId(notice.holder) === notice.id
+      && Array.isArray(notice.deliveredTo) && notice.deliveredTo.every((item) => ['project', 'boss'].includes(item))
+      && typeof notice.text === 'string' && notice.text.startsWith('Lock watchdog: ')
+      && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
+    const validExpiryNotice = !notice?.type && notice?.text === LOCK_NOTICE_TEXT;
     if (!notice || notice.id !== path.basename(file, '.json') || notice.severity !== 'warn'
-      || typeof notice.ownerPane !== 'string'
-      || (notice.type === 'slow-holder'
-        ? !notice.holder || notice.holder.name !== FULL_SUITE_LOCK || notice.holder.ownerPane !== notice.ownerPane
-          || !['long', 'short'].includes(notice.holder.lane) || !LOCK_KINDS.has(notice.holder.kind)
-          || !Number.isSafeInteger(notice.holder.pid) || notice.holder.pid < 1
-          || !Number.isFinite(Date.parse(notice.holder.acquiredAt)) || slowHolderId(notice.holder) !== notice.id
-          || typeof notice.text !== 'string' || !notice.text.startsWith(`Lock ${FULL_SUITE_LOCK}: holder is slow; `)
-          || /[\r\n]/.test(notice.text)
-          || (notice.deliveredAt !== undefined && !Number.isFinite(Date.parse(notice.deliveredAt)))
-        : notice.text !== LOCK_NOTICE_TEXT)
+      || typeof notice.ownerPane !== 'string' || !(validSlowNotice || validWatchdogNotice || validExpiryNotice)
+      || /[\r\n]/.test(notice.text)
       || typeof notice.createdAt !== 'string' || !Number.isFinite(Date.parse(notice.createdAt))) {
       throw new Error(`Lock notice ${path.basename(file)} is invalid.`);
     }
@@ -606,11 +658,21 @@ export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
   }).filter((notice) => !notice.deliveredAt);
 }
 
-export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR, now = Date.now } = {}) {
+export function removeLockTakeoverNotice(id, { dataDir = DATA_DIR, now = Date.now, recipients = null } = {}) {
   if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Lock notice ID is invalid.');
   const file = path.join(dataDir, 'locks', 'machine', 'notices', `${id}.json`);
   try {
     const notice = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (notice.type === 'lock-watchdog' && Array.isArray(recipients)) {
+      const deliveredTo = [...new Set([...(notice.deliveredTo || []), ...recipients])];
+      const deliveredAt = ['project', 'boss'].every((recipient) => deliveredTo.includes(recipient))
+        ? new Date(timeValue(now)).toISOString() : undefined;
+      replaceRecord(file, { ...notice, deliveredTo, ...(deliveredAt ? { deliveredAt } : {}) });
+      const directory = path.join(dataDir, 'locks', 'machine');
+      const holder = readRecord(recordFile(directory, notice.holder.name, notice.holder.slot), '', 'machine');
+      if (!holder || lockWatchdogId(holder) !== id) fs.unlinkSync(file);
+      return;
+    }
     if (notice.type !== 'slow-holder') { fs.unlinkSync(file); return; }
     const directory = path.join(dataDir, 'locks', 'machine');
     // Mark the successful prompt before cleanup. A busy mutation guard must not make it pending again.
