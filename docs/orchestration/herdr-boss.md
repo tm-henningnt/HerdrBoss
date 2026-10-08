@@ -1,4 +1,4 @@
-<!-- herdr-boss kit v=7a6e12fa7945 -->
+<!-- herdr-boss kit v=6a8031beb794 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
@@ -11,7 +11,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Do not edit another project's repository.
 - Do not copy secrets, tenant hosts, client names, or app IDs into this project.
 - Cite each source file in `docs/orchestration/memory.md`.
-- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a tracked file fails the docs gate.
+- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a file that the docs gate scans fails the gate. The gate does not scan test/*.test.js, so the rule holds there without a check.
 - Read this file and `docs/orchestration/memory.md` at start and at resume, before you choose work. The session start hook prints both files.
 - When a `Kit updated` notice arrives, run `herdr-boss kit update` and continue. The command prints the current kit file. Do not read the file again.
 - Commit a changed kit file, `AGENTS.md` stub, or hook with your next commit. Do not make a separate commit for it.
