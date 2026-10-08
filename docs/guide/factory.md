@@ -149,6 +149,46 @@ If you do not see it:
 - If the command exits with code 3, run one of the two printed commands in the host terminal. Then run `factory connect <name>` again. This also fixes a read credential that is missing at first.
 - If you see `dashboard-unreachable`, add the port named in the message next to port 22 in the access rule. Then run the command again.
 
+## Sign in to a factory dashboard
+
+The factory dashboard uses the access token in the factory container. Read it only in an Owner terminal on the Mac. Do not use a Herdr pane.
+
+What you do:
+
+1. Run `herdr-boss factory shell NAME` in the Owner terminal.
+2. In the factory shell, run `cat "$HOME/.config/herdr-boss/access-token"`. If `access.tokenFile` is set, read that path instead. Select the token text in the terminal and copy it.
+3. Open the factory dashboard. Paste the token into the sign-in form.
+
+What you should see: the factory dashboard opens.
+
+The factory container has no `pbcopy`. Keep the token out of panes, chats, and reports.
+
+### Rotate the token by hand
+
+Run `herdr-boss factory shell NAME` in an Owner terminal. Replace both `NAME` values in the block with the factory name. The block writes the default token path, `$HOME/.config/herdr-boss/access-token`. Rotation signs out all devices. The block removes the session file, restarts only the factory service, checks its health, and then prints the token in the Owner terminal.
+
+```sh
+(
+set -eu
+read -r -p 'Type NAME to confirm: ' confirm
+test "$confirm" = "NAME"
+token=$(openssl rand -hex 32)
+file="$HOME/.config/herdr-boss/access-token"
+tmp="$file.$$"
+umask 077
+printf '%s\n' "$token" > "$tmp"
+mv "$tmp" "$file"
+rm -f "$HOME/.config/herdr-boss/sessions.json"
+/command/s6-svc -r /run/service/herdr-boss-serve
+curl --retry 30 --retry-connrefused --retry-delay 1 --fail --silent --show-error --output /dev/null http://127.0.0.1:4477/api/health
+printf '%s\n' "$token"
+)
+```
+
+If the block stops after it writes the token, the new token is already in place; read it at the Owner terminal, then restart the service by hand.
+
+Select the token text in the terminal and copy it.
+
 ## Attach Herdr on the Mac to a factory
 
 The Herdr server of a factory runs in its container. The container runs an SSH server. The container publishes that SSH port only on the loopback address of the factory host. A tailnet rule does not open it.

@@ -23,6 +23,14 @@ A verified Owner wait shows `Waiting for you: STEP` in its factory card, below t
 Each remote factory card shows `Attach: attached` or `Attach: not attached` in its header. Attached means that Herdr on the Mac has an SSH machine for this factory. Select the copy button in the card to copy `herdr-boss factory attach NAME`. Run the command in a Mac terminal. Run `herdr-boss factory attach NAME --undo` to detach. The page shows no address or key.
 Run factory login NAME claude, factory login NAME codex, or factory login NAME opencode in an Owner terminal. The command checks login and prepares the first-run state. For OpenCode it runs the login, then checks the credential list. It trusts the Boss folder, the work folder, and the registered project folders. It keeps other settings and credential files. Run factory boss start NAME to start the Boss. That command also prepares the first-run state before a start. If a startup dialog remains, the error names the dialog and pane ID. It includes masked pane text and prompt errors. Inspect that pane before you retry.
 
+## Sign in to a factory dashboard
+
+1. In an Owner terminal on the Mac, run `herdr-boss factory shell NAME`.
+2. In the factory shell, run `cat "$HOME/.config/herdr-boss/access-token"`. If `access.tokenFile` is set, read that path instead.
+3. Select the token text in the terminal and copy it. Paste it into the factory dashboard. Keep it out of panes, chats, and reports.
+
+To rotate the token by hand, follow [the factory guide](../guide/factory.md#sign-in-to-a-factory-dashboard).
+
 ## Factory shares
 
 At the head office, set one slider for each factory in an account scope. Use whole percentages from 0 to 100. The shares of one account must total at most 100. Select Save factory shares. The plan saves before delivery. A pending factory keeps its last accepted share. The next successful poll retries delivery.
