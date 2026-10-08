@@ -362,6 +362,56 @@ test('handoff activate CLI waits for the activation result', (t) => {
   assert.equal(item.id, 'handoff-activate');
 });
 
+test('handoff activation prints bounded, redacted stderr from a failed step', (t) => {
+  const f = activationFixture(t, { failRenames: ['ws:p2'] });
+  const secretField = ['api', 'key'].join('_');
+  const detail = [`rename failed: ${secretField}=fixture-private-value`, ...Array.from({ length: 24 }, (_, index) => `step detail ${index + 1}`)].join('\n');
+  let failure;
+  try {
+    runHandoffCli(f.root, ['handoff', 'activate', 'handoff-activate', '--confirmed'], { ...f.env, TEST_RENAME_STDERR: detail });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'the failed rename must stop activation');
+  assert.match(failure.stderr, /Handover activation failed while renaming the successor pane/);
+  assert.match(failure.stderr, /step detail 17/);
+  assert.doesNotMatch(failure.stderr, /fixture-private-value/);
+  assert.match(failure.stderr, /stderr truncated/);
+  assert.ok(failure.stderr.trim().split(/\r?\n/).length <= 20, 'activation output stays within 20 lines');
+});
+
+test('handoff activation prints bounded, redacted stderr when reading the source pane fails', (t) => {
+  const f = activationFixture(t, { paneErrors: { 'ws:p1': 'source_read_failed' } });
+  const secretField = ['api', 'key'].join('_');
+  const detail = 'pane read failed: ' + secretField + '=fixture-private-value\n'
+    + Array.from({ length: 24 }, (_, index) => 'source detail ' + (index + 1)).join('\n');
+  let failure;
+  try {
+    runHandoffCli(f.root, ['handoff', 'activate', 'handoff-activate', '--confirmed'], { ...f.env, TEST_PANE_STDERR: detail });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'the source pane read failure must stop activation');
+  assert.match(failure.stderr, /Handover activation failed while reading the source pane/);
+  assert.match(failure.stderr, /source detail 17/);
+  assert.doesNotMatch(failure.stderr, /fixture-private-value/);
+  assert.match(failure.stderr, /stderr truncated/);
+  assert.ok(failure.stderr.trim().split(/\r?\n/).length <= 20, 'activation output stays within 20 lines');
+});
+
+test('handoff activation prints bounded, redacted stderr when renaming the source pane fails', (t) => {
+  const f = activationFixture(t, { failRenames: ['ws:p1'] });
+  const secretField = ['api', 'key'].join('_');
+  const detail = 'rename failed: ' + secretField + '=fixture-private-value\n'
+    + Array.from({ length: 24 }, (_, index) => 'source rename detail ' + (index + 1)).join('\n');
+  let failure;
+  try {
+    runHandoffCli(f.root, ['handoff', 'activate', 'handoff-activate', '--confirmed'], { ...f.env, TEST_RENAME_STDERR: detail });
+  } catch (error) { failure = error; }
+  assert.ok(failure, 'the source pane rename failure must stop activation');
+  assert.match(failure.stderr, /Handover activation failed while renaming the source pane/);
+  assert.match(failure.stderr, /source rename detail 17/);
+  assert.doesNotMatch(failure.stderr, /fixture-private-value/);
+  assert.match(failure.stderr, /stderr truncated/);
+  assert.ok(failure.stderr.trim().split(/\r?\n/).length <= 20, 'activation output stays within 20 lines');
+});
+
 test('project activation prompts the successor and the previous agent with both pane IDs', (t) => {
   const f = activationFixture(t);
   const item = f.activate();

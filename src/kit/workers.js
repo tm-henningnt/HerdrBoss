@@ -1872,7 +1872,7 @@ function startWorkerOnce(name, options, {
     kindHeaderNote: [
       options.kind === 'codex' ? 'In a Codex shell, run `setopt NO_BG_NICE` before a background command.' : '',
       // In the vendor test, Luna failed to report a broken tool in 28.7% of cases. Sol 6.1 failed in 2.8%.
-      model === 'gpt-6-luna' ? 'Report a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source.' : '',
+      model === 'gpt-6-luna' ? `Report a failing tool, a missing file, or missing evidence explicitly in your report. Never give a best guess in place of a result. The orchestrator verifies each claim at the source. For an eligible leftover process in this worker, run \`herdr-boss worker stop-own ${name} --pid <pid>\`.` : '',
     ].filter(Boolean).join('\n'),
     kindWaitNote: options.kind === 'claude' ? 'To wait, use a background command and wait for its exit. Do not run sleep and then poll. Do not run herdr-boss wait: it waits on other workers.' : '',
     stopRule: options.kind === 'codex'

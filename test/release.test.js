@@ -102,7 +102,7 @@ test('request posts one Mailbox item the Owner can answer, with all card fields'
 });
 
 test('request is refused for a repository outside releases.repos', () => {
-  assert.throws(() => release.requestRelease({ repo: 'other-org/other', tag: TAG, run: fakeGh(), dir: newDir(), config, knownHosts }), /not in the releases\.repos setting/);
+  assert.throws(() => release.requestRelease({ repo: 'other-org/other', tag: TAG, run: fakeGh(), dir: newDir(), config, knownHosts }), /not in the releases\.repos setting.*Settings.*Releases/);
 });
 
 test('a second request for the same repository and tag returns the open item', () => {

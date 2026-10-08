@@ -201,6 +201,10 @@ fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(args) + '\\n');
 const panes = fs.existsSync(process.env.TEST_PANES_FILE) ? JSON.parse(fs.readFileSync(process.env.TEST_PANES_FILE, 'utf8')) : JSON.parse(process.env.TEST_PANES);
 const paneErrors = JSON.parse(process.env.TEST_PANE_ERRORS);
 if (args[0] === 'pane' && paneErrors[args[2]]) {
+  if (process.env.TEST_PANE_STDERR) {
+    process.stderr.write(process.env.TEST_PANE_STDERR);
+    process.exit(1);
+  }
   console.error(JSON.stringify({ id: 'cli:' + args.slice(0, 2).join(':'), error: { code: paneErrors[args[2]], message: 'Pane error ' + paneErrors[args[2]] + '.' } }));
   process.exit(1);
 }
@@ -209,6 +213,7 @@ if (args[0] === 'agent' && args[1] === 'prompt' && paneErrors[args[2]]) {
   process.exit(1);
 }
 if (args[0] === 'pane' && args[1] === 'rename' && JSON.parse(process.env.TEST_FAIL_RENAMES).includes(args[2])) {
+  if (process.env.TEST_RENAME_STDERR) { process.stderr.write(process.env.TEST_RENAME_STDERR); process.exit(1); }
   console.error(JSON.stringify({ id: 'cli:pane:rename', error: { code: 'rename_failed', message: 'Pane error rename_failed.' } }));
   process.exit(1);
 }
@@ -260,6 +265,8 @@ exec node "$(dirname "$0")/herdr.cjs" "$@"
     ...process.env, HOME: root, HERDR_BOSS_DIR: root, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
     TEST_CALLS: callsFile, TEST_PANES: JSON.stringify(panes), TEST_PANES_FILE: path.join(root, 'panes.json'), TEST_FAIL_PROMPTS: JSON.stringify(failPrompts),
     TEST_PANE_LIST_FAIL: paneListFails ? '1' : '0', TEST_PANE_ERRORS: JSON.stringify(paneErrors), TEST_FAIL_RENAMES: JSON.stringify(failRenames),
+    TEST_PANE_STDERR: '',
+    TEST_RENAME_STDERR: '',
     TEST_AGENTS: JSON.stringify(agents), TEST_FAIL_AGENT_RENAMES: JSON.stringify(failAgentRenames),
     TEST_SUCCESSOR_KIND: successorKind, TEST_GOAL_PANE: `${ws}:p2`, TEST_GOAL_STATE: path.join(root, 'goal-state.txt'), TEST_GOAL_SCREEN: goalScreen ?? record.goal ?? (boss ? '' : 'Ship the release safely.'),
   };

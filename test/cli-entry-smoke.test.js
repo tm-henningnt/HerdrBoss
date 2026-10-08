@@ -100,6 +100,15 @@ test('worker help forms print complete usage and exit successfully', async () =>
   }
 });
 
+test('check --help prints its usage and exits successfully', async () => {
+  const result = await runCli(['check', '--help']);
+  assertNoInitializationCrash(result, 'check --help');
+  assert.equal(result.error?.code ?? 0, 0, `check --help must exit 0: ${result.stderr}`);
+  assert.match(result.stdout, /Usage: check --report FILE \| --run FILE \| --worktree DIR --allow PATH/);
+  assert.match(result.stdout, /check agents \[FILE\]/);
+  assert.match(result.stdout, /check kit/);
+});
+
 test('every listed top-level CLI command has a safe entry smoke check', async () => {
   const startedAt = Date.now();
   const help = await runCli(['help']);

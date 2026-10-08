@@ -15,6 +15,7 @@ import { EXIT_CODES as GOAL_EXIT_CODES, setGoal } from './goal-set.js';
 import { reownProjectLocks } from './kit/locks.js';
 import { reownLeases } from './leases.js';
 import { appendForcedAction, forceReason } from './force-audit.js';
+import { redactBrowserSecrets } from './browser-url-mask.js';
 
 const FILE = path.join(DATA_DIR, 'handoffs.json');
 const TARGETS = new Set(['codex', 'claude', 'pi', 'opencode']);
@@ -71,6 +72,16 @@ function boundedContext(raw) {
   return truncated ? `${TRUNCATION_MARKER}\n${text}` : text;
 }
 
+function activationStepError(step, error) {
+  const raw = String(error?.stderr || error?.message || error || '').trim();
+  const detail = redactBrowserSecrets(redactContext(raw));
+  const detailLines = detail ? detail.split(/\r?\n/) : [];
+  const truncated = detailLines.length > 19;
+  const lines = [`Handover activation failed while ${step}.`, ...detailLines.slice(0, truncated ? 18 : 19)];
+  if (truncated) lines.push('[stderr truncated]');
+  return new Error(lines.join('\n'), { cause: error });
+}
+
 function sourceContext(id) {
   for (const source of ['recent', 'visible']) {
     try {
@@ -122,9 +133,10 @@ function call(command, args, cwd, { timeout = 120000, killSignal = 'SIGTERM' } =
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PATH: `${path.join(os.homedir(), '.local/bin')}${path.delimiter}${process.env.PATH || ''}` } });
 }
-function herdrError(envelope) {
+function herdrError(envelope, stderr = '') {
   const error = new Error(envelope.message || String(envelope));
   if (envelope.code) error.code = envelope.code;
+  if (stderr) error.stderr = stderr;
   return error;
 }
 function herdr(args) {
@@ -135,7 +147,7 @@ function herdr(args) {
     for (const stream of [e.stderr, e.stdout]) {
       let response;
       try { response = JSON.parse(stream); } catch { continue; }
-      if (response?.error && typeof response.error === 'object') throw herdrError(response.error);
+      if (response?.error && typeof response.error === 'object') throw herdrError(response.error, e.stderr || '');
     }
     throw e;
   }
@@ -922,14 +934,23 @@ export async function activateHandoff(id, { confirmed = false, goalSetter = setG
   let sourceMissing = false;
   let source = null;
   try { source = herdr(['pane', 'get', item.sourcePane]).pane; }
-  catch (e) { if (e.code !== 'pane_not_found') throw e; sourceMissing = true; }
+  catch (e) {
+    if (e.code === 'pane_not_found') sourceMissing = true;
+    else throw activationStepError('reading the source pane', e);
+  }
   if (Object.hasOwn(item, 'memoryUpdateStatus') && !sourceMissing && !['idle', 'done'].includes(source?.agent_status)) {
     throw new Error('The source orchestrator is working. Wait until it is idle or done before activating this forced context handoff.');
   }
   const sourceLabel = sourceMissing ? null : `${role} previous`;
-  if (!sourceMissing) herdr(['pane', 'rename', item.sourcePane, sourceLabel]);
+  if (!sourceMissing) {
+    try { herdr(['pane', 'rename', item.sourcePane, sourceLabel]); }
+    catch (e) { throw activationStepError('renaming the source pane', e); }
+  }
   try { herdr(['pane', 'rename', item.newPane, role]); }
-  catch (e) { if (!sourceMissing) try { herdr(['pane', 'rename', item.sourcePane, item.label]); } catch {} throw e; }
+  catch (e) {
+    if (!sourceMissing) try { herdr(['pane', 'rename', item.sourcePane, item.label]); } catch {}
+    throw activationStepError('renaming the successor pane', e);
+  }
   item.status = 'active'; item.activatedAt = new Date().toISOString();
   item.activation = { at: item.activatedAt, sourcePane: item.sourcePane, successorPane: item.newPane, sourceLabel, successorLabel: role };
   if (sourceMissing) item.activation.sourceMissing = true;

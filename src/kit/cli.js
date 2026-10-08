@@ -47,6 +47,10 @@ const USAGE = `Kit commands:
   models [--kind KIND]
 `;
 
+const CHECK_USAGE = `Usage: check --report FILE | --run FILE | --worktree DIR --allow PATH...
+       check agents [FILE]
+       check kit`;
+
 export const WORKER_COMMAND_USAGE = Object.freeze({
   start: `Usage: worker start <name> --kind KIND (--task TEXT | --task-file FILE) [options]
 Options:
@@ -628,9 +632,13 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
   }
 
   if (command === 'check') {
+    if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) {
+      output(CHECK_USAGE);
+      return;
+    }
     const { positional, flags } = parseArgs(argv, { repeat: ['--allow'] });
     knownFlags(flags, ['report', 'run', 'worktree', 'allow']);
-    if (positional.length) fail('Usage: check --report FILE | --run FILE | --worktree DIR --allow PATH...');
+    if (positional.length) fail(CHECK_USAGE);
     const targets = ['report', 'run', 'worktree'].filter((key) => flags[key]);
     if (targets.length > 1) fail('Use only one of --report, --run, or --worktree.');
     if (flags.report) {
@@ -658,7 +666,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       output(`check: PASS (worktree scope, ${actual.length} changed paths)`);
       return { actual, disallowed };
     }
-    fail('Usage: check --report FILE | --run FILE | --worktree DIR --allow PATH...');
+    fail(CHECK_USAGE);
   }
 
   if (command === 'gh') {

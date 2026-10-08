@@ -48,8 +48,8 @@ function kitFiles(root, directory) {
   });
 }
 
-// Hash only content that the kit installer distributes. The project-kit template body is canonical;
-// its generated revision line and note are not part of the input.
+// Hash shared guidance and installed assets so either kind of change requires a kit update. The
+// project-kit template body is canonical; its generated revision line and note are not part of input.
 export function kitRevision(root = KIT_ROOT) {
   try {
     const template = path.join(root, 'kit/templates/project-kit.md');
@@ -57,6 +57,7 @@ export function kitRevision(root = KIT_ROOT) {
       ...kitFiles(root, 'kit/templates'),
       'kit/skills/herdr-orchestrator/SKILL.md',
       ...kitFiles(root, 'kit/skills/herdr-orchestrator/reference'),
+      'kit/models.md',
       'kit/models.json',
       ...kitFiles(root, 'kit/watch'),
     ].sort();

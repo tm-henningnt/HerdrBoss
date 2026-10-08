@@ -40,6 +40,20 @@ test('the kit file has a version line, a do-not-edit line, and the template body
   assert.ok(kit.text.endsWith(`${body}\n`));
 });
 
+test('the kit revision changes when the shared model guidance changes', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-kit-revision-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.cpSync(path.join(ROOT, 'kit', 'templates'), path.join(dir, 'kit', 'templates'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'kit', 'skills'), path.join(dir, 'kit', 'skills'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'kit', 'watch'), path.join(dir, 'kit', 'watch'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'kit'), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'kit', 'models.json'), path.join(dir, 'kit', 'models.json'));
+  fs.copyFileSync(path.join(ROOT, 'kit', 'models.md'), path.join(dir, 'kit', 'models.md'));
+  const before = kitRevision(dir);
+  fs.appendFileSync(path.join(dir, 'kit', 'models.md'), '\nModel guidance change.\n');
+  assert.notEqual(kitRevision(dir), before);
+});
+
 test('the stub has 6 to 8 lines and names the kit file and memory', () => {
   const stub = agentsBlock();
   const lines = stub.body.split('\n');

@@ -78,3 +78,19 @@ Use `--accept-scope` for other extra files that the project lead approved. This 
 The lock watchdog checks a live `full-suite` lock after it runs longer than the multiplier times its predicted hold time. It sends one notice to the holder pane and the Boss when the process tree stays below the CPU limit in the Locks panel on Settings. The notice names the holder and child processes and tells you to inspect the pane. The Boss or holder pane can run `herdr-boss lock release`; the watchdog never releases the lock.
 
 For persisted record rules, see the [record inventory](architecture-records.md). For supervisor steps and gaps, see the [supervisor contract](reference/supervisor-contract.md). For technical details, see the [Reference](reference/index.md). For commands, see the [CLI reference](cli.md).
+
+## Harness sync and release settings
+
+Run `herdr-boss harness sync` after you register projects or change the worktree root. The command adds each registered project's common Git directory to Codex `writable_roots`. This lets Codex write shared Git metadata for linked worktrees. The command prints each path it adds and saves a backup before it edits the Codex config.
+
+WARNING: The shared `.git` root gives Codex write access to refs, config, and hooks of the main repository.
+
+If the command cannot verify a common Git directory, it tries the repository `.git` path and prints a warning. It skips that project root if neither path is a valid Git directory.
+
+Set `releases.repos` in **Settings → Advanced → Service settings → Releases**. This setting lists the repositories that may request a release. When a repository is not allowed, the refusal names `releases.repos` and points to this Settings page.
+
+## CLI checks and handover errors
+
+Run `herdr-boss check --help` to see the report, run, worktree, agents, and kit check forms.
+
+When a pane command fails during handover activation, the CLI prints up to 20 lines of redacted stderr.

@@ -493,6 +493,76 @@ test('harness sync adds the missing roots, keeps the others, makes a backup, and
   assert.equal(fs.readdirSync(path.dirname(config)).filter((name) => name.startsWith('config.toml.bak-')).length, 1);
 });
 
+test('harness sync adds a linked worktree shared git directory and prints the added root', (t) => {
+  const f = fixture(t);
+  const main = gitRepo(f, 'main');
+  execFileSync('git', ['-C', main, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-m', 'init']);
+  const linked = path.join(f.home, 'Projects', 'linked');
+  execFileSync('git', ['-C', main, 'worktree', 'add', '--detach', linked]);
+  registry(f, [{ slug: 'linked', repo: linked, remote: 'https://github.com/example/linked.git' }]);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  const before = codexConfig([path.join(f.home, '.herdr-boss'), path.join(f.home, 'Projects', '.herdr-wt')]);
+  writeFile(config, before);
+
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const sharedGitDir = path.join(main, '.git');
+  assert.match(fs.readFileSync(config, 'utf8'), new RegExp(sharedGitDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(fs.readFileSync(config, 'utf8'), new RegExp(`${linked}/\\.git`));
+  assert.match(result.stdout, new RegExp(`added .*${sharedGitDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  const backups = fs.readdirSync(path.dirname(config)).filter((name) => /^config\.toml\.bak-\d{8}T\d{6}Z$/.test(name));
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(path.dirname(config), backups[0]), 'utf8'), before);
+});
+
+test('harness sync warns and adds no project root when a gitdir pointer and fallback are invalid', (t) => {
+  const f = fixture(t);
+  const repo = gitRepo(f, 'broken');
+  fs.rmSync(path.join(repo, '.git'), { recursive: true, force: true });
+  writeFile(path.join(repo, '.git'), 'gitdir: missing/admin\n');
+  registry(f, [{ slug: 'broken', repo, remote: 'https://github.com/example/broken.git' }]);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([]));
+
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = fs.readFileSync(config, 'utf8');
+  assert.doesNotMatch(saved, /Projects\/broken\/\.git|missing\/admin/);
+  assert.match(result.stdout, /Warning: .*project broken.*no project Git root was added/);
+});
+
+test('harness sync warns and falls back to a valid repository git directory', (t) => {
+  const f = fixture(t);
+  const repo = gitRepo(f, 'fallback');
+  writeFile(path.join(repo, '.git', 'commondir'), 'missing-common\n');
+  registry(f, [{ slug: 'fallback', repo, remote: 'https://github.com/example/fallback.git' }]);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([]));
+
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = fs.readFileSync(config, 'utf8');
+  assert.ok(saved.includes(fs.realpathSync(path.join(repo, '.git'))), saved);
+  assert.match(result.stdout, /Warning: .*project fallback.*using its \.git directory/);
+});
+
+test('harness sync resolves a symlinked git directory to its real path', (t) => {
+  const f = fixture(t);
+  const target = gitRepo(f, 'target');
+  const repo = path.join(f.home, 'Projects', 'symlinked');
+  fs.mkdirSync(repo, { recursive: true });
+  fs.symlinkSync(path.join(target, '.git'), path.join(repo, '.git'), 'dir');
+  registry(f, [{ slug: 'symlinked', repo, remote: 'https://github.com/example/symlinked.git' }]);
+  const config = path.join(f.home, '.codex', 'config.toml');
+  writeFile(config, codexConfig([]));
+
+  const result = run(f, ['harness', 'sync', '--codex-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = fs.readFileSync(config, 'utf8');
+  assert.ok(saved.includes(fs.realpathSync(path.join(target, '.git'))), saved);
+  assert.ok(!saved.includes(path.join(repo, '.git')), saved);
+});
+
 test('harness sync reports nothing when every Claude template line is present', (t) => {
   const f = harnessSyncFixture(t);
   writeClaudeAutoMode(f, f.expected);

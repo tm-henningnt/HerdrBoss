@@ -9,8 +9,8 @@ import { runKitCommand } from '../src/kit/cli.js';
 import { collectWorker, commitWorker, listCwdProcesses, startWorker, stopOwnWorker } from '../src/kit/workers.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 
-function startKind(f, name, { kind = 'codex', allow = ['src/'] } = {}) {
-  return startWorker(name, { kind, task: 'x', allow }, {
+function startKind(f, name, { kind = 'codex', model, allow = ['src/'] } = {}) {
+  return startWorker(name, { kind, model, task: 'x', allow }, {
     config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
   });
 }
@@ -241,10 +241,11 @@ test('the codex worker brief carries the stop-own and no-commit rules', (t) => {
   const template = path.resolve('kit/templates/worker-brief.md');
   const f = setupFixture(null);
   f.config.briefTemplatePath = template;
-  const run = startKind(f, 'brief-codex');
+  const run = startKind(f, 'brief-codex', { model: 'gpt-6-luna' });
   cleanup(t, f, run);
   const brief = fs.readFileSync(path.join(run.worktree, '.worker/brief.md'), 'utf8');
   assert.match(brief, /herdr-boss worker stop-own brief-codex --pid/);
+  assert.match(brief, /For an eligible leftover process in this worker, run `herdr-boss worker stop-own brief-codex --pid <pid>`/);
   assert.match(brief, /Never run `kill`, `pkill`, `killall`/);
   assert.match(brief, /do not run `git add` or `git commit`/i);
   assert.match(brief, /herdr-boss worker commit brief-codex -m MESSAGE/);
