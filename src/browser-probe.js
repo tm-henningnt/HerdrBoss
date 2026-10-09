@@ -1,6 +1,6 @@
 // A CDP round trip against a project browser. /json/version can answer while the browser serves no tab,
 // so the probe opens a temporary background tab and evaluates 1+1 in it. It closes only the tab that it opened.
-import { BROWSER_QUIET_MS } from './browser-activity.js';
+import { BROWSER_QUIET_MS, withBrowserCommand } from './browser-activity.js';
 
 export const PROBE_INTERVAL_MS = 60000;
 const STEP_MS = 3000;
@@ -10,6 +10,12 @@ const FAILURES_TO_MARK = 2;
 
 class StepError extends Error {
   constructor(reason) { super(reason); this.reason = reason; }
+}
+
+// A reserved browser restart refuses a probe command (exitCode 3). The probe never read the browser, so it is not
+// a failed probe. The detector ignores a skipped result: it keeps the previous state and counts no failure.
+class SkippedError extends Error {
+  constructor() { super('browser restart in progress'); this.skipped = true; }
 }
 
 function timeoutAfter(ms, reason) {
@@ -22,7 +28,7 @@ function timeoutAfter(ms, reason) {
 async function step(work, limit, timedOut, failed) {
   const timer = timeoutAfter(limit, timedOut);
   try { return await Promise.race([work, timer.promise]); }
-  catch (error) { throw error instanceof StepError ? error : new StepError(failed); }
+  catch (error) { if (error?.skipped) throw error; throw error instanceof StepError ? error : new StepError(failed); }
   finally { timer.cancel(); work.catch?.(() => {}); }
 }
 
@@ -80,12 +86,24 @@ async function endpointOf(port, fetchImpl) {
 
 // Return { ok: true } or { ok: false, reason }. The reason is a plain phrase without a URL or a tab title.
 // The function never throws. stepMs limits each step and totalMs limits all steps together.
-export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS, cleanupMs = CLEANUP_MS, fetch: fetchImpl = globalThis.fetch, WebSocket: WebSocketImpl = globalThis.WebSocket, onTabs = () => {} } = {}) {
+// With a project, the tab open, the stale-tab sweep and the tab close run in the browser command queue
+// (the same queue as every other tab open), so a restart waits for them and a probe never counts as user activity.
+export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS, cleanupMs = CLEANUP_MS, fetch: fetchImpl = globalThis.fetch, WebSocket: WebSocketImpl = globalThis.WebSocket, onTabs = () => {}, project = null, queue = null } = {}) {
   const deadline = Date.now() + totalMs;
   const limit = () => Math.max(1, Math.min(stepMs, deadline - Date.now()));
   // The holder lets the cleanup reach a socket that the getVersion step opens late. After cancel, a step that still runs opens and sends nothing.
   const holder = { session: null, cancelled: false, created: null, creating: null };
   const live = () => { if (holder.cancelled) throw new StepError('probe cancelled'); };
+  const useQueue = typeof queue === 'function' ? queue : (project ? withBrowserCommand : null);
+  const queued = (work) => {
+    if (!useQueue) return work();
+    // A restart in progress refuses the command with exitCode 3. That is a skip, not a failed probe.
+    return useQueue(project, work, { markActivity: false }).catch((error) => {
+      if (error?.exitCode === 3) throw new SkippedError();
+      throw error;
+    });
+  };
+  let result;
   try {
     await step((async () => {
       // The abort fires after the step timer, so a hung answer reads as a timeout.
@@ -103,10 +121,12 @@ export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS,
     onTabs(pageTargets.filter((info) => !isProbeTab(info.targetId)).map((info) => ({ id: info.targetId, url: info.url })));
     const pageIds = pageTargets.map((info) => info.targetId);
     const attachedTabIds = pageTargets.filter((info) => info.attached === true).map((info) => info.targetId);
-    holder.creating = session.send('Target.createTarget', { url: 'about:blank', background: true }).then((result) => {
-      holder.created = result.targetId || null;
-      if (holder.created) probeTabs.set(holder.created, Date.now());
-      return result;
+    // Close a tagged probe tab that a previous probe left behind, before this probe opens its own tab.
+    try { await queued(() => sweepProbeTabs({ targets: pageIds, closeTarget: (id) => session.send('Target.closeTarget', { targetId: id }), now: Date.now() })); } catch {}
+    holder.creating = queued(() => session.send('Target.createTarget', { url: 'about:blank', background: true })).then((created) => {
+      holder.created = created.targetId || null;
+      if (holder.created) tagProbeTab(holder.created, project, Date.now());
+      return created;
     });
     holder.creating.catch(() => {});
     const target = await step(holder.creating, limit(), 'createTarget timed out', 'createTarget failed');
@@ -116,40 +136,84 @@ export async function probeBrowser(port, { stepMs = STEP_MS, totalMs = TOTAL_MS,
       return (await session.send('Runtime.evaluate', { expression: '1+1', returnByValue: true }, sessionId))?.result?.value;
     })(), limit(), 'evaluate did not return', 'evaluate failed');
     if (value !== 2) throw new StepError('evaluate returned a wrong value');
-    return finish({ ok: true, pageIds, attachedTabIds, attachedClientCount: attachedTabIds.length });
+    result = { ok: true, pageIds, attachedTabIds, attachedClientCount: attachedTabIds.length };
   } catch (error) {
-    return finish({ ok: false, reason: error instanceof StepError ? error.reason : 'probe failed' });
-  }
-
-  // Close the temporary tab and the socket in every case, then return the result with a warning when the tab stayed open.
-  async function finish(result) {
+    result = error?.skipped
+      ? { ok: false, skipped: true, reason: 'browser restart in progress' }
+      : { ok: false, reason: error instanceof StepError ? error.reason : 'probe failed' };
+  } finally {
+    // Close the temporary tab and the socket in every case, also on a timeout, an error and a hung request.
     holder.cancelled = true;
-    const warning = await closeTemporaryTab({ port, holder, cleanupMs, fetchImpl });
+    try {
+      const warning = await closeTemporaryTab({ port, holder, cleanupMs, fetchImpl, queued });
+      if (warning) result.warnings = [warning];
+    } catch {}
     holder.session?.close();
-    return warning ? { ...result, warnings: [warning] } : result;
   }
+  return result;
 }
 
 // Tabs that a probe opened. Each entry ends when the tab closes, or after 10 minutes. The tab list hides these tabs.
+// A tag holds the project and the time, so the sweep below can close a tab that a failed cleanup left behind.
 const probeTabs = new Map();
 const PROBE_TAB_TTL_MS = 10 * 60000;
+// A leaked probe tab is swept on a later engine tick after this age. The registry keeps a tag for 10 minutes, so
+// the next tick reaches it. Only a tagged tab is swept; a tab of the Owner or of a worker carries no tag.
+export const PROBE_TAB_STALE_MS = 2 * 60000;
+// The most probe tabs that one tick closes. The sweep stays bounded, also when many tabs leaked at once.
+export const PROBE_TAB_SWEEP_MAX = 20;
+
+function pruneProbeTabs(now) {
+  for (const [tab, tag] of probeTabs) if (now - tag.at > PROBE_TAB_TTL_MS) probeTabs.delete(tab);
+}
+
 export function isProbeTab(id, now = Date.now()) {
-  for (const [tab, at] of probeTabs) if (now - at > PROBE_TAB_TTL_MS) probeTabs.delete(tab);
+  pruneProbeTabs(now);
   return probeTabs.has(id);
+}
+
+// Tag a tab that a probe opened, so the tab list hides it and the sweep can close it on a later tick.
+export function tagProbeTab(id, project = null, at = Date.now()) {
+  if (typeof id === 'string' && id) probeTabs.set(id, { project, at });
+}
+
+export function untagProbeTab(id) {
+  probeTabs.delete(id);
+}
+
+// Close tagged probe tabs older than minAgeMs in one bounded tick. `targets` holds page target IDs, or target
+// objects with an `id`. Return the IDs that closed. A close that fails keeps its tag for the next tick.
+export async function sweepProbeTabs({ targets = [], closeTarget, now = Date.now(), minAgeMs = PROBE_TAB_STALE_MS, max = PROBE_TAB_SWEEP_MAX } = {}) {
+  const closed = [];
+  if (typeof closeTarget !== 'function') return closed;
+  for (const target of targets) {
+    if (closed.length >= max) break;
+    const id = typeof target === 'string' ? target : target?.id;
+    const tag = typeof id === 'string' ? probeTabs.get(id) : null;
+    if (!tag || now - tag.at < minAgeMs) continue;
+    try { await closeTarget(id); untagProbeTab(id); closed.push(id); } catch {}
+  }
+  return closed;
 }
 
 // Close the tab that this probe created. Wait a short time for a late createTarget answer to learn its ID.
 // Return a plain warning when the tab did not close. The warning holds the target ID and no URL.
-async function closeTemporaryTab({ port, holder, cleanupMs, fetchImpl }) {
+async function closeTemporaryTab({ port, holder, cleanupMs, fetchImpl, queued = (work) => work() }) {
   if (holder.creating && !holder.created) await Promise.race([holder.creating.catch(() => {}), new Promise((resolve) => setTimeout(resolve, cleanupMs))]);
   const id = holder.created;
   if (!id) return null;
   if (holder.session?.isOpen()) {
-    try { await step(holder.session.send('Target.closeTarget', { targetId: id }), cleanupMs, 'close timed out', 'close failed'); probeTabs.delete(id); return null; } catch {}
+    // Chrome reports a refused close with success: false on an answering socket, so fall through to the HTTP close.
+    try {
+      const closed = await step(queued(() => holder.session.send('Target.closeTarget', { targetId: id })), cleanupMs, 'close timed out', 'close failed');
+      if (closed?.success === false) throw new Error('close refused');
+      untagProbeTab(id);
+      return null;
+    } catch {}
   }
   try {
     const response = await fetchImpl(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(cleanupMs) });
-    if (response.ok) { probeTabs.delete(id); return null; }
+    if (response.ok) { untagProbeTab(id); return null; }
   } catch {}
   return `The probe tab ${id} on port ${port} did not close.`;
 }
@@ -179,10 +243,12 @@ export function createBrowserProbes({ probe = probeBrowser, intervalMs = PROBE_I
     running.add(record);
     const work = (async () => {
       let result;
-      try { result = await probe(browser.port, { onTabs: (tabs) => onTabs(tabs, browser),
+      try { result = await probe(browser.port, { onTabs: (tabs) => onTabs(tabs, browser), project: browser.project,
         ...(browser.externalClients > 0 ? { stepMs: STEP_MS * 2, totalMs: TOTAL_MS * 2 } : {}) }); } catch { result = { ok: false, reason: 'probe failed' }; }
       for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) { try { onWarning(warning, browser); } catch {} }
       const state = record.state;
+      // A restart refused the probe: this is not a reading. Keep the previous verdict and count no failure.
+      if (result?.skipped) return;
       state.lastProbeAt = new Date(now).toISOString();
       if (result?.ok) Object.assign(state, {
         ok: true, notResponding: false, reason: null, failures: 0, since: null,

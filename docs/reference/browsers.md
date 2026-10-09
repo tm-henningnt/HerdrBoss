@@ -54,6 +54,8 @@ Each step has a limit of 3 seconds. The four steps together have a limit of 8 se
 
 The probe records the ID of its blank tab. `browser tabs`, the preview grid, and the tab counts hide that tab. Herdr Boss drops a record when the tab closes, or after 10 minutes. When the blank tab does not close, the service writes one `browser` event to the log: `The probe tab ID on port PORT did not close.`
 
+The probe opens and closes its blank tab through the browser command queue. That is the same queue as every other tab open, so a restart waits for the probe and the probe never counts as Owner or agent activity. The probe tags its blank tab. Before a probe opens its own tab, it sweeps a tagged probe tab that an earlier failed cleanup left behind. The sweep closes a tagged tab only after the tab is older than 2 minutes, and it closes at most 20 tabs in one tick. It closes only a tab with a tag, so it never closes a tab of the Owner or of a worker. A tab whose close fails keeps its tag for the next tick.
+
 The service runs at most one probe for each browser in 60 seconds. It never runs two probes of one browser at the same time. It runs no probe for a closed browser, for a browser that Herdr Boss did not start, for a browser that started less than 120 seconds ago, or in the read-only preview.
 
 One failed probe changes nothing. Two failed probes in a row mark the browser `not responding`. One successful probe clears the mark. The service sends no not-responding notice while `GET /json/version` answers. A deliberate close clears the notice and marks the browser `closed`. The engine state and `GET /api/browser-sessions` show `closed`, `notResponding`, `probeAt` (time of the last probe), and `probeReason`. The reason is one of these phrases:

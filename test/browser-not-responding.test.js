@@ -242,6 +242,16 @@ test('the engine excludes failures during commands and waits for 20 quiet second
   assert.equal(out.steps[5].notResponding, true);
 });
 
+test('a probe that a browser restart skipped marks nothing and does not count as a failure', { timeout: 60000 }, () => {
+  const skipped = { ok: false, skipped: true, reason: 'browser restart in progress' };
+  const out = runEngine([fail('getTargets timed out'), { advanceMs: 60_000, probe: skipped }, { advanceMs: 60_000, probe: skipped }],
+    { probeIntervalMs: 60_000, cdpResponsive: false });
+  const last = out.steps.at(-1);
+  assert.equal(last.notResponding, false);
+  assert.equal(last.reason, 'getTargets timed out', 'the skipped probe keeps the last reason');
+  assert.deepEqual(last.alerts, []);
+});
+
 test('browser notice diagnosis ends after a week', { timeout: 60000 }, () => {
   const out = runEngine([fail('getVersion timed out'), fail('getVersion timed out'), { ok: true },
     { advanceMs: 7 * 86400_000, probe: fail('evaluate did not return') }, fail('evaluate did not return')], { cdpResponsive: false });

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeCdp } from './fake-cdp.js';
 import fs from 'node:fs';
-import { probeBrowser, createBrowserProbes, isProbeTab, PROBE_INTERVAL_MS } from '../src/browser-probe.js';
+import { probeBrowser, createBrowserProbes, isProbeTab, tagProbeTab, sweepProbeTabs, PROBE_INTERVAL_MS, PROBE_TAB_STALE_MS, PROBE_TAB_SWEEP_MAX } from '../src/browser-probe.js';
 
 const fast = { stepMs: 200, totalMs: 800, cleanupMs: 200 };
 async function withCdp(options, run) {
@@ -378,4 +378,114 @@ test('the registry holds the probe tab while the probe runs, drops it after a cl
 test('the tab list hides the tabs of the probe', () => {
   const source = fs.readFileSync(new URL('../src/browser-preview.js', import.meta.url), 'utf8');
   assert.match(source, /\(await \(adapters\.listTargets \|\| targets\)\(session\)\)\.filter\(\(page\) => !isProbeTab\(page\.id\)\)/);
+});
+
+// ----- the probe tab queue and the bounded sweep -----
+
+test('a probe opens and closes its tab only through the browser command queue', async () => {
+  const events = [];
+  const queue = async (project, work, options) => { events.push({ project, markActivity: options?.markActivity }); return work(); };
+  await withCdp({}, async (cdp) => {
+    const result = await probeBrowser(cdp.port, { ...fast, project: 'alpha', queue });
+    assert.equal(result.ok, true);
+    assert.ok(events.length >= 2, 'the tab open and the tab close both use the queue');
+    assert.ok(events.every((event) => event.project === 'alpha'));
+    assert.ok(events.every((event) => event.markActivity === false), 'a probe is never user activity');
+    assert.deepEqual(cdp.created[0].params, { url: 'about:blank', background: true });
+  });
+});
+
+test('the tracker hands the project to the probe so its tab opens through the queue', async () => {
+  const seen = [];
+  const probes = createBrowserProbes({ probe: async (_port, options) => { seen.push(options.project); return { ok: true }; } });
+  probes.tick(browser(), 1_000_000);
+  await probes.idle();
+  assert.deepEqual(seen, ['alpha']);
+});
+
+test('the sweep closes a tagged probe tab that is older than the stale age', async () => {
+  const now = 1_000_000;
+  tagProbeTab('old-probe', 'alpha', now - PROBE_TAB_STALE_MS - 1000);
+  const closed = [];
+  const result = await sweepProbeTabs({ targets: ['old-probe', 'user-tab'], closeTarget: async (id) => { closed.push(id); }, now });
+  assert.deepEqual(closed, ['old-probe']);
+  assert.deepEqual(result, ['old-probe']);
+  assert.equal(isProbeTab('old-probe', now), false);
+});
+
+test('the sweep leaves a young probe tab and a tab that is not a probe', async () => {
+  const now = 1_000_000;
+  tagProbeTab('young-probe', 'alpha', now - 30_000);
+  const closed = [];
+  const result = await sweepProbeTabs({ targets: ['young-probe', 'owner-tab'], closeTarget: async (id) => { closed.push(id); }, now });
+  assert.deepEqual(result, []);
+  assert.deepEqual(closed, []);
+  assert.equal(isProbeTab('young-probe', now), true);
+});
+
+test('the sweep closes at most the bounded number of tabs in one tick', async () => {
+  const now = 1_000_000;
+  const ids = Array.from({ length: PROBE_TAB_SWEEP_MAX + 5 }, (_, index) => `probe-${index}`);
+  for (const id of ids) tagProbeTab(id, 'alpha', now - PROBE_TAB_STALE_MS - 1000);
+  const closed = [];
+  const result = await sweepProbeTabs({ targets: ids, closeTarget: async (id) => { closed.push(id); }, now });
+  assert.equal(result.length, PROBE_TAB_SWEEP_MAX);
+  assert.equal(closed.length, PROBE_TAB_SWEEP_MAX);
+  assert.equal(ids.filter((id) => isProbeTab(id, now)).length, 5);
+});
+
+test('the sweep keeps the tag of a tab whose close fails for the next tick', async () => {
+  const now = 1_000_000;
+  tagProbeTab('stubborn-probe', 'alpha', now - PROBE_TAB_STALE_MS - 1000);
+  const result = await sweepProbeTabs({ targets: ['stubborn-probe'], closeTarget: async () => { throw new Error('socket closed'); }, now });
+  assert.deepEqual(result, []);
+  assert.equal(isProbeTab('stubborn-probe', now), true);
+});
+
+test('a probe closes a leftover probe tab that an earlier probe left behind', async () => {
+  tagProbeTab('leftover-probe', 'alpha', Date.now() - PROBE_TAB_STALE_MS - 1000);
+  await withCdp({ behavior: { 'Target.getTargets': () => ({ targetInfos: [
+    { targetId: 'leftover-probe', type: 'page' },
+    { targetId: 'user-tab', type: 'page', attached: true },
+  ] }) } }, async (cdp) => {
+    const result = await probeBrowser(cdp.port, { ...fast, project: 'alpha', queue: async (_project, work) => work() });
+    assert.equal(result.ok, true);
+    assert.ok(cdp.closed.includes('leftover-probe'), 'the leftover probe tab is swept');
+    assert.ok(!cdp.closed.includes('user-tab'), 'a tab that is not a probe is left alone');
+    assert.equal(isProbeTab('leftover-probe'), false);
+  });
+});
+
+test('a probe that a reserved browser restart refuses is skipped, not failed, and opens no tab', async () => {
+  await withCdp({}, async (cdp) => {
+    const refusal = Object.assign(new Error('The alpha browser restart is in progress. Retry when it finishes.'), { exitCode: 3 });
+    const queue = async () => { throw refusal; };
+    const result = await probeBrowser(cdp.port, { ...fast, project: 'alpha', queue });
+    assert.deepEqual(result, { ok: false, skipped: true, reason: 'browser restart in progress' });
+    assert.deepEqual(cdp.created, []);
+  });
+});
+
+test('the detector ignores a skipped probe and keeps the failure count and the reason', async () => {
+  const skipped = { ok: false, skipped: true, reason: 'browser restart in progress' };
+  const { probes } = tracker([{ ok: false, reason: 'getTargets timed out' }, skipped, skipped]);
+  const now = 1_000_000;
+  probes.tick(browser(), now);
+  await probes.idle();
+  assert.equal(probes.tick(browser(), now + PROBE_INTERVAL_MS - 1).failures, 1);
+  probes.tick(browser(), now + PROBE_INTERVAL_MS);
+  await probes.idle();
+  const state = probes.tick(browser(), now + 2 * PROBE_INTERVAL_MS - 1);
+  assert.equal(state.failures, 1, 'the skipped probe keeps the failure count');
+  assert.equal(state.reason, 'getTargets timed out', 'the skipped probe keeps the reason');
+  assert.equal(state.notResponding, false);
+});
+
+test('a probe tab whose close answers success false is closed over HTTP instead', async () => {
+  await withCdp({ behavior: { 'Target.closeTarget': () => ({ success: false }) } }, async (cdp) => {
+    const result = await probeBrowser(cdp.port, fast);
+    assert.equal(result.ok, true);
+    assert.deepEqual(cdp.httpClosed, [cdp.created[0].id]);
+    assert.equal(result.warnings, undefined);
+  });
 });

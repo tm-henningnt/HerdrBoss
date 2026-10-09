@@ -1022,7 +1022,7 @@ export class Engine extends EventEmitter {
               beforeClose: async (session) => {
                 let latest;
                 let latestClients = null;
-                try { latest = await this.collectors.probeBrowser(session.port); } catch {}
+                try { latest = await this.collectors.probeBrowser(session.port, { project: session.project }); } catch {}
                 try { latestClients = await this.collectors.collectBrowserClients(session.port, { servicePid: process.pid, browserPid: browser.pid }); } catch {}
                 let currentAgentTabs = [];
                 try { currentAgentTabs = agentBrowserTabIds(b.project); } catch {}

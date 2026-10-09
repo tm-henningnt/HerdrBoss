@@ -45,7 +45,8 @@ export function beginBrowserCommand(project, options = {}) {
     const id = randomUUID();
     const at = time(options.now);
     entry.commands[id] = { pid: process.pid, at };
-    entry.lastCommandAt = Math.max(entry.lastCommandAt ?? 0, at);
+    // A probe holds a command slot so a restart waits for it, but it is not Owner or agent activity.
+    if (options.markActivity !== false) entry.lastCommandAt = Math.max(entry.lastCommandAt ?? 0, at);
     return id;
   });
 }
@@ -53,7 +54,7 @@ export function beginBrowserCommand(project, options = {}) {
 export function endBrowserCommand(project, id, options = {}) {
   mutate(project, options, (entry) => {
     delete entry.commands[id];
-    entry.lastCommandAt = Math.max(entry.lastCommandAt ?? 0, time(options.now));
+    if (options.markActivity !== false) entry.lastCommandAt = Math.max(entry.lastCommandAt ?? 0, time(options.now));
   });
 }
 
