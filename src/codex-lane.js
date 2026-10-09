@@ -48,12 +48,16 @@ export function clearCodexLaneBlock({ dir }) {
   fs.rmSync(path.join(dir, FILE_NAME), { force: true });
 }
 
-export function waitForCodexHookReview({ readSnapshot, isPromptReady = () => false, matchesDialog = hasCodexHookReviewDialog, clock = Date.now, wait, timeoutMs = 20_000, intervalMs = 250 }) {
+export function waitForCodexHookReview({ readSnapshot, isPromptReady = () => false, matchesDialog = hasCodexHookReviewDialog, clock = Date.now, wait, timeoutMs = 20_000, intervalMs = 250, emptyLimit = 8 }) {
   const startedAt = clock();
   let elapsedMs = 0;
+  let emptyReads = 0;
   for (;;) {
     const snapshot = readSnapshot();
     if (matchesDialog(snapshot)) return true;
+    // A pane that shows no text at all cannot show the dialog. A real Codex pane draws within a second or two.
+    emptyReads = String(snapshot ?? '').trim() ? 0 : emptyReads + 1;
+    if (emptyReads >= emptyLimit) return false;
     if (isPromptReady(snapshot)) return false;
     const elapsed = Math.max(elapsedMs, clock() - startedAt);
     if (elapsed >= timeoutMs) return false;

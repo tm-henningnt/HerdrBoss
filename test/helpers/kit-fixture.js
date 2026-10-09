@@ -76,7 +76,7 @@ export function setupFixture(setup) {
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: paneCwd } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
-    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: `% \n${ALL_READY_SCREENS}` };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
