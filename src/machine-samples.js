@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
+import { sharedWorktreeRoot } from './kit/config.js';
 
 export const MACHINE_SAMPLES_FILE = 'machine-samples.jsonl';
 export const MACHINE_SAMPLES_ROTATED_FILE = 'machine-samples.1.jsonl';
@@ -12,11 +14,35 @@ const num = (value, digits = null) => {
 };
 const kinds = (entries) => (entries || []).map((entry) => (typeof entry?.kind === 'string' && entry.kind ? entry.kind : 'unknown'));
 
+// The free bytes on the volume that holds `volumePath`, or null when the volume is unreadable.
+export function freeBytesFromStat(volumePath, { freeSpaceReader = (file) => fs.statfsSync(file) } = {}) {
+  try {
+    const stat = freeSpaceReader(volumePath);
+    const bytes = Number(stat?.bavail) * Number(stat?.bsize);
+    return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+  } catch { return null; }
+}
+
+// The free space in GB on the data-directory volume and the worktree volume, or null for an unreadable volume.
+// The worktree volume is the configured shared root. A missing setting falls back to the default root.
+export function diskFreeGb({ dataDir = DATA_DIR, worktreeRoot = null, freeSpaceReader = (file) => fs.statfsSync(file) } = {}) {
+  const gb = (volumePath) => {
+    const bytes = freeBytesFromStat(volumePath, { freeSpaceReader });
+    return bytes === null ? null : +((bytes / 1024 ** 3).toFixed(1));
+  };
+  let root = worktreeRoot;
+  if (!root) {
+    try { root = sharedWorktreeRoot(os.homedir(), dataDir); } catch { root = null; }
+  }
+  return { diskFreeGB: gb(dataDir), worktreeFreeGB: root === null ? null : gb(root) };
+}
+
 // One line for one minute. The line holds numbers, kinds, and counts only: no project name, pane id, path, or command.
-export function sampleLine({ machine, holders = [], waiters = [], now = Date.now() } = {}) {
+export function sampleLine({ machine, holders = [], waiters = [], now = Date.now(), disk = null } = {}) {
   const load = machine?.load || [];
   const cpus = num(machine?.cpus);
   const cpuTotal = num(machine?.cpuTotalSample);
+  const free = disk ?? diskFreeGb();
   return {
     at: new Date(Math.floor(now / 60000) * 60000).toISOString(),
     l1: num(load[0]), l5: num(load[1]), l15: num(load[2]),
@@ -26,6 +52,8 @@ export function sampleLine({ machine, holders = [], waiters = [], now = Date.now
     memGB: num(machine?.memTotalGB),
     swapMB: num(machine?.swapUsedMB),
     swapTotalMB: num(machine?.swapTotalMB),
+    diskFreeGB: num(free?.diskFreeGB, 1),
+    worktreeFreeGB: num(free?.worktreeFreeGB, 1),
     holders: kinds(holders),
     waiters: (waiters || []).length,
     waiterKinds: kinds(waiters),
@@ -72,6 +100,35 @@ const swapPercent = (line) => {
   const total = finite(line.swapTotalMB);
   return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
 };
+
+export const MACHINE_DISK_BUCKETS_MAX = 96;
+const DISK_BUCKET_MS = 15 * 60 * 1000;
+const DISK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// The lowest free GB in each 15-minute bucket of the last 24 hours, and the overall minimum with its bucket time.
+// The value of a bucket is the lower of the two volume figures of its samples. A line without a disk figure is skipped.
+export function summarizeDisk({ samples = null, dataDir = DATA_DIR, now = Date.now() } = {}) {
+  const sinceMs = now - DISK_WINDOW_MS;
+  const lines = samples || readMachineSamples({ dataDir, sinceMs });
+  const buckets = new Map();
+  let min = null;
+  for (const line of lines) {
+    const at = Date.parse(line?.at);
+    if (!Number.isFinite(at) || at < sinceMs || at > now) continue;
+    const values = [finite(line.diskFreeGB), finite(line.worktreeFreeGB)].filter((value) => value !== null);
+    if (!values.length) continue;
+    const gb = Math.min(...values);
+    const bucketMs = Math.floor(at / DISK_BUCKET_MS) * DISK_BUCKET_MS;
+    const current = buckets.get(bucketMs);
+    if (current === undefined || gb < current) buckets.set(bucketMs, gb);
+    if (min === null || gb < min.gb) min = { at: new Date(bucketMs).toISOString(), gb };
+  }
+  const points = [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .slice(-MACHINE_DISK_BUCKETS_MAX)
+    .map(([bucketMs, gb]) => ({ at: new Date(bucketMs).toISOString(), gb: +gb.toFixed(1) }));
+  return { points, min: min ? { at: min.at, gb: +min.gb.toFixed(1) } : null };
+}
 
 // Read only the latest existing sample. The local calendar offset comes from its timestamp.
 export function latestMachineSample(options = {}) {
@@ -152,6 +209,7 @@ export function summarizeHours({ samples = null, dataDir = DATA_DIR, days = MACH
     daysWithData: dates.size,
     hours,
     totals,
+    disk: summarizeDisk({ samples: lines, now }),
     coverage: +Math.min(1, totals.samples / (window * 1440)).toFixed(3),
   };
 }

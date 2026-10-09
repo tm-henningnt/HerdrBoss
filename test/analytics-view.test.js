@@ -9,6 +9,7 @@ import {
   denialGrid, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd,
   DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml,
   lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, memorySeries, memoryDetailsHtml, hourLabel,
+  diskFreeCard, diskFreeSeries, gbText, DISK_FREE_TITLE,
 } from '../public/analytics.js';
 import * as communicationView from '../public/analytics.js';
 import { PAGE_READS } from '../public/store.js';
@@ -353,6 +354,31 @@ test('the activity log moves to Analytics and old Logs links keep working', asyn
 test('one series color set for light and dark', () => {
   for (const hex of ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#3987e5', '#d95926', '#199e70', '#c98500', '#d55181']) assert.match(css, new RegExp(hex, 'i'));
   assert.match(css, /\.viz-scroll \{[^}]*overflow-x: auto/);
+});
+
+test('diskFreeCard draws the floor line, the minimum text, and an empty state', () => {
+  const card = diskFreeCard({
+    minFreeGb: 8,
+    disk: {
+      points: [
+        { at: '2026-09-30T10:00:00.000Z', gb: 12.3 },
+        { at: '2026-09-30T10:15:00.000Z', gb: 4.5 },
+      ],
+      min: { at: '2026-09-30T10:15:00.000Z', gb: 4.5 },
+    },
+  });
+  assert.equal(card.title, DISK_FREE_TITLE);
+  assert.equal(card.title, 'Lowest free disk space in each 15 minutes, last 24 hours');
+  assert.match(card.chart, /class="viz-line s1"/);
+  assert.match(card.chart, /class="viz-line s-ink dashed"/);
+  assert.match(card.legend, /Floor \(8 GB\)/);
+  assert.match(card.footer, /Lowest free disk space 4\.5 GB at \w{3} \d{1,2} \w{3} \d{2}:\d{2}\./);
+  assert.equal(gbText(4.5), '4.5 GB');
+  assert.deepEqual(diskFreeSeries({}).points, []);
+  assert.equal(diskFreeCard({}).empty, 'No disk samples yet.');
+  assert.equal(diskFreeCard({}).chart, undefined);
+  // The floor defaults to 8 GB when the setting is missing.
+  assert.equal(diskFreeSeries({ disk: { points: [{ at: '2026-09-30T10:00:00.000Z', gb: 20 }] } }).floor, 8);
 });
 
 test('each chart has one tab stop: the first hit area has tabindex 0, the others -1, and the wait strip has none', () => {

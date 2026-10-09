@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { readLockLedger } from '../src/kit/locks.js';
 import {
-  appendMachineSample, readMachineSamples, sampleLine, summarizeHours,
+  appendMachineSample, readMachineSamples, sampleLine, summarizeHours, summarizeDisk,
+  diskFreeGb, freeBytesFromStat, MACHINE_DISK_BUCKETS_MAX,
   MACHINE_SAMPLES_FILE, MACHINE_SAMPLES_ROTATED_FILE,
 } from '../src/machine-samples.js';
 
@@ -23,24 +24,47 @@ test('sampleLine has the planned keys, the whole minute, and kinds and counts on
     holders: [{ kind: 'suite', project: 'secret-client', ownerPane: 'w:p1' }],
     waiters: [{ kind: 'push', pane: 'w:p2', cwd: '/private/path' }, { kind: 'suite' }],
     now: Date.parse('2026-09-29T14:03:27.500Z'),
+    disk: { diskFreeGB: 12.3, worktreeFreeGB: 4.5 },
   });
   assert.deepEqual(line, {
     at: '2026-09-29T14:03:00.000Z', l1: 2.4, l5: 3.1, l15: 2.8, cpus: 10, cpu: 41.2,
-    memFree: 18, memGB: 24, swapMB: 3200, swapTotalMB: 4096,
+    memFree: 18, memGB: 24, swapMB: 3200, swapTotalMB: 4096, diskFreeGB: 12.3, worktreeFreeGB: 4.5,
     holders: ['suite'], waiters: 2, waiterKinds: ['push', 'suite'],
   });
   assert.doesNotMatch(JSON.stringify(line), /secret-client|w:p|private/);
 });
 
 test('sampleLine writes null for a field that the collector cannot read', () => {
-  const line = sampleLine({ machine: { cpus: 8, load: [1, 2, 3], memFreePercent: null, swapUsedMB: null, swapTotalMB: null }, now: 0 });
+  const line = sampleLine({ machine: { cpus: 8, load: [1, 2, 3], memFreePercent: null, swapUsedMB: null, swapTotalMB: null }, now: 0, disk: { diskFreeGB: null, worktreeFreeGB: null } });
   assert.equal(line.memFree, null);
   assert.equal(line.swapMB, null);
   assert.equal(line.swapTotalMB, null);
   assert.equal(line.cpu, null);
   assert.equal(line.memGB, null);
+  assert.equal(line.diskFreeGB, null);
+  assert.equal(line.worktreeFreeGB, null);
   assert.deepEqual(line.holders, []);
   assert.equal(line.waiters, 0);
+});
+
+test('sampleLine carries the free disk figures and null for an unreadable volume', () => {
+  const stat = (gb) => ({ bsize: 1, bavail: gb * 1024 ** 3 });
+  const line = sampleLine({
+    machine, now: 0,
+    disk: diskFreeGb({ dataDir: '/data', worktreeRoot: '/wt', freeSpaceReader: (p) => stat(p === '/data' ? 12.3 : 4.5) }),
+  });
+  assert.equal(line.diskFreeGB, 12.3);
+  assert.equal(line.worktreeFreeGB, 4.5);
+  const bad = sampleLine({ machine, now: 0, disk: diskFreeGb({ dataDir: '/data', worktreeRoot: '/wt', freeSpaceReader: () => { throw new Error('unreadable'); } }) });
+  assert.equal(bad.diskFreeGB, null);
+  assert.equal(bad.worktreeFreeGB, null);
+});
+
+test('freeBytesFromStat returns null for an invalid reading', () => {
+  assert.equal(freeBytesFromStat('/x', { freeSpaceReader: () => ({ bsize: 1, bavail: 8 * 1024 ** 3 }) }), 8 * 1024 ** 3);
+  assert.equal(freeBytesFromStat('/x', { freeSpaceReader: () => ({ bsize: 1, bavail: -1 }) }), null);
+  assert.equal(freeBytesFromStat('/x', { freeSpaceReader: () => ({}) }), null);
+  assert.equal(freeBytesFromStat('/x', { freeSpaceReader: () => { throw new Error('missing'); } }), null);
 });
 
 test('appendMachineSample appends one line with mode 0600 and readMachineSamples reads it back', (t) => {
@@ -158,8 +182,48 @@ test('summarizeHours on no samples returns 24 empty hours and zero coverage', ()
   assert.equal(summary.daysWithData, 0);
   assert.equal(summary.coverage, 0);
   assert.deepEqual(summary.totals, { samples: 0, overloadMin: 0, idleWaitMin: 0 });
+  assert.deepEqual(summary.disk, { points: [], min: null });
   assert.equal(summary.hours.length, 24);
   assert.ok(summary.hours.every((h) => h.samples === 0 && h.overloadMin === 0 && h.idleWaitMin === 0));
+});
+
+test('an old machine line without the disk fields reads fine', (t) => {
+  const dataDir = tmp(t);
+  fs.writeFileSync(path.join(dataDir, MACHINE_SAMPLES_FILE), `${JSON.stringify(sample(local(29, 8)))}\n`);
+  const all = readMachineSamples({ dataDir });
+  assert.equal(all.length, 1);
+  assert.equal(all[0].diskFreeGB, undefined);
+  const summary = summarizeHours({ dataDir, now: NOW });
+  assert.equal(summary.totals.samples, 1);
+  assert.deepEqual(summary.disk, { points: [], min: null });
+});
+
+test('summarizeDisk buckets the last 24 hours to at most 96 points and finds the minimum', () => {
+  const now = Date.parse('2026-09-29T12:00:00Z');
+  const at = (minutes, extra) => ({ at: new Date(now - minutes * 60000).toISOString(), ...extra });
+  const samples = [];
+  for (let i = 0; i <= 96; i += 1) samples.push(at(i * 15, { diskFreeGB: 50, worktreeFreeGB: 40 }));
+  samples.push(at(0, { diskFreeGB: 3.2, worktreeFreeGB: 9.9 }));
+  const disk = summarizeDisk({ samples, now });
+  assert.equal(disk.points.length, MACHINE_DISK_BUCKETS_MAX);
+  assert.equal(disk.points.at(-1).gb, 3.2);
+  assert.equal(disk.min.gb, 3.2);
+  assert.ok(disk.points.every((p) => Number.isFinite(Date.parse(p.at)) && Number.isFinite(p.gb)));
+});
+
+test('summarizeDisk uses the lower of the two volumes and skips a line without a disk figure', () => {
+  const now = Date.parse('2026-09-29T12:00:00Z');
+  const at = (minutes, extra) => ({ at: new Date(now - minutes * 60000).toISOString(), ...extra });
+  const samples = [
+    at(20, { diskFreeGB: 20, worktreeFreeGB: 5.5 }),
+    at(2, {}),
+    at(1, { diskFreeGB: null, worktreeFreeGB: 7 }),
+  ];
+  const disk = summarizeDisk({ samples, now });
+  assert.equal(disk.points.length, 2);
+  assert.deepEqual(disk.points.map((p) => p.gb), [5.5, 7]);
+  assert.equal(disk.min.gb, 5.5);
+  assert.equal(disk.min.at, disk.points[0].at);
 });
 
 test('summarizeHours reads an empty file and skips broken lines through readMachineSamples', (t) => {

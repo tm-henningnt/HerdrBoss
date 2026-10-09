@@ -154,6 +154,7 @@ Each line has these keys:
 - `cpu`: the summed CPU of all processes, in percent of all cores.
 - `memFree`, `memGB`: the free memory in percent, and the total memory.
 - `swapMB`, `swapTotalMB`: the swap in use and the swap total.
+- `diskFreeGB`, `worktreeFreeGB`: the free space in GB on the data-directory volume and the worktree volume, or `null` for an unreadable volume.
 - `holders`: the kinds (`suite`, `push`, `manual`) of the live `full-suite` lock holders.
 - `waiters`, `waiterKinds`: the number and the kinds of the tickets in the `full-suite` queue.
 
@@ -173,13 +174,15 @@ The response has these keys:
 - `days`, `daysWithData`: the window, and the number of local dates that hold a sample.
 - `hours`: 24 rows. Each row has `hour` (0 to 23), `samples`, `overloadMin`, `idleWaitMin`, `swapPeakPct`, `memFreeMin`, and `holderKinds`.
 - `totals`: `samples`, `overloadMin`, and `idleWaitMin` over all hours.
+- `disk`: `points` for at most 96 buckets of 15 minutes in the last 24 hours, each with `at` and the lower `gb` of the two volumes, and `min` with the overall lowest `gb` and its `at` time.
+- `minFreeGb`: the `worktrees.minFreeGb` floor.
 - `coverage`: `samples` divided by `days` times 1440.
 
 `overloadMin` and `idleWaitMin` count samples, and one sample is one minute. A minute without a sample is missing data. It is not a quiet minute. `swapPeakPct` and `memFreeMin` are the highest swap percent and the lowest free memory of the hour, or `null`. `holderKinds` counts the samples for each holder kind. The response holds no project name, pane id, or path.
 
 The route keeps its result for 60 seconds for each value of `days`. The summary counts a repeated minute once.
 
-The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The chart title gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box.
+The **Analytics** page shows the hours in the block **Machine overload and idle waiting by hour**. The chart has two bars for each local hour of the day. The bars show the mean minutes per day of overload and of idle waiting, from 0 to 60. The chart title gives the two daily means. A tooltip on hover, focus, or touch gives the values of one hour. A hatched bar marks an hour with fewer than 10 samples. A note shows when `coverage` is below 0.5. The details element under the chart holds the same 24 rows as a table. On a phone the chart scrolls sideways inside its own box. The page shows the free disk figures in the block **Disk free**.
 
 ## Memory by class
 

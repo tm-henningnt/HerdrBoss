@@ -970,7 +970,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         const days = clampSummaryDays(url.searchParams.get('days'));
         const hit = machineHoursCache.get(days);
         if (hit && Date.now() - hit.at < MACHINE_HOURS_CACHE_MS) return send(res, 200, hit.body);
-        const body = summarizeHours({ dataDir: DATA_DIR, days });
+        const body = { ...summarizeHours({ dataDir: DATA_DIR, days }), minFreeGb: Number.isSafeInteger(cfg.worktrees?.minFreeGb) ? cfg.worktrees.minFreeGb : 8 };
         machineHoursCache.set(days, { at: Date.now(), body });
         return send(res, 200, body);
       }
