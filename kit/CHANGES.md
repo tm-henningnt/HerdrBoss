@@ -307,12 +307,6 @@ Summary: Scope Haiku 5.5 to bounded captures and keep its support and benchmark 
 Impact: useful
 Summary: The release scan accepts the Qlik Engine inline table path /home/engine/<uuid>.inline in a .qvf asset only, counts it as allowed on the card, and refuses every other path class.
 
-## e60ca72cc765
-Impact: useful
-Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode-go/step-5-preview-free are trial models; pass --model-result at each collect. The worker brief says: never print a config value, a tenant host, a client id or an app id. A worker may use subagents for reads, surveys and review. The orchestrator skill says: bundle related issues into one worker brief, keep one tracker reference per issue, and use cheap models for subagents.
-## c81ec413327f
+## 4e9f84d371c4
 Impact: required
-Summary: Limit orchestrator work to Owner-approved items, define validated proposal cards sent through the Boss, and warn when the installed kit lacks the approval rule.
-## dc7443c7a376
-Impact: useful
-Summary: Require a separate public Qlik demo app for extension releases; add the shared sheet publish, verify, export, and content scan helper.
+Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode-go/step-5-preview-free are trial models; pass --model-result at each collect. The worker brief says: never print a config value, a tenant host, a client id or an app id. A worker may use subagents for reads, surveys and review. The orchestrator skill says: bundle related issues into one worker brief, keep one tracker reference per issue, and use cheap models for subagents. Limit orchestrator work to Owner-approved items, define validated proposal cards sent through the Boss, and warn when the installed kit lacks the approval rule. Require a separate public Qlik demo app for extension releases; add the shared sheet publish, verify, export, and content scan helper.
