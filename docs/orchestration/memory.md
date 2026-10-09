@@ -854,3 +854,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Not yet verified: docs gate, full suite on this tree, main fast-forward, push, the live Board and Overview pages.
 
 - Released 2026-10-09: r39 on main 30d11d7, pushed and live (suite clean on integrate-r39, `suite --reuse` on main, /api/state 200, no restart because only `public/` and a test changed, diff scan clean): PG1b. The live Board and Overview pages at 1280 px in the dark theme show no layout break after the scope change. Open: the Fleet dark theme at 393 px was not captured; no worker runs.
+
+## Release checkpoint 2026-10-09 — integrate-r40 (RS1)
+
+- Released before this checkpoint: main 0ebcd4b (r39 and its memory line, pushed and live).
+- Planned branch, written and verified by the orchestrator (no worker; Boss ticket RS1): rs1 (the release scan accepts the Qlik Engine inline table path `/home/engine/<uuid>.inline` in a `.qvf` asset only, and the card shows `qvf engine inline paths: N, allowed`; any other path class, the same string in a zip, and the same string in the notes still fail). Kit revision db68d0b4b2e1 (useful): one sentence in `kit/templates/project-kit.md`, the `kit/CHANGES.md` entry, and one sentence in `docs/cli.md`. Server code changes: restart after the merge. Tell the Boss and TmProcessMining when live.
+- Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push, a real qvf scan by TmProcessMining.
