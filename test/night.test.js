@@ -43,18 +43,22 @@ test('worker and browser maintenance settings expose their defaults and validate
   const settings = Object.fromEntries(serviceSettingsView({}).map(({ setting, value }) => [setting, value]));
   assert.equal(settings['workers.paneCloseDelayMinutes'], 2);
   assert.equal(settings['workers.uncollectedNoticeMinutes'], 30);
+  assert.equal(settings['workers.autoCloseReview'], true);
   assert.equal(settings['browser.idleCloseMinutes'], 20);
   assert.deepEqual(validateServiceSettings({
     'workers.paneCloseDelayMinutes': 0,
     'workers.uncollectedNoticeMinutes': 45,
+    'workers.autoCloseReview': false,
     'browser.idleCloseMinutes': 0,
   }), {
     'workers.paneCloseDelayMinutes': 0,
     'workers.uncollectedNoticeMinutes': 45,
+    'workers.autoCloseReview': false,
     'browser.idleCloseMinutes': 0,
   });
   assert.throws(() => validateServiceSettings({ 'workers.paneCloseDelayMinutes': 61 }), /workers\.paneCloseDelayMinutes must be a whole number from 0 to 60/);
   assert.throws(() => validateServiceSettings({ 'workers.uncollectedNoticeMinutes': 0 }), /workers\.uncollectedNoticeMinutes must be a whole number from 1 to 1440/);
+  assert.throws(() => validateServiceSettings({ 'workers.autoCloseReview': 'yes' }), /workers\.autoCloseReview must be true or false/);
   assert.throws(() => validateServiceSettings({ 'browser.idleCloseMinutes': 1441 }), /browser\.idleCloseMinutes must be a whole number from 0 to 1440/);
 });
 

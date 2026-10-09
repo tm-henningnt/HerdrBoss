@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { workerRunId } from './agent-messages.js';
 
@@ -9,6 +10,13 @@ const WORKER_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const WORKER_CLOSE_MAX_ATTEMPTS = 5;
 const LOCK_WAIT_MS = 2000;
 const LOCK_STALE_MS = 10000;
+// A finished review worker closes this long after its report is recorded. The value is fixed, not a setting.
+export const REVIEW_PANE_CLOSE_MINUTES = 10;
+const REVIEW_ROLES = new Set(['review', 'judge']);
+// A worker writes its own files under these paths, and the kit writes its generated files. None is a product change.
+const WORKER_OWN_PATH = (item) => item === '.worker' || item.startsWith('.worker/')
+  || item === '.orchestration' || item.startsWith('.orchestration/')
+  || item === 'docs/orchestration/herdr-boss.md' || item === 'AGENTS.md' || item === '.claude/settings.json';
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -59,6 +67,12 @@ function firstTimestamp(...values) {
   return null;
 }
 
+// A run is a review worker when its record says so, or when it ran read-only. A review worker writes a report but no
+// product change, so it never needs collection. `--review-worktree` requires `--read-only`, so the read-only flag covers it.
+export function isReviewRun(run) {
+  return REVIEW_ROLES.has(run?.role) || run?.readOnly === true;
+}
+
 export function readWorkerPaneCloses({ dir = DATA_DIR } = {}) {
   const value = readJson(path.join(dir, WORKER_CLOSE_FILE), []);
   if (!Array.isArray(value)) throw new Error('worker-pane-closes.json must contain an array.');
@@ -92,7 +106,7 @@ export async function processDueWorkerPaneCloses({ panes, now = Date.now(), dir 
     let run;
     try { run = await readRun(job); }
     catch (error) { failed++; outcomes.set(key, { type: 'failed', job, error }); continue; }
-    if (!run || run.name !== job.name || workerRunId(run, job.project) !== job.runId || !run.finishedAt || !run.pane) {
+    if (!run || run.name !== job.name || workerRunId(run, job.project) !== job.runId || !run.pane || (!run.finishedAt && !isReviewRun(run))) {
       skipped++;
       outcomes.set(key, { type: 'remove' });
       continue;
@@ -146,6 +160,8 @@ export function inspectUncollectedWorkers({ panes, runs, observed = {}, now = Da
   const notices = [];
   for (const run of runs || []) {
     if (run.collectedAt || !run.name || !run.pane || !run.startedAt || !run.project) continue;
+    // A review worker never gets the "done and not collected" notice. It auto-closes instead. See inspectReviewWorkerCloses.
+    if (isReviewRun(run)) continue;
     const pane = live.get(run.pane);
     if (!pane || pane.name !== run.name || pane.agent !== run.kind || pane.status !== 'done' || !pane.workspace) continue;
     const runId = workerRunId(run, run.project);
@@ -168,6 +184,51 @@ export function inspectUncollectedWorkers({ panes, runs, observed = {}, now = Da
     });
   }
   return { observed: nextObserved, notices };
+}
+
+// The report time of a run: an explicit timestamp on the record, else the mtime of the report file in its worktree.
+function workerReportAt(run) {
+  const fromRun = firstTimestamp(run.reportAt, run.reportedAt, run.reportMtimeMs);
+  if (Number.isFinite(fromRun)) return fromRun;
+  try { return fs.statSync(path.join(run.worktree, run.workerDir || '.worker', 'report.json')).mtimeMs; }
+  catch { return null; }
+}
+
+// True when the worktree has a change outside the worker's own files. A Git read failure counts as a change, so the pane stays.
+function workerWorktreeHasChanges(run) {
+  try {
+    const out = execFileSync('git', ['-C', run.worktree, 'status', '--porcelain=v1'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000,
+    });
+    return out.split('\n').filter(Boolean).some((line) => {
+      const body = line.slice(3);
+      const item = body.includes(' -> ') ? body.split(' -> ')[1] : body;
+      return item && !WORKER_OWN_PATH(item);
+    });
+  } catch { return true; }
+}
+
+// The review workers whose pane is ready to close: a live run with role review or judge (or a read-only run), a recorded
+// report, and no uncommitted diff. The due time is 10 minutes after the report. The pane close queue applies the same
+// running-process and permission-prompt guard as every other worker pane close.
+export function inspectReviewWorkerCloses({ panes, runs, autoCloseReview = true, minutes = REVIEW_PANE_CLOSE_MINUTES, reportAtOf = workerReportAt, hasChanges = workerWorktreeHasChanges } = {}) {
+  if (autoCloseReview !== true) return { closes: [] };
+  if (!Number.isSafeInteger(minutes) || minutes < 1) return { closes: [] };
+  const live = new Map((panes || []).map((pane) => [pane.id, pane]));
+  const closes = [];
+  for (const run of runs || []) {
+    if (!run || run.collectedAt || run.finishedAt || !run.name || !run.pane || !run.startedAt || !run.project) continue;
+    if (!isReviewRun(run)) continue;
+    const pane = live.get(run.pane);
+    if (!pane || pane.name !== run.name || pane.agent !== run.kind) continue;
+    const runId = workerRunId(run, run.project);
+    if (!runId) continue;
+    const reportAt = reportAtOf(run);
+    if (!Number.isFinite(reportAt)) continue;
+    if (hasChanges(run)) continue;
+    closes.push({ project: run.project, name: run.name, runId, dueAt: reportAt + minutes * 60_000 });
+  }
+  return { closes };
 }
 
 export function trackBrowserIdle(state = {}, session, { probe, clientCount, agentTabIds = [] } = {}, { now = Date.now(), idleCloseMinutes = 20 } = {}) {

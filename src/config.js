@@ -164,7 +164,7 @@ const DEFAULTS = {
     sweepCodeSignClones: true,
   },
   browser: { idleCloseMinutes: 20, allowVisible: false },
-  workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, leaseGraceMinutes: 30 },
+  workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, autoCloseReview: true, leaseGraceMinutes: 30 },
   // Remove a clean worker worktree and its merged branch after collection.
   worktrees: { minFreeGb: 8, pruneAtCollect: true },
   analytics: { actionsMinutes: true },
@@ -212,6 +212,7 @@ const SERVICE_SETTINGS = [
   ['Workers', 'workers.staleIdleMinutes'],
   ['Workers', 'workers.paneCloseDelayMinutes'],
   ['Workers', 'workers.uncollectedNoticeMinutes'],
+  ['Workers', 'workers.autoCloseReview'],
   ['Workers', 'workers.leaseGraceMinutes'],
   ['Workers', 'worktrees.pruneAtCollect'],
   ['Workers', 'worktrees.minFreeGb'],
@@ -484,6 +485,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'factories.claudeUsageHelper',
   'browser.allowVisible',
   'worktrees.pruneAtCollect',
+  'workers.autoCloseReview',
 ]);
 const MAX_ALLOWED_HOSTS = 50;
 // One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.
