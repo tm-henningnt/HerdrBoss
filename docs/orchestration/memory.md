@@ -799,3 +799,11 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Released before this checkpoint: main dfbc9a3 (r32, pushed and live).
 - Planned branches, reviewed by the orchestrator (opencode-go/deepseek-v4.1-flash workers): k34 96b303f (the idle orchestrator notice names a stale card, open on the board and finished in git for more than 6 hours, and a wait for the Owner, card-based only; review repaired an inverted stale rule and a global Mailbox fallback), k38 7d65e2a (a review worker pane closes 10 minutes after its report, setting `workers.autoCloseReview`, default on; no uncollected notice for review workers; review: the close job is queued once per run). `public/` and server code change: restart after the merge.
 - Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push.
+
+- Released 2026-10-09: r33 on main df8d8c9, pushed and live (suite clean on integrate-r33, `suite --reuse` on main, service restarted, /api/state 200, diff scan clean): K34 (idle notice names a stale card and an Owner wait) and K38 (review worker pane closes 10 minutes after the report; `workers.autoCloseReview`). Ledger: k34 rework, k38 first-time (one small fix by the orchestrator), k37 rework, k39 first-time. Open: K33, K46, K52, K53 and the Codex queue wait for 'codex hook trusted'; prune the k37, k39, k34 and k38 worktrees when their opencode processes end; the k60 leftover directory stays (sandbox denial, Boss decision).
+
+## Release checkpoint 2026-10-09 — integrate-r34 (K52, K45)
+
+- Released before this checkpoint: main df8d8c9 (r33, pushed and live).
+- Planned branches, reviewed by the orchestrator (opencode-go/deepseek-v4.1-flash workers, no review finding): k52 e2af131 (the `worker collect` scope refusal lists the changed paths inside the scope, at most 20, and names the nearest allowed path for each rejected path), k45 (Claude Haiku 5.5 row in the spend prices with no figures; spend shows its tokens as unpriced and adds no USD until the Owner sets input and output in Settings). `public/` changes: restart after the merge.
+- Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push.
