@@ -561,3 +561,44 @@ test('a second request after the Owner answer and before publish posts no duplic
   assert.equal(release.releaseStatus({ run, dir, config }).openRequests.length, 1);
   assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 1);
 });
+
+// RS1: the Qlik Engine writes its own inline-table path into a .qvf. Only that exact pattern passes, only for a .qvf asset.
+const ENGINE_PATH = '/home/engine/0123abcd-4567-89ab-cdef-0123456789ab.inline';
+
+test('RS1: a qvf with the Engine inline path passes and the card counts the path', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'demo.qvf': `head\0${ENGINE_PATH}\0mid\0${ENGINE_PATH}\0tail` } });
+  const result = request(dir, run);
+  assert.equal(result.scanOk, true);
+  const text = item(dir, result.id).text;
+  assert.match(text, /Pass:/);
+  assert.match(text, /demo\.qvf: qvf engine inline paths: 2, allowed/);
+  assert.ok(!text.includes('/home/engine'), 'the card never shows the path');
+});
+
+test('RS1: a qvf with another path class still fails', () => {
+  for (const bad of ['/Users/x/work/app', '/home/other/dir/file', '/home/engine/not-a-uuid.inline', `${ENGINE_PATH}/evil`, '/home/engine/0123abcd-4567-89ab-cdef-0123456789ab.txt']) {
+    const dir = newDir();
+    const run = fakeGh({ files: { 'demo.qvf': `a\0${ENGINE_PATH}\0${bad}\0b` } });
+    const result = request(dir, run);
+    assert.equal(result.scanOk, false, bad);
+    assert.match(item(dir, result.id).text, /demo\.qvf: private path/);
+  }
+});
+
+test('RS1: the same string in a zip or in the notes fails', () => {
+  const dir = newDir();
+  const notesFile = path.join(dir, 'notes.md');
+  fs.writeFileSync(notesFile, `Source ${ENGINE_PATH}\n`);
+  const zip = request(newDir(), fakeGh({ files: { 'demo.zip': `x${ENGINE_PATH}y` } }));
+  assert.equal(zip.scanOk, false);
+  const notes = request(dir, fakeGh({ files: { 'demo.qvf': 'clean' } }), { notesFile });
+  assert.equal(notes.scanOk, false);
+  assert.match(item(dir, notes.id).text, /notes: private path/);
+});
+
+test('RS1: scanRelease allows the Engine path only for a qvf file name', () => {
+  assert.deepEqual(release.scanRelease(`a ${ENGINE_PATH} b`, { file: 'App.QVF' }), []);
+  assert.deepEqual(release.scanRelease(`a ${ENGINE_PATH} b`, { file: 'app.zip' }), ['private path']);
+  assert.deepEqual(release.scanRelease(`a ${ENGINE_PATH} b`), ['private path']);
+});

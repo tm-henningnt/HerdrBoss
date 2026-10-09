@@ -57,14 +57,28 @@ function hostKnown(hostname, knownHosts) {
   });
 }
 
-// The classes of secret in one text. A class name never holds the value.
-export function scanRelease(text, { knownHosts = [], file = 'text' } = {}) {
+// The Qlik Engine writes the path of its own inline table source into an exported .qvf: /home/engine/<uuid>.inline.
+// The path belongs to the Engine and holds no user path. Only this exact pattern passes, and only for a .qvf asset.
+const ENGINE_INLINE_PATH = /(?<![A-Za-z0-9._/-])\/home\/engine\/[0-9a-fA-F-]{36}\.inline(?![A-Za-z0-9._/-])/g;
+
+// The classes of secret in one text, and the allowed paths that the scan counted. A class name never holds the value.
+export function scanReleaseDetailed(text, { knownHosts = [], file = 'text' } = {}) {
   const classes = new Set([...scanText(file, text), ...scanTokenText(text)]);
-  if (/\/(?:Users|home)\/[A-Za-z0-9._-]+\//.test(text)) classes.add('private path');
+  const allowed = [];
+  let pathText = text;
+  if (/\.qvf$/i.test(String(file))) {
+    const count = (text.match(ENGINE_INLINE_PATH) ?? []).length;
+    if (count) { allowed.push(`qvf engine inline paths: ${count}, allowed`); pathText = text.replace(ENGINE_INLINE_PATH, ''); }
+  }
+  if (/\/(?:Users|home)\/[A-Za-z0-9._-]+\//.test(pathText)) classes.add('private path');
   for (const match of text.match(/https?:\/\/[A-Za-z0-9.-]+/g) ?? []) {
     try { if (hostKnown(new URL(match).hostname, knownHosts)) classes.add('tenant host'); } catch {}
   }
-  return [...classes];
+  return { classes: [...classes], allowed };
+}
+
+export function scanRelease(text, options = {}) {
+  return scanReleaseDetailed(text, options).classes;
 }
 
 export function repoConfig(repo, config) {
@@ -102,12 +116,17 @@ function inspectAssets(run, repo, tag, release, knownHosts) {
       const content = fs.readFileSync(file);
       const sha256 = crypto.createHash('sha256').update(content).digest('hex');
       const classes = [];
+      let allowed = [];
       if (content.length > MAX_SCAN_BYTES) classes.push('too large to scan');
-      else classes.push(...scanRelease(content.toString('latin1'), { knownHosts, file: asset.name }));
+      else {
+        const scan = scanReleaseDetailed(content.toString('latin1'), { knownHosts, file: asset.name });
+        classes.push(...scan.classes);
+        allowed = scan.allowed;
+      }
       const sidecar = files.get(`${asset.name}.sha256`);
       const listed = asset.digest ?? (sidecar ? fs.readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0].toLowerCase() : null);
       if (listed && listed !== sha256) classes.push('checksum differs from the listed checksum');
-      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes };
+      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes, allowed };
     });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -169,6 +188,7 @@ function cardText({ repo, tag, release, notes, assets, findings, latest, coverag
   lines.push('', '## Scan result');
   if (findings.length) { lines.push('Fail:'); for (const finding of findings) lines.push(`- ${finding.file}: ${finding.classes.join(', ')}`); }
   else lines.push('Pass: no secrets found.');
+  for (const asset of assets) for (const note of asset.allowed ?? []) lines.push(`- ${asset.name}: ${note}`);
   lines.push('', '## Build commit', release.commit ?? '(not available)', '', '## Review coverage', coverage, '', '## Effect',
     `Approve makes the release public${latest ? ' and marks it as the latest release' : ' and does not mark it as the latest release'}.`);
   return lines.join('\n');

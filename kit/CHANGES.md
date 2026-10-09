@@ -302,3 +302,7 @@ Summary: Workers never run impeccable ignores or edit .impeccable/config.json; w
 ## 4384c4db2e96
 Impact: useful
 Summary: Scope Haiku 5.5 to bounded captures and keep its support and benchmark facts; record its results and Luna fit; name stop-own in Codex Luna briefs.
+
+## db68d0b4b2e1
+Impact: useful
+Summary: The release scan accepts the Qlik Engine inline table path /home/engine/<uuid>.inline in a .qvf asset only, counts it as allowed on the card, and refuses every other path class.
