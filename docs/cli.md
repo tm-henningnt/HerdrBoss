@@ -225,6 +225,17 @@ Do the fix, then run the command again.
 Only you sign in and add the Claude settings lines.
 Keep passwords, keys, and tokens out of chat.
 
+Homebrew can replace the node binary of the launchd job.
+The job then stays down and shows exit code 78.
+The `Herdr Boss service` item of `doctor` is red.
+Its fix reads `Homebrew replaced node: run herdr-boss install`.
+Run `herdr-boss install`, then run the command again.
+On macOS, each other `herdr-boss` command prints the same line once on standard error before its own output.
+It prints the line when the dashboard port does not answer and the job shows the problem.
+That check skips `doctor`, `install`, `uninstall`, `logs`, and `serve`.
+It stops each probe after one second.
+A failed probe prints nothing and never changes an exit code.
+
 Add `--json` for an agent.
 The result has `schema: "herdr-boss.doctor/1"`, `ok`, `exitCode`, and `items`.
 Each item has `id`, `stepId`, `name`, `status`, `message`, and `fix`.

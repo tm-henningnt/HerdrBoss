@@ -532,9 +532,29 @@ async function verifyQuotaMutationCaller() {
   return caller;
 }
 
+// These commands read the service themselves, or the owner is already there.
+const LAUNCHD_NOTICE_SKIP = new Set(['doctor', 'install', 'uninstall', 'logs', 'serve']);
+
+// A Homebrew node upgrade keeps the launchd job down, so every other command names the repair before its own
+// output. Return the printed line, or an empty string. A failed check prints nothing and changes no exit code.
+export async function launchdNodeNoticeLine(cmd, { launchctl, probe, installedNode, platform = process.platform, port = Number(process.env.HERDR_BOSS_PORT || 4477), stderr = process.stderr } = {}) {
+  if (platform !== 'darwin' || !cmd || LAUNCHD_NOTICE_SKIP.has(cmd)) return '';
+  try {
+    const { launchdNodeNotice } = await import('./launchd-state.js');
+    // The installer registers the stable node path. Compare the job with the path that install writes.
+    const { stableNodePath } = await import('./install.js');
+    const line = await launchdNodeNotice({ launchctl, probe, port, installedNode: installedNode ?? stableNodePath() });
+    if (line) stderr.write(`${line}\n`);
+    return line;
+  } catch {
+    return '';
+  }
+}
+
 async function main() {
   initializeLifecyclePort();
   const [cmd, ...args] = process.argv.slice(2);
+  await launchdNodeNoticeLine(cmd);
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(USAGE);
     return;
