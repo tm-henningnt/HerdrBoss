@@ -1294,6 +1294,7 @@ test('an expired handover never closes a working successor pane', { timeout: 300
 test('a 400K context warning stays active and clears below the threshold or when a successor is ready', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000,
+    policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 },
     steps: [
       { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
       { at: '2026-09-29T12:30:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
@@ -1304,10 +1305,10 @@ test('a 400K context warning stays active and clears below the threshold or when
   assert.ok(warnings.every(Boolean));
   assert.equal(warnings[0].severity, 'warn');
   assert.equal(warnings[0].title, 'Context at 400K tokens: handover not ready');
-  const cleared = run(t, { tokens: 399999, steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
+  const cleared = run(t, { tokens: 399999, policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 }, steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
   assert.equal(cleared.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
   const ready = run(t, {
-    tokens: 400000, handoffs: [readyRecord()],
+    tokens: 400000, handoffs: [readyRecord()], policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 },
     steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }],
   });
   assert.equal(ready.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
