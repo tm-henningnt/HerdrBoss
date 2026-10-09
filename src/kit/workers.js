@@ -21,6 +21,7 @@ import { scheduleWorkerPaneClose } from '../maintenance.js';
 import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
+import { clearCodexLaneBlock, CODEX_HOOK_BLOCK_REASON, CODEX_HOOK_REVIEW_INSTRUCTION, hasCodexHookReviewDialog, waitForCodexHookReview, writeCodexLaneBlock } from '../codex-lane.js';
 import { processStartIdentity } from './process-info.js';
 import { activeLaunchRecords, clearModelFailure, detectLaunchBlock, launchBlockedError, markModelUnavailable, modelFailureMark, newPaneLines, untilText } from './model-unavailable.js';
 import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
@@ -1545,9 +1546,11 @@ function startWorkerOnce(name, options, {
   herdr = createHerdrRunner(),
   env = process.env,
   rulesFile,
-  now = Date.now(),
+  clock = Date.now,
+  now = clock(),
   output = console.log,
   readText = null,
+  paneSnapshotReader = null,
   projectStatus = null,
   wait = pause,
   runSetup = runSetupCommand,
@@ -2001,7 +2004,10 @@ function startWorkerOnce(name, options, {
     };
     const readPaneSnapshot = () => {
       try {
-        const response = herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
+        const response = paneSnapshotReader
+          ? paneSnapshotReader(paneId)
+          : herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
+        if (response == null) return null;
         return typeof response === 'string' ? response : response?.text ?? response?.output ?? '';
       } catch { return null; }
     };
@@ -2039,6 +2045,7 @@ function startWorkerOnce(name, options, {
       waitForShell();
       const shellPid = workerPaneShellPid(paneId, herdr);
       if (options.kind === 'opencode') launchBaseline = readPaneSnapshot();
+      const codexLaunchBaseline = options.kind === 'codex' ? readPaneSnapshot() : null;
       const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
       try {
         herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
@@ -2083,10 +2090,48 @@ function startWorkerOnce(name, options, {
         workerDir: plan.workerDir,
         allowedPaths,
         readOnly: !!options.readOnly,
+        ...(options.kind === 'codex' ? { state: 'running' } : {}),
         ...(leases.length ? { leases } : {}),
         startedAt: new Date(now).toISOString(),
       };
       writeJsonAtomic(recordFile, record);
+      if (options.kind === 'codex') {
+        const hookReviewNeeded = waitForCodexHookReview({
+          readSnapshot: () => readPaneSnapshot() ?? '',
+          matchesDialog: (snapshot) => {
+            let lines = newPaneLines(snapshot, codexLaunchBaseline ?? '');
+            const marker = briefPrompt(plan.workerDir).slice(0, 24);
+            const briefStart = lines.findIndex((line) => line.includes(marker));
+            if (briefStart >= 0) lines = lines.slice(0, briefStart);
+            return hasCodexHookReviewDialog(lines.join('\n'));
+          },
+          isPromptReady: (snapshot) => agentReadyVisible('codex', snapshot),
+          clock,
+          wait,
+        });
+        if (hookReviewNeeded) {
+          const blockedAt = clock();
+          const blockedRecord = { ...record, state: 'blocked', reason: CODEX_HOOK_BLOCK_REASON, blockedAt: new Date(blockedAt).toISOString() };
+          writeJsonAtomic(recordFile, blockedRecord);
+          writeCodexLaneBlock({ dir: dataDir, now: blockedAt });
+          let paneClosed = false;
+          try {
+            herdr(['agent', 'close', name]);
+            closeFailedWorkerPane(name, options.kind, paneId, workspaceId, worktree, herdr);
+            paneClosed = true;
+          } catch { /* Keep the lane block and record when Herdr cannot close this pane. */ }
+          if (paneClosed) {
+            agentStarted = false;
+            releaseStartLeases(leases, name, config, leaseContext);
+          } else {
+            output('The Codex worker pane stays open because Herdr could not close the agent.');
+          }
+          output(CODEX_HOOK_BLOCK_REASON);
+          output(CODEX_HOOK_REVIEW_INSTRUCTION);
+          return { ...blockedRecord, recordFile, dryRun: false };
+        }
+        clearCodexLaneBlock({ dir: dataDir });
+      }
       if (options.planner && !plannerRegistered) {
         // The worker pane gets the label planner and a registry record. The pane can then run `review publish` for this project.
         herdr(['pane', 'rename', paneId, PLANNER_LABEL]);

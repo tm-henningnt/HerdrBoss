@@ -7,6 +7,7 @@ import { goalTextError } from './goal.js';
 import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from './quota-plan.js';
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
+import { readCodexLaneBlock } from './codex-lane.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
@@ -1042,15 +1043,20 @@ export function claudePaceHoldText(hold) {
 const USE_NOW_KINDS = { claude: 'claude', codex: 'codex', opencodego: 'opencode' };
 
 // List the lanes that can take work now: the unmetered lane first, then the metered lanes with the most headroom first.
-export function useNowLanes(lanes) {
+export function useNowLanes(lanes, { includeBlocked = false, dataDir = process.env.HERDR_BOSS_DIR || DATA_DIR, now = Date.now() } = {}) {
   const belowPace = [];
   const trickle = [];
   const open = [];
   const ignored = [];
   const free = [];
+  const codexBlock = includeBlocked ? readCodexLaneBlock({ dir: dataDir, now }) : null;
   for (const [provider, lane] of Object.entries(lanes || {})) {
     if (!lane) continue;
     const entry = { provider, kind: USE_NOW_KINDS[provider] || provider };
+    if (provider === 'codex' && codexBlock) {
+      open.push({ ...entry, reason: codexBlock.reason });
+      continue;
+    }
     // An ignored lane has no pacing limit, and the unmetered lane costs no quota, so both can take work.
     if (lane.unmetered) {
       if (lane.state === 'open') free.push({ ...entry, reason: 'free models' });
@@ -1077,6 +1083,9 @@ export function useNowLanes(lanes) {
     } else if (lane.state === 'open') {
       open.push({ ...entry, reason: 'open' });
     }
+  }
+  if (codexBlock && !Object.hasOwn(lanes || {}, 'codex')) {
+    open.push({ provider: 'codex', kind: 'codex', reason: codexBlock.reason });
   }
   belowPace.sort((a, b) => b.roomPercent - a.roomPercent || a.provider.localeCompare(b.provider));
   return [...free, ...belowPace, ...ignored, ...trickle, ...open].map(({ provider, kind, reason }) => ({ provider, kind, reason }));
