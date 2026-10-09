@@ -225,11 +225,11 @@ export function maskDeep(value, options = {}) {
   return value;
 }
 
-export function maskBrowserState(state) {
+export function maskBrowserState(state, { full = false } = {}) {
   if (!state || typeof state !== 'object') return state;
   const result = { ...state };
   for (const key of ['managedBrowsers', 'browsers', 'events']) {
-    if (Object.hasOwn(result, key)) result[key] = maskDeep(result[key]);
+    if (Object.hasOwn(result, key)) result[key] = maskDeep(result[key], { full });
   }
   return result;
 }

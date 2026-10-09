@@ -331,6 +331,10 @@ The Settings page has one section for each harness. A harness section holds the 
 
 The **Service settings** table shows the values that the service uses. Each row shows whether the value comes from `config.json` or a default. The table groups rows under Paths, Machine, Quota, Quota plan, Status, Workers, Watch, Browsers, and Service. Set values with inputs, then select **Save** for that group. Herdr Boss writes only those values to `config.json` and applies them at once. Keep the quota warning below the critical value. After a save, each field of the group shows the value that the server stored. When a stored value differs from the typed value, the status line next to **Save** names the setting, the stored value, and the typed value. The `tickSeconds` and `quotaSeconds` rows apply at once. The `tickSeconds` range is 5 to 300 seconds. The `quotaSeconds` range is 30 to 3600 seconds. The `alertCooldownSeconds` row is read-only. It is an unused legacy value. Set the notice cooldown in the Machine group. The `push` row is a switch. Herdr Boss reads `push` at service start, so the row shows `restart required`. The environment variable `HERDR_BOSS_PUSH=0` overrides the saved value. The `port`, `host`, `providerKinds`, and `orchestratorLabel` rows stay read-only. A wrong port or host can lock the Owner out of the dashboard. Provider kinds and the orchestrator label are structural. Change them in `config.json` and restart the service. The table does not show access or Roamgate settings.
 
+### Browser URL display
+
+The `browser.showTenantHosts` switch is off by default. Turn it on to show full browser URL hosts on an Owner page that sends a same-origin browser signal. A process on this machine can still forge the headers. Use this setting only on the Owner's own machine. It does not change masking in agent, CLI, message, report, status, log, or published output.
+
 ### Resource pools on the Settings page
 
 The **Resource pools** panel on the Settings page holds the same pools as the Allocation page. Each pool row shows the name, the ports, the split, the idle minutes, the wait seconds, the lease TTL, the environment variable, and the values by port. A line under the row names each variable that holds a value and the ports it covers. The row never shows a value. Select **Edit** to change the pool. Select **Remove**, then confirm the name, to remove it. Select **Add pool** to create a pool. The editor, the save, and the remove dialog are the same as on the Allocation page. See [Port leases](browsers.md#port-leases) for the rules of a pool.
@@ -493,7 +497,7 @@ Each project has two share values:
 
 The line **Total** next to the bar shows the sum of the set shares, for example `Total 99 of 100`. When the sum is below 100, the button **Distribute the remaining N** adds the remainder to the largest share. Herdr Boss adds it only when you select the button. A sum above 100 shows a warning and blocks **Apply policy**.
 
-A project that the policy holds but the project list does not shows the line `not in the project list` with its saved share. The share is read-only, counts in the total, and no save changes it.
+A project in the policy with no live orchestrator stays editable. Its row shows whether its workspace is open or closed and whether the project is registered in the project register. You can change its share, activity mode, and kind or model exclusions. Select **Remove from policy** and confirm to set its share to zero and redistribute it across the other policy projects. Then select **Apply policy**. The PC1 share confirmations apply to the whole change, including policy-only projects.
 
 The form always shows the shares that the policy holds, also when their sum is not 100. A project that has no share in the policy shows the marker `default, not saved`. Its default is a part of the room that the saved shares leave. Herdr Boss writes the default only when you change that share or confirm the dialog of **Apply policy**.
 
@@ -502,6 +506,7 @@ The form always shows the shares that the policy holds, also when their sum is n
 - The form changes more than one share and you moved more than one boundary.
 - The total changes by more than 5 points.
 - A project has a default share that you did not change.
+- The form changes three or more shares.
 
 The dialog lists the old and the new share of every project. A move of one boundary between two neighbors saves without a dialog.
 

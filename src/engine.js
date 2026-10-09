@@ -698,6 +698,7 @@ export class Engine extends EventEmitter {
     this.lockWatchdogLedgerCache = { at: null, lines: null };
     this.kitNoticeRead = false;
     this.state = maskBrowserState(readJson(STATE_FILE, null));
+    this.dashboardManagedBrowsers = null;
     this.messageStore = openMessageStore({ dir: DATA_DIR });
     this.quotaPlanService = createQuotaPlanService({ dataDir: DATA_DIR, settings: cfg.quotaPlan, now: () => this.clock(),
       messageStore: this.act ? this.messageStore : null });
@@ -1092,10 +1093,10 @@ export class Engine extends EventEmitter {
         const responsive = matched ? await this.collectors.cdpResponds(b.port) : false;
         const closed = !!b.closedAt && !matched;
         const migrationId = `${b.project}:${b.port}:${b.pid || 'none'}:${b.launchedAt || b.createdAt || ''}`;
-        return maskDeep({ ...publicSession, headless: browser?.headless ?? !!b.headless,
+        return { ...publicSession, headless: browser?.headless ?? !!b.headless,
           headlessMigration: browserHeadlessMigrations[migrationId] || b.headlessMigration || null,
           processState: processesKnown ? matched ? 'running' : 'missing' : 'unknown', processPid: browser?.pid ?? null, externalClients: clientCount,
-          responsive, closed, notResponding: !closed && probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures });
+          responsive, closed, notResponding: !closed && probe.notResponding, probeAt: probe.lastProbeAt, probeReason: probe.reason, probeSince: probe.since, probeFailures: probe.failures };
       }));
       const night = readNight({ dataDir: DATA_DIR, now });
 
@@ -1267,7 +1268,7 @@ export class Engine extends EventEmitter {
         orphanedWorktreeProcesses: this.orphanedWorktreeProcesses,
         herdr,
         browsers,
-        managedBrowsers,
+        managedBrowsers: managedBrowsers.map((browser) => maskDeep(browser)),
         browserSafetyNotices: [],
         browserHeadlessMigrations: this.memory.browserHeadlessMigrations || {},
         resourceLeases,
@@ -1665,6 +1666,7 @@ export class Engine extends EventEmitter {
 
       try { snap.handoverWaits = policy.autoHandover ? this.handoverWaits(herdr, control, snap.projects, policy) : {}; }
       catch (e) { snap.handoverWaits = {}; errors.push(`handover waits: ${e.message}`); }
+      this.dashboardManagedBrowsers = managedBrowsers;
       this.state = snap;
       writeJson(STATE_FILE, snap);
       writeJson(MEMORY_FILE, this.memory);

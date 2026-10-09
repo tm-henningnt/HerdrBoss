@@ -121,14 +121,14 @@ try {
     'workers.autoCloseReview',
     'workers.leaseGraceMinutes', 'worktrees.pruneAtCollect', 'worktrees.minFreeGb',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
-    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'browser.allowVisible', 'chromePath', 'releases.repos',
+    'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'browser.allowVisible', 'browser.showTenantHosts', 'chromePath', 'releases.repos',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'factories.claudeUsageHelper', 'analytics.actionsMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
     'config', 'default', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
-    'default', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
+    'default', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
     'config', 'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
@@ -143,6 +143,9 @@ try {
   });
   assert.deepEqual(view.find(({ setting }) => setting === 'browsers.sweepCodeSignClones'), {
     group: 'Browsers', setting: 'browsers.sweepCodeSignClones', value: true, source: 'default',
+  });
+  assert.deepEqual(view.find(({ setting }) => setting === 'browser.showTenantHosts'), {
+    group: 'Browsers', setting: 'browser.showTenantHosts', value: false, source: 'default',
   });
   assert.deepEqual(state.serviceSettings, view, 'the engine puts this same view in state');
   assert.deepEqual(Object.keys(state.quotaPlanSummary).sort(), ['nextCreditAt', 'plannedUsageNow', 'state']);
@@ -257,8 +260,16 @@ test('the state API sends the watch state, read from the old night.json file, wi
   fs.mkdirSync(homeDir, { recursive: true });
   const since = new Date(Date.now() - 3600000).toISOString();
   const until = new Date(Date.now() + 3600000).toISOString();
+  fs.writeFileSync(path.join(dataDir, 'project-register.json'), JSON.stringify({ version: 1, projects: [{
+    slug: 'closed-preview', title: 'Closed preview', group: '', repo: '', remote: '', factory: 'factory-zero', state: 'parked',
+    pinned: false, priority: 'normal', issueSource: null, autoOpen: 'off', lastOpenedAt: '', lastActivityAt: '',
+    nextAction: '', notes: '', createdAt: '2026-10-01T00:00:00.000Z',
+  }] }));
   fs.writeFileSync(path.join(dataDir, 'night.json'), JSON.stringify({ active: true, since, until, by: 'boss', quietHours: true, noticeStartAt: {} }));
-  t.after(async () => { fs.rmSync(path.join(dataDir, 'night.json'), { force: true }); });
+  t.after(async () => {
+    fs.rmSync(path.join(dataDir, 'night.json'), { force: true });
+    fs.rmSync(path.join(dataDir, 'project-register.json'), { force: true });
+  });
   const collectors = {
     collectHerdr: async () => ({ panes: [], workspaces: [] }),
     collectMachine: async () => null,
@@ -286,6 +297,8 @@ test('the state API sends the watch state, read from the old night.json file, wi
   const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`);
   assert.equal(response.status, 200);
   const state = await response.json();
+  assert.deepEqual(state.projectRegisterSlugs, ['closed-preview']);
+  assert.equal(state.projectRegister, undefined);
   assert.deepEqual(Object.keys(state.night).sort(), ['active', 'adhoc', 'by', 'quietHours', 'reportAt', 'reportDaily', 'routines', 'since', 'until', 'untilCancelled']);
   assert.equal(state.night.active, true);
   assert.equal(state.night.since, since);
@@ -484,6 +497,7 @@ test('PUT /api/settings persists allowed values and updates the running engine c
       quotaSeconds: 600,
       push: false,
       'analytics.actionsMinutes': false,
+      'browser.showTenantHosts': true,
       'watch.maxWorkers': 20,
       'watch.maxWorkersByLane': { unmetered: 12, codex: 8, claude: null, opencodego: 4 },
     } }),
@@ -505,6 +519,8 @@ test('PUT /api/settings persists allowed values and updates the running engine c
   assert.equal(engine.cfg.machine.memFreeWarnPercent, 22);
   assert.equal(engine.cfg.tickSeconds, 20);
   assert.equal(engine.cfg.quotaSeconds, 600);
+  assert.equal(engine.cfg.browser.showTenantHosts, true);
+  assert.equal(result.settings.find(({ setting }) => setting === 'browser.showTenantHosts').value, true);
   assert.equal(engine.cfg.push, false);
   assert.equal(engine.cfg.analytics.actionsMinutes, false);
   assert.equal(engine.state.serviceSettings.find(({ setting }) => setting === 'push').value, false);

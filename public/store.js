@@ -196,7 +196,7 @@ export function createClientStore({
 
   function connect() {
     if (source || typeof EventSourceImpl !== 'function') return source;
-    source = new EventSourceImpl('/api/events');
+    source = new EventSourceImpl('/api/events?caller=page');
     source.addEventListener('state', (event) => { const value = parseEvent(event); if (value !== null) emit('state', value); });
     for (const type of EVENT_TYPES.filter((name) => name !== 'state')) {
       source.addEventListener(type, (event) => { const value = parseEvent(event); if (value !== null) emit(type, value); });

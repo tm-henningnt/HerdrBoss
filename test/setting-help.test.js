@@ -9,6 +9,14 @@ import { APPLY, SETTING_GROUPS, SETTING_HELP, SETTING_FIELDS, DOCS_BEGIN, DOCS_E
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const docsPath = new URL('../docs/cli.md', import.meta.url);
 
+test('browser help states the local header-forgery limit and appears once', () => {
+  const match = app.match(/browsers: \['Browsers', `([\s\S]*?)`\],/);
+  assert.ok(match, 'the Browsers help entry is present');
+  assert.match(match[1], /process on this machine can still forge the headers/i);
+  assert.match(match[1], /Use this setting only on the Owner's own machine\./);
+  assert.doesNotMatch(app, /if \(topic === 'browsers'\) body \+= HELP\.browsers\[1\]/);
+});
+
 // Policy keys that have no single setting control. Each one has its own editor with its own help text, or holds a list that the page edits by other means.
 const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'machine', // the machine.* keys are checked one by one below

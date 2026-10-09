@@ -12,6 +12,7 @@ import { checkMachineTools } from './collect.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, hostAllowedByList, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects, SLUG } from './projects.js';
+import { readRegister } from './project-register.js';
 import { loadModels } from './kit/config.js';
 import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
@@ -84,7 +85,10 @@ function handoffSourceMatches(state, body) {
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
-  if (res.browserOutput && !Buffer.isBuffer(body)) body = maskDeep(body);
+  if (res.browserOutput && !Buffer.isBuffer(body)) {
+    const options = typeof res.browserOutput === 'object' ? res.browserOutput : {};
+    body = maskDeep(body, options);
+  }
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
@@ -327,10 +331,49 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     const parent = readMessages().find((item) => item.id === record.replyTo);
     return isMailAnswer(record, messagesById(parent ? [parent] : [])) ? { ...data, record: { ...record, mailAnswer: true } } : data;
   };
+  const dashboardState = (data) => ({
+    ...data,
+    ...(Array.isArray(engine.dashboardManagedBrowsers) ? { managedBrowsers: engine.dashboardManagedBrowsers } : {}),
+    projectRegisterSlugs: readRegister().projects.map(({ slug }) => slug),
+  });
+  const pageRequest = (req, { eventSource = false, url } = {}) => {
+    if (!eventSource || req.headers['x-herdr-boss-caller'] === 'page' || url?.searchParams.get('caller') !== 'page') return req;
+    const marked = Object.create(req);
+    marked.headers = { ...req.headers, 'x-herdr-boss-caller': 'page' };
+    return marked;
+  };
+  const hasSameOriginBrowserSignal = (req) => {
+    if (req.headers['sec-fetch-site'] === 'same-origin') return true;
+    const origin = req.headers.origin;
+    const host = req.headers.host;
+    if (typeof origin !== 'string' || typeof host !== 'string') return false;
+    try {
+      const scheme = req.socket?.encrypted ? 'https' : 'http';
+      const dashboardOrigin = new URL(`${scheme}://${host}`).origin;
+      const parsedOrigin = new URL(origin);
+      return parsedOrigin.origin === dashboardOrigin
+        && parsedOrigin.origin === origin
+        && parsedOrigin.pathname === '/'
+        && !parsedOrigin.search
+        && !parsedOrigin.hash;
+    } catch { return false; }
+  };
+  const tenantHostsVisible = (req, options) => {
+    if (cfg.browser?.showTenantHosts !== true || !hasSameOriginBrowserSignal(req)) return false;
+    const marked = pageRequest(req, options);
+    return access ? access.owner(marked) : loopbackRequest(req) && marked.headers['x-herdr-boss-caller'] === 'page';
+  };
   const broadcast = (event, data) => {
     if (event === 'message') data = annotateMessage(data);
-    if (event === 'state') data = maskBrowserState(data);
     if (event === 'event') data = maskDeep(data);
+    if (event === 'state') {
+      const state = dashboardState(data);
+      for (const res of clients) {
+        const full = res.tenantHostsVisible?.() === true;
+        res.write(`event: state\ndata: ${JSON.stringify(maskBrowserState(state, { full }))}\n\n`);
+      }
+      return;
+    }
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of clients) res.write(msg);
   };
@@ -407,7 +450,8 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
-    res.browserOutput = p === '/api/browser-sessions' || p.startsWith('/api/browser-sessions/');
+    const isBrowserOutput = p === '/api/browser-sessions' || p.startsWith('/api/browser-sessions/');
+    res.browserOutput = isBrowserOutput ? { full: tenantHostsVisible(req) } : false;
     try {
       if (readOnlyPreview && !loopbackRequest(req)) return send(res, 403, { error: 'The read-only preview accepts only local requests.' });
       const fleetRead = fleetReadAccess.check(req);
@@ -581,7 +625,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
           refreshMailbox();
           if (typeof engine.decorateProjects === 'function') engine.state.projects = decorateProjects(listProjects());
         }
-        return send(res, 200, maskBrowserState(engine.state || {}));
+        return send(res, 200, maskBrowserState(dashboardState(engine.state || {}), { full: tenantHostsVisible(req) }));
       }
       if (p === '/api/worker-brief' && req.method === 'GET') {
         const brief = typeof engine.readWorkerBrief === 'function' ? engine.readWorkerBrief(url.searchParams.get('project'), url.searchParams.get('name')) : null;
@@ -1246,9 +1290,13 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         return send(res, 200, await handoffCommand(['activate', item.id, '--confirmed']));
       }
       if (p === '/api/events') {
+        res.tenantHostsVisible = () => tenantHostsVisible(req, { eventSource: true, url });
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(`retry: 3000\n\n`);
-        if (engine.state) res.write(`event: state\ndata: ${JSON.stringify(maskBrowserState(engine.state))}\n\n`);
+        if (engine.state) {
+          const full = res.tenantHostsVisible();
+          res.write(`event: state\ndata: ${JSON.stringify(maskBrowserState(dashboardState(engine.state), { full }))}\n\n`);
+        }
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 25000);
         req.on('close', () => { clearInterval(ping); clients.delete(res); });
