@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { sharedWorktreeRoot } from './kit/config.js';
-import { nearestExistingPath } from './disk-diagnosis.js';
+import { nearestExistingPath } from './nearest-path.js';
 
 export const MACHINE_SAMPLES_FILE = 'machine-samples.jsonl';
 export const MACHINE_SAMPLES_ROTATED_FILE = 'machine-samples.1.jsonl';

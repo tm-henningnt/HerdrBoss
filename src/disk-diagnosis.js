@@ -4,6 +4,7 @@ import path from 'node:path';
 import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
 import { appendForcedAction } from './force-audit.js';
 import { redactSecrets } from './redact.js';
+import { nearestExistingPath } from './nearest-path.js';
 
 export const DISK_DIAGNOSIS_FILE = 'disk-guard-diagnosis.json';
 export const DISK_DIAGNOSIS_MARKER = '<!-- Herdr Boss disk guard diagnosis -->';
@@ -230,17 +231,6 @@ export function readDiskDiagnosis(dataDir, {
       recordedAt: new Date(recordedAtMs).toISOString(),
     };
   } catch { return null; }
-}
-
-// A volume path that does not exist yet reads the free space of its nearest existing parent folder.
-export function nearestExistingPath(file, { exists = fs.existsSync } = {}) {
-  let current = path.resolve(file);
-  while (!exists(current)) {
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return current;
 }
 
 function freeBytesFromStat(stat) {
