@@ -1943,9 +1943,9 @@ function projectSelector(s, selected) {
     const color = allocationColor(s, slug);
     const decisions = (p?.tasks || []).filter(waitsForOwner).length;
     return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''} ${color ? `has-allocation ${allocationActivity(l)}` : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''} ${color ? `style="--allocation-color:${color}"` : ''}>
-      <div class="proj-head"><b>${esc(name)}</b><span class="tag">${esc(mode)}</span></div>
-      <div class="project-selector-meta"><span>${esc(p?.status || p?.phase || 'No status published')}</span><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
-      ${p?.summary ? `<p>${esc(p.summary)}</p>` : ''}
+      <div class="proj-head"><b>${esc(name)}</b><span class="tag" title="${esc(p?.status || p?.phase || 'No status published')}">${esc(mode)}</span></div>
+      <div class="project-selector-meta"><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
+      ${p?.summary ? `<p class="proj-summary" title="${esc(p.summary)}">${esc(p.summary)}</p>` : ''}
       ${p ? segBar(taskCounts(p)) : ''}
       ${decisions ? `<span class="project-decision-count">Needs your decision ${decisions}</span>` : ''}
       ${p?.errors?.length ? `<span class="project-card-error">${p.errors.length} status issue${p.errors.length === 1 ? '' : 's'}</span>` : ''}
