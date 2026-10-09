@@ -404,7 +404,7 @@ test('lanes prints the shared use-now line before other lane details', (t) => {
 
 test('the project kit tells orchestrators to use the bulletin Use now line', () => {
   const template = fs.readFileSync(new URL('../kit/templates/project-kit.md', import.meta.url), 'utf8');
-  assert.match(template, /When a lane is ahead of pace, start ready work on a lane from the bulletin \*\*Use now\*\* line\. Do not wait for the ahead lane\./);
+  assert.match(template, /Use a lane from the bulletin \*\*Use now\*\* line for approved work\. Do not wait for the ahead lane\./);
 });
 
 test('lanes filters unmetered output to the configured checkout project', () => {

@@ -36,7 +36,7 @@ test('the kit, orchestrator skill, user guide, and CLI describe the Owner approv
   }
 
   assert.match(skill, /reference\/approval-policy\.md/);
-  assert.ok(skill.trim().split(/\s+/).length <= 3090, 'the orchestrator skill must stay within its word limit');
+  assert.ok(skill.trim().split(/\s+/).length <= 3120, 'the orchestrator skill must stay within its word limit');
 
   const userGuide = read('docs/user-guide.md');
   const cli = read('docs/cli.md');

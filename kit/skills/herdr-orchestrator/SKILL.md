@@ -52,7 +52,7 @@ Read each reference before its step:
 
 ## Context and cost
 
-- Use subagents for reviews, reads, and surveys inside approved work. Get the Owner's yes if a survey, review, or audit is itself unapproved new work. Keep the main thread for decisions.
+- Use subagents for diff reviews, long report reads, log searches, and code surveys inside approved work. Get the Owner's yes if a survey, review, or audit is itself unapproved new work. Keep the main thread for decisions.
 - Require file and line evidence for findings. Verify a finding at the source before acting.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message; the service warns about a stall, a block, and a missing report.
