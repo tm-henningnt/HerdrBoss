@@ -181,6 +181,8 @@ List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss work
 
 Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
 
+Never print a config value, a tenant host, a client id or an app id. Filter `jq` and `cat` output to non-sensitive fields.
+
 Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 
 For a browser task, use only the project browser.

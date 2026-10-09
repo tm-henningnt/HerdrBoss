@@ -463,7 +463,7 @@ test('models disable and enable keep a launch record that the models command sho
 });
 
 test('the kit lists both trial models for the opencode harness only', () => {
-  const trial = ['opencode/ling-3.1-flash-free', 'opencode/fledge-alpha-free'];
+  const trial = ['opencode/ling-3.1-flash-free', 'opencode/fledge-alpha-free', 'opencode/exo-free', 'opencode/step-5-preview-free'];
   assert.deepEqual(models.kinds.opencode.trialModels, trial);
   for (const model of trial) {
     assert.ok(models.kinds.opencode.allowedModels.includes(model));
@@ -503,4 +503,10 @@ test('opus.maxConcurrent refuses an allowed Opus start at the limit and names th
 test('--force still starts Opus at the opus.maxConcurrent limit', (t) => {
   const f = fixture(t, { rules: { ...withPolicy({ opus: { allowWithoutForce: true, maxConcurrent: 1 } }), control: { runningOpus: 3 } } });
   assert.equal(f.start('wmforce', { kind: 'claude', model: 'claude-opus-5-5', force: true, reason: 'owner approved Opus', dryRun: true }).force, true);
+});
+
+test('the kit lists the pi trial model step-5-preview-free for the pi harness only', () => {
+  assert.deepEqual(models.kinds.pi.trialModels, ['opencode-go/step-5-preview-free']);
+  assert.ok(models.kinds.pi.allowedModels.includes('opencode-go/step-5-preview-free'));
+  assert.equal(models.kinds.opencode.allowedModels.includes('opencode-go/step-5-preview-free'), false);
 });

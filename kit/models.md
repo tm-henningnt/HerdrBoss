@@ -52,12 +52,13 @@ In the vendor test, a model failed to report a broken search tool in these cases
 | `pi`, `opencode-go/deepseek-v4.1-flash` | Economical research and fully specified mechanical work. | Shared Go quota can stop every worker on that provider. Pin the model and verify results. |
 | `pi`, `opencode-go/muse-spark-1.3-contributor` | Cheap bounded implementation, docs, copy, and read-only diagnosis. | Source records disagree on its success rate. Keep the task atomic and inspect every path. |
 | `pi`, `opencode-go/longcat-2.5-preview-free` and `opencode-go/space-bunny-free` (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Evidence is limited. Verify the full diff and each finding at its source. `space-bunny-free` was unavailable upstream on 2026-10-06; use `longcat-2.5-preview-free`. |
-| `opencode`, `opencode/ling-3.1-flash-free` and `opencode/fledge-alpha-free` (trial, unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Trial: the model has a `trial` tag until its scorecard has 5 results. Evidence is limited. Verify the full diff. Run it in the OpenCode harness only. Record `--model-result` for every run with `worker collect`. `opencode/fledge-alpha-free` is not available in the Owner's country; mark it with `herdr-boss models disable opencode/opencode/fledge-alpha-free` until the Owner re-enables it. |
+| `opencode`, `opencode/ling-3.1-flash-free`, `opencode/fledge-alpha-free`, `opencode/exo-free` and `opencode/step-5-preview-free` (trial, unmetered), and `pi`, `opencode-go/step-5-preview-free` (trial) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Trial: the model has a `trial` tag until its scorecard has 5 results. Evidence is limited. Verify the full diff. Run the `opencode/` models in the OpenCode harness only and `opencode-go/step-5-preview-free` in the Pi harness only. Record `--model-result` for every run with `worker collect`. `opencode/fledge-alpha-free` is not available in the Owner's country; mark it with `herdr-boss models disable opencode/opencode/fledge-alpha-free` until the Owner re-enables it. |
 | `opencode`, free `opencode/` models (unmetered) | Bounded, well-specified implementation, tests, docs, audits, and data checks. | Give an exact brief and a clear gate. Verify the full diff. Permission prompts and provider overload can stop work; then move the task to another lane. |
 
 Free `opencode/` models recorded in the source include:
 
 - `opencode/big-pickle`
+- `opencode/exo-free` (trial)
 - `opencode/fledge-alpha-free` (trial)
 - `opencode/ling-3.0-flash-fin-free`
 - `opencode/ling-3.1-flash-free` (trial)
@@ -66,6 +67,7 @@ Free `opencode/` models recorded in the source include:
 - `opencode/nemotron-3-ultra-free`
 - `opencode/nemotron-3.5-lightning-free`
 - `opencode/space-bunny-free`
+- `opencode/step-5-preview-free` (trial)
 
 ## Removed until a trial passes
 

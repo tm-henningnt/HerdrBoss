@@ -36,9 +36,16 @@
         "opencode/nemotron-3-ultra-free",
         "opencode/nemotron-3.5-lightning-free",
         "opencode/space-bunny-free",
+        "opencode/exo-free",
+        "opencode/step-5-preview-free",
         "opencode-go/deepseek-v4.1-flash"
       ],
-      "trialModels": ["opencode/ling-3.1-flash-free", "opencode/fledge-alpha-free"],
+      "trialModels": [
+        "opencode/ling-3.1-flash-free",
+        "opencode/fledge-alpha-free",
+        "opencode/exo-free",
+        "opencode/step-5-preview-free"
+      ],
       "allowedEfforts": [],
       "defaultEffort": null,
       "launchArgs": ["-m", "{{model}}", "--agent", "worker"]
@@ -50,8 +57,10 @@
         "opencode-go/mimo-v2.6-flash",
         "opencode-go/longcat-2.5-preview-free",
         "opencode-go/muse-spark-1.3-contributor",
-        "opencode-go/space-bunny-free"
+        "opencode-go/space-bunny-free",
+        "opencode-go/step-5-preview-free"
       ],
+      "trialModels": ["opencode-go/step-5-preview-free"],
       "allowedEfforts": [],
       "defaultEffort": null,
       "launchArgs": [
