@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { assertProjectGitPins } from '../git-pins.js';
+import { GIT_PIN_NOTICE_TEXT_LIMIT, assertProjectGitPins } from '../git-pins.js';
 import { DATA_DIR } from '../config.js';
 import { POLICY_DEFAULTS } from '../control.js';
 import { quietHoursActive, readNight } from '../night.js';
@@ -28,6 +28,9 @@ export const LEGACY_TICKET_TTL_MS = 30 * 60 * 1000;
 const LOCK_WAIT_NOTICE_INTERVAL_MS = 60 * 1000;
 const LOCK_KINDS = new Set(['manual', 'suite', 'push']);
 const LOCK_NOTICE_TEXT = 'Your full-suite lock expired after 60 minutes and was released. Use herdr-boss suite -- <command> next time.';
+// A forged git-pins notice carries a project slug and printable text only. Cap both so a notice cannot smuggle content or length.
+const GIT_PIN_PROJECT = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const GIT_PIN_NOTICE_TEXT = /^(?:[\x20-\x7E]|\p{L})*$/u;
 export const LOCK_LEDGER_FILE = 'lock-ledger.jsonl';
 const LEDGER_EVENTS = new Set(['acquire', 'release', 'busy', 'timeout']);
 const LEDGER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -648,8 +651,9 @@ export function readLockTakeoverNotices({ dataDir = DATA_DIR } = {}) {
       && Array.isArray(notice.deliveredTo) && notice.deliveredTo.every((item) => ['project', 'boss'].includes(item))
       && typeof notice.text === 'string' && notice.text.startsWith('Lock watchdog: ')
       && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
-    const validGitNotice = notice?.type === 'git-pins' && typeof notice.project === 'string'
-      && typeof notice.text === 'string' && notice.text.startsWith('Git pins: ')
+    const validGitNotice = notice?.type === 'git-pins' && typeof notice.project === 'string' && GIT_PIN_PROJECT.test(notice.project)
+      && typeof notice.text === 'string' && notice.text.length <= GIT_PIN_NOTICE_TEXT_LIMIT && GIT_PIN_NOTICE_TEXT.test(notice.text)
+      && notice.text.startsWith('Git pins: ')
       && (notice.deliveredAt === undefined || Number.isFinite(Date.parse(notice.deliveredAt)));
     const validExpiryNotice = !notice?.type && notice?.text === LOCK_NOTICE_TEXT;
     if (!notice || notice.id !== path.basename(file, '.json') || notice.severity !== 'warn'

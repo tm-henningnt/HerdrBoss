@@ -12,6 +12,7 @@ const digest = (value) => createHash('sha256').update(value).digest('hex');
 const HASH = /^[a-f0-9]{64}$/;
 const cache = new Map();
 export const GIT_PIN_CACHE_MS = 10000;
+export const GIT_PIN_NOTICE_TEXT_LIMIT = 500;
 export const safeGitPinName = (name) => redactSecrets(String(name)).replace(/[^A-Za-z0-9._@-]/g, '?').slice(0, 64);
 export function gitPinChangesText(result) {
   const names = result.changed.slice(0, 10).map(safeGitPinName);
@@ -206,7 +207,7 @@ function queueNotice(project, pin, live, changed, dataDir, directory, now) {
     const notices = path.join(dataDir, 'locks', 'machine', 'notices');
     fs.mkdirSync(notices, { recursive: true, mode: 0o700 });
     const file = path.join(notices, `${id}.json`);
-    const notice = { id, type: 'git-pins', severity: 'warn', ownerPane: '', project: safeGitPinName(project.slug), text: `Git pins: ${safeGitPinName(project.slug)} changed ${gitPinChangesText({ changed })}. Ask the Boss. Do not run the hook.`, createdAt: new Date(now()).toISOString() };
+    const notice = { id, type: 'git-pins', severity: 'warn', ownerPane: '', project: safeGitPinName(project.slug), text: `Git pins: ${safeGitPinName(project.slug)} changed ${gitPinChangesText({ changed })}. Ask the Boss. Do not run the hook.`.slice(0, GIT_PIN_NOTICE_TEXT_LIMIT), createdAt: new Date(now()).toISOString() };
     // An exclusive create deduplicates concurrent CLI checks too.
     try {
       const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);

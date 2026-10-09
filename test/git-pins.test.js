@@ -11,6 +11,13 @@ import { readLockTakeoverNotices, removeLockTakeoverNotice } from '../src/kit/lo
 
 const cli = path.resolve('src/cli.js');
 const privatePins = (f) => path.join(f.home, '.config', 'herdr-boss', 'git-pins');
+const gitNotice = (project, text, id = '00000000-0000-4000-8000-000000000000') => ({ id, type: 'git-pins', severity: 'warn', ownerPane: '', project, text, createdAt: new Date().toISOString() });
+function writeNotice(f, notice) {
+  const directory = path.join(f.dataDir, 'locks', 'machine', 'notices');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${notice.id}.json`), JSON.stringify(notice));
+}
+const noticePath = (f, id) => path.join(f.dataDir, 'locks', 'machine', 'notices', `${id}.json`);
 const projectPin = (f) => path.join(privatePins(f), fs.readdirSync(privatePins(f)).find((name) => name !== 'index.json' && name.endsWith('.json')));
 function fixture(t, slug = 'alpha') {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'git-pins-')));
@@ -87,6 +94,44 @@ test('notice dedupe remains in the private pin after the transient notice is rem
   removeLockTakeoverNotice(notice.id, { dataDir: f.dataDir });
   assert.ok(!fs.existsSync(path.join(f.dataDir, 'locks', 'machine', 'notices', `${notice.id}.json`)));
   f.check(); assert.deepEqual(readLockTakeoverNotices({ dataDir: f.dataDir }), []);
+});
+test('a git-pins notice over 500 characters is rejected', (t) => {
+  const f = fixture(t);
+  writeNotice(f, gitNotice('alpha', `Git pins: ${'x'.repeat(501 - 'Git pins: '.length)}`));
+  assert.throws(() => readLockTakeoverNotices({ dataDir: f.dataDir }), /is invalid\./);
+});
+test('a git-pins notice of exactly 500 printable characters passes', (t) => {
+  const f = fixture(t);
+  writeNotice(f, gitNotice('alpha', `Git pins: ${'x'.repeat(500 - 'Git pins: '.length)}`));
+  assert.equal(readLockTakeoverNotices({ dataDir: f.dataDir }).length, 1);
+});
+test('a git-pins notice with a control character is rejected', (t) => {
+  const f = fixture(t);
+  writeNotice(f, gitNotice('alpha', 'Git pins: alpha changed pre-push.\u0007 Ask the Boss.'));
+  assert.throws(() => readLockTakeoverNotices({ dataDir: f.dataDir }), /is invalid\./);
+});
+test('a git-pins notice project must be a project slug', (t) => {
+  const f = fixture(t);
+  for (const [index, project] of ['Alpha', 'alpha/x', '-alpha', ''].entries()) {
+    const id = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    writeNotice(f, gitNotice(project, 'Git pins: alpha changed pre-push. Ask the Boss. Do not run the hook.', id));
+    assert.throws(() => readLockTakeoverNotices({ dataDir: f.dataDir }), /is invalid\./);
+    fs.unlinkSync(noticePath(f, id));
+  }
+});
+test('a normal git-pins notice passes', (t) => {
+  const f = fixture(t);
+  writeNotice(f, gitNotice('alpha-2', 'Git pins: alpha-2 changed pre-push. Ask the Boss. Do not run the hook.'));
+  const [notice] = readLockTakeoverNotices({ dataDir: f.dataDir });
+  assert.equal(notice.type, 'git-pins'); assert.equal(notice.project, 'alpha-2');
+});
+test('a created git-pins notice with many long hook names stays within the 500 character cap', (t) => {
+  const f = fixture(t); assert.equal(f.pin().status, 0);
+  for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(f.root, '.git', 'hooks', `${String(i).padStart(2, '0')}-${'x'.repeat(60)}`), 'fixture');
+  f.check();
+  const [notice] = readLockTakeoverNotices({ dataDir: f.dataDir });
+  assert.ok(notice, 'the created notice must pass validation');
+  assert.ok(notice.text.length <= 500, `notice text length ${notice.text.length}`);
 });
 test('harness pin requires an explicit nonempty reason before any pin or audit mutation', (t) => {
   const f = fixture(t);
