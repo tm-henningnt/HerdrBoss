@@ -16,7 +16,7 @@ import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, worker
 import { isOpus, normalizeModel } from './kit/workers.js';
 import { POLICY_DEFAULTS, pickSuccessorDetailed, modelTier, tierAllowsAutoActivation, autoCooldownSkips, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
-import { activeLaunchRecords, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
+import { activeLaunchRecords, MODEL_UNAVAILABLE_LABEL, recordModelFailure, TRIAL_RESULT_TARGET } from './kit/model-unavailable.js';
 import { quotaUsageToday, readQuotaHistory, recordQuotaSnapshot, readUsage } from './usage.js';
 import { renderNightReport } from './night-report.js';
 import { adhocOneLine, effectiveRoutines, routinePromptText, slotAfter, slotEnd, WATCH_SNAPSHOT_ID, watchSnapshotText } from './watch-routines.js';
@@ -1254,8 +1254,11 @@ export class Engine extends EventEmitter {
       this.memory.exhaustedFreeModels = activeFreeModelExhaustions(this.memory.exhaustedFreeModels, now);
       for (const pane of herdr?.panes || []) {
         const failure = workerTransitions.failures[pane.id];
-        const cooldown = workerModelCooldown(failure, now);
-        if (!cooldown) continue;
+        if (!failure) continue;
+        // A "Model is unavailable" failure counts for its model. The other failures set a cooldown.
+        const countedFailure = failure.label === MODEL_UNAVAILABLE_LABEL;
+        const cooldown = countedFailure ? null : workerModelCooldown(failure, now);
+        if (!cooldown && !countedFailure) continue;
         const checkoutPaths = [...new Set([
           ...herdr.panes.filter((candidate) => candidate.workspace === pane.workspace && candidate.orch && candidate.cwd).map((candidate) => candidate.cwd),
           pane.cwd,
@@ -1266,6 +1269,13 @@ export class Engine extends EventEmitter {
           if (association) break;
         }
         if (!association) continue;
+        if (countedFailure) {
+          try {
+            // The failure time is the first sighting, so a repeated tick counts once.
+            recordModelFailure(DATA_DIR, { kind: association.kind, model: association.model, provider: association.provider, now: failure.at });
+          } catch (error) { errors.push(`model failure: ${error.message}`); }
+          continue;
+        }
         this.memory.unavailableModels = extendModelUnavailability(this.memory.unavailableModels, association, cooldown, now);
         if (association.provider === null) this.memory.exhaustedFreeModels = extendFreeModelExhaustion(this.memory.exhaustedFreeModels, association, cooldown.retryAt, now);
       }
@@ -1276,6 +1286,12 @@ export class Engine extends EventEmitter {
         if ((unavailableByModel.get(key)?.retryAt ?? 0) <= item.retryAt) unavailableByModel.set(key, item);
       }
       snap.unavailableModels = [...unavailableByModel.values()].sort((a, b) => a.model.localeCompare(b.model));
+      // The free models that cannot start: a free model with a cooldown or a mark, and a model marked
+      // by repeated "Model is unavailable" failures. The unmetered lane and the successor choice skip them.
+      const unavailableFreeModels = Object.fromEntries(snap.unavailableModels
+        .filter((item) => item.provider === null || item.label === MODEL_UNAVAILABLE_LABEL)
+        .map((item) => [item.model, { model: item.model, retryAt: item.retryAt }]));
+      const freeExhausted = { ...this.memory.exhaustedFreeModels, ...unavailableFreeModels };
       snap.trialModels = trialModelStatus(this.models, readUsage());
       clearExpiredOneOffGoals(policy, snap.quotas, now, { log: (message) => this.log('policy', message) });
       // Apply the failure status before deriving control, so a failed worker does not count as running.
@@ -1289,7 +1305,7 @@ export class Engine extends EventEmitter {
       const laneCapsActive = snap.night?.active === true &&
         Object.values(nightConfig.maxWorkersByLane || {}).some((cap) => Number.isInteger(cap));
       const runningByLane = laneCapsActive ? runningWorkerCountsByLane(snap.herdr, policy, this.models) : {};
-      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, this.memory.exhaustedFreeModels, {
+      const control = deriveControl(snap, policy, this.models, this.memory.paneSince, now, freeExhausted, {
         piModels: this.memory.piModels, lanes: snap.lanes,
         nightMaxWorkers: nightConfig.maxWorkers,
         cooldownSkips: this.autoCooldownSkips(policy, now),
@@ -1348,9 +1364,7 @@ export class Engine extends EventEmitter {
       }
       if (this.act) this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
-      const unavailableFreeModels = Object.fromEntries(snap.unavailableModels
-        .filter((item) => item.provider === null).map((item) => [item.model, { model: item.model, retryAt: item.retryAt }]));
-      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, { ...this.memory.exhaustedFreeModels, ...unavailableFreeModels }, {
+      snap.lanes.unmetered = unmeteredLane(this.models, policy, control.projects, freeExhausted, {
         unavailablePiModels: unavailablePiModels(mergeModels(this.models, policy).kinds.pi?.allowedModels, this.memory.piModels),
         now,
       });

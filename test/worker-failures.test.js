@@ -57,6 +57,7 @@ test('worker failure matching returns only a fixed case-insensitive label', () =
     ['HTTP 503 service_overloaded', 'overloaded'],
     ['503 Service Unavailable', 'overloaded'],
     ['FREE USAGE EXCEEDED. Retry in 5h 48m.', 'Free usage exceeded'],
+    ['400: Upstream request failed: Model is unavailable.', 'Model is unavailable'],
   ]) assert.equal(matchWorkerFailure([line]), label);
   for (const line of ['401', 'usage limit']) assert.equal(matchWorkerFailure([line]), null);
   assert.equal(matchWorkerFailure(['all good']), null);

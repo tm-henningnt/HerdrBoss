@@ -22,7 +22,7 @@ import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '../planner-sessions.js';
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
 import { processStartIdentity } from './process-info.js';
-import { activeLaunchRecords, detectLaunchBlock, launchBlockedError, markModelUnavailable, newPaneLines, untilText } from './model-unavailable.js';
+import { activeLaunchRecords, clearModelFailure, detectLaunchBlock, launchBlockedError, markModelUnavailable, modelFailureMark, newPaneLines, untilText } from './model-unavailable.js';
 import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
@@ -767,6 +767,11 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   const explicit = normalizeModel(options.model);
   const heldBack = explicit == null ? null : activeUnavailableModel(unavailableModels, kind, explicit, now);
   if (heldBack?.untilReenabled) throw new Error(`Model ${explicit} of ${kind} is unavailable until the Owner re-enables it (${heldBack.reason || heldBack.label || 'launch blocked'}). Run herdr-boss models enable ${kind}/${explicit} to re-enable it.`);
+  // A model that failed with "Model is unavailable" three times in 24 hours. --force --reason overrides it.
+  const modelFailure = modelFailureMark(heldBack ? [heldBack] : [], kind, explicit, now);
+  if (modelFailure && !options.force) {
+    throw new Error(`Model ${explicit} of ${kind} is unavailable: it failed ${modelFailure.count} times with "Model is unavailable" within 24 hours. It returns at ${untilText(modelFailure.retryAt)}. Pass --force --reason TEXT to override.`);
+  }
   let model = explicit;
   let modelSource = 'flag';
   let modelFallback;
@@ -835,7 +840,7 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
     ...policy.launchArgs,
     ...(effortPolicy === policy ? [] : effortPolicy.launchArgs || []),
   ].map((arg) => arg.replaceAll('{{model}}', model).replaceAll('{{effort}}', effort ?? ''));
-  return { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed };
+  return { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed, modelFailureOverride: !!modelFailure };
 }
 
 function appendWorkerEvent(env, event, now) {
@@ -1657,7 +1662,8 @@ function startWorkerOnce(name, options, {
     : null;
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
-  const { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0, rules.lanes);
+  const { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed, modelFailureOverride } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0, rules.lanes);
+  if (modelFailureOverride) overrideKinds.add('model-unavailable');
   if (options.force && isOpus(model)) {
     const opus = policy?.opus;
     const limit = Number.isInteger(opus?.maxConcurrent) ? opus.maxConcurrent : 2;
@@ -2663,6 +2669,11 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (scopeException) run.scopeException = scopeException;
       if (scopeExclusions) run.scopeExclusions = scopeExclusions;
       writeJsonAtomic(file, run);
+      // A successful run of the model clears its "Model is unavailable" counter and mark.
+      if (entry.outcome === 'done') {
+        try { clearModelFailure(leaseDataDir, { kind: run.kind, model: run.model }); }
+        catch (error) { output(`Warning: could not clear the model-failure count for ${run.model}: ${error.message}`); }
+      }
       // Give back every lease that names this worker, also a lease that the worker took after its start.
       // A worker with no lease file does not need the lifecycle port.
       if (hasLeaseStore(leaseDataDir)) {
