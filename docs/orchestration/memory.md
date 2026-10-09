@@ -782,3 +782,12 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Boss holds (2026-10-08): start no new Codex worker until the Boss says 'codex hook trusted' (the Owner edited `~/.codex/hooks.json`; the Codex dialog '1 hook needs review' needs the Owner). Claude is 58 percent against 34 expected: at most one Claude worker per project, no Opus. Ticket K61: Codex worker start detects the hook dialog within 20 seconds, closes the pane, marks the record 'blocked: Codex hook needs Owner review', and doctor shows it.
 - Queue waiting for the Codex go: DA1-A and DA1-B (requireDemoApp, kit rule), DA1-C (`release add-asset`), DA1-D (shared qlik-cli recipe), K61, FS1 slice 2 (store), K33, K34, K37, K38, K39, K46, K52, K53.
 - Not yet verified: full suite on this tree, main fast-forward, restart, push; the Owner has not run the probe.
+
+- Released 2026-10-08: r31 on main a100734, pushed and live (suite clean on integrate-r31, `suite --reuse` on main, service restarted, /api/state 200, diff scan clean): FS1 slice 1 (`herdr-boss account probe`, `scripts/account-probe.mjs`). Next for the Owner: run the probe once at a terminal; its result answers the facts about overrides and the re-read of a login file. Codex workers wait for the Boss message 'codex hook trusted'.
+
+## Release checkpoint 2026-10-09 — integrate-r32 (K37, K39)
+
+- Released before this checkpoint: main a100734 (r31, pushed and live). The orchestrator pane changed to wB:pPY at the handover.
+- Planned branches, reviewed by the orchestrator (opencode-go/deepseek-v4.1-flash workers, first-time rate about 59 percent): k37 10cb4f3 (probe tabs open and close in the browser command queue and always close in a finally path; a bounded sweep closes tagged probe tabs older than 2 minutes, at most 20 per tick; a probe that a browser restart refuses counts as skipped, not failed, after review finding), k39 5204a82 (three `Model is unavailable` failures in 24 hours mark a model unavailable for 6 hours; `worker start` refuses an explicit model with the mark unless `--force --reason`; a successful collect clears the count).
+- Prune: seven merged worktrees were removed. `worktree prune --apply` stopped at k60 with `Permission denied`; k60, kitmini1, kitmini2, r29fix and r30fix remain. Not retried; the cause is not known.
+- Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push.
