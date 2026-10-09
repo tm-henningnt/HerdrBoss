@@ -807,3 +807,14 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Released before this checkpoint: main df8d8c9 (r33, pushed and live).
 - Planned branches, reviewed by the orchestrator (opencode-go/deepseek-v4.1-flash workers, no review finding): k52 e2af131 (the `worker collect` scope refusal lists the changed paths inside the scope, at most 20, and names the nearest allowed path for each rejected path), k45 (Claude Haiku 5.5 row in the spend prices with no figures; spend shows its tokens as unpriced and adds no USD until the Owner sets input and output in Settings). `public/` changes: restart after the merge.
 - Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push.
+
+- Released 2026-10-09: r34 on main 9b6dea0, pushed and live (suite clean on integrate-r34, `suite --reuse` on main, service restarted, /api/state 200, diff scan clean): K52 (collect scope refusal lists inside paths and the nearest allowed path) and K45 (Haiku 5.5 spend price row, unpriced until the Owner sets it). Ledger: k52 and k45 first-time. The opencode-go tickets K34 to K39, K45 and K52 are done. Waiting for 'codex hook trusted': K61, DA1-A to DA1-D, FS1 slice 2, K33, K46, K53.
+
+- 2026-10-09: Lane rule (Boss, for the Owner). When the Codex lane is blocked, start small, well-specified tickets on opencode-go or pi without asking the Boss, up to the lane goal, and review them myself. Put the ticket list in the next published status. Source: Boss. The K-tickets K61 to K69, K33, K46 and K53 are in the Boss retro file; K61 starts first when the Codex hook is trusted.
+
+## Release checkpoint 2026-10-09 — integrate-r35 (LN1)
+
+- Released before this checkpoint: main 9b6dea0 (r34, pushed and live).
+- Planned branch, reviewed by the orchestrator (opencode-go worker, no finding): ln1 (a git-pins lock notice needs a lowercase project slug and a text of at most 500 printable characters; the notice writer cuts its text to 500). Follow-up of the K60 second review; the other K60 follow-ups stay open (stale `mutation.lock` rule, `include.path` targets, symlinked `~/.config`, unset HOME test, corrupt policy.json).
+- The watch ended 2026-10-09; the normal Owner rules apply.
+- Not yet verified: docs gate, full suite on this tree, main fast-forward, restart, push.
