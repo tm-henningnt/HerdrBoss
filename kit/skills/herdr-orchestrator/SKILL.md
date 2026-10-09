@@ -23,9 +23,10 @@ Read each reference before its step:
 
 ## What the orchestrator owns
 
+- Follow [the work approval policy](reference/approval-policy.md).
 - The orchestrator owns the work sequence.
-- Keep one active frontier unless the project contract permits a bounded batch.
-- Read issue dependencies and work only the first unblocked item.
+- Keep one active frontier unless the contract permits a batch.
+- Read issue dependencies and work only the first unblocked approved item.
 - Delegate one bounded task at a time. Do not hand the entire roadmap to one worker.
 - Give each worker a role, exact paths, evidence, and stop point.
 - Do not delegate roadmap or product direction.
@@ -51,7 +52,7 @@ Read each reference before its step:
 
 ## Context and cost
 
-- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions.
+- Use subagents for reviews, reads, and surveys inside approved work. Get the Owner's yes if a survey, review, or audit is itself unapproved new work. Keep the main thread for decisions.
 - Require file and line evidence for findings. Verify a finding at the source before acting.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
@@ -237,7 +238,7 @@ herdr agent prompt <orch-pane> "WORKER REPORT <name>: <done|blocked|stopped>. Re
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. It ends with a reply command that holds the message ID.
 - Reply to an Owner message with `herdr-boss say --reply-to <id> "<answer>"`. Keep the answer short and free of secrets.
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
-- Send a picture with `herdr-boss say --image FILE "TEXT"`; `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
+- Send a picture with `herdr-boss say --image FILE "TEXT"`; Boss `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
 - Record an Owner decision from an Owner message in `docs/orchestration/memory.md`, with its full text.
 - Use `herdr-boss publish <slug> <file>` for a validated status file. Follow `docs/project-status.md`. Do the [status review](reference/ledger-and-evidence.md#status-review) first.
 - Publish at task boundaries only: a task starts, a task ends, a blocker appears, or a blocker clears. Publish no more often.

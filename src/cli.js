@@ -267,6 +267,7 @@ const USAGE = `herdr-boss <command>
   kit update [--quiet]    Install the kit, print the kit changes since the installed kit revision, and print the kit file.
                           --quiet prints nothing when the kit is current and no file changes. Otherwise it
                           prints the digest and the summary line only.
+  proposal check FILE    Validate a proposal file before sending its path to the Boss.
   kit block             Print the marked Herdr Boss stub for AGENTS.md.
   gh issue ...          Run safe GitHub issue commands.
   gh label create|list|edit|sync ...  Run safe GitHub label commands. sync --preset triage [--dry-run] sets the triage labels.
@@ -722,7 +723,7 @@ async function main() {
     await messageCommand(cmd, args);
     return;
   }
-  if (['worker', 'wait', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit'].includes(cmd)) {
+  if (['worker', 'wait', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit', 'proposal'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
     const result = runKitCommand(cmd, args);
     if (result?.exitCode) process.exitCode = result.exitCode;

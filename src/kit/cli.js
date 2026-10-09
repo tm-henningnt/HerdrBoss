@@ -19,6 +19,7 @@ import { listProjects } from '../projects.js';
 import { createWaitHerdr, parseWaitArgs, waitForWorkers } from './wait.js';
 import { assertPinCaller } from '../git-pin-caller.js';
 import { appendForcedAction, forceReason } from '../force-audit.js';
+import { validateProposalFile } from './proposal.js';
 
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
@@ -42,6 +43,7 @@ const USAGE = `Kit commands:
   kit install [--no-hook]
   kit update [--quiet]
   kit block
+  proposal check FILE
   gh issue create|comment|edit ... --body-file FILE
   gh label create|list|edit|sync ...
   gh milestone create|list ...
@@ -214,6 +216,16 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         return { help: true };
       }
     }
+  }
+  if (command === 'proposal') {
+    const usage = 'Usage: proposal check FILE';
+    if (argv.length !== 2 || argv[0] !== 'check' || !argv[1]) fail(usage);
+    const root = injectedConfig?.root ?? findGitRoot();
+    const file = filePath(root, argv[1]);
+    const errors = validateProposalFile(fs.readFileSync(file, 'utf8'));
+    if (errors.length) fail(`Proposal file is incomplete:\n- ${errors.join('\n- ')}`, 1);
+    output('Proposal file is valid.');
+    return { valid: true, file };
   }
   herdr ??= command === 'wait' ? createWaitHerdr(createHerdrRunner) : createHerdrRunner();
   if (command === 'models') {
