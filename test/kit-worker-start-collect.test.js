@@ -1365,6 +1365,7 @@ test('worker start copies nested repository inputs before sending the prompt', (
   };
   const result = runKitCommand('worker', ['start', 'demo', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--copy', 'fixtures/one/a.txt', '--copy', path.join(f.root, 'docs/nested/b.txt')], {
     config: f.config, herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
   });
   assert.equal(result.worktree, path.join(TEST_HOME, 'Projects', '.herdr-wt', path.basename(f.root), 'demo'));
   const brief = fs.readFileSync(path.join(result.worktree, '.worker/brief.md'), 'utf8');
@@ -1489,6 +1490,7 @@ test('worker start rejects unsafe copied inputs without sending a prompt', () =>
   const herdr = (args) => { if (args[0] === 'agent' && args[1] === 'prompt') prompted = true; return f.herdr(args); };
   assert.throws(() => runKitCommand('worker', ['start', 'demo', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--copy', '../outside'], {
     config: f.config, herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
   }), (error) => /inside the repository/.test(error.message) && /START FAILED:/.test(error.message));
   assert.equal(prompted, false);
 });
@@ -1787,6 +1789,7 @@ test('OpenCode starts in separate processes share a lock through brief delivery'
     try {
       startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'] }, {
         config: f.config, models: loadModels(), env: f.env, rulesFile: f.rulesFile, wait: () => {},
+        freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
         readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
         tuiSupportsModelFlags: () => true,
         output: (line) => { if (line.includes('Waiting for OpenCode start lock')) event('waiting'); },
@@ -1972,7 +1975,10 @@ test('worker start adds its own worker folder to allowed paths', () => {
 
 test('worker start read-only mode needs no allow path and rejects one', () => {
   const f = setupFixture(null);
-  const options = { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} };
+  const options = {
+    config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
+  };
   assert.throws(() => runKitCommand('worker', ['start', 'read-only-conflict', '--kind', 'codex', '--task', 'x', '--read-only', '--allow', 'src/'], options), /--read-only cannot be used with --allow/);
   const run = runKitCommand('worker', ['start', 'read-only', '--kind', 'codex', '--task', 'x', '--read-only'], options);
   assert.equal(run.readOnly, true);

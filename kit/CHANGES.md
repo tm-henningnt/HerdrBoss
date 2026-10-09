@@ -313,3 +313,6 @@ Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode
 ## c81ec413327f
 Impact: required
 Summary: Limit orchestrator work to Owner-approved items, define validated proposal cards sent through the Boss, and warn when the installed kit lacks the approval rule.
+## dc7443c7a376
+Impact: useful
+Summary: Require a separate public Qlik demo app for extension releases; add the shared sheet publish, verify, export, and content scan helper.

@@ -1196,7 +1196,9 @@ function quotaSourceText(q) {
 
 function releaseRepoRowHtml(repo = {}, index = 0) {
   const field = (key, label, placeholder) => `<label><span>${label}</span><input type="text" value="${esc(repo[key] || '')}" placeholder="${placeholder}" data-release-repo-index="${index}" data-release-repo-field="${key}" data-service-group="Releases" aria-label="${label}"></label>`;
-  return `<div class="release-repo-row" data-release-repo-row="${index}">${field('name', 'GitHub repository', 'OWNER/REPO')}${field('project', 'Project slug', 'project-name')}${field('kind', 'Release kind', 'app')}<button type="button" class="quiet" data-release-repo-remove aria-label="Remove release repository row ${index + 1}">Remove</button></div>`;
+  const requireDemoApp = Object.hasOwn(repo, 'requireDemoApp') ? repo.requireDemoApp : repo.kind === 'qlik-extension';
+  const demoApp = `<label><input type="checkbox"${requireDemoApp ? ' checked' : ''}${repo.kind === 'qlik-extension' ? '' : ' disabled'} data-release-repo-index="${index}" data-release-repo-field="requireDemoApp" data-service-group="Releases" aria-label="Require separate demo app"><span>Require separate demo app</span></label>`;
+  return `<div class="release-repo-row" data-release-repo-row="${index}">${field('name', 'GitHub repository', 'OWNER/REPO')}${field('project', 'Project slug', 'project-name')}${field('kind', 'Release kind', 'app')}${demoApp}<button type="button" class="quiet" data-release-repo-remove aria-label="Remove release repository row ${index + 1}">Remove</button></div>`;
 }
 
 function releaseRepoEditorHtml(value) {
@@ -6758,7 +6760,7 @@ const HELP = {
     <h3>Avatars</h3><p>The <b>Avatars</b> section has one row for the Boss and one row for each project. A row shows the avatar of that chat. Select <b>Upload image</b> to use your own image. Select <b>Reset</b> to use the generated avatar again. An image is a PNG, JPEG, or WebP file of at most 512 KB. Herdr Boss keeps no other format. The image shows at once in the Chat, the Mailbox, and the Agents chart. Without an image, the page uses a generated avatar. Its color comes from the name of the project, and it stays the same. The two letters come from the project display name, the same on every page. The Boss has a crown. Each other project has two letters. The letters use the color of the best contrast on the circle.</p>
     <h3>Watch routines</h3><p>Each routine in the <b>Watch routines</b> section has a title, a model hint, a schedule, and a prompt text. Select a routine to edit it. The schedule is a number of minutes between runs, or a time before the end of the watch. Select <b>Save</b> to store the change on this machine. The change never edits the kit file, and it applies to the next prompt of a running watch. Select <b>Reset to the kit text</b> to remove your change. Use <b>Add a routine</b> to create your own routine. Turn routines on or off for a watch in the Watch box on the Agents page.</p>
     <h3>Service settings</h3><p>The table shows the values that the service uses. Each row shows whether the value comes from <code>config.json</code> or a default. Rows with inputs can be changed in the dashboard. Change the values in a group, then select <b>Save</b>. Herdr Boss applies saved values at once. Keep the usage limit warning below the critical value. After a save, each field shows the stored value. When the stored value differs from the typed value, the status line names both values. Rows without inputs are read-only: port, host, provider kinds, and project lead label. Change them in <code>config.json</code> and restart. A row marked restart required saves at once and takes effect after the next service restart.</p>
-    <p>In <b>Releases</b>, set <code>releases.repos</code> to list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish. A refusal names this setting and points to <b>Settings → Advanced → Service settings → Releases</b>.</p>
+    <p>In <b>Releases</b>, set <code>releases.repos</code> to list the GitHub repositories that may request a release; the Owner must approve each request in the Mailbox before publish. A Qlik extension row can require a separate demo app asset. This option defaults on for Qlik extension products and is unavailable for other release kinds. The release card shows the QVF asset name, size, and SHA-256. A Qlik extension ZIP must not contain a QVF. A refusal names this setting and points to <b>Settings → Advanced → Service settings → Releases</b>.</p>
     <h3>Usage limit plan</h3><p>Set the Codex burst pace, the plan mode, the credit threshold, the reserve margin, the planning horizon, the guidance tolerance, the hold margin, and the slow scenario factor. The planned curve starts at a fixed anchor with its used percent. A new reading does not move the anchor. The anchor moves when the burst pace changes, when the window reset time moves by more than 10 minutes, when use drops by more than 1 point below the anchor, and when no anchor exists. With usage limit history or an available reset credit, the Codex lane compares use with the curve. In <b>paced</b> mode the lane says <b>hold</b> when use is ahead of the curve by more than the tolerance plus the hold margin, <b>on pace</b> above the curve by up to the tolerance, and <b>Use now</b> at or below the curve. A saved <b>hold</b> stays until the lead falls below the tolerance minus the hold margin. In <b>burst</b> mode the curve is advice only and the lane stays <b>Use now</b>. Every mode shows how many points use is ahead of or behind the plan. Near-exhaustion, exhausted, and trickle states keep priority. With no usage limit history and no available reset credit, the lane keeps linear guidance. The plan changes guidance only. Herdr Boss never applies a reset credit or changes worker admission from this plan. The service posts one Mailbox approval item when a credit is due or expires within 48 hours. The item gives the time at which the recent burn reaches the credit threshold and its distance from the planned time. The service sends one warning in the 24 hours before an available credit expires. Apply credits in the Codex app.</p>
     <h3>Token prices</h3><p>The <b>Token prices</b> section lists the price of each model in USD per million tokens: input, output, cache read, cache write for 5 minutes, and cache write for 1 hour. It shows the source and date of each entry. A model with no published price shows empty fields and stays <b>unpriced</b> until you set its input and output. <b>unconfirmed</b> marks a figure that does not match the published pricing rule. Herdr Boss shows the cost as an <b>API-price equivalent</b>, because a subscription is not billed per token. Change a figure and select <b>Save prices</b>. A blank field uses the default. <b>Reset to defaults</b> removes all changes. A figure that you save is no longer unconfirmed.</p>
     <h3>Factory hosts</h3>
@@ -8498,7 +8500,8 @@ async function saveServiceSettings(group, button) {
       for (const field of fields) {
         const index = Number(field.dataset.releaseRepoIndex);
         if (!Number.isSafeInteger(index) || index < 0) continue;
-        rows.set(index, { ...(rows.get(index) || {}), [field.dataset.releaseRepoField]: field.value.trim() });
+        const value = field.type === 'checkbox' ? Boolean(field.checked) : String(field.value || '').trim();
+        rows.set(index, { ...(rows.get(index) || {}), [field.dataset.releaseRepoField]: value });
       }
       changes[setting] = [...rows.entries()].sort(([left], [right]) => left - right).map(([, repo]) => repo).filter((repo) => Object.values(repo).some(Boolean));
     } else if (input.dataset.serviceLane) {
@@ -8561,6 +8564,19 @@ document.addEventListener('click', (e) => {
   const rows = editor?.querySelector('[data-release-repo-rows]');
   const empty = editor?.querySelector('[data-release-repo-empty]');
   if (empty) empty.hidden = !!rows?.querySelector('[data-release-repo-row]');
+});
+
+document.addEventListener('change', (e) => {
+  const field = e.target;
+  const name = field?.dataset?.releaseRepoField;
+  if (name === 'requireDemoApp') field.dataset.touched = 'true';
+  if (name !== 'kind') return;
+  const checkbox = field.closest('[data-release-repo-row]')?.querySelector('[data-release-repo-field="requireDemoApp"]');
+  if (!checkbox) return;
+  const isQlikExtension = field.value.trim() === 'qlik-extension';
+  checkbox.disabled = !isQlikExtension;
+  if (!isQlikExtension) checkbox.checked = false;
+  else if (checkbox.dataset.touched !== 'true') checkbox.checked = true;
 });
 
 // A new model joins only this harness. It starts enabled and unmetered.

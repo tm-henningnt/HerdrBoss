@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { setupFixture } from './helpers/kit-fixture.js';
 import { loadModels } from '../src/kit/config.js';
-import { startWorker, describeLane } from '../src/kit/workers.js';
+import { describeLane } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { loadPolicy, laneStatus, pacingGoal, writePolicy } from '../src/control.js';
 import { writeFleetFile } from '../src/fleet-store.js';
 

@@ -105,9 +105,71 @@ function readRelease(run, repo, tag) {
   };
 }
 
+function zipContainsQvf(content) {
+  const first = Math.max(0, content.length - 65_557);
+  let end = -1;
+  for (let offset = content.length - 22; offset >= first; offset -= 1) {
+    if (content.readUInt32LE(offset) !== 0x06054b50) continue;
+    if (offset + 22 + content.readUInt16LE(offset + 20) === content.length) { end = offset; break; }
+  }
+  if (end < 0) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+  const entryCount = content.readUInt16LE(end + 10);
+  const directorySize = content.readUInt32LE(end + 12);
+  const directoryOffset = content.readUInt32LE(end + 16);
+  if (entryCount === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff
+    || directoryOffset + directorySize > end) {
+    throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+  }
+  let offset = directoryOffset;
+  let containsQvf = false;
+  const localOffsets = new Set();
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > end || content.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    }
+    const nameLength = content.readUInt16LE(offset + 28);
+    const extraLength = content.readUInt16LE(offset + 30);
+    const commentLength = content.readUInt16LE(offset + 32);
+    const next = offset + 46 + nameLength + extraLength + commentLength;
+    if (next > end) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    const name = content.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
+    const localOffset = content.readUInt32LE(offset + 42);
+    if (localOffset + 30 > directoryOffset || content.readUInt32LE(localOffset) !== 0x04034b50) {
+      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    }
+    const localNameLength = content.readUInt16LE(localOffset + 26);
+    const localExtraLength = content.readUInt16LE(localOffset + 28);
+    const localNameEnd = localOffset + 30 + localNameLength;
+    if (!localNameLength || localNameEnd + localExtraLength > directoryOffset) {
+      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    }
+    const localName = content.subarray(localOffset + 30, localNameEnd).toString('utf8');
+    const centralQvf = /\.qvf$/i.test(name);
+    const localQvf = /\.qvf$/i.test(localName);
+    if (centralQvf || localQvf) containsQvf = true;
+    if (name !== localName && !centralQvf && !localQvf) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    localOffsets.add(localOffset);
+    offset = next;
+  }
+  if (offset !== directoryOffset + directorySize) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+
+  // Also find a local QVF header that an incomplete central directory omits.
+  const localSignature = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  for (let candidate = content.indexOf(localSignature); candidate >= 0 && candidate < directoryOffset; candidate = content.indexOf(localSignature, candidate + 4)) {
+    if (localOffsets.has(candidate) || candidate + 30 > directoryOffset || content.readUInt16LE(candidate + 4) > 63) continue;
+    const candidateNameLength = content.readUInt16LE(candidate + 26);
+    const candidateExtraLength = content.readUInt16LE(candidate + 28);
+    const candidateNameEnd = candidate + 30 + candidateNameLength;
+    if (!candidateNameLength || candidateNameLength > 4096 || candidateNameEnd + candidateExtraLength > directoryOffset) continue;
+    const candidateName = content.subarray(candidate + 30, candidateNameEnd).toString('utf8');
+    if (/\.qvf$/i.test(candidateName)) containsQvf = true;
+  }
+  return containsQvf;
+}
+
 // Download each asset into a temporary folder, hash it, and scan its text.
 // Returns [{ name, size, sha256, listedSha256, classes }]. A scan class never holds a value.
-function inspectAssets(run, repo, tag, release, knownHosts) {
+function inspectAssets(run, repo, tag, release, knownHosts, { inspectQlikExtensionZips = false } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-'));
   try {
     const files = new Map();
@@ -129,10 +191,11 @@ function inspectAssets(run, repo, tag, release, knownHosts) {
         classes.push(...scan.classes);
         allowed = scan.allowed;
       }
+      const containsQvf = inspectQlikExtensionZips && /\.zip$/i.test(asset.name) ? zipContainsQvf(content) : false;
       const sidecar = files.get(`${asset.name}.sha256`);
       const listed = asset.digest ?? (sidecar ? fs.readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0].toLowerCase() : null);
       if (listed && listed !== sha256) classes.push('checksum differs from the listed checksum');
-      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes, allowed };
+      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes, allowed, containsQvf };
     });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -184,7 +247,7 @@ function packCoverage({ dir, slug, pack }) {
   }
 }
 
-function cardText({ repo, tag, release, notes, assets, findings, latest, coverage }) {
+function cardText({ repo, tag, release, notes, assets, demoApp, findings, latest, coverage }) {
   const lines = [
     '# Release approval request', '',
     `Repository: ${repo}`, `Tag: ${tag}`, `Draft: ${release.url ?? release.name ?? tag}`, '',
@@ -193,6 +256,9 @@ function cardText({ repo, tag, release, notes, assets, findings, latest, coverag
   ];
   if (assets.length) for (const asset of assets) lines.push(`- ${asset.name}: ${asset.size} bytes, sha256 ${asset.sha256}`);
   else lines.push('(no assets)');
+  lines.push('', '## Demo app');
+  if (demoApp) lines.push(`- ${demoApp.name}: ${demoApp.size} bytes, sha256 ${demoApp.sha256}`);
+  else lines.push('(not required)');
   lines.push('', '## Scan result');
   if (findings.length) { lines.push('Fail:'); for (const finding of findings) lines.push(`- ${finding.file}: ${finding.classes.join(', ')}`); }
   else lines.push('Pass: no secrets found.');
@@ -200,6 +266,17 @@ function cardText({ repo, tag, release, notes, assets, findings, latest, coverag
   lines.push('', '## Build commit', release.commit ?? '(not available)', '', '## Review coverage', coverage, '', '## Effect',
     `Approve makes the release public${latest ? ' and marks it as the latest release' : ' and does not mark it as the latest release'}.`);
   return lines.join('\n');
+}
+
+function demoAppAsset(entry, assets) {
+  if (entry?.kind !== 'qlik-extension') return null;
+  if (assets.some((asset) => asset.containsQvf)) throw new Error('A Qlik extension zip contains a .qvf file; ship the demo app as a separate asset.');
+  const qvfs = assets.filter((asset) => /\.qvf$/i.test(asset.name));
+  const required = entry.requireDemoApp ?? true;
+  if (required && qvfs.length !== 1) throw new Error('A Qlik extension release requires one separate .qvf demo app asset.');
+  if (qvfs.length > 1) throw new Error('A Qlik extension release can list only one separate .qvf demo app asset.');
+  const asset = qvfs[0];
+  return asset ? { name: asset.name, size: asset.size, sha256: asset.sha256 } : null;
 }
 
 // Request a release approval. Posts one Mailbox item of action approve.
@@ -219,12 +296,13 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   let currentAssets = null;
   try {
     release = readRelease(run, repo, tag);
-    if (open) currentAssets = inspectAssets(run, repo, tag, release, hosts);
+    if (open) currentAssets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
   } catch (error) {
     if (open) return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
     throw error;
   }
   if (open) {
+    demoAppAsset(entry, currentAssets);
     const notes = readNotes(notesFile);
     const changelog = notes || release.body || '';
     const notesSourceMatches = typeof open.release.notesFromFile === 'boolean'
@@ -236,9 +314,10 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   }
   if (!release.draft) throw new Error(REFUSALS['not-draft']);
   const notes = readNotes(notesFile);
-  const assets = inspectAssets(run, repo, tag, release, hosts);
+  const assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
+  const demoApp = demoAppAsset(entry, assets);
   const findings = scanFindings(scanRelease(`${notes}\n${release.body}`, { knownHosts: hosts, file: 'notes' }), assets);
-  const text = cardText({ repo, tag, release, notes, assets, findings, latest, coverage: packCoverage({ dir, slug: entry.project, pack }) });
+  const text = cardText({ repo, tag, release, notes, assets, demoApp, findings, latest, coverage: packCoverage({ dir, slug: entry.project, pack }) });
 
   const record = openMessageStore({ dir }).append({
     thread: entry.project, from: 'orch', to: 'owner', kind: 'report', title: `Release approval: ${repo} ${tag}`, text, action: 'approve',
@@ -246,6 +325,7 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
     release: {
       repo, tag, latest, commit: release.commit, notesFromFile: Boolean(notesFile),
       notesSha256: crypto.createHash('sha256').update(notes || release.body || '').digest('hex'),
+      demoApp,
       assets: assets.map(({ name, size, sha256 }) => ({ name, size, sha256 })),
     },
   }, { now });
@@ -545,7 +625,12 @@ export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now
   const release = readRelease(run, repo, tag);
   if (!release.draft) return refuse('not-draft');
   const hosts = knownHosts ?? knownHostsFromSessions();
-  const assets = inspectAssets(run, repo, tag, release, hosts);
+  const entry = config ? repoConfig(repo, config) : null;
+  const assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
+  let demoApp;
+  try { demoApp = demoAppAsset(entry, assets); } catch { return refuse('scan-failed'); }
+  if (entry?.kind === 'qlik-extension' && (entry.requireDemoApp ?? true) && !approval.release.demoApp) return refuse('checksum-mismatch');
+  if (JSON.stringify(approval.release.demoApp ?? null) !== JSON.stringify(demoApp)) return refuse('checksum-mismatch');
   const card = approval.release.assets ?? [];
   const same = card.length === assets.length && card.every((entry) => assets.some((asset) => asset.name === entry.name && asset.sha256 === entry.sha256 && asset.size === entry.size));
   if (!same) return refuse('checksum-mismatch');

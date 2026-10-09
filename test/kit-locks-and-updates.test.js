@@ -11,7 +11,8 @@ import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProj
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';
@@ -449,6 +450,7 @@ test('worker start keeps every repeated --allow path in the run record', () => {
   const result = runKitCommand('worker', ['start', 'three-allow', '--kind', 'pi', '--model', 'opencode-go/space-bunny-free', '--issue', '331', '--task', 'x',
     '--allow', 'src/a.js', '--allow', 'test/a.test.js', '--allow', 'docs/a.md'], {
     config: f.config, herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
   });
   const record = JSON.parse(fs.readFileSync(result.recordFile, 'utf8'));
   for (const item of ['src/a.js', 'test/a.test.js', 'docs/a.md']) assert.ok(record.allowedPaths.includes(item), `${item} in ${record.allowedPaths.join(', ')}`);

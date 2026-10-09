@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { withOpenCodeStartLock } from '../src/kit/opencode-start.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 

@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { HOOK_COMMAND, installedKitRevision, installKit, KIT_FILE, kitRequiredBehind, kitRevision, refreshKitIfRequired, safeRefreshKit } from '../src/kit/agents-check.js';
 import { loadModels } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { setupFixture } from './helpers/kit-fixture.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -24,11 +24,43 @@ test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const REPO = 'example-org/example-app';
 const TAG = 'v1.0.0';
-const config = { releases: { repos: [{ name: REPO, project: 'example', kind: 'app' }] } };
+const config = { releases: { repos: [{ name: REPO, project: 'example', kind: 'app', requireDemoApp: false }] } };
+const qlikExtensionConfig = { releases: { repos: [{ name: REPO, project: 'example', kind: 'qlik-extension' }] } };
 const knownHosts = ['tenant.example.test'];
 const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
 let counter = 0;
 const newDir = () => { const dir = path.join(root, `case-${++counter}`); fs.mkdirSync(dir, { recursive: true }); return dir; };
+
+function zipLocalEntry(name) {
+  const filename = Buffer.from(name);
+  const local = Buffer.alloc(30 + filename.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(filename.length, 26);
+  filename.copy(local, 30);
+  return local;
+}
+
+function zipWithEntry(name, { localName = name, centralName = name, hiddenLocalEntries = [] } = {}) {
+  const hidden = Buffer.concat(hiddenLocalEntries.map(zipLocalEntry));
+  const localFilename = Buffer.from(localName);
+  const centralFilename = Buffer.from(centralName);
+  const local = zipLocalEntry(localName);
+  const central = Buffer.alloc(46 + centralFilename.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(centralFilename.length, 28);
+  central.writeUInt32LE(hidden.length, 42);
+  centralFilename.copy(central, 46);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(hidden.length + local.length, 16);
+  return Buffer.concat([hidden, local, central, end]);
+}
 
 // A fake gh. `state` can change between calls: state.draft, state.files (name -> content), state.body.
 function fakeGh(state = {}) {
@@ -117,6 +149,54 @@ test('request posts one Mailbox item the Owner can answer, with all card fields'
 
 test('request is refused for a repository outside releases.repos', () => {
   assert.throws(() => release.requestRelease({ repo: 'other-org/other', tag: TAG, run: fakeGh(), dir: newDir(), config, knownHosts }), /not in the releases\.repos setting.*Settings.*Releases/);
+});
+
+test('Qlik extension requests require and list a separate demo app asset', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'extension.zip': zipWithEntry('extension/manifest.json'), 'demo.qvf': Buffer.from('demo app bytes') } });
+  const result = request(dir, run, { config: qlikExtensionConfig });
+  const record = item(dir, result.id);
+  const digest = sha(Buffer.from('demo app bytes'));
+  assert.match(record.text, new RegExp(`## Demo app\\n- demo\\.qvf: ${Buffer.byteLength('demo app bytes')} bytes, sha256 ${digest}`));
+  assert.deepEqual(record.release.demoApp, { name: 'demo.qvf', size: Buffer.byteLength('demo app bytes'), sha256: digest });
+});
+
+test('Qlik extension requests refuse a draft without a separate demo app asset', () => {
+  const dir = newDir();
+  assert.throws(() => request(dir, fakeGh(), { config: qlikExtensionConfig }), /requires one separate \.qvf demo app asset/);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 0);
+});
+
+test('Qlik extension requests refuse an extension zip that contains a demo app', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'extension.zip': zipWithEntry('nested/demo.qvf'), 'demo.qvf': Buffer.from('demo app bytes') } });
+  assert.throws(() => request(dir, run, { config: qlikExtensionConfig }), /extension zip contains a \.qvf file/);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 0);
+});
+
+test('Qlik extension requests refuse a QVF local entry hidden by a different central-directory name', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'extension.zip': zipWithEntry('manifest.json', { localName: 'nested/demo.qvf', centralName: 'manifest.json' }), 'demo.qvf': Buffer.from('demo app bytes') } });
+  assert.throws(() => request(dir, run, { config: qlikExtensionConfig }), /extension zip contains a \.qvf file/);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 0);
+});
+
+test('Qlik extension requests refuse a QVF local entry omitted from the central directory', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'extension.zip': zipWithEntry('manifest.json', { hiddenLocalEntries: ['nested/demo.qvf'] }), 'demo.qvf': Buffer.from('demo app bytes') } });
+  assert.throws(() => request(dir, run, { config: qlikExtensionConfig }), /extension zip contains a \.qvf file/);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 0);
+});
+
+test('publish rechecks that a Qlik demo app stays separate after Owner approval', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: { 'extension.zip': zipWithEntry('extension/manifest.json'), 'demo.qvf': Buffer.from('demo app bytes') } });
+  const approval = request(dir, run, { config: qlikExtensionConfig });
+  answer(dir, approval.id, 'Approved.');
+  run.state.files['extension.zip'] = zipWithEntry('extension/demo.qvf');
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: approval.id, run, dir, knownHosts, config: qlikExtensionConfig });
+  assert.equal(result.code, 'scan-failed');
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
 });
 
 test('a second request for the same repository and tag returns the open item', () => {
@@ -792,7 +872,7 @@ test('releases.repos validation keeps only the policy fields', async () => {
   const { validateReleasesRepos } = await import('../src/config.js');
   const result = validateReleasesRepos([{ name: REPO, project: 'example', kind: 'app', token: 'fixture-only' }]);
   assert.deepEqual(result.errors, []);
-  assert.deepEqual(result.repos, [{ name: REPO, project: 'example', kind: 'app' }]);
+  assert.deepEqual(result.repos, [{ name: REPO, project: 'example', kind: 'app', requireDemoApp: false }]);
 });
 
 test('releases.repos is a visible service setting that accepts and validates repository rows', async () => {

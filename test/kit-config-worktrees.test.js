@@ -10,7 +10,8 @@ import { checkAgentsExclude, contextTokensFor, globMatches, loadModels, loadProj
 import { appendDelegatedRun, compareChangedPaths, gitChangedPaths, readDelegatedRuns, validateAllowedPaths, validateDelegatedRun, validateWorkerReport } from '../src/kit/orchestration.js';
 import { buildGhArgs } from '../src/kit/gh.js';
 import { formatKitDigest, runKitCommand } from '../src/kit/cli.js';
-import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, startWorker, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { allowWorkerScope, collectWorker, createHerdrRunner, filterCollectProcesses, listWorkers, parseWorktreeCwdProcesses, renderBrief, waitForAgentReady, waitForWorkerPane } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { classifyWorktrees, pruneWorktrees } from '../src/kit/worktrees.js';
 import { usageProvider, validateUsage } from '../src/usage.js';
 import { validateProject } from '../src/projects.js';

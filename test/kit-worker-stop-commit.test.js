@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { collectWorker, commitWorker, listCwdProcesses, startWorker, stopOwnWorker } from '../src/kit/workers.js';
+import { collectWorker, commitWorker, listCwdProcesses, stopOwnWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 
 function startKind(f, name, { kind = 'codex', model, allow = ['src/'] } = {}) {
