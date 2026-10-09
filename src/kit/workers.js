@@ -2457,6 +2457,36 @@ function impeccablePath(item) {
   return candidate === '.impeccable' || candidate.startsWith('.impeccable/');
 }
 
+// The directory segments of a repository-relative path. A trailing slash and a leading ./ drop away.
+function pathSegments(value) {
+  return path.posix.normalize(String(value).replaceAll('\\', '/')).replace(/^\.\//, '')
+    .split('/').filter((part) => part && part !== '.');
+}
+
+// The allowed entry that shares the longest directory prefix with the rejected path. A rejected path
+// compares its directory segments with each allowed entry. When no entry shares a directory, the first
+// allowed entry wins. A tie keeps the earlier entry.
+function nearestAllowedPath(item, allowedPaths) {
+  const directory = pathSegments(item).slice(0, -1);
+  let best = allowedPaths[0] ?? null;
+  let bestScore = -1;
+  for (const allowed of allowedPaths) {
+    const parts = pathSegments(allowed);
+    const limit = Math.min(directory.length, parts.length);
+    let score = 0;
+    while (score < limit && directory[score] === parts[score]) score += 1;
+    if (score > bestScore) { bestScore = score; best = allowed; }
+  }
+  return best;
+}
+
+// A short, plain list of paths for a refusal. The list holds at most `limit` paths and names the rest as a count.
+function scopePathList(paths, limit = 20) {
+  const shown = paths.slice(0, limit);
+  const rest = paths.length - shown.length;
+  return `${shown.join(', ')}${rest > 0 ? ` and ${rest} more` : ''}`;
+}
+
 export function collectWorker(name, options, { config, now = Date.now(), output = console.log, recordUsageFn = recordUsage, listWorktreeProcesses = worktreeCwdProcesses, leaseDataDir = DATA_DIR, schedulePaneCloseFn = scheduleWorkerPaneClose, callerPid = process.pid, callerPpid = process.ppid, herdr = null } = {}) {
   const record = options.noRecord !== true && options.record !== false;
   let ledgerWritten = false;
@@ -2576,9 +2606,16 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (unlistedErrors.some(impeccablePath)) {
         throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. ${IMPECCABLE_WORKER_RULE} Discard the change, then use --exclude-path PATH[,PATH] --reason TEXT.`);
       }
+      // The refusal also lists the changed paths inside the scope and the nearest allowed path for each
+      // rejected path, so the orchestrator sees what would pass without a new search.
+      const insideScope = scopePathList(changed.filter((item) => !impeccablePath(item) && compareChangedPaths([item], allowedPaths).length === 0));
+      const inside = insideScope ? ` Inside the allowed scope: ${insideScope}.` : '';
+      const hints = allowedPaths.length
+        ? ` Nearest allowed path for each rejected path: ${unlistedErrors.map((item) => `${item} (nearest allowed: ${nearestAllowedPath(item, allowedPaths)})`).join(', ')}.`
+        : '';
       const form = `herdr-boss worker collect ${name} --accept-scope FILE[,FILE] --reason TEXT`;
       const example = `herdr-boss worker collect ${name} --accept-scope ${shellQuote(unlistedErrors.join(','))} --reason "approved by the orchestrator"`;
-      throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}. The allowed command form is: ${form}. Example: ${example}.`);
+      throw new Error(`Worker ${name} changed paths outside its allowed scope: ${list}.${inside}${hints} The allowed command form is: ${form}. Example: ${example}.`);
     }
     // A Codex worker cannot write the shared Git metadata, so it leaves its change in the working tree.
     // Collection accepts that state and names it, so the orchestrator commits with worker commit.
