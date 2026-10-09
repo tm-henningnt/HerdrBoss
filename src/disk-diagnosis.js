@@ -2,12 +2,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
+import { appendForcedAction } from './force-audit.js';
 import { redactSecrets } from './redact.js';
 
 export const DISK_DIAGNOSIS_FILE = 'disk-guard-diagnosis.json';
 export const DISK_DIAGNOSIS_MARKER = '<!-- Herdr Boss disk guard diagnosis -->';
 export const DISK_SCAN_TIME_LIMIT_MS = 2500;
 export const LARGE_TEMP_DIRECTORY_BYTES = 50 * 1024 ** 2;
+// The engine runs at most one diagnosis per hour while a volume is below the floor.
+export const LOW_DISK_SCAN_INTERVAL_MS = 60 * 60 * 1000;
+// The audit kind of an engine-triggered scan. It has no worker name.
+export const DISK_LOW_SCAN_AUDIT_KIND = 'disk-low-scan';
+export const MAX_DISK_DIAGNOSES = 10;
 const MAX_ENTRIES = 5;
 
 function candidateRoots({ home, tempRoot, dataDir }) {
@@ -123,6 +129,14 @@ export function formatDiskDiagnosisMarkdown(diagnosis) {
   return lines.join('\n').trimEnd();
 }
 
+function readDiagnosisList(dir) {
+  let value;
+  try { value = JSON.parse(readDataFile(path.join(dir, DISK_DIAGNOSIS_FILE), dir)); }
+  catch { return []; }
+  if (Array.isArray(value)) return value.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+  return value && typeof value === 'object' ? [value] : [];
+}
+
 export function writeDiskDiagnosis(diagnosis, { dataDir, bulletinFile = path.join(dataDir, 'bulletin.md') } = {}) {
   const dir = path.resolve(dataDir);
   const parsedRecordedAt = Date.parse(diagnosis?.recordedAt);
@@ -133,6 +147,10 @@ export function writeDiskDiagnosis(diagnosis, { dataDir, bulletinFile = path.joi
     recordedAt: Number.isFinite(parsedRecordedAt) ? new Date(parsedRecordedAt).toISOString() : new Date().toISOString(),
     ...(Number.isSafeInteger(diagnosis?.minFreeGb) && diagnosis.minFreeGb >= 1 && diagnosis.minFreeGb <= 500
       ? { minFreeGb: diagnosis.minFreeGb } : {}),
+    ...(Number.isSafeInteger(diagnosis?.worktreeFreeBytes) && diagnosis.worktreeFreeBytes >= 0
+      ? { worktreeFreeBytes: diagnosis.worktreeFreeBytes } : {}),
+    ...(Number.isSafeInteger(diagnosis?.dataDirFreeBytes) && diagnosis.dataDirFreeBytes >= 0
+      ? { dataDirFreeBytes: diagnosis.dataDirFreeBytes } : {}),
     ...(diagnosis?.volumePaths && typeof diagnosis.volumePaths.worktree === 'string' && typeof diagnosis.volumePaths.dataDir === 'string'
       ? { volumePaths: {
         worktree: redactSecrets(path.resolve(diagnosis.volumePaths.worktree)).slice(0, 1000),
@@ -145,7 +163,10 @@ export function writeDiskDiagnosis(diagnosis, { dataDir, bulletinFile = path.joi
       : []);
   }
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeDataFile(path.join(dir, DISK_DIAGNOSIS_FILE), `${JSON.stringify(clean)}\n`, dir);
+  // The file keeps the newest diagnoses, newest last. An old single-object file reads as one entry.
+  const entries = readDiagnosisList(dir);
+  entries.push(clean);
+  writeDataFile(path.join(dir, DISK_DIAGNOSIS_FILE), `${JSON.stringify(entries.slice(-MAX_DISK_DIAGNOSES))}\n`, dir);
   let current = '';
   try { current = readDataFile(bulletinFile, dir); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -180,7 +201,9 @@ export function readDiskDiagnosis(dataDir, {
   freeSpaceReader = (file) => fs.statfsSync(file),
 } = {}) {
   try {
-    const value = JSON.parse(readDataFile(path.join(dataDir, DISK_DIAGNOSIS_FILE), dataDir));
+    const parsed = JSON.parse(readDataFile(path.join(dataDir, DISK_DIAGNOSIS_FILE), dataDir));
+    const value = Array.isArray(parsed) ? parsed[parsed.length - 1] : parsed;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const recordedAtMs = Date.parse(value.recordedAt);
     if (!Number.isFinite(recordedAtMs) || recordedAtMs > now || now - recordedAtMs > 6 * 60 * 60 * 1000) return null;
     const floorGb = Number.isSafeInteger(minFreeGb) && minFreeGb >= 1 && minFreeGb <= 500
@@ -207,4 +230,76 @@ export function readDiskDiagnosis(dataDir, {
       recordedAt: new Date(recordedAtMs).toISOString(),
     };
   } catch { return null; }
+}
+
+function freeBytesFromStat(stat) {
+  const bytes = Number(stat?.bavail) * Number(stat?.bsize);
+  if (!Number.isFinite(bytes) || bytes < 0) throw new Error('invalid free space');
+  return bytes;
+}
+
+// Whether the engine must run a low-disk scan now. The engine keeps the last scan time; a restart may scan again.
+export function lowDiskScanDue({ now, lastScanAt, freeSpaceBytes, minFreeGb, intervalMs = LOW_DISK_SCAN_INTERVAL_MS }) {
+  const floorBytes = minFreeGb * (1024 ** 3);
+  if ((freeSpaceBytes || []).every((bytes) => bytes >= floorBytes)) return false;
+  return !Number.isFinite(lastScanAt) || now - lastScanAt >= intervalMs;
+}
+
+// Run at most one engine-triggered diagnosis per interval while a volume is below the floor. It reads
+// free space, scans directories with paths and sizes only, writes the diagnosis, and writes the audit
+// row. A free-space, scan, or write failure returns an error and leaves the last scan time unchanged.
+export function runLowDiskDiagnosis({
+  now = Date.now(),
+  lastScanAt = null,
+  dataDir,
+  worktreePath,
+  dataDirPath,
+  minFreeGb = 8,
+  intervalMs = LOW_DISK_SCAN_INTERVAL_MS,
+  freeSpaceReader = (file) => fs.statfsSync(file),
+  scan = scanDiskUsage,
+  write = writeDiskDiagnosis,
+  audit = appendForcedAction,
+  home = os.homedir(),
+  tempRoot = os.tmpdir(),
+} = {}) {
+  const validLastScanAt = Number.isFinite(lastScanAt) ? lastScanAt : null;
+  const floorGb = Number.isSafeInteger(minFreeGb) && minFreeGb >= 1 && minFreeGb <= 500 ? minFreeGb : 8;
+  let worktreeFreeBytes;
+  let dataDirFreeBytes;
+  try {
+    worktreeFreeBytes = freeBytesFromStat(freeSpaceReader(worktreePath));
+    dataDirFreeBytes = freeBytesFromStat(freeSpaceReader(dataDirPath));
+  } catch (error) {
+    return { scanned: false, lastScanAt: validLastScanAt, error: `free space: ${error.message}` };
+  }
+  if (!lowDiskScanDue({ now, lastScanAt: validLastScanAt, freeSpaceBytes: [worktreeFreeBytes, dataDirFreeBytes], minFreeGb: floorGb, intervalMs })) {
+    return { scanned: false, lastScanAt: validLastScanAt };
+  }
+  let scanResult;
+  try { scanResult = scan({ home, tempRoot, dataDir }); }
+  catch (error) { return { scanned: false, lastScanAt: validLastScanAt, error: `scan: ${error.message}` }; }
+  const diagnosis = {
+    ...scanResult,
+    recordedAt: new Date(now).toISOString(),
+    minFreeGb: floorGb,
+    worktreeFreeBytes,
+    dataDirFreeBytes,
+    volumePaths: { worktree: worktreePath, dataDir: dataDirPath },
+  };
+  try { write(diagnosis, { dataDir }); }
+  catch (error) { return { scanned: false, lastScanAt: validLastScanAt, error: `write: ${error.message}` }; }
+  try {
+    audit({
+      dataDir,
+      time: new Date(now).toISOString(),
+      command: 'engine tick',
+      project: null,
+      workerName: null,
+      refusalKind: DISK_LOW_SCAN_AUDIT_KIND,
+      reason: `The engine ran a disk diagnosis because the free space on a worker volume is below the ${floorGb} GB worktrees.minFreeGb floor.`,
+      diagnosis,
+    });
+  } catch { /* The diagnosis stays recorded when the audit write fails. */ }
+  return { scanned: true, lastScanAt: now, diagnosis };
 }

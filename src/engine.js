@@ -9,10 +9,10 @@ import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
 import { collectHerdr, collectQuotas, collectMachine, collectProcesses, collectCwdProcesses, collectMissingWorktreeProcesses, collectWorktreeCounts, collectPiModels, collectBrowserClients, findBrowsers, cpuUse, keepStaleRows, run, QUOTA_PROVIDERS, QUOTA_TIMEOUT_BACKOFF_BY_PROVIDER_MS } from './collect.js';
 import { evaluate, swapWarnStep, renderBulletin, fmtDuration, providerName, broadcastTargets, staleStatuses, staleTextStatuses } from './rules.js';
-import { readDiskDiagnosis } from './disk-diagnosis.js';
+import { readDiskDiagnosis, runLowDiskDiagnosis, scanDiskUsage, writeDiskDiagnosis } from './disk-diagnosis.js';
 import { listProjects } from './projects.js';
 import { checkHarness, readProjectRepos } from './harness.js';
-import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, workerConfigView } from './kit/config.js';
+import { effortSettingsForModel, loadModels, loadProjectConfig, KIT_ROOT, sharedWorktreeRoot, workerConfigView } from './kit/config.js';
 import { isOpus, normalizeModel } from './kit/workers.js';
 import { POLICY_DEFAULTS, pickSuccessorDetailed, modelTier, tierAllowsAutoActivation, autoCooldownSkips, loadPolicy, clearExpiredOneOffGoals, codexPlanGuidance, deriveControl, migrateWorkspacePolicy, providerFor, selectModel, pickSuccessor, laneStatus, leastOverProvider, machineLimits, unmeteredLane, unavailablePiModels, mergeModels, weeklyUseByProvider } from './control.js';
 import { scanSpend, SPEND_SCAN_INTERVAL_MS } from './spend.js';
@@ -579,7 +579,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
     super();
     initializeLifecyclePort();
     this.cfg = cfg;
@@ -616,6 +616,8 @@ export class Engine extends EventEmitter {
     this.reviewRetentionRunning = false;
     this.denialScanAt = 0;
     this.denialScanRunning = false;
+    // The time of the last engine-triggered low-disk scan. It lives in memory only, so a restart may scan again.
+    this.diskScanAt = null;
     this.spendScanAt = 0;
     this.spendScanRunning = false;
     this.harness = null;
@@ -689,6 +691,9 @@ export class Engine extends EventEmitter {
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
     this.lockLedgerReader = lockLedgerReader;
+    this.diskFreeSpaceReader = diskFreeSpaceReader;
+    this.diskScan = diskScan;
+    this.diskDiagnosisWrite = diskDiagnosisWrite;
     this.lockWatchdogProcesses = null;
     this.lockWatchdogLedgerCache = { at: null, lines: null };
     this.kitNoticeRead = false;
@@ -875,6 +880,33 @@ export class Engine extends EventEmitter {
     });
     this.lockWatchdogProcesses = watchdog.processes ? { at: now, processes: watchdog.processes } : null;
     return watchdog;
+  }
+
+  // Run one low-disk diagnosis when a volume is below the worktrees.minFreeGb floor and the last
+  // engine scan is older than one hour. The timestamp lives in engine memory only. A failure is
+  // logged and never breaks the tick.
+  checkLowDiskDiagnosis(now) {
+    try {
+      const minFreeGb = Number.isSafeInteger(this.cfg.worktrees?.minFreeGb) && this.cfg.worktrees.minFreeGb >= 1 && this.cfg.worktrees.minFreeGb <= 500
+        ? this.cfg.worktrees.minFreeGb : 8;
+      const result = runLowDiskDiagnosis({
+        now,
+        lastScanAt: this.diskScanAt,
+        dataDir: DATA_DIR,
+        worktreePath: sharedWorktreeRoot(),
+        dataDirPath: DATA_DIR,
+        minFreeGb,
+        freeSpaceReader: this.diskFreeSpaceReader,
+        scan: this.diskScan,
+        write: this.diskDiagnosisWrite,
+      });
+      if (Number.isFinite(result.lastScanAt)) this.diskScanAt = result.lastScanAt;
+      if (result.error) this.log('disk-diagnosis', `Low-disk diagnosis skipped: ${result.error}`);
+      return result;
+    } catch (error) {
+      this.log('disk-diagnosis', `Low-disk diagnosis failed: ${String(error?.message || error).slice(0, 200)}`);
+      return { scanned: false, lastScanAt: this.diskScanAt, error: String(error?.message || error) };
+    }
   }
 
   // Tick phases:
@@ -1607,6 +1639,8 @@ export class Engine extends EventEmitter {
       snap.push = this.push;
       // The denial trend is for the Owner. It goes to the dashboard and the bulletin, never to a pane prompt.
       snap.denials = denialSummary(readDenials(DATA_DIR), now, { pendingBytes: this.memory.denialScan?.pendingBytes || 0 });
+      // Run a low-disk diagnosis on the acting tick before the bulletin reads it.
+      if (this.act) this.checkLowDiskDiagnosis(now);
       snap.diskDiagnosis = readDiskDiagnosis(DATA_DIR, {
         now,
         minFreeGb: this.cfg.worktrees?.minFreeGb ?? 8,

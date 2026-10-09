@@ -1595,6 +1595,8 @@ function startWorkerOnce(name, options, {
             ...diagnosticScan({ home: os.homedir(), tempRoot: os.tmpdir(), dataDir }),
             recordedAt: new Date(now).toISOString(),
             minFreeGb: minimumFreeGb,
+            worktreeFreeBytes,
+            dataDirFreeBytes,
             volumePaths: { worktree: worktreeVolumePath, dataDir: dataDirVolumePath },
           };
           diagnosisWrite(diagnosis, { dataDir });
