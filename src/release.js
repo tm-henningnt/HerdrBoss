@@ -59,7 +59,9 @@ function hostKnown(hostname, knownHosts) {
 
 // The Qlik Engine writes the path of its own inline table source into an exported .qvf: /home/engine/<uuid>.inline.
 // The path belongs to the Engine and holds no user path. Only this exact pattern passes, and only for a .qvf asset.
-const ENGINE_INLINE_PATH = /(?<![A-Za-z0-9._/-])\/home\/engine\/[0-9a-fA-F-]{36}\.inline(?![A-Za-z0-9._/-])/g;
+// The qvf stores the path with a one-byte length prefix. The path is 56 characters, so the prefix byte is '8' (0x38).
+// Only that prefix may touch the path; any other word character before it still fails.
+const ENGINE_INLINE_PATH = /(?:(?<![A-Za-z0-9._/-])|(?<=8))\/home\/engine\/[0-9a-fA-F-]{36}\.inline(?![A-Za-z0-9._/-])/g;
 
 // The classes of secret in one text, and the allowed paths that the scan counted. A class name never holds the value.
 export function scanReleaseDetailed(text, { knownHosts = [], file = 'text' } = {}) {

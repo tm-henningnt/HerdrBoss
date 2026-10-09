@@ -602,3 +602,17 @@ test('RS1: scanRelease allows the Engine path only for a qvf file name', () => {
   assert.deepEqual(release.scanRelease(`a ${ENGINE_PATH} b`, { file: 'app.zip' }), ['private path']);
   assert.deepEqual(release.scanRelease(`a ${ENGINE_PATH} b`), ['private path']);
 });
+
+test('RS1b: the real qvf byte shape passes with a length-prefix byte before the path', () => {
+  const prefix = String.fromCharCode(ENGINE_PATH.length);
+  const real = `...labels${prefix}${ENGINE_PATH}\0\0\0\0\0\0tail`;
+  assert.deepEqual(release.scanRelease(real, { file: 'app.qvf' }), []);
+  assert.deepEqual(release.scanRelease(real, { file: 'app.zip' }), ['private path']);
+});
+
+test('RS1b: a wrong prefix or a longer path before the Engine path still fails', () => {
+  const wrong = String.fromCharCode(ENGINE_PATH.length + 1);
+  for (const before of [wrong, 'x', '/Users/me', '/srv']) {
+    assert.deepEqual(release.scanRelease(`ab${before}${ENGINE_PATH}\0`, { file: 'app.qvf' }), ['private path'], before);
+  }
+});
