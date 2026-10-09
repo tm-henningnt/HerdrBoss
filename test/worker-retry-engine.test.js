@@ -50,6 +50,7 @@ console.log(JSON.stringify({
   runningWorkers: snap.control?.runningWorkers ?? null,
   exhausted: snap.lanes?.unmetered?.exhausted || [],
   available: snap.lanes?.unmetered?.byProject?.alpha?.opencode || [],
+  unavailableModels: (snap.unavailableModels || []).map((item) => ({ model: item.model, count: item.count || null, label: item.label || null, retryAt: item.retryAt || null })),
   failureNotices: (snap.alerts || []).filter((a) => a.key.startsWith('workers:failed:')).map((a) => ({ key: a.key, title: a.title, text: a.text })),
   memory: engine.memory,
   events: engine.events.map((event) => ({ type: event.type, text: event.text })),
@@ -228,4 +229,43 @@ test('a later absolute retry timestamp extends the exhausted model until that ti
   assert.deepEqual(expired.memory.exhaustedFreeModels, {}, 'the exhaustion expires at the new deadline');
   assert.equal(expired.available.includes(MODEL), true, 'the model returns to the available list at the new deadline');
   assert.equal(expired.bulletin.includes('Exhausted models:'), false);
+});
+
+test('three "Model is unavailable" pane failures mark the model and leave it out of the lane', { timeout: 60000 }, (t) => {
+  const dir = makeDataDir(t);
+  const { checkout, worktree } = makeFreeRunFixture(dir);
+  const herdr = {
+    workspaces: [{ id: 'w-alpha', label: 'Alpha' }],
+    panes: alphaPanes({ orchCwd: checkout, workerCwd: worktree, worker: { agent: 'opencode', name: 'W worker-a' } }),
+  };
+  const errorScreen = '400: Upstream request failed: Model is unavailable.';
+  const cleanScreen = 'ordinary working output';
+  const tick = (now, screen) => runScenario({ now, herdr, screens: { 'w-alpha:p2': screen } }, dir);
+
+  // A clean tick clears the in-memory failure, so each error tick is a new observation.
+  const first = tick('2026-09-27T10:00:00.000Z', errorScreen);
+  assert.deepEqual(first.errors, []);
+  assert.equal(first.memory.workerFailures['w-alpha:p2'].label, 'Model is unavailable');
+  assert.equal(first.available.includes(MODEL), true, 'one failure does not mark the model');
+
+  tick('2026-09-27T10:00:30.000Z', cleanScreen);
+  const second = tick('2026-09-27T10:01:00.000Z', errorScreen);
+  assert.equal(second.available.includes(MODEL), true, 'two failures do not mark the model');
+  assert.deepEqual(second.unavailableModels, []);
+
+  tick('2026-09-27T10:01:30.000Z', cleanScreen);
+  const third = tick('2026-09-27T10:02:00.000Z', errorScreen);
+  assert.deepEqual(third.errors, []);
+  assert.deepEqual(third.unavailableModels.map((item) => item.model), [MODEL]);
+  assert.equal(third.unavailableModels[0].count, 3, 'the mark names the failure count');
+  assert.equal(third.unavailableModels[0].label, 'Model is unavailable');
+  assert.equal(third.unavailableModels[0].retryAt, Date.parse('2026-09-27T16:02:00.000Z'));
+  assert.equal(third.available.includes(MODEL), false, 'the model leaves the available list');
+  assert.deepEqual(third.exhausted.map((item) => item.model), [MODEL], 'the lane reports the marked model');
+
+  // After the 6 hour cooldown the model returns.
+  const returned = tick('2026-09-27T16:02:01.000Z', cleanScreen);
+  assert.deepEqual(returned.unavailableModels, []);
+  assert.equal(returned.available.includes(MODEL), true, 'the model returns after the cooldown');
+  assert.equal(JSON.stringify(third).includes('Upstream request failed'), false, 'raw pane text must not be stored');
 });

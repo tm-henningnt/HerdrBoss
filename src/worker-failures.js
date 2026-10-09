@@ -45,6 +45,7 @@ export function readBoundedWorkerReport(file) {
 
 export const WORKER_FAILURE_LABELS = Object.freeze([
   'API Error', '401', '429', 'Connection lost', 'usage limit', 'rate limit', 'overloaded', 'Free usage exceeded',
+  'Model is unavailable',
 ]);
 
 export const FREE_MODEL_COOLDOWN_MS = 60 * 60 * 1000;
