@@ -74,7 +74,7 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'prices', title: 'Token prices', advanced: true,
-    controls: 'The USD price per million tokens of each model.',
+    controls: 'The USD price per million tokens of each model. A model with no published price shows empty fields. It stays unpriced until you set its input and output.',
     affects: 'Only the cost figures on the Analytics page. No price changes how workers run.',
     safe: 'Safe to change. Reset to defaults removes all your changes.',
     restart: 'No restart. Select Save prices.',

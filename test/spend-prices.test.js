@@ -98,6 +98,44 @@ test('a model that the table does not list stays unpriced', () => {
   assert.deepEqual(costOf(only({ input: M }), 'claude', 'claude-made-up-1', priceOf), { costUsd: 0, unpricedTokens: M });
 });
 
+test('the Haiku 5.5 row is present with no figures and a source, and stays unpriced', () => {
+  const row = loadPrices()['claude/claude-haiku-5-5'];
+  assert.ok(row, 'the Haiku 5.5 row exists');
+  for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h']) assert.equal(row[field], undefined, `${field} is not set`);
+  assert.equal(row.date, undefined);
+  assert.match(row.source, /Price not published in the announcement; set it in Settings\./);
+  // An empty row is not a price of zero, so its tokens are unpriced.
+  const priceOf = priceFor(loadPrices());
+  assert.equal(priceOf('claude', 'claude-haiku-5-5'), null);
+  assert.deepEqual(costOf(only({ input: M, output: M }), 'claude', 'claude-haiku-5-5', priceOf), { costUsd: 0, unpricedTokens: 2 * M });
+});
+
+test('the summary shows Haiku 5.5 as unpriced with no USD, and counts USD after an override', async () => {
+  const home = newHome();
+  const dataDir = path.join(home, 'boss');
+  writeLines(path.join(home, '.claude', 'projects', '-x', 'a.jsonl'), [claudeRow({ cwd: '/x/repo', model: 'claude-haiku-5-5', usage: { input_tokens: 1000, output_tokens: 500 } })]);
+  await scanSpend({ dataDir, home, now: NOW, repos: [], worktreeRoot: path.join(home, 'wt'), fillUsage: false });
+  const summary = spendSummary({ dataDir, days: 1, now: NOW });
+  assert.equal(summary.days[0].total.tokens, 1500);
+  assert.equal(summary.days[0].total.costUsd, 0);
+  assert.equal(summary.days[0].total.unpricedTokens, 1500);
+  assert.match(formatSpend(summary), /unpriced \(1\.5K tokens\)/);
+  // The Owner sets input and output in Settings, and the USD is counted.
+  writePriceOverrides({ models: { 'claude/claude-haiku-5-5': { input: 1, output: 5 } } }, { dataDir });
+  const priced = spendSummary({ dataDir, days: 1, now: NOW });
+  // 1000 input at 1 USD/M and 500 output at 5 USD/M is 0.001 + 0.0025.
+  assert.ok(Math.abs(priced.days[0].total.costUsd - 0.0035) < 1e-9);
+  assert.equal(priced.days[0].total.unpricedTokens, 0);
+  writePriceOverrides({ models: {} }, { dataDir });
+});
+
+test('a figure for the Haiku 5.5 row is validated like any other row', () => {
+  assert.deepEqual(validatePriceOverrides({ models: { 'claude/claude-haiku-5-5': { input: 1, output: 5 } } }).errors, []);
+  for (const fields of [{ input: -1 }, { input: 1001 }, { output: '5' }, { cacheRead: NaN }, { colour: 1 }]) {
+    assert.ok(validatePriceOverrides({ models: { 'claude/claude-haiku-5-5': fields } }).errors.length > 0, JSON.stringify(fields));
+  }
+});
+
 test('the summary and the CLI label the cost as an API-price equivalent and list unconfirmed prices', async () => {
   const home = newHome();
   const dataDir = path.join(home, 'boss');
