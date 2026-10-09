@@ -137,6 +137,10 @@ Read each reference before its step:
 
 ## Starting a worker
 
+- Bundle related issues into one worker brief. Group by the same files, the same area, or the same check. Give the worker a list of issues with an acceptance check for each. Aim for a worker that runs a substantial piece of work, not minutes.
+- Keep a bundle reviewable: one coherent diff, one review pass, one merge. Do not bundle across unrelated areas or across a gate boundary.
+- Give each issue in a bundle its own tracker reference and its own evidence. After TR1, `worker start` takes more than one `--issue`.
+- Tell the worker to use subagents for reads, surveys, and review, and to keep the main thread for decisions. Use cheap models for subagents (Haiku for read-only work) while Claude is throttled.
 - Verify `test "${HERDR_ENV:-}" = 1` before using Herdr commands.
 - If the check fails, do not inspect or control Herdr.
 - Label the orchestrator pane `orch` with `herdr pane rename "$HERDR_PANE_ID" orch`. Keep that label so Herdr Boss can find it.

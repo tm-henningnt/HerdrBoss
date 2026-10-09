@@ -47,8 +47,13 @@ test('trialModelStatus counts results per model and drops a model at 5 results',
     ...Array.from({ length: 5 }, () => event('opencode/fledge-alpha-free', 'rework')),
     event('opencode/big-pickle', 'first-time'),
   ];
-  assert.deepEqual(trialModelStatus(models, events), [{ kind: 'opencode', model: 'opencode/ling-3.1-flash-free', results: 4 }]);
-  assert.deepEqual(trialModelStatus(models, []).map((item) => item.results), [0, 0]);
+  assert.deepEqual(trialModelStatus(models, events), [
+    { kind: 'opencode', model: 'opencode/ling-3.1-flash-free', results: 4 },
+    { kind: 'opencode', model: 'opencode/exo-free', results: 0 },
+    { kind: 'opencode', model: 'opencode/step-5-preview-free', results: 0 },
+    { kind: 'pi', model: 'opencode-go/step-5-preview-free', results: 0 },
+  ]);
+  assert.deepEqual(trialModelStatus(models, []).map((item) => item.results), [0, 0, 0, 0, 0]);
 });
 
 test('a corrupt unavailable-models.json counts as empty, warns once, and does not throw', (t) => {

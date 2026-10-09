@@ -307,6 +307,6 @@ Summary: Scope Haiku 5.5 to bounded captures and keep its support and benchmark 
 Impact: useful
 Summary: The release scan accepts the Qlik Engine inline table path /home/engine/<uuid>.inline in a .qvf asset only, counts it as allowed on the card, and refuses every other path class.
 
-## 7d4213aa619c
+## e60ca72cc765
 Impact: useful
-Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode-go/step-5-preview-free are trial models; the scorecard tags them until it holds 5 results, so pass --model-result at each collect. The worker brief says: never print a config value, a tenant host, a client id or an app id, and filter jq and cat output to non-sensitive fields.
+Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode-go/step-5-preview-free are trial models; pass --model-result at each collect. The worker brief says: never print a config value, a tenant host, a client id or an app id. A worker may use subagents for reads, surveys and review. The orchestrator skill says: bundle related issues into one worker brief, keep one tracker reference per issue, and use cheap models for subagents.

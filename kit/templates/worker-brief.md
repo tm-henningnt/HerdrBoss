@@ -97,6 +97,8 @@ Use the task below as the complete work order:
 
 ## Work rules
 
+Use subagents for reads, surveys, and review. Keep the main thread for decisions. Use a cheap model for a subagent that only reads. When the brief lists several issues, finish each issue with its own acceptance check and its own evidence in the report.
+
 Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.
 
 For code changes, write a regression test before changing behavior.
