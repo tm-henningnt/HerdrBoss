@@ -31,6 +31,10 @@ export const REFUSALS = {
   'checksum-mismatch': 'The draft assets changed after the request. Request a new approval.',
   'scan-failed': 'The secret scan found a problem after the request. Request a new approval.',
   'not-draft': 'The release is no longer a draft.',
+  'wrong-operation': 'The approval item is for a different release action.',
+  'file-changed': 'The add-asset files changed or cannot be read after the request. Cancel and request again.',
+  'asset-name-exists': 'A requested asset name already exists on the release.',
+  'body-changed': 'the release body changed since the request; cancel and request again',
 };
 
 const refuse = (code, extra = {}) => ({ ok: false, code, reason: REFUSALS[code], published: false, ...extra });
@@ -144,6 +148,8 @@ const records = (dir) => openMessageStore({ dir }).all();
 // An Owner answer through the dashboard sets closedAt only, so that close still counts as an open request.
 const settled = (record) => record.closedBy === 'project' || record.closeNote === 'published' || record.closeNote === 'denied by the Owner' || record.closeNote === 'superseded';
 const isRelease = (record) => record.kind === 'report' && record.release && record.action === 'approve';
+const isAddAsset = (record) => isRelease(record) && record.release.operation === 'add-asset';
+const isPublishRequest = (record) => isRelease(record) && !isAddAsset(record);
 const sameTarget = (record, repo, tag) => record.release.repo === repo && record.release.tag === tag;
 
 function readNotes(notesFile) {
@@ -204,7 +210,9 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   const entry = config ? repoConfig(repo, config) : { project: 'boss' };
   if (!entry) throw new Error(REFUSALS['repo-not-allowed']);
 
-  const open = records(dir).find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
+  const targetOpen = records(dir).find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
+  if (targetOpen && isAddAsset(targetOpen)) throw new Error(`An add-asset request is already open for ${repo} ${tag}. Cancel it before requesting publication.`);
+  const open = targetOpen;
 
   const hosts = knownHosts ?? knownHostsFromSessions();
   let release;
@@ -244,11 +252,121 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   return { id: record.id, repo, tag, alreadyOpen: false, scanOk: findings.length === 0 };
 }
 
-function writeAudit({ dir, approvalId, who, repo, tag, now, action = 'publish', reason = undefined }) {
+function readAddAssetFile(filePath, knownHosts = []) {
+  if (typeof filePath !== 'string' || !filePath.trim()) throw new Error('An asset file is required.');
+  const name = path.basename(filePath);
+  if (name.includes('#')) throw new Error('Asset file names cannot contain #.');
+  let fileStat;
+  try { fileStat = fs.lstatSync(filePath); } catch { throw new Error(`Cannot read asset file ${name || '(unnamed)'}.`); }
+  if (fileStat.isSymbolicLink()) throw new Error(`Asset file ${name} is a symlink.`);
+  if (!fileStat.isFile()) throw new Error(`Asset file ${name} is not a regular file.`);
+  let content;
+  try {
+    content = fs.readFileSync(filePath);
+  } catch { throw new Error(`Cannot read asset file ${name || '(unnamed)'}.`); }
+  if (!content.length) throw new Error(`Asset file ${name} is empty.`);
+  const classes = [];
+  let allowed = [];
+  if (content.length > MAX_SCAN_BYTES) classes.push('too large to scan');
+  else {
+    const scan = scanReleaseDetailed(content.toString('latin1'), { knownHosts, file: name });
+    classes.push(...scan.classes);
+    allowed = scan.allowed;
+  }
+  return {
+    name, path: path.resolve(filePath), size: content.length,
+    sha256: crypto.createHash('sha256').update(content).digest('hex'), classes, allowed, content,
+  };
+}
+
+function readAppendNotesFile(notesFile) {
+  if (!notesFile) return null;
+  try { return fs.readFileSync(notesFile, 'utf8'); } catch { throw new Error('Cannot read the Demo app notes file.'); }
+}
+
+function addAssetCardText({ repo, tag, release, reason, files, findings, notesBlock, noteFindings }) {
+  const lines = [
+    '# Add release assets approval', '',
+    `Repository: ${repo}`, `Tag: ${tag}`, `Release: ${release.url ?? release.name ?? tag}`, `Reason: ${redactSecrets(reason)}`, '',
+    '## Assets',
+  ];
+  for (const file of files) lines.push(`- ${file.name}: ${file.size} bytes, sha256 ${file.sha256}`);
+  lines.push('', '## Scan result');
+  if (findings.length) {
+    lines.push('Fail:');
+    for (const finding of findings) lines.push(`- ${finding.file}: ${finding.classes.join(', ')}`);
+  } else lines.push('Pass: no secrets found.');
+  for (const file of files) for (const note of file.allowed ?? []) lines.push(`- ${file.name}: ${note}`);
+  if (notesBlock !== null) {
+    lines.push('', '## Demo app', '');
+    if (noteFindings.length) lines.push(`[Hidden because the notes scan found: ${noteFindings.join(', ')}]`);
+    else lines.push(redactSecrets(notesBlock.replace(/^## Demo app\n\n/, '')));
+  }
+  lines.push('', '## Effect', 'After the Owner accepts, add the listed files to this release. Append the Demo app notes block when one is shown.');
+  return lines.join('\n');
+}
+
+// Request approval to add assets to an existing draft or published release.
+// Returns { id, repo, tag, alreadyOpen, scanOk }.
+export function requestAddAsset({ repo, tag, files = [], reason = '', appendNotesFile = null, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, requesterPane = null, config = null }) {
+  if (!repo || !tag || !Array.isArray(files) || files.length === 0) {
+    throw new Error('Usage: release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE]');
+  }
+  if (typeof run !== 'function') throw new Error('A gh runner is required.');
+  const entry = config ? repoConfig(repo, config) : { project: 'boss' };
+  if (!entry) throw new Error(REFUSALS['repo-not-allowed']);
+  const safeReason = redactSecrets(String(reason).trim());
+  if (!safeReason || safeReason.length > 300) throw new Error('A reason is required and must contain 1 to 300 characters.');
+
+  const release = readRelease(run, repo, tag);
+  const hosts = knownHosts ?? knownHostsFromSessions();
+  const addFiles = files.map((file) => readAddAssetFile(file, hosts));
+  const names = new Set();
+  for (const file of addFiles) {
+    if (names.has(file.name)) throw new Error('Each add-asset file must have a unique base name.');
+    names.add(file.name);
+    if (release.assets.some((asset) => asset.name === file.name)) throw new Error(`Asset ${file.name} already exists on the release.`);
+  }
+  const notesText = readAppendNotesFile(appendNotesFile);
+  const notesBlock = notesText === null ? null : `## Demo app\n\n${notesText}`;
+  const noteFindings = notesText === null ? [] : scanRelease(notesText, { knownHosts: hosts, file: 'notes' });
+  const scannedFiles = addFiles;
+  const findings = scanFindings(noteFindings, scannedFiles);
+  const bodyHash = crypto.createHash('sha256').update(release.body).digest('hex');
+  const notesSha256 = notesText === null ? null : crypto.createHash('sha256').update(notesText).digest('hex');
+  const targetOpen = records(dir).find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
+  if (targetOpen && !isAddAsset(targetOpen)) throw new Error(`A release approval is already open for ${repo} ${tag}. Cancel it before requesting asset changes.`);
+  const open = targetOpen;
+  if (open) {
+    const oldFiles = (open.release.files ?? []).map(({ name, path: sourcePath, size, sha256 }) => ({ name, path: sourcePath, size, sha256 }));
+    const newFiles = addFiles.map(({ name, path: sourcePath, size, sha256 }) => ({ name, path: sourcePath, size, sha256 }));
+    const identical = open.release.bodyHash === bodyHash
+      && open.release.reason === safeReason
+      && open.release.notesSha256 === notesSha256
+      && JSON.stringify(oldFiles) === JSON.stringify(newFiles);
+    if (!identical) throw new Error(`An add-asset request is already open for ${repo} ${tag}. Cancel it before making a different request.`);
+    return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
+  }
+
+  const text = addAssetCardText({ repo, tag, release, reason: safeReason, files: scannedFiles, findings, notesBlock, noteFindings });
+  const record = openMessageStore({ dir }).append({
+    thread: entry.project, from: 'orch', to: 'owner', kind: 'report', title: `Add release assets: ${repo} ${tag}`, text, action: 'approve',
+    status: 'new', requesterPane,
+    release: {
+      operation: 'add-asset', repo, tag, bodyHash, reason: safeReason,
+      files: addFiles.map(({ name, path: sourcePath, size, sha256 }) => ({ name, path: sourcePath, size, sha256 })),
+      notesSha256, notesBlock,
+    },
+  }, { now });
+  return { id: record.id, repo, tag, alreadyOpen: false, scanOk: findings.length === 0 };
+}
+
+function writeAudit({ dir, approvalId, who, repo, tag, now, action = 'publish', reason = undefined, files = undefined }) {
   const file = path.join(dir, AUDIT_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const entry = { at: new Date(now).toISOString(), approvalId, who, repo, tag, action };
   if (reason !== undefined) entry.reason = reason;
+  if (files !== undefined) entry.files = files;
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
 }
@@ -276,13 +394,134 @@ export function cancelRelease({ repo, tag, reason = '', dir = DATA_DIR, now = Da
     return { ok: false, reason: 'Only the requesting orchestrator pane or the Boss can cancel this release request.' };
   }
   if (ownerAnswer(all, approval)?.verdict === 'accept') {
-    return { ok: false, reason: 'The Owner has answered Approve. Run release publish or wait for an Owner denial to settle this request.' };
+    const next = isAddAsset(approval)
+      ? `Run release apply-asset ${repo} ${tag} --approval ${approval.id} or wait for an Owner denial to settle this request.`
+      : 'Run release publish or wait for an Owner denial to settle this request.';
+    return { ok: false, reason: `The Owner has answered Approve. ${next}` };
   }
   const boundedReason = redactSecrets(String(reason).trim()).slice(0, MAX_CANCEL_REASON);
   openMessageStore({ dir }).update(approval.id, { supersededReason: boundedReason }, { now });
   closeItem(approval.id, 'superseded', { dir, now });
   writeAudit({ dir, approvalId: approval.id, who, repo, tag, now, action: 'cancel', reason: boundedReason });
   return { ok: true, approvalId: approval.id, repo, tag };
+}
+
+const refuseAddAsset = (code, extra = {}) => ({ ok: false, code, reason: REFUSALS[code], applied: false, ...extra });
+
+// Add the approved assets to the release. Recheck every request input before the first gh write.
+export function applyAddAsset({ repo, tag, approvalId, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, who = null, config = null }) {
+  if (!repo || !tag || !approvalId) throw new Error('Usage: release apply-asset REPO TAG --approval ID');
+  if (typeof run !== 'function') throw new Error('A gh runner is required.');
+  if (config && !repoConfig(repo, config)) return refuseAddAsset('repo-not-allowed');
+
+  const all = records(dir);
+  const approval = all.find((record) => record.id === approvalId && isRelease(record));
+  if (!approval) return refuseAddAsset('no-approval');
+  if (!sameTarget(approval, repo, tag)) return refuseAddAsset('wrong-approval');
+  if (!isAddAsset(approval)) return refuseAddAsset('wrong-operation');
+  if (settled(approval)) return refuseAddAsset('closed');
+  const answer = ownerAnswer(all, approval);
+  if (!answer || answer.verdict === 'other') return refuseAddAsset('no-answer', { waiting: true });
+  if (answer.verdict === 'deny') {
+    closeItem(approvalId, 'denied by the Owner', { dir, now });
+    return refuseAddAsset('not-accept');
+  }
+  if (Date.parse(answer.at) <= Date.parse(approval.at)) return refuseAddAsset('answer-too-old');
+
+  const release = readRelease(run, repo, tag);
+  const bodyHash = crypto.createHash('sha256').update(release.body).digest('hex');
+  if (bodyHash !== approval.release.bodyHash) return refuseAddAsset('body-changed');
+  const expected = approval.release.files ?? [];
+  if (!expected.length) return refuseAddAsset('file-changed');
+  if (expected.some((file) => release.assets.some((asset) => asset.name === file.name))) return refuseAddAsset('asset-name-exists');
+
+  const hosts = knownHosts ?? knownHostsFromSessions();
+  let current;
+  try { current = expected.map((file) => readAddAssetFile(file.path, hosts)); } catch { return refuseAddAsset('file-changed'); }
+  const storedShape = expected.map(({ name, size, sha256 }) => ({ name, size, sha256 }));
+  const currentShape = current.map(({ name, size, sha256 }) => ({ name, size, sha256 }));
+  if (JSON.stringify(storedShape) !== JSON.stringify(currentShape)) return refuseAddAsset('file-changed');
+
+  const notesBlock = approval.release.notesBlock ?? null;
+  const notesText = notesBlock === null ? null : notesBlock.replace(/^## Demo app\n\n/, '');
+  const notesSha256 = notesText === null ? null : crypto.createHash('sha256').update(notesText).digest('hex');
+  if (notesSha256 !== (approval.release.notesSha256 ?? null)) return refuseAddAsset('file-changed');
+  const noteFindings = notesText === null ? [] : scanRelease(notesText, { knownHosts: hosts, file: 'notes' });
+  const findings = scanFindings(noteFindings, current);
+  if (findings.length) return refuseAddAsset('scan-failed');
+
+  const latest = ownerAnswer(records(dir), approval);
+  if (!latest || latest.verdict === 'other') return refuseAddAsset('no-answer', { waiting: true });
+  if (latest.verdict === 'deny') {
+    closeItem(approvalId, 'denied by the Owner', { dir, now });
+    return refuseAddAsset('not-accept');
+  }
+  if (Date.parse(latest.at) <= Date.parse(approval.at)) return refuseAddAsset('answer-too-old');
+
+  const uploadedNames = current.map((file) => file.name);
+  const partialFailure = (reason, files = uploadedNames) => ({
+    ok: false, code: 'partial-failure', reason: redactSecrets(reason), applied: false, partial: true, uploadedFiles: files,
+  });
+  const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-add-'));
+  try {
+    fs.chmodSync(uploadDir, 0o700);
+    const uploadPaths = current.map((file) => {
+      const stagedPath = path.join(uploadDir, file.name);
+      fs.writeFileSync(stagedPath, file.content, { flag: 'wx', mode: 0o600 });
+      fs.chmodSync(stagedPath, 0o600);
+      return stagedPath;
+    });
+
+    let upload;
+    try { upload = run(['release', 'upload', tag, '--repo', repo, ...uploadPaths]); } catch (error) {
+      let found = [];
+      try {
+        const afterUpload = readRelease(run, repo, tag);
+        found = uploadedNames.filter((name) => afterUpload.assets.some((asset) => asset.name === name));
+      } catch {}
+      const detail = `gh release upload failed: ${redactSecrets(error.message)}`;
+      return found.length ? partialFailure(detail, found) : { ok: false, code: 'upload-failed', reason: detail, applied: false };
+    }
+    if (upload.error || upload.status !== 0) {
+      const detail = `gh release upload failed: ${failureDetail(upload)}`;
+      let found = [];
+      try {
+        const afterUpload = readRelease(run, repo, tag);
+        found = uploadedNames.filter((name) => afterUpload.assets.some((asset) => asset.name === name));
+      } catch {}
+      return found.length ? partialFailure(detail, found) : { ok: false, code: 'upload-failed', reason: redactSecrets(detail), applied: false };
+    }
+
+    try {
+      let newBody = release.body;
+      if (notesBlock !== null) {
+        const freshRelease = readRelease(run, repo, tag);
+        const freshBody = freshRelease.body;
+        const freshBodyHash = crypto.createHash('sha256').update(freshBody).digest('hex');
+        if (freshBodyHash !== approval.release.bodyHash) {
+          return partialFailure('The release body changed after upload.');
+        }
+        newBody = `${freshBody}\n\n${notesBlock}`;
+        if (!newBody.startsWith(freshBody)) return partialFailure('The new release body does not start with the freshly read body.');
+        const edit = run(['release', 'edit', tag, '--repo', repo, '--notes', newBody]);
+        if (edit.error || edit.status !== 0) throw new Error(`gh release edit failed: ${failureDetail(edit)}`);
+      }
+
+      const after = readRelease(run, repo, tag);
+      const expectedNames = [...release.assets.map((asset) => asset.name), ...uploadedNames].sort().join('\n');
+      const actualNames = after.assets.map((asset) => asset.name).sort().join('\n');
+      if (actualNames !== expectedNames) throw new Error('The release does not have the expected asset names after gh release upload.');
+      if (notesBlock !== null && after.body !== newBody) throw new Error('The release notes did not match the approved Demo app block after gh release edit.');
+
+      writeAudit({ dir, approvalId, who, repo, tag, now, action: 'add-asset', files: uploadedNames });
+      closeItem(approvalId, 'assets added', { dir, now });
+      return { ok: true, code: null, reason: null, applied: true };
+    } catch (error) {
+      return partialFailure(error.message);
+    }
+  } finally {
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+  }
 }
 
 // Publish a release. Every check must pass before gh release edit runs.
@@ -296,6 +535,7 @@ export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now
   const approval = all.find((record) => record.id === approvalId && isRelease(record));
   if (!approval) return refuse('no-approval');
   if (!sameTarget(approval, repo, tag)) return refuse('wrong-approval');
+  if (!isPublishRequest(approval)) return refuse('wrong-operation');
   if (settled(approval)) return refuse('closed');
   const answer = ownerAnswer(all, approval);
   if (!answer || answer.verdict === 'other') return refuse('no-answer', { waiting: true });
@@ -353,7 +593,10 @@ export function noticeReleaseAnswer(record, { dir = DATA_DIR, herdr, now = Date.
   if (verdict === 'denied') closeItem(approval.id, 'denied by the Owner', { dir, now });
   const { repo, tag } = approval.release;
   if (approval.requesterPane && typeof herdr === 'function') {
-    const next = verdict === 'accepted' ? `Run: herdr-boss release publish ${repo} ${tag} --approval ${approval.id}` : 'Request a new approval after you change the draft.';
+    const command = isAddAsset(approval)
+      ? `herdr-boss release apply-asset ${repo} ${tag} --approval ${approval.id}`
+      : `herdr-boss release publish ${repo} ${tag} --approval ${approval.id}`;
+    const next = verdict === 'accepted' ? `Run: ${command}` : 'Request a new approval after you change the release.';
     try { herdr(['agent', 'prompt', approval.requesterPane, `[herdr-boss] The Owner ${verdict} the release ${repo} ${tag}. ${next}`]); } catch {}
   }
   return { id: approval.id, verdict };
@@ -366,7 +609,7 @@ export function watchReleaseAnswers(store, options = {}) {
   });
 }
 
-const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release cancel REPO TAG [--reason TEXT] | release publish REPO TAG --approval ID | release status [REPO]';
+const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE] | release apply-asset REPO TAG --approval ID | release cancel REPO TAG [--reason TEXT] | release publish REPO TAG --approval ID | release status [REPO]';
 
 function parseArgs(args, valueFlags, boolFlags = []) {
   const flags = {};
@@ -387,7 +630,7 @@ function parseArgs(args, valueFlags, boolFlags = []) {
 // The handler of `herdr-boss release ...`. It returns the exit code: 0 done, 1 refused, 3 waiting for the Owner.
 export async function releaseCommand(args, { env = process.env, dataDir = DATA_DIR, config = {}, run = null, herdr = null, out = console.log, err = console.error } = {}) {
   const [action, ...rest] = args;
-  if (!['request', 'cancel', 'publish', 'status'].includes(action)) throw new Error(USAGE);
+  if (!['request', 'add-asset', 'apply-asset', 'cancel', 'publish', 'status'].includes(action)) throw new Error(USAGE);
   try {
     if (action === 'status') {
       if (!run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
@@ -417,6 +660,29 @@ export async function releaseCommand(args, { env = process.env, dataDir = DATA_D
       else out(result.alreadyOpen ? `An open request exists for ${repo} ${tag}: ${result.id}` : `Posted approval ${result.id} for ${repo} ${tag}.`);
       if (result.scanOk === false) out('The secret scan failed. The card shows the classes. Publish will refuse until the draft is clean and a new request exists.');
       return 0;
+    }
+    if (action === 'add-asset') {
+      const { flags, positional } = parseArgs(rest, ['--reason', '--append-notes']);
+      if (positional.length < 3) throw new Error(USAGE);
+      if (!flags['--reason']?.trim()) throw new Error('--reason is required and must contain 1 to 300 characters.');
+      const [repo, tag, ...files] = positional;
+      const result = requestAddAsset({ repo, tag, files, reason: flags['--reason'], appendNotesFile: flags['--append-notes'] ?? null, run, dir: dataDir, config, requesterPane: env.HERDR_PANE_ID ?? null });
+      out(result.alreadyOpen ? `An open add-asset request exists for ${repo} ${tag}: ${result.id}` : `Posted add-asset approval ${result.id} for ${repo} ${tag}.`);
+      if (result.scanOk === false) out('The secret scan failed. The card shows the classes. Apply will refuse until the files and notes are clean.');
+      return 0;
+    }
+    if (action === 'apply-asset') {
+      const { flags, positional } = parseArgs(rest, ['--approval']);
+      if (positional.length !== 2 || !flags['--approval']) throw new Error(USAGE);
+      const [repo, tag] = positional;
+      const result = applyAddAsset({ repo, tag, approvalId: flags['--approval'], run, dir: dataDir, config, who: env.HERDR_PANE_ID ?? null });
+      if (result.applied) { out(`Added approved assets to ${repo} ${tag}.`); return 0; }
+      if (result.partial) {
+        err(`Partial failure after upload. Uploaded assets: ${result.uploadedFiles.join(', ')}. cancel the request and request again; the uploaded assets stay. ${result.reason}`);
+        return 1;
+      }
+      err(`${result.waiting ? 'Waiting for the Owner' : 'Refused'}: ${result.reason}`);
+      return result.waiting ? 3 : 1;
     }
     const { flags, positional } = parseArgs(rest, ['--approval']);
     if (positional.length !== 2 || !flags['--approval']) throw new Error(USAGE);

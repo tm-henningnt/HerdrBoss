@@ -50,7 +50,17 @@ function fakeGh(state = {}) {
       fs.writeFileSync(path.join(args[args.indexOf('--dir') + 1], name), state.files[name]);
       return ok();
     }
-    if (args[0] === 'release' && args[1] === 'edit') { state.draft = false; return ok(); }
+    if (args[0] === 'release' && args[1] === 'upload') {
+      state.uploadedPaths = args.slice(5);
+      state.onUpload?.(state.uploadedPaths);
+      for (const file of args.slice(5)) state.files[path.basename(file)] = fs.readFileSync(file);
+      return ok();
+    }
+    if (args[0] === 'release' && args[1] === 'edit') {
+      if (args.includes('--draft=false')) state.draft = false;
+      if (args.includes('--notes')) state.body = args[args.indexOf('--notes') + 1];
+      return ok();
+    }
     if (args[0] === 'release' && args[1] === 'list') return ok(JSON.stringify([{ tagName: TAG, isDraft: state.draft, isLatest: false, publishedAt: '2026-10-01T00:00:00Z' }]));
     return { status: 1, error: null, stdout: '', stderr: 'unexpected gh call' };
   };
@@ -72,6 +82,10 @@ const answer = (dir, id, text, offset = 1000) => openMessageStore({ dir }).appen
 });
 const item = (dir, id) => openMessageStore({ dir }).all().find((record) => record.id === id);
 const publish = (dir, run, id, extra = {}) => release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config, who: 'wA:p1', ...extra });
+const requestAssets = (dir, run, files, extra = {}) => release.requestAddAsset({
+  repo: REPO, tag: TAG, files, reason: 'Add the demo app', run, dir, knownHosts, config, requesterPane: 'wA:p1', ...extra,
+});
+const applyAssets = (dir, run, id, extra = {}) => release.applyAddAsset({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config, who: 'wA:p1', ...extra });
 const releaseCaller = (paneId, label, workspaceId = paneId.split(':')[0]) => ({
   env: { HERDR_ENV: '1', HERDR_PANE_ID: paneId, HERDR_WORKSPACE_ID: workspaceId },
   herdr: (args) => ({ pane: { pane_id: args[2], workspace_id: workspaceId, label } }),
@@ -288,6 +302,284 @@ test('cancel truncates a stored reason to 500 characters', async () => {
   assert.equal(item(dir, first.id).supersededReason.length, 500);
   const line = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
   assert.equal(line.reason.length, 500);
+});
+
+test('add-asset posts hashes, scan results, reason, and the full Demo app notes block', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  const notesFile = path.join(dir, 'demo-notes.md');
+  fs.writeFileSync(file, 'demo bundle');
+  fs.writeFileSync(notesFile, 'Try the sample app.\nOpen the README for steps.\n');
+  const result = requestAssets(dir, run, [file], { appendNotesFile: notesFile });
+  const record = item(dir, result.id);
+  const block = '## Demo app\n\nTry the sample app.\nOpen the README for steps.\n';
+  assert.equal(result.alreadyOpen, false);
+  assert.equal(result.scanOk, true);
+  assert.equal(record.release.operation, 'add-asset');
+  assert.equal(record.release.bodyHash, sha('Changelog text'));
+  assert.deepEqual(record.release.files.map(({ name, size, sha256 }) => ({ name, size, sha256 })), [
+    { name: 'demo.zip', size: 11, sha256: sha('demo bundle') },
+  ]);
+  assert.match(record.text, /Repository: example-org\/example-app/);
+  assert.match(record.text, /Tag: v1\.0\.0/);
+  assert.match(record.text, /Reason: Add the demo app/);
+  assert.match(record.text, new RegExp(`demo\\.zip: 11 bytes, sha256 ${sha('demo bundle')}`));
+  assert.match(record.text, /Pass: no secrets found\./);
+  assert.ok(record.text.includes(block));
+  assert.equal(record.text.includes(file), false);
+});
+
+test('add-asset refuses a file name that already exists on the release', () => {
+  const dir = newDir();
+  const file = path.join(dir, 'app.tar.gz');
+  fs.writeFileSync(file, 'new bundle');
+  assert.throws(() => requestAssets(dir, fakeGh(), [file]), /already exists on the release/);
+  assert.equal(openMessageStore({ dir }).all().length, 0);
+});
+
+test('add-asset refuses a symlink and a file name that contains a hash', () => {
+  const dir = newDir();
+  const target = path.join(dir, 'demo.zip');
+  const link = path.join(dir, 'demo-link.zip');
+  const hashFile = path.join(dir, 'demo#app.zip');
+  fs.writeFileSync(target, 'demo bundle');
+  fs.symlinkSync(target, link);
+  fs.writeFileSync(hashFile, 'demo bundle');
+  assert.throws(() => requestAssets(dir, fakeGh({ draft: false }), [link]), /symlink/i);
+  assert.throws(() => requestAssets(dir, fakeGh({ draft: false }), [hashFile]), /cannot contain #/);
+  assert.throws(() => requestAssets(dir, fakeGh({ draft: false }), [dir]), /not a regular file/);
+  assert.equal(openMessageStore({ dir }).all().length, 0);
+});
+
+test('add-asset requires a non-empty reason and at least one readable non-empty file', async () => {
+  const dir = newDir();
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, '');
+  const lines = [];
+  const code = await release.releaseCommand(['add-asset', REPO, TAG, file], {
+    dataDir: dir, config, run: fakeGh({ draft: false }), env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => lines.push(line), err: (line) => lines.push(line),
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join('\n'), /--reason is required/);
+  assert.throws(() => requestAssets(dir, fakeGh({ draft: false }), [file]), /is empty/);
+  assert.throws(() => requestAssets(dir, fakeGh({ draft: false }), [path.join(dir, 'missing.zip')]), /Cannot read asset file/);
+  assert.equal(openMessageStore({ dir }).all().length, 0);
+});
+
+test('a second identical add-asset request returns its open approval ID', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const first = requestAssets(dir, run, [file]);
+  const second = requestAssets(dir, run, [file]);
+  assert.equal(second.id, first.id);
+  assert.equal(second.alreadyOpen, true);
+  assert.equal(openMessageStore({ dir }).all().filter((record) => record.release?.operation === 'add-asset').length, 1);
+});
+
+test('apply-asset waits for an Owner Accept and does not upload', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.ok, false);
+  assert.equal(result.waiting, true);
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset refuses a file that changed after the request', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  answer(dir, id, 'Approved.');
+  fs.writeFileSync(file, 'changed bundle');
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'file-changed');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset refuses when a requested asset name exists at apply time', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  answer(dir, id, 'Approved.');
+  run.state.files['demo.zip'] = 'another upload';
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'asset-name-exists');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset settles and refuses an Owner denial', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  answer(dir, id, 'Rejected.');
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'not-accept');
+  assert.equal(item(dir, id).closeNote, 'denied by the Owner');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('release commands reject an approval for the other operation', () => {
+  const publishDir = newDir();
+  const publishRun = fakeGh();
+  const publishRequest = request(publishDir, publishRun);
+  assert.equal(applyAssets(publishDir, publishRun, publishRequest.id).code, 'wrong-operation');
+
+  const addDir = newDir();
+  const addRun = fakeGh({ draft: false });
+  const file = path.join(addDir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const addRequest = requestAssets(addDir, addRun, [file]);
+  answer(addDir, addRequest.id, 'Approved.');
+  assert.equal(publish(addDir, addRun, addRequest.id).code, 'wrong-operation');
+  assert.ok(!addRun.calls.some((args) => args[1] === 'edit'));
+});
+
+test('apply-asset refuses an Owner answer older than the request', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  answer(dir, id, 'Approved.', -60000);
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'answer-too-old');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset refuses files that fail the scan', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  const fakeToken = ['ghp', 'abcdefghijklmnopqrstuvwxyz123456'].join('_');
+  fs.writeFileSync(file, `bundle ${fakeToken}`);
+  const requested = requestAssets(dir, run, [file]);
+  assert.equal(requested.scanOk, false);
+  const { id } = requested;
+  answer(dir, id, 'Approved.');
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'scan-failed');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset refuses when the release body changed after the request', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  answer(dir, id, 'Approved.');
+  run.state.body = 'Updated changelog text';
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.code, 'body-changed');
+  assert.equal(result.reason, 'the release body changed since the request; cancel and request again');
+  assert.ok(!run.calls.some((args) => args[1] === 'upload'));
+});
+
+test('apply-asset uploads files, appends notes, audits names, and closes the request', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  const notesFile = path.join(dir, 'demo-notes.md');
+  fs.writeFileSync(file, 'demo bundle');
+  fs.writeFileSync(notesFile, 'Try the sample app.');
+  const { id } = requestAssets(dir, run, [file], { appendNotesFile: notesFile });
+  answer(dir, id, 'Approved.');
+  let stagedPath;
+  let stagedDirectory;
+  run.state.onUpload = (paths) => {
+    stagedPath = paths[0];
+    stagedDirectory = path.dirname(stagedPath);
+    assert.notEqual(stagedPath, file);
+    assert.equal(path.basename(stagedPath), 'demo.zip');
+    assert.equal(fs.statSync(stagedDirectory).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(stagedPath).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(stagedPath, 'utf8'), 'demo bundle');
+    fs.writeFileSync(file, 'changed after verification');
+  };
+  const result = applyAssets(dir, run, id);
+  assert.equal(result.ok, true);
+  assert.deepEqual(run.calls.find((args) => args[1] === 'upload'), ['release', 'upload', TAG, '--repo', REPO, stagedPath]);
+  assert.equal(run.calls.some((args) => args.includes('--clobber')), false);
+  assert.equal(fs.existsSync(stagedPath), false);
+  assert.equal(fs.existsSync(stagedDirectory), false);
+  const edit = run.calls.find((args) => args[1] === 'edit');
+  assert.deepEqual(edit, ['release', 'edit', TAG, '--repo', REPO, '--notes', 'Changelog text\n\n## Demo app\n\nTry the sample app.']);
+  assert.ok(run.state.body.startsWith('Changelog text'));
+  assert.equal(item(dir, id).closeNote, 'assets added');
+  const line = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.deepEqual({ approvalId: line.approvalId, who: line.who, repo: line.repo, tag: line.tag, action: line.action, files: line.files }, {
+    approvalId: id, who: 'wA:p1', repo: REPO, tag: TAG, action: 'add-asset', files: ['demo.zip'],
+  });
+});
+
+test('apply-asset reports uploaded file names when the body changes before the notes edit', async () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  const notesFile = path.join(dir, 'demo-notes.md');
+  fs.writeFileSync(file, 'demo bundle');
+  fs.writeFileSync(notesFile, 'Try the sample app.');
+  const { id } = requestAssets(dir, run, [file], { appendNotesFile: notesFile });
+  answer(dir, id, 'Approved.');
+  let stagedPath;
+  run.state.onUpload = (paths) => { stagedPath = paths[0]; run.state.body = 'Edited after upload'; };
+  const lines = [];
+  const code = await release.releaseCommand(['apply-asset', REPO, TAG, '--approval', id], {
+    dataDir: dir, config, run, env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => lines.push(line), err: (line) => lines.push(line),
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join('\n'), /demo\.zip/);
+  assert.match(lines.join('\n'), /cancel the request and request again; the uploaded assets stay/);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+  assert.equal(fs.existsSync(stagedPath), false);
+});
+
+test('the add-asset command posts an approval and its Owner notice names apply-asset', async () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const lines = [];
+  const code = await release.releaseCommand(['add-asset', REPO, TAG, file, '--reason', 'Add the sample app'], {
+    dataDir: dir, config, run, env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => lines.push(line), err: (line) => lines.push(line),
+  });
+  assert.equal(code, 0);
+  assert.match(lines.join('\n'), /Posted add-asset approval/);
+  const approval = openMessageStore({ dir }).all()[0];
+  const herdr = fakeHerdr();
+  const reply = answer(dir, approval.id, 'Accept.');
+  assert.equal(release.noticeReleaseAnswer(reply, { dir, herdr }).verdict, 'accepted');
+  assert.match(herdr.prompts[0].text, new RegExp(`release apply-asset ${REPO.replace('/', '\\/')} ${TAG} --approval ${approval.id}`));
+  const applyLines = [];
+  const applyCode = await release.releaseCommand(['apply-asset', REPO, TAG, '--approval', approval.id], {
+    dataDir: dir, config, run, env: { HERDR_PANE_ID: 'wA:p1' }, out: (line) => applyLines.push(line), err: (line) => applyLines.push(line),
+  });
+  assert.equal(applyCode, 0);
+  assert.match(applyLines.join('\n'), /Added approved assets/);
+});
+
+test('cancel settles an open add-asset request', async () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const { id } = requestAssets(dir, run, [file]);
+  const result = await cancel(dir, run);
+  assert.equal(result.code, 0);
+  assert.equal(item(dir, id).closeNote, 'superseded');
+  assert.equal(release.releaseStatus({ run, dir, config }).openRequests.length, 0);
 });
 
 test('request refuses a release that is not a draft', () => {

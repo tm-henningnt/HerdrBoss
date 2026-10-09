@@ -111,7 +111,9 @@ In Settings, open Advanced and Codex shared Git. The project switch sets `projec
 
 If the command cannot verify a common Git directory, it tries the repository `.git` path and prints a warning. It skips that project root if neither path is a valid Git directory.
 
-Set `releases.repos` in **Settings → Advanced → Service settings → Releases**. This setting lists the repositories that may request a release. When a repository is not allowed, the refusal names `releases.repos` and points to this Settings page.
+Set `releases.repos` in **Settings → Advanced → Service settings → Releases**. This setting lists the repositories that may request a release or add release assets. When a repository is not allowed, the refusal names `releases.repos` and points to this Settings page.
+
+Use `herdr-boss release add-asset` to request new files for a draft or published release. The Owner must accept the request before Herdr Boss uploads the files. Herdr Boss keeps the current release body and can append a Demo app notes block after it.
 
 ## CLI checks and handover errors
 

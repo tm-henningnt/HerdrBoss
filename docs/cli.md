@@ -770,18 +770,26 @@ An orchestrator publishes a GitHub release only after the Owner approves it in t
 
 WARNING: Never run `gh release edit`, `gh release delete`, or `gh release create` with `--draft=false` for a release of a listed repository. Use `herdr-boss release publish`.
 
+Use `release add-asset` to add files to an existing draft or published release. The command uploads files only after the Owner accepts the Mailbox request. It may append a Demo app notes block after the existing release body.
+
 The setting `releases.repos` in `config.json` lists the repositories that the commands accept. Set it in **Settings → Advanced → Service settings → Releases**. Each entry has `name` (`OWNER/REPO`), `project` (the project slug, which names the Mailbox thread), and `kind`. A repository that is not in the list is refused with exit code 1. The refusal names `releases.repos` and points to this Settings page.
 
 | Command | Action |
 |---|---|
 | `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. Print the approval ID. |
+| `herdr-boss release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE]` | Hash and scan each file and the optional notes. Post one Mailbox item of action `approve`. The release may be a draft or published. |
+| `herdr-boss release apply-asset REPO TAG --approval ID` | Check the Owner's approval, the files, the scan, and the release body. Then upload the files and append the approved Demo app notes block. |
 | `herdr-boss release cancel REPO TAG [--reason TEXT]` | Settle an open request as superseded. Only the pane that requested it or the Boss pane can run this command. |
 | `herdr-boss release publish REPO TAG --approval ID` | Check the approval, then run `gh release edit TAG --repo REPO --draft=false --latest`. |
 | `herdr-boss release status [REPO]` | Print JSON with the drafts and the last published release of each listed repository, and the open requests. |
 
 The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID when the release data still matches. The command compares notes when the request has a notes hash. It compares the asset names, sizes, and SHA-256 values. If the data changed, the command says that the request is stale. Run `release cancel` before you request again.
 
-The request reads the notes from `--notes FILE` when you give it. The scan finds tokens, private keys, inline license blobs, private paths, and hosts of the browser sessions of this machine. A public verification key is allowed. A finding shows only its class. When the scan fails, the item shows the failure and `release publish` refuses. A `.qvf` asset may hold the Qlik Engine inline table path `/home/engine/<uuid>.inline`. The scan counts these paths, the card names the count as allowed, and no other path class passes. The `.qvf` format stores the path after a one-byte length prefix. The scan accepts that prefix only when it equals the path length (56, the character `8`).
+The add-asset item shows the repository, tag, reason, each new file with its size and SHA-256, and the scan result. When you give `--append-notes`, the item shows the Demo app block. Only one release approval can be open for a repository and tag. A repeated identical add-asset request prints the open ID. Cancel an open request before you change its files, reason, notes, or target release.
+
+Each file must be readable, non-empty, and a regular file. The command refuses symlinks and file names that contain `#`.
+
+The request reads the notes from `--notes FILE` when you give it. The add-asset command reads each file and the optional notes file. The scan finds tokens, private keys, inline license blobs, private paths, and hosts of the browser sessions of this machine. A public verification key is allowed. A finding shows only its class. When a scan fails, the item shows the failure and `release publish` or `release apply-asset` refuses. A `.qvf` asset may hold the Qlik Engine inline table path `/home/engine/<uuid>.inline`. The scan counts these paths, the card names the count as allowed, and no other path class passes. The `.qvf` format stores the path after a one-byte length prefix. The scan accepts that prefix only when it equals the path length (56, the character `8`).
 
 `release publish` runs `gh release edit` only when all of these checks pass:
 
@@ -793,22 +801,35 @@ The request reads the notes from `--notes FILE` when you give it. The scan finds
 
 After `gh release edit`, the command reads the release again. It checks that the release is published with the assets of the card. Then it writes one line to `releases/audit.jsonl` in the data directory (time, approval ID, pane, repository, tag) and closes the item with the note `published`. The command never deletes a release or a tag, and never edits the assets of a published release. `--not-latest` on the request makes the card, and the publish, use `--latest=false`.
 
-`release cancel` closes the Mailbox card with the note `superseded`. It stores up to 500 characters of the reason, if you give one, and writes one line to the release audit file. It refuses a request that the Owner approved. Run `release publish` for an approved request. An Owner denial settles the request.
+`release apply-asset` runs only when all of these checks pass:
 
-When the Owner answers the item, Herdr Boss sends one notice to the pane that ran `release request`. For Approve, the notice names the publish command. For Reject, Herdr Boss closes the item, and the notice says that a new request is needed. Nobody polls. After any change to the draft, run `release request` again. Cancel the old request first if the command says that it is stale.
+1. The item is an open add-asset request for this repository and tag.
+2. The latest Owner answer is Approve, and it is newer than the request.
+3. Each file still has the size and SHA-256 value shown on the card.
+4. The scan of the files and notes passes.
+5. The release body has the same SHA-256 value as it had at request time.
+6. None of the new file names is already on the release.
+
+The command runs `gh release upload` without `--clobber`. If the item has a Demo app block, the command reads the body again before it runs `gh release edit --notes`. It refuses the edit if the body changed after the request. The new body starts with the freshly read body, then a blank line, then the block. It reads the release again and checks the asset names and the new body. Then it writes one line to `releases/audit.jsonl` with the time, approval ID, pane, repository, tag, action, and file names. It closes the item with the note `assets added`. If a later step fails after upload, the command prints the uploaded names and says `cancel the request and request again; the uploaded assets stay`.
+
+`release cancel` closes the Mailbox card with the note `superseded`. It stores up to 500 characters of the reason, if you give one, and writes one line to the release audit file. It refuses a request that the Owner approved. Run `release publish` for an approved publication request. Run `release apply-asset` for an approved asset request. An Owner denial settles the request.
+
+When the Owner answers the item, Herdr Boss sends one notice to the pane that ran the request. For Approve, the notice names `release publish` or `release apply-asset`, as needed. For Reject, Herdr Boss closes the item, and the notice says that a new request is needed. Nobody polls. After any change to the draft, run `release request` again. Cancel the old request first if the command says that it is stale.
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Done. The request is posted or open, the status printed, or the release published. |
-| 1 | Refused. The message names the reason: the repository is not listed, the Owner rejected it, the draft changed, the scan failed, the release is not a draft, a request cannot be cancelled, or a `gh` command failed. |
-| 3 | `release publish` waits for the Owner. The item has no answer yet. |
+| 0 | Done. The request is posted or open, the status printed, the release published, or the assets added. |
+| 1 | Refused. The message names the reason: the repository is not listed, the Owner rejected it, the release or files changed, the scan failed, the release is not a draft, a request cannot be cancelled, or a `gh` command failed. |
+| 3 | `release publish` or `release apply-asset` waits for the Owner. The item has no answer yet. |
 
 Example:
 
 ```sh
 herdr-boss release request example-org/example-app v1.0.0 --notes notes.md --pack landing
+herdr-boss release add-asset example-org/example-app v1.0.0 demo.zip --reason "Add the sample app" --append-notes demo-app.md
+herdr-boss release apply-asset example-org/example-app v1.0.0 --approval m-demo
 herdr-boss release status example-org/example-app
 herdr-boss release cancel example-org/example-app v1.0.0 --reason "Updated notes"
 herdr-boss release publish example-org/example-app v1.0.0 --approval m-example
