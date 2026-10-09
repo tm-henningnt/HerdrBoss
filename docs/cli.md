@@ -1317,7 +1317,7 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Token prices (Advanced)
 
-- Controls: The USD price per million tokens of each model.
+- Controls: The USD price per million tokens of each model. A model with no published price shows empty fields. It stays unpriced until you set its input and output.
 - Effect: Only the cost figures on the Analytics page. No price changes how workers run.
 - Safe to change: Safe to change. Reset to defaults removes all your changes.
 - Restart: No restart. Select Save prices.

@@ -84,6 +84,20 @@ test('Save prices sends only the figures that differ from the defaults and shows
   assert.equal(good.lastRender(), '');
 });
 
+test('the price editor shows a model with no published price with empty fields', () => {
+  const unpricedTable = {
+    prices: { 'claude/claude-haiku-5-5': { source: 'Price not published in the announcement; set it in Settings.' } },
+    defaults: { 'claude/claude-haiku-5-5': { source: 'Price not published in the announcement; set it in Settings.' } },
+    overrides: { models: {} },
+  };
+  const html = editor({ table: unpricedTable }).pricesPanel();
+  assert.match(html, /claude\/claude-haiku-5-5/);
+  for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h']) {
+    assert.match(html, new RegExp(`value="" data-price-model="claude/claude-haiku-5-5" data-price-field="${field}"`), field);
+  }
+  assert.match(html, /Price not published in the announcement; set it in Settings\./);
+});
+
 test('Reset to defaults sends an empty override', async () => {
   const e = editor({ table, response: { ok: true, body: { ok: true, ...table } } });
   await e.savePrices(true, { disabled: false });
