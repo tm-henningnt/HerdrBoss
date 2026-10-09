@@ -26,7 +26,7 @@ import { browserAuditRow, readBrowserAudit } from './browser-audit.js';
 import { maskDeep, maskBrowserState, maskBrowserText } from './browser-url-mask.js';
 import { agentBrowserTabIds, browserCommandActivity } from './browser-activity.js';
 import { probeBrowser, createBrowserProbes, PROBE_INTERVAL_MS } from './browser-probe.js';
-import { inspectUncollectedWorkers, processDueWorkerPaneCloses, shouldCloseManagedBrowser, trackBrowserIdle } from './maintenance.js';
+import { inspectReviewWorkerCloses, inspectUncollectedWorkers, processDueWorkerPaneCloses, readWorkerPaneCloses, scheduleWorkerPaneClose, shouldCloseManagedBrowser, trackBrowserIdle } from './maintenance.js';
 import { readLeases, reclaimLeases, publicLease, publicPool, reclaimNoticeText, hasIdleRule, tcpListening, tcpListeningAsync, leasePools, migrateProjectBrowserLeases, reconcileUnleasedListeners, unleasedNoticeText, markUnleasedNotified, listenerPid, processCwd, processLabel, projectWorktreeRoot } from './leases.js';
 import { codeSignCloneDir, sweepCodeSignClones } from './clone-sweep.js';
 import { runDenialScan, readDenials, denialSummary, DENIAL_SCAN_INTERVAL_MS, SCAN_BUDGET_BYTES, RETAIN_DAYS, RISE_FACTOR, RISE_MIN_EVENTS } from './denials.js';
@@ -936,6 +936,19 @@ export class Engine extends EventEmitter {
             onError: (job, error) => this.log('error', `Worker pane close for ${job.name} failed: ${String(error?.stderr || error?.message || error).slice(0, 200)}`, { project: job.project }),
           });
         } catch (error) { errors.push(`worker pane close queue: ${error.message}`); }
+        // A finished review worker writes its report but no product change, so it is never collected. Schedule its pane
+        // to close ten minutes after the report, unless `workers.autoCloseReview` is off. The pane close queue keeps the
+        // running-process and permission-prompt guard.
+        try {
+          const reviewCloses = inspectReviewWorkerCloses({
+            panes: herdr.panes,
+            runs: this.communicationRuns,
+            autoCloseReview: this.cfg.workers?.autoCloseReview !== false,
+          });
+          // Queue each run once, so a later tick keeps the attempt count of a retried job.
+          const queued = new Set(readWorkerPaneCloses().map((job) => job.runId));
+          for (const close of reviewCloses.closes) if (!queued.has(close.runId)) scheduleWorkerPaneClose(close);
+        } catch (error) { errors.push(`review pane close: ${error.message}`); }
       }
       if (this.act) {
         try {

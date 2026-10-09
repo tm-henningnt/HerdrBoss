@@ -89,7 +89,7 @@ Put overrides in `~/.herdr-boss/config.json`, then restart the service.
   "machine": { "memFreeWarnPercent": 15, "loadWarnFactor": 2 },
   "browsers": { "reapOrphanDaemons": true, "orphanDaemonMinAgeSeconds": 7200, "staleOwnedMinutes": 30, "sweepCodeSignClones": true },
   "browser": { "idleCloseMinutes": 20 },
-  "workers": { "staleIdleMinutes": 120, "paneCloseDelayMinutes": 2, "uncollectedNoticeMinutes": 30 },
+  "workers": { "staleIdleMinutes": 120, "paneCloseDelayMinutes": 2, "uncollectedNoticeMinutes": 30, "autoCloseReview": true },
   "roamgate": { "port": 8787, "tokenFile": "/path/to/private/access-token" },
   "providerKinds": { "claude": ["claude"], "codex": ["codex"], "opencodego": ["opencode", "pi"] },
   "resourcePools": [

@@ -761,6 +761,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'A lower value sends the notice sooner.',
     apply: 'service',
   }),
+  S('service', 'workers.autoCloseReview', 'Auto-close finished review workers', {
+    what: 'Closes the pane of a finished review worker ten minutes after it records its report. A review worker writes a report but no product change, so it is not collected.',
+    default: 'On', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on closes a finished review pane without a collection.',
+    lower: 'Turning it off leaves a finished review pane open.',
+    apply: 'service',
+  }),
   S('service', 'workers.leaseGraceMinutes', 'Lease grace minutes', {
     what: 'The time that a lease of a pool with an idle rule can have no bound process and no listener. The service reclaims the lease after this time, also when the idle time of the pool is longer. A lease of a pool without an idle rule is not reclaimed by this time. A worker gives back its leases at collect and at park in any pool.',
     default: '30', unit: 'Minutes', range: '1 to 1440',

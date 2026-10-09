@@ -118,6 +118,7 @@ test('worker and browser maintenance settings have editable rows and help text',
   const expected = {
     'workers.paneCloseDelayMinutes': { range: '0 to 60', default: '2' },
     'workers.uncollectedNoticeMinutes': { range: '1 to 1440', default: '30' },
+    'workers.autoCloseReview': { range: 'On or off', default: 'On' },
     'browser.idleCloseMinutes': { range: '0 to 1440', default: '20' },
     'browser.allowVisible': { range: 'On or off', default: 'Off' },
     'worktrees.pruneAtCollect': { range: 'On or off', default: 'On' },
@@ -130,6 +131,7 @@ test('worker and browser maintenance settings have editable rows and help text',
     assert.equal(help.range, values.range);
     assert.equal(help.default, values.default);
     if (setting === 'worktrees.pruneAtCollect') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'worktrees\.pruneAtCollect'/);
+    else if (setting === 'workers.autoCloseReview') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'workers\.autoCloseReview'/);
     else if (setting === 'worktrees.minFreeGb') assert.match(app, /['"]worktrees\.minFreeGb['"]\s*:\s*\[1, 500\]/);
     else if (setting === 'browser.allowVisible') assert.match(app, /serviceSettingBooleans = new Set\([^\n]*'browser\.allowVisible'/);
     else assert.match(app, new RegExp(`['"]${setting.replaceAll('.', '\\.')}['"]\\s*:\\s*\\[`));

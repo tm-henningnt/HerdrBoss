@@ -118,6 +118,7 @@ try {
     'workers.staleIdleMinutes',
     'workers.paneCloseDelayMinutes',
     'workers.uncollectedNoticeMinutes',
+    'workers.autoCloseReview',
     'workers.leaseGraceMinutes', 'worktrees.pruneAtCollect', 'worktrees.minFreeGb',
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'browser.allowVisible', 'chromePath', 'releases.repos',
@@ -126,9 +127,9 @@ try {
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
     'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default', 'default',
-    'config', 'default', 'config', 'default', 'default', 'default', 'default', 'default', 'config', 'config', 'default',
-    'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'config', 'config', 'config',
-    'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
+    'config', 'default', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
+    'default', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
+    'config', 'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',

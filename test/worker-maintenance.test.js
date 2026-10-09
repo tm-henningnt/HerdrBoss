@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { workerRunId } from '../src/agent-messages.js';
 import { collectBrowserClients } from '../src/collect.js';
 
@@ -13,7 +14,9 @@ test('the client collector treats lsof with no matches as zero clients and keeps
 });
 import { agentBrowserTabIds, forgetAgentBrowserTab, recordAgentBrowserTab } from '../src/browser-activity.js';
 import {
+  inspectReviewWorkerCloses,
   inspectUncollectedWorkers,
+  isReviewRun,
   processDueWorkerPaneCloses,
   readWorkerPaneCloses,
   scheduleWorkerPaneClose,
@@ -190,6 +193,126 @@ test('uncollected worker age starts from a report or finish timestamp when the r
     assert.equal(due.observed[workerRunId(run)].since, reportAt, field);
   }
 });
+
+test('a review run counts as a review worker without a role field and never gets the uncollected notice', () => {
+  const now = 1000;
+  const run = runRecord({ readOnly: true });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done', workspace: 'fixture-workspace' };
+  assert.equal(isReviewRun(run), true);
+  assert.equal(isReviewRun(runRecord({ role: 'judge' })), true);
+  assert.equal(isReviewRun(runRecord()), false);
+  const first = inspectUncollectedWorkers({ panes: [pane], runs: [run], now, minutes: 30 });
+  const later = inspectUncollectedWorkers({ panes: [pane], runs: [run], observed: first.observed, now: now + 300 * 60_000, minutes: 30 });
+  assert.deepEqual(later.notices, []);
+});
+
+test('a build worker still gets the uncollected notice after the configured age', () => {
+  const finishedAt = Date.parse('2026-10-01T10:00:00.000Z');
+  const run = runRecord({ finishedAt: new Date(finishedAt).toISOString() });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done', workspace: 'fixture-workspace' };
+  const due = inspectUncollectedWorkers({ panes: [pane], runs: [run], now: finishedAt + 30 * 60_000, minutes: 30 });
+  assert.equal(due.notices.length, 1);
+  assert.equal(due.notices[0].key, `workers:uncollected:${workerRunId(run)}`);
+});
+
+test('a finished review worker closes 10 minutes after its report and not before', async (t) => {
+  const dir = tempDir(t);
+  const reportAt = 5 * 60_000;
+  const run = runRecord({ readOnly: true });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+  const plans = inspectReviewWorkerCloses({
+    panes: [pane], runs: [run], now: reportAt,
+    reportAtOf: () => reportAt, hasChanges: () => false,
+  });
+  assert.equal(plans.closes.length, 1);
+  assert.equal(plans.closes[0].dueAt, reportAt + 10 * 60_000);
+  scheduleWorkerPaneClose({ ...plans.closes[0], dir });
+
+  const closed = [];
+  const shared = { dir, panes: [pane], readRun: () => run, closePane: async (id) => closed.push(id) };
+  await processDueWorkerPaneCloses({ ...shared, now: reportAt + 10 * 60_000 - 1 });
+  assert.deepEqual(closed, [], 'the pane stays open before the ten minutes');
+  await processDueWorkerPaneCloses({ ...shared, now: reportAt + 10 * 60_000 });
+  assert.deepEqual(closed, [run.pane], 'the pane closes at the ten minutes');
+});
+
+test('a build worker never gets a review close plan', () => {
+  const run = runRecord();
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+  const plans = inspectReviewWorkerCloses({
+    panes: [pane], runs: [run], now: 0,
+    reportAtOf: () => 0, hasChanges: () => false,
+  });
+  assert.deepEqual(plans.closes, []);
+});
+
+test('a review worker with an uncommitted diff stays for collection', () => {
+  const run = runRecord({ readOnly: true });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+  const plans = inspectReviewWorkerCloses({
+    panes: [pane], runs: [run], now: 0,
+    reportAtOf: () => 0, hasChanges: () => true,
+  });
+  assert.deepEqual(plans.closes, []);
+});
+
+test('a review worker with no recorded report gets no close plan', () => {
+  const run = runRecord({ readOnly: true });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+  const plans = inspectReviewWorkerCloses({
+    panes: [pane], runs: [run], now: 0,
+    reportAtOf: () => null, hasChanges: () => false,
+  });
+  assert.deepEqual(plans.closes, []);
+});
+
+test('the default diff check ignores the worker own files and refuses a product change', (t) => {
+  const root = tempDir(t);
+  execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(root, 'tracked.txt'), 'fixture');
+  execFileSync('git', ['-C', root, 'add', 'tracked.txt'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture'], { stdio: 'ignore' });
+  fs.mkdirSync(path.join(root, '.worker'));
+  fs.writeFileSync(path.join(root, '.worker', 'report.json'), '{}');
+  const run = runRecord({ readOnly: true, worktree: root });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+
+  const ownFilesOnly = inspectReviewWorkerCloses({ panes: [pane], runs: [run], reportAtOf: () => 500 });
+  assert.equal(ownFilesOnly.closes.length, 1, 'a worker report file is not a product change');
+
+  fs.writeFileSync(path.join(root, 'tracked.txt'), 'changed');
+  const productChange = inspectReviewWorkerCloses({ panes: [pane], runs: [run], reportAtOf: () => 500 });
+  assert.deepEqual(productChange.closes, [], 'an uncommitted product change keeps the pane for collection');
+});
+
+test('no review close is planned when the autoCloseReview setting is false', () => {
+  const run = runRecord({ readOnly: true });
+  const pane = { id: run.pane, name: run.name, agent: run.kind, status: 'done' };
+  const plans = inspectReviewWorkerCloses({
+    panes: [pane], runs: [run], now: 0, autoCloseReview: false,
+    reportAtOf: () => 0, hasChanges: () => false,
+  });
+  assert.deepEqual(plans.closes, []);
+});
+
+test('a review pane does not close while its agent is working or blocked', async (t) => {
+  for (const status of ['working', 'blocked']) {
+    const dir = tempDir(t);
+    const run = runRecord({ readOnly: true });
+    scheduleWorkerPaneClose({ project: run.project, name: run.name, runId: workerRunId(run), dueAt: 1, dir });
+    const closed = [];
+    const result = await processDueWorkerPaneCloses({
+      dir, now: 1,
+      panes: [{ id: run.pane, name: run.name, agent: run.kind, agent_status: status }],
+      readRun: () => run,
+      closePane: async (id) => closed.push(id),
+    });
+    assert.deepEqual(closed, [], status);
+    assert.equal(result.skipped, 0, status);
+    assert.equal(readWorkerPaneCloses({ dir }).length, 1, `${status} keeps the job for a later tick`);
+  }
+});
+
 
 test('a project browser closes only after a quiet interval with no attached client or agent tab', () => {
   const session = { project: 'fixture-project', port: 9224, profile: '/tmp/profile', launchedAt: '2026-10-01T10:00:00.000Z' };
