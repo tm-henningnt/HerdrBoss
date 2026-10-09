@@ -566,7 +566,7 @@ export function evaluate(snap, cfg, paneSince, now = Date.now(), policy = null, 
   return { alerts, advice };
 }
 
-export function renderBulletin(snap, evaluation, cfg) {
+export function renderBulletin(snap, evaluation, cfg, { dataDir, now = Date.parse(snap.updatedAt) || Date.now() } = {}) {
   const L = [];
   L.push(`# Herdr Boss bulletin`, '', `Updated: ${new Date(snap.updatedAt).toISOString()}`, `Kit revision: ${kitRevision() ?? 'unknown'}`, '');
   L.push('Read this file before you start new workers. Obey the rules below.', '');
@@ -642,15 +642,16 @@ export function renderBulletin(snap, evaluation, cfg) {
       L.push(`| ${provider} | ${w.label} | ${reset ? 'reset, not yet measured' : `${w.usedPercent}%`} | ${reset ? '–' : `${w.expectedPercent ?? '–'}${w.expectedPercent != null ? '%' : ''}`} | ${fmtTime(w.resetsAt)} |`);
     }
   }
-  if (snap.lanes && Object.keys(snap.lanes).length) {
+  const bulletinUseNow = useNowLanes(snap.lanes, { includeBlocked: true, dataDir, now });
+  if ((snap.lanes && Object.keys(snap.lanes).length) || bulletinUseNow.some((lane) => lane.provider === 'codex' && lane.reason.startsWith('blocked:'))) {
     L.push('', '## Provider lanes', '');
-    const useNow = useNowLanes(snap.lanes);
+    const useNow = bulletinUseNow;
     L.push(useNow.length
       ? `Use now: ${useNow.map(({ provider, reason }) => `${provider} (${reason})`).join(', ')}`
       : 'Use now: no metered lane; use unmetered models or wait.');
-    const planLine = codexPlanLine(snap.lanes.codex?.planGuidance);
+    const planLine = codexPlanLine(snap.lanes?.codex?.planGuidance);
     if (planLine) L.push(planLine);
-    for (const [provider, lane] of Object.entries(snap.lanes)) {
+    for (const [provider, lane] of Object.entries(snap.lanes || {})) {
       if (lane.unmetered) {
         const summary = unmeteredSummary(lane);
         const exhausted = (lane.exhausted || []).map((item) => `${item.model} until ${fmtTime(new Date(item.retryAt).toISOString())}`).sort();

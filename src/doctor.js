@@ -16,6 +16,7 @@ import { DATA_DIR, ROOT_DEFAULTS, resolveRootPath } from './config.js';
 import { toolsDoctorUpdates } from './tools-check.js';
 import { FACTORY_HOME, FACTORY_PROJECT_GROUP, factoryProjectWarning, isFactoryRole, isTrustedFactoryProjectPath } from './factory-role.js';
 import { readFactoryRegistry } from './fleet-registry.js';
+import { CODEX_HOOK_REVIEW_INSTRUCTION, readCodexLaneBlock } from './codex-lane.js';
 
 export const DOCTOR_TIMEOUT_MS = 5000;
 export const DOCTOR_MIN_DISK_BYTES = 5 * 1024 ** 3;
@@ -397,6 +398,8 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
 export async function doctorCommand(args, { output = console.log, dataDir = DATA_DIR, ...options } = {}) {
   if (args.some((arg) => !['--json', '--factory-host'].includes(arg)) || new Set(args).size !== args.length) throw new Error('Usage: doctor [--json] [--factory-host]');
   const report = await runDoctor({ ...options, factoryHost: args.includes('--factory-host') });
+  const codexBlock = readCodexLaneBlock({ dir: dataDir, now: options.now ?? Date.now() });
+  if (codexBlock) report.warnings.push(`${codexBlock.reason}. ${CODEX_HOOK_REVIEW_INSTRUCTION}`);
   const toolUpdates = toolsDoctorUpdates({ dataDir });
   if (toolUpdates) {
     report.toolUpdates = toolUpdates;
