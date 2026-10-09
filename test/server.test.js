@@ -2607,10 +2607,12 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
   assert.equal(emptyBody.hours.length, 24);
   assert.equal(emptyBody.totals.samples, 0);
   assert.equal(emptyBody.coverage, 0);
+  assert.equal(emptyBody.minFreeGb, 8);
+  assert.deepEqual(emptyBody.disk, { points: [], min: null });
 
   const at = new Date(Date.now() - 3600000);
   at.setMinutes(0, 0, 0);
-  const line = { at: at.toISOString(), l1: 1, l5: 40, l15: 1, cpus: 10, cpu: 10, memFree: 30, memGB: 24, swapMB: 100, swapTotalMB: 4096, holders: ['suite'], waiters: 1, waiterKinds: ['push'] };
+  const line = { at: at.toISOString(), l1: 1, l5: 40, l15: 1, cpus: 10, cpu: 10, memFree: 30, memGB: 24, swapMB: 100, swapTotalMB: 4096, diskFreeGB: 12.3, worktreeFreeGB: 4.5, holders: ['suite'], waiters: 1, waiterKinds: ['push'] };
   const old = { ...line, at: new Date(Date.now() - 5 * 86400000).toISOString() };
   fs.writeFileSync(samplesFile, `${JSON.stringify(line)}\nbroken line\n${JSON.stringify(old)}\n`);
 
@@ -2627,6 +2629,10 @@ test('GET /api/machine-hours summarizes the sample file, limits days, and works 
   assert.equal(body.hours[at.getHours()].overloadMin, 1);
   assert.equal(body.hours[at.getHours()].idleWaitMin, 1);
   assert.deepEqual(body.hours[at.getHours()].holderKinds, { suite: 1 });
+  assert.equal(body.minFreeGb, 8);
+  assert.equal(body.disk.points.length, 1);
+  assert.equal(body.disk.points[0].gb, 4.5);
+  assert.equal(body.disk.min.gb, 4.5);
   assert.doesNotMatch(JSON.stringify(body), /\/Users|\/tmp|herdr-preview/);
 
   assert.equal((await (await fetch(`${base}/api/machine-hours?days=1`)).json()).totals.samples, 1);

@@ -29,7 +29,7 @@ import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
-import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
+import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, diskFreeCard, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
 import { listRowHtml, statusChipHtml } from './components.js';
@@ -2622,6 +2622,7 @@ function analyticsView(s) {
     memoryBlock(),
     lockWaitBlock(),
     machineHoursBlock(),
+    diskFreeBlock(),
     '</div></div><div class="viz-group" data-key="grp:communication"><h2>Agent communication</h2><div class="viz-grid">',
     agentCommunicationBlock(),
     agentResponseBlock(),
@@ -2962,6 +2963,11 @@ document.addEventListener('pointerdown', (e) => {
   if (e.target.classList?.contains('mh-hit')) showMachineTip(e.target);
   else { const tip = document.getElementById('mh-tip'); if (tip) tip.hidden = true; }
 });
+
+// The disk line for the Machine section: the lowest free GB in each 15-minute bucket of the last 24 hours.
+function diskFreeBlock() {
+  return vizCard(diskFreeCard(machineHours));
+}
 
 // The text of a routine schedule.
 function routineScheduleText(routine) {
@@ -6852,6 +6858,7 @@ const HELP = {
     <h3>Machine load and lock waits</h3><p>Lines show the 5-minute load as a percent of the cores, the memory in use, and the swap in use over the last 24 hours, in columns of 10 minutes. A shaded column had a lock holder. The strip under the chart shows the minutes in which a suite request waited in the queue.</p>
     <h3>Machine overload and idle waiting</h3><p>The chart shows, for each hour of the day in local time, the mean minutes per day of two conditions over the last 14 days. <b>Overload</b>: swap above 90% with at least 1 GB in use, or a 5-minute load above 3 times the cores. <b>Queue waited, CPU under 50%</b>: a suite request waited in the <code>full-suite</code> queue while the CPU was not the reason.</p>
     <p>Hover, focus, or touch an hour to read its values. Hatched bars have fewer than 10 samples. A note shows when samples cover less than half of the window; a minute without a sample is missing data. The table under the chart has the same 24 rows. On a phone the chart scrolls sideways inside its own box.</p>
+    <h3>Disk free</h3><p>The chart shows the lower free space of the worktree volume and the data directory volume in each 15-minute bucket of the last 24 hours, and its dashed line marks the <code>worktrees.minFreeGb</code> floor.</p>
     <h3>Agent communication</h3><p>The section shows the last 7 local days from message metadata. Stacked bars split daily messages by kind. Select a message project to show one project or all projects. The title gives the reminder share. The filter changes the daily bars only. Response time and nudges per task use all projects. The response tables show the median and p90 time per project lead and per worker kind and model. At least 90% of measured times are at or below p90. Each row shows message and response counts. The first idle or done transition, or delivered <code>tell</code> from the target, sets the response time. An initially idle target must become active before idle counts. The engine writes one response per message. Unanswered rows after 24 hours add no time sample. Failed deliveries add no traffic. The nudge chart shows the 10 tasks with the most nudges. Each table shows at most 200 rows; the figures include all rows. Service status, kit, idle-worker, resource, and handover notices are reminders. A prompt to an idle project lead with ready work is a nudge. No message text enters these figures.</p>
     <h3>Notices per pane</h3><p>Stacked bars show the notices and digest items that Herdr Boss sent to each pane on each day. The chart shows pane IDs only. The five panes with the most notices have their own color. The other panes share one gray.</p>
     <h3>Policy changes</h3><p>The list shows the last writes of <code>policy.json</code>, newest first. A row shows the time, the caller kind (<b>Page</b>, <b>CLI</b>, <b>Project new</b>, or <b>Unknown</b>), and the changed keys with the old and the new value. A list or an object shows <code>changed</code>. <b>Details</b> holds one table row for each changed key of the last 100 writes. The caller kind is a label that the client sends. It does not prove who wrote. The Allocation page asks for a confirmation before it saves 3 or more changed shares, and asks again before it saves a total other than 100.</p>

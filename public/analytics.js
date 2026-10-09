@@ -753,6 +753,63 @@ export function memoryDetailsHtml(win) {
   return `<div class="fleet-table-wrap"><table class="fleet-table"><thead><tr><th>Class</th><th>Latest</th><th>Peak 24 h</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// ---------- Free disk space ----------
+
+export const DISK_FREE_TITLE = 'Lowest free disk space in each 15 minutes, last 24 hours';
+
+// A time with the minutes, short '14:15' or long 'Mon 30 Mar 14:15'.
+function diskClock(at, long = false) {
+  const d = new Date(Date.parse(at));
+  if (Number.isNaN(d.getTime())) return '–';
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return long ? `${WEEKDAY[d.getDay()]} ${d.getDate()} ${MONTH[d.getMonth()]} ${time}` : time;
+}
+
+// A GB value with one decimal place.
+export const gbText = (value) => (Number.isFinite(value) ? `${value.toFixed(1)} GB` : '–');
+
+// The lowest free GB in each 15-minute bucket of the last 24 hours, from /api/machine-hours.
+// floorValues draws the worktrees.minFreeGb line as a second, dashed series.
+export function diskFreeSeries(machineHours) {
+  const raw = Array.isArray(machineHours?.disk?.points) ? machineHours.disk.points : [];
+  const points = raw
+    .filter((p) => Number.isFinite(Date.parse(p?.at)) && Number.isFinite(p?.gb))
+    .map((p) => ({ at: p.at, gb: +(+p.gb).toFixed(1) }));
+  const configured = Number.isFinite(machineHours?.minFreeGb) ? machineHours.minFreeGb : 8;
+  const floor = configured > 0 ? configured : 8;
+  const minRaw = machineHours?.disk?.min;
+  const min = minRaw && Number.isFinite(Date.parse(minRaw.at)) && Number.isFinite(minRaw.gb)
+    ? { at: minRaw.at, gb: +(+minRaw.gb).toFixed(1) } : null;
+  const values = points.map((p) => p.gb);
+  return {
+    points,
+    values,
+    floor,
+    floorValues: points.map(() => floor),
+    min,
+    yMax: niceMax(Math.max(floor, ...values, 1) * 1.1),
+    tips: points.map((p) => `${diskClock(p.at, true)} · ${gbText(p.gb)} free`),
+  };
+}
+
+// The Machine section card for the disk line: the point list, the floor line, and the window minimum.
+export function diskFreeCard(machineHours) {
+  const win = diskFreeSeries(machineHours);
+  const base = { id: 'disk-free', title: DISK_FREE_TITLE, sub: 'The lower free space of the worktree volume and the data-directory volume, in each 15-minute bucket. Local time.' };
+  if (!win.points.length) return { ...base, empty: 'No disk samples yet.' };
+  const series = [
+    { key: 'free', label: 'Free disk space', cls: 's1', values: win.values },
+    { key: 'floor', label: `Floor (${win.floor} GB)`, cls: 's-ink', values: win.floorValues, dashed: true },
+  ];
+  const chart = lineChart({ points: win.points, series, yMax: win.yMax, fmt: (v) => `${Math.round(v)} GB`, label: DISK_FREE_TITLE, tips: win.tips });
+  return {
+    ...base,
+    legend: legendHtml(series),
+    chart,
+    footer: win.min ? `<p class="viz-note">Lowest free disk space ${gbText(win.min.gb)} at ${diskClock(win.min.at, true)}.</p>` : '',
+  };
+}
+
 // ---------- Policy changes ----------
 
 export const POLICY_CALLER_LABEL = { page: 'Page', cli: 'CLI', 'project-new': 'Project new', unknown: 'Unknown' };
