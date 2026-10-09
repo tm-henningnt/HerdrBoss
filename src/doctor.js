@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseCodexRoots } from './harness.js';
 import { listProjectPaths } from './project-paths.js';
+import { LAUNCHD_NODE_FIX, SERVICE_LABEL as LABEL, launchdNodeProblem } from './launchd-state.js';
+import { stableNodePath } from './install.js';
 import { claudeRateLimitsDir } from './claude-statusline.js';
 import { DATA_DIR, ROOT_DEFAULTS, resolveRootPath } from './config.js';
 import { toolsDoctorUpdates } from './tools-check.js';
@@ -33,7 +35,6 @@ export const DOCTOR_INSTALL_FIXES = Object.freeze({
   gh: { darwin: 'Run brew install gh. Put gh on PATH.', linux: 'Install the GitHub command gh with the package manager of your system. Put gh on PATH.' },
   codexbar: { darwin: 'Run brew install --cask codexbar. Put codexbar on PATH.', linux: 'CodexBar does not exist on Linux and is not needed. The Codex usage and Claude usage checks replace it.' },
 });
-const LABEL = 'no.tallmaker.herdr-boss';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const text = (value) => typeof value === 'string' ? value.trim() : '';
 function json(value) { try { return JSON.parse(value); } catch { return null; } }
@@ -141,7 +142,8 @@ function checks({ home, env, factoryHost }) {
     }),
     command('gh', 'tools', 'GitHub command', 'gh', ['--version'], null, (value) => /^gh version \d/.test(text(value))),
     command('codexbar', 'tools', 'CodexBar', 'codexbar', ['--version'], null),
-    { id: 'service', stepId: 'service', name: 'Herdr Boss service', fix: 'Run doctor as your normal user, without sudo. On macOS, sudo checks gui/0. Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.', pass: (value) => /\bstate = running\b/.test(text(value)) || text(value) === 'active', request: { kind: 'service' } },
+    { id: 'service', stepId: 'service', name: 'Herdr Boss service', fix: 'Run doctor as your normal user, without sudo. On macOS, sudo checks gui/0. Run bin/herdr-boss install from the Herdr Boss folder. On Linux, set up the systemd user service.', pass: (value) => /\bstate = running\b/.test(text(value)) || text(value) === 'active', // A Homebrew node upgrade keeps the launchd job down. Name the install that repairs it.
+      reject: (value, { platform, installedNode }) => platform === 'darwin' && launchdNodeProblem(value, { installedNode }), request: { kind: 'service' } },
     { id: 'data-folder', stepId: 'service', name: 'Data folder', fix: 'Run bin/herdr-boss install. Give your user read, write, and search access to the data folder.', pass: (value) => value === true, request: { kind: 'directory', file: env.HERDR_BOSS_DIR || path.join(home, '.herdr-boss') } },
     read('claude-settings', 'Claude autoMode', '.claude/settings.json', 'Only you: run herdr-boss harness sync. Back up ~/.claude/settings.json. Add the missing autoMode lines in your editor.', (value) => {
       const mode = json(value)?.autoMode;
@@ -339,7 +341,7 @@ export function createDoctorRunner({ home = os.homedir(), env = process.env, pla
   return run;
 }
 
-export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, factory = env.HOME === FACTORY_HOME && isFactoryRole(env), factoryProjectGroup = FACTORY_PROJECT_GROUP, stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
+export async function runDoctor({ home = os.homedir(), env = process.env, factoryHost = false, factory = env.HOME === FACTORY_HOME && isFactoryRole(env), factoryProjectGroup = FACTORY_PROJECT_GROUP, installedNode = stableNodePath(), stepId, timeoutMs = DOCTOR_TIMEOUT_MS, runner = createDoctorRunner({ home, env }) } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('The doctor timeout must be a positive number.');
   const items = [];
   let platform = 'linux';
@@ -351,6 +353,7 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
     let timer;
     let timedOut = false;
     let good = false;
+    let rejected = false;
     let value;
     try {
       const deadline = new Promise((_, reject) => {
@@ -359,10 +362,13 @@ export async function runDoctor({ home = os.homedir(), env = process.env, factor
       value = await Promise.race([Promise.resolve().then(() => runner({ ...check.request, id: check.id }, { signal: controller.signal, timeout: timeoutMs })), deadline]);
       if (check.id === 'os') platform = value === 'darwin' ? 'darwin' : 'linux';
       good = check.pass(value) === true;
+      // A probe value that shows a known problem names its own fix, also when the check itself passes.
+      rejected = check.reject ? check.reject(value, { platform, installedNode }) === true : false;
     } catch { /* Print fixed words only, never a probe error or its output. */ }
     finally { clearTimeout(timer); }
     if (stepId && check.stepId !== stepId) continue;
-    const fix = DOCTOR_INSTALL_FIXES[check.id]?.[platform] ?? check.fix;
+    if (rejected) good = false;
+    const fix = rejected ? LAUNCHD_NODE_FIX : DOCTOR_INSTALL_FIXES[check.id]?.[platform] ?? check.fix;
     const diskStats = check.id === 'disk' && value ? (Array.isArray(value) ? value : [value]) : [];
     const diskValues = diskStats.map((stat) => Number(stat?.bavail) * Number(stat?.bsize)).filter((bytes) => Number.isFinite(bytes) && bytes >= 0);
     const diskBytes = check.id === 'disk' && diskValues.length ? Math.min(...diskValues) : null;

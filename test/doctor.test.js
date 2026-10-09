@@ -143,6 +143,31 @@ for (const id of IDS.concat(['docker', 'docker-contexts'])) {
   });
 }
 
+// The launchd text of a job that a Homebrew node upgrade stopped, and of the same job in a good state.
+const LAUNCHD = (...lines) => ['gui/501/no.tallmaker.herdr-boss = {', '\tactive count = 1', ...lines, '\tprogram = /opt/homebrew/bin/node', '}'].join('\n');
+const NODE_PROBLEM = LAUNCHD('\tstate = exited', '\tlast exit code = 78');
+
+test('doctor names the install repair when the service check shows a replaced node binary', async () => {
+  const lines = [];
+  const options = { home: HOME, runner: fake({ service: NODE_PROBLEM }), installedNode: '/opt/homebrew/bin/node' };
+  assert.equal(await doctorCommand([], { ...options, output: (line) => lines.push(line) }), 4);
+  const line = lines.find((item) => item.startsWith('red: ') && item.includes('Herdr Boss service'));
+  assert.equal(line, 'red: Herdr Boss service needs a fix. Fix: Homebrew replaced node: run herdr-boss install');
+  const json = [];
+  await doctorCommand(['--json'], { ...options, output: (line) => json.push(line) });
+  const red = JSON.parse(json[0]).items.filter((item) => item.id === 'service');
+  assert.equal(red[0].status, 'red');
+  assert.equal(red[0].fix, 'Homebrew replaced node: run herdr-boss install');
+  // The same job after `herdr-boss install` runs the installed node path, so the check stays green.
+  const good = await runDoctor({ home: HOME, runner: fake({ service: LAUNCHD('\tstate = running') }), installedNode: '/opt/homebrew/bin/node' });
+  assert.equal(good.exitCode, 0);
+  assert.equal(good.items.find((item) => item.id === 'service').status, 'green');
+  // A job that a Homebrew upgrade registered under a versioned node path fails the same way.
+  const cellar = await runDoctor({ home: HOME, runner: fake({ service: LAUNCHD('\tstate = running').replace('/opt/homebrew/bin/node', '/opt/homebrew/Cellar/node/26.10.0/bin/node') }), installedNode: '/opt/homebrew/bin/node' });
+  assert.equal(cellar.items.find((item) => item.id === 'service').fix, 'Homebrew replaced node: run herdr-boss install');
+  assert.equal(cellar.exitCode, 4);
+});
+
 test('doctor JSON and plain output do not expose raw output, errors, homes, addresses or keys', async () => {
   const unsafe = `${HOME}/secret/config.json private.example.test 192.0.2.1 sk-invented-key`;
   const runner = fake({ 'git-name': unsafe, 'claude-signed-in': `{\"loggedIn\":true,\"token\":\"${unsafe}\"}`, node: new Error(unsafe), 'opencode-settings': '{"agent":{"worker":{}},"apiKey":"sk-invented-key"}' });
