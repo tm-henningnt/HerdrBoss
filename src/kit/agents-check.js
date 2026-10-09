@@ -309,19 +309,20 @@ export function kitSnapshot(entries = readKitChanges(), current = kitRevision())
 // line in the kit template, and the message that names the rule for a project that lacks it.
 export const KIT_RULES = Object.freeze([
   { id: 'license-never-inline', pattern: /^-\s*A license is never inline\./m, message: 'has no rule that a license is never inline; run herdr-boss kit install' },
+  { id: 'work-approval', pattern: /^-\s*An orchestrator may propose work\. It starts no unapproved work\./m, level: 'warn', message: 'has no work approval rule; run herdr-boss kit install' },
 ]);
 
 // Findings for the text of docs/orchestration/herdr-boss.md. text is null for a missing file.
 export function checkKitText(text, revision) {
   const findings = [];
-  const add = (message) => findings.push({ level: 'error', line: 1, message: `${KIT_FILE} ${message}` });
+  const add = (message, level = 'error') => findings.push({ level, line: 1, message: `${KIT_FILE} ${message}` });
   if (text == null) { findings.push({ level: 'error', line: 1, message: `${KIT_FILE} is missing; ${INSTALL}` }); return findings; }
   const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
   const match = KIT_VERSION.exec(lines[0].trim());
   if (!match) { add(`has no version line; ${INSTALL}`); return findings; }
   const version = match[1];
   const body = lines.slice(lines[1]?.trim() === KIT_NOTE ? 2 : 1).join('\n').replace(/^\n+/, '');
-  for (const rule of KIT_RULES) if (!rule.pattern.test(body)) add(rule.message);
+  for (const rule of KIT_RULES) if (!rule.pattern.test(body)) add(rule.message, rule.level || 'error');
   if (version !== revision) add(`has old kit revision ${version || '(none)'}; ${INSTALL}`);
   else if (normalize(body) !== normalize(fs.readFileSync(KIT_TEMPLATE, 'utf8'))) add(`was edited by hand; ${INSTALL}`);
   return findings;

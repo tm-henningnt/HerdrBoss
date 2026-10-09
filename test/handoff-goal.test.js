@@ -88,8 +88,17 @@ test('goalShown compares the start of the goal without whitespace', () => {
 
 test('the default orchestrator goal is the Boss default text', () => {
   assert.equal(typeof POLICY_DEFAULTS.defaultOrchestratorGoal, 'string');
-  assert.match(POLICY_DEFAULTS.defaultOrchestratorGoal, /^Keep the build moving end to end\./);
+  assert.match(POLICY_DEFAULTS.defaultOrchestratorGoal, /^Work only on approved work:/);
+  assert.match(POLICY_DEFAULTS.defaultOrchestratorGoal, /approved, unblocked task/);
+  assert.doesNotMatch(POLICY_DEFAULTS.defaultOrchestratorGoal, /start the next ready task/i);
   assert.equal(goalTextError(POLICY_DEFAULTS.defaultOrchestratorGoal), null);
+});
+
+test('loading policy preserves a goal that was already stored', (t) => {
+  const file = path.join(tmp(t, 'herdr-stored-goal-'), 'policy.json');
+  const storedGoal = 'Keep the build moving end to end and start the next ready task as soon as a slot is free.';
+  fs.writeFileSync(file, JSON.stringify({ defaultOrchestratorGoal: storedGoal }));
+  assert.equal(loadPolicy({ file, models: loadModels(), warn: () => {} }).defaultOrchestratorGoal, storedGoal);
 });
 
 test('automatic Claude goal commands default off, validate as booleans, and keep manual goal set', (t) => {

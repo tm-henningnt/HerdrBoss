@@ -870,6 +870,37 @@ An action of `answer`, `approve`, or `decide` puts the item in both the Mailbox 
 
 The Mailbox shows action items under **Needs you**. It shows information under **Updates**. The escalation rules make Owner actions rare. The Owner answer comes back as an `[owner] Answer to ID (TITLE): ANSWER` prompt. The quoted question follows the answer.
 
+Start only approved work: a backlog task, an Owner goal, a fix for a finding of approved work, or a defect fix. A subagent read or survey inside approved work is allowed. Get the Owner's yes before a survey, review, or audit that is itself new work outside those categories. Get the Owner's yes before a refactor, a new feature, a new test program, or a release outside an Owner request.
+
+Only the Boss runs `mail post` to post a proposal card. Write one Markdown file with these exact headings. Add both a lane and a size under `## Cost`. List exactly `Accept` and `Deny` under `## Choices`.
+
+Run `herdr-boss proposal check FILE` and fix every error. Then tell the Boss the absolute file path and the card type `decide`. For a `proposal.md` file in the current directory, run:
+
+```sh
+cat > proposal.md <<'EOF'
+## What
+Add a report export.
+
+## Why
+Owners need a file to share with their team.
+
+## Cost
+Lane: codex
+Size: small
+
+## Recommendation
+Accept this proposal.
+
+## Choices
+- Accept
+- Deny
+EOF
+herdr-boss proposal check proposal.md
+herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."
+```
+
+The proposal check reports missing headings, cost fields, or choices. The `tell` command sends the Boss the file path and the `decide` card type. The Boss posts the file with `herdr-boss mail post --to owner --action decide FILE` as one Mailbox decision card. The card states what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
+
 The command output names the destination. For example, `say` prints `Message ID sent in chat.` An action prints `Message ID posted as a Mailbox item (decide).` A reply to an item prints `Message ID sent as an answer to ID.` `mail post` names the Mailbox item. `mail close` names the Mailbox. `messages relay` names the chat message.
 
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.

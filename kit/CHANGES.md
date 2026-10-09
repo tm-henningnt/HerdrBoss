@@ -306,3 +306,7 @@ Summary: Scope Haiku 5.5 to bounded captures and keep its support and benchmark 
 ## db68d0b4b2e1
 Impact: useful
 Summary: The release scan accepts the Qlik Engine inline table path /home/engine/<uuid>.inline in a .qvf asset only, counts it as allowed on the card, and refuses every other path class.
+
+## c81ec413327f
+Impact: required
+Summary: Limit orchestrator work to Owner-approved items, define validated proposal cards sent through the Boss, and warn when the installed kit lacks the approval rule.

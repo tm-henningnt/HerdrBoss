@@ -15,6 +15,16 @@ Use Chat for ordinary messages. Use the Mailbox to answer, approve, or decide. A
 - [I want to see the usage limits of a factory](guide/factory.md#sign-in-the-agent-apps-and-start-the-factory-boss)
 - [Something went wrong](guide/trouble.md)
 
+## Approve proposed work
+
+An orchestrator may propose work. It starts no unapproved work.
+
+Approved work includes a backlog task, an Owner goal, a fix for a finding of approved work, or a defect fix.
+
+A subagent read or survey inside approved work is allowed. Get the Owner's yes before a survey, review, or audit that is itself new work outside those categories. Get the Owner's yes before a refactor, a new feature, a new test program, or a release outside an Owner request.
+
+Each proposal uses one Mailbox decision card. The card states what, why, cost, and recommendation. Select **Accept** or **Deny** to decide. The Boss's yes does not replace the Owner's yes. See [Owner messages](cli.md#owner-messages) for the command.
+
 ## Sign in to a site with a project browser
 
 Project browsers run headless. Use the Browsers page to sign in without opening a Chrome window on the service machine.
