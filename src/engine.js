@@ -1447,7 +1447,7 @@ export class Engine extends EventEmitter {
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy, (this.memory.alertState ||= {}));
       if (this.act) evaluation.alerts.push(...this.quotaPlanService.expiryNotices({ now }));
-      evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now));
+      evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now, policy, snap.projects));
       evaluation.alerts.push(...workerTransitions.notices);
       evaluation.alerts.push(...reportTransitions.notices);
       evaluation.alerts.push(...uncollectedTransitions.notices);
@@ -1503,6 +1503,7 @@ export class Engine extends EventEmitter {
         evaluation.alerts.push(quotaRecoveredAlert(id, recovery));
       }
       for (const h of handoffCandidates(control).filter((candidate) => candidate.window)) {
+        if (projectHeld(h.project, snap.projects, snap.control)) continue;
         const model = h.target ? normalizeModel(h.target.model) : null;
         const opusForce = h.target && isOpusModel(model) ? ' --force --reason "Owner approved Opus"' : '';
         const effort = h.target?.effort ? ` --effort ${h.target.effort}` : '';
@@ -2432,12 +2433,13 @@ export class Engine extends EventEmitter {
     }
   }
 
-  contextHandoverAlerts(control, herdr, now = Date.now()) {
+  contextHandoverAlerts(control, herdr, now = Date.now(), policy = {}, projects = []) {
     let records = [];
     try { records = listHandoffs(); } catch { return []; }
     const panes = herdr?.panes || [];
     const alerts = [];
     for (const project of Object.values(control.projects || {})) {
+      if (projectHeld(project.slug, projects, control)) continue;
       const orch = project.orch;
       const pane = orch && panes.find((candidate) => candidate.id === orch.pane);
       if (!pane || orch.kind !== 'claude') continue;
