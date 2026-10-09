@@ -37,8 +37,8 @@
 .alert-toggle .grow { flex: 1 1 auto; min-width: 0; }
 .alert-toggle .tag { font-size: 12px; color: var(--accent); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
 .alert-label { font-weight: 600; overflow-wrap: anywhere; }
-.sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.sev.error { background: var(--crit); } .sev.warning { background: var(--warn); } .sev.info { background: var(--info); }
+.fleet-page .sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.fleet-page .sev.error { background: var(--crit); } .fleet-page .sev.warning { background: var(--warn); } .fleet-page .sev.info { background: var(--info); }
 .alert-fix { display: none; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 14px 12px 36px; }
 .alert.open .alert-fix { display: flex; }
 code.cmd { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -59,11 +59,11 @@ button.copy { min-height: 44px; min-width: 44px; padding: 0 12px; border: 1px so
 .drift { color: var(--warn); font-weight: 600; }
 
 /* Factory card */
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; }
-.card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.card-head h2 { margin: 0; font-size: 18px; }
+.fleet-page .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; }
+.fleet-page .card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.fleet-page .card-head h2 { margin: 0; font-size: 18px; }
 .role { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
-.card-head .grow { flex: 1 1 auto; }
+.fleet-page .card-head .grow { flex: 1 1 auto; }
 .wait-owner { margin: 0; padding: 10px 16px; background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border-bottom: 1px solid var(--line); font-size: 13px; display: grid; gap: 6px; }
 .wait-owner b { color: var(--warn); }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-bottom: 1px solid var(--line); }
@@ -73,7 +73,7 @@ button.copy { min-height: 44px; min-width: 44px; padding: 0 12px; border: 1px so
 
 /* Quota lanes. The expansion button is visible at every width. */
 .lanes { padding: 8px 16px; border-bottom: 1px solid var(--line); }
-.card p[data-fleet-claude-helper] { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.fleet-page .card p[data-fleet-claude-helper] { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .lanes h3 { margin: 6px 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 button.lane-more { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer; }
 .lane { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); }
@@ -82,9 +82,9 @@ button.lane-more { display: inline-flex; align-items: center; min-height: 44px; 
 .lanes:not(.open) .lane.more { display: none; }
 .lanes.open button.lane-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .lane .who { overflow-wrap: anywhere; }
-.bar { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--ok); }
-.bar i.warn { background: var(--warn); } .bar i.crit { background: var(--crit); }
+.fleet-page .bar { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.fleet-page .bar i { display: block; height: 100%; background: var(--ok); }
+.fleet-page .bar i.warn { background: var(--warn); } .fleet-page .bar i.crit { background: var(--crit); }
 /* Fleet badges only. A neutral background and the normal text colour keep every label readable
    in both themes. The global .pill of the Mac page keeps its own colours. */
 .fleet-page .pill { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; background: var(--panel-2); color: var(--text); }
@@ -165,10 +165,10 @@ button.lane-more { display: inline-flex; align-items: center; min-height: 44px; 
   .cmp-name { grid-column: 1; grid-row: 1; }
   .cmp-health { grid-column: 2; grid-row: 1; text-align: right; }
   .cmp-sum { display: block; grid-column: 1 / -1; grid-row: 2; padding: 2px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-  .card-head { padding: 12px; }
+  .fleet-page .card-head { padding: 12px; }
   .fact { border-right: 0; border-bottom: 1px solid var(--line); }
   .actions { padding: 10px 12px; }
-  .projects, .lanes, .card p[data-fleet-claude-helper] { padding-left: 12px; padding-right: 12px; }
+  .projects, .lanes, .fleet-page .card p[data-fleet-claude-helper] { padding-left: 12px; padding-right: 12px; }
   .fleet-item-list li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .fleet-item-list .tag { justify-self: start; }
   .fleet-settings form { max-width: 100%; }

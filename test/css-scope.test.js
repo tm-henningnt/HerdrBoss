@@ -6,9 +6,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
-const read = (name) => fs.readFileSync(path.join(publicDir, name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const strip = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+const read = (name) => strip(fs.readFileSync(path.join(publicDir, name), 'utf8'));
 
-// The selectors of the rules at the top level of a style sheet. Rules inside @media blocks are included.
+// The main sheet and the theme sheet style every page. Each other sheet belongs to one page and keeps its rules under the
+// scope names of that page. The index.html file loads all of them on every page, so an unscoped rule leaks to all pages.
+const SHARED_SHEETS = ['style.css', 'theme.css'];
+const PAGE_SHEETS = {
+  'fleet.css': /^(fleet|projects$)/,
+  'docs.css': /^docs?(-|$)|^help-body$/,
+  'host-guide.css': /^hg-/,
+  'explainer.css': /^(ex-|explainer$)/,
+};
+
+// The selectors of all rules, also inside @media and @supports blocks. A keyframe step such as `from` has no class.
 function selectors(css) {
   const found = [];
   for (const match of css.matchAll(/(?:^|[}{;])\s*([^{}@;]+)\{/g)) {
@@ -17,25 +28,36 @@ function selectors(css) {
   return found.filter(Boolean);
 }
 
-// A selector that starts with a bare class, for example `.proj` or `.proj:hover` or `.proj .slug`. Return the class.
+// The first class of a selector that starts with a class, for example `.proj` of `.proj:hover .slug`.
 const firstClass = (selector) => /^\.([a-zA-Z][\w-]*)(?![\w-])/.exec(selector)?.[1] ?? null;
 
-test('Fleet style sheet does not restyle a class that the main style sheet owns', () => {
-  const main = new Set(selectors(read('style.css')).map(firstClass).filter(Boolean));
-  // Classes that fleet.css defines for its own page and that the main sheet uses with the same meaning.
-  const shared = new Set(['panel', 'tag', 'small', 'mono', 'legend', 'win-foot']);
-  const collisions = selectors(read('fleet.css'))
-    .map((selector) => [selector, firstClass(selector)])
-    .filter(([, name]) => name && main.has(name) && !shared.has(name))
-    .map(([selector]) => selector);
-  // Known collisions that need their own review (follow-up PG1b). A new collision fails this test.
-  const known = ['.sev', '.sev.error', '.sev.warning', '.sev.info', '.card', '.card p[data-fleet-claude-helper]', '.bar', '.bar i', '.bar i.warn', '.bar i.crit'];
-  assert.deepEqual([...new Set(collisions)].filter((selector) => !known.includes(selector)), [], 'scope each of these selectors under .fleet-page or .projects');
+test('every page style sheet is known to this test', () => {
+  const sheets = fs.readdirSync(publicDir).filter((name) => name.endsWith('.css'));
+  const unknown = sheets.filter((name) => !SHARED_SHEETS.includes(name) && !(name in PAGE_SHEETS));
+  assert.deepEqual(unknown, [], 'add the sheet to PAGE_SHEETS with its scope names, or to SHARED_SHEETS');
 });
 
-test('the project card selectors in the main sheet are not overridden by fleet.css', () => {
-  const fleet = selectors(read('fleet.css'));
-  for (const name of ['proj', 'proj-head', 'project-selector', 'seg']) {
-    assert.equal(fleet.some((selector) => firstClass(selector) === name), false, `fleet.css must not start a selector with .${name}`);
+test('a page style sheet never starts a selector with a class that another sheet also styles', () => {
+  const firstClassesOf = (name) => new Set(selectors(read(name)).map(firstClass).filter(Boolean));
+  const owners = new Map();
+  for (const name of [...SHARED_SHEETS, ...Object.keys(PAGE_SHEETS)]) {
+    for (const cls of firstClassesOf(name)) owners.set(cls, [...(owners.get(cls) || []), name]);
+  }
+  const collisions = [];
+  for (const [sheet, scope] of Object.entries(PAGE_SHEETS)) {
+    for (const selector of selectors(read(sheet))) {
+      const cls = firstClass(selector);
+      if (!cls || scope.test(cls)) continue;
+      // An unscoped class of a page sheet that also starts a selector in another sheet leaks into the other page.
+      if ((owners.get(cls) || []).some((owner) => owner !== sheet)) collisions.push(`${sheet}: ${selector}`);
+    }
+  }
+  assert.deepEqual([...new Set(collisions)], [], 'put the selector under the scope class of its page, for example .fleet-page .card');
+});
+
+test('the Projects page card classes are not restyled by a page sheet', () => {
+  for (const sheet of Object.keys(PAGE_SHEETS)) {
+    const bad = selectors(read(sheet)).filter((selector) => ['proj', 'proj-head', 'project-selector', 'seg', 'card', 'bar', 'sev', 'board', 'stale'].includes(firstClass(selector)));
+    assert.deepEqual(bad, [], `${sheet} must not start a selector with a class of the main sheet`);
   }
 });
