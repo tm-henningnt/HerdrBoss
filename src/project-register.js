@@ -18,6 +18,7 @@ export const FIELDS = [
   'slug',
   'title',
   'group',
+  'clientTag',
   'repo',
   'remote',
   'factory',
@@ -37,6 +38,7 @@ export const FIELDS = [
 export const EDIT_FIELDS = [
   'title',
   'group',
+  'clientTag',
   'repo',
   'remote',
   'factory',
@@ -100,6 +102,38 @@ export function remoteProblem(value) {
   return value.slice(0, value.lastIndexOf('@')).includes(':') ? 'credentials' : null;
 }
 
+// Return an OWNER/REPO source only when the remote identifies a GitHub repository.
+export function githubRepoFromRemote(value) {
+  if (!isText(value) || value === '' || remoteProblem(value) !== null) return null;
+
+  let owner;
+  let repo;
+  const shorthand = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(value);
+  if (shorthand) {
+    [, owner, repo] = shorthand;
+  } else {
+    const scp = /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(value);
+    if (scp) {
+      [, owner, repo] = scp;
+    } else {
+      let url;
+      try { url = new URL(value); }
+      catch { return null; }
+      if (url.hostname.toLowerCase() !== 'github.com' || url.port !== '' || !['http:', 'https:', 'ssh:', 'git:'].includes(url.protocol)) return null;
+      if (url.protocol === 'ssh:' && url.username !== 'git') return null;
+      if (url.protocol !== 'ssh:' && url.username !== '') return null;
+      const segments = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+      if (segments.length !== 2) return null;
+      [owner, repo] = segments;
+      repo = repo.replace(/\.git$/i, '');
+      if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) return null;
+    }
+  }
+  repo = repo?.replace(/\.git$/i, '');
+  if (!owner || !repo || owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
+  return `${owner}/${repo}`;
+}
+
 export function normalizeRepoPath(value) {
   return isText(value) && value !== '' && path.isAbsolute(value) ? path.normalize(value) : value;
 }
@@ -117,7 +151,7 @@ function checkIssueSource(value, slug) {
   const keys = Object.keys(value);
   if (keys.length !== 2 || !keys.includes('repo') || !keys.includes('label')) throw recordError(fields);
   if (!isText(value.repo) || !isText(value.label)) throw recordError(fields);
-  if (value.repo === '' || value.label === '') throw recordError(fields);
+  if (value.repo === '') throw recordError(fields);
   return value;
 }
 
@@ -127,6 +161,9 @@ function fieldRules(record, slug) {
   }
   if (!isText(record.group) || [...record.group].length > 40) {
     throw recordError(`The group of ${slug} must hold at most 40 characters.`);
+  }
+  if (record.clientTag !== undefined && (!isText(record.clientTag) || [...record.clientTag].length > 80)) {
+    throw recordError(`The client tag of ${slug} must hold at most 80 characters.`);
   }
   if (!isText(record.repo) || (record.repo !== '' && !path.isAbsolute(record.repo))) {
     throw recordError(`The repo of ${slug} must be an absolute path or be empty.`);
@@ -141,6 +178,7 @@ function fieldRules(record, slug) {
   }
   if (!STATE.includes(record.state)) throw recordError(`The state of ${slug} must be ${enumPhrase(STATE)}.`);
   if (typeof record.pinned !== 'boolean') throw recordError(`The pinned of ${slug} must be true or false.`);
+  if (record.pinned && !['open', 'parking'].includes(record.state)) throw recordError(`Only an open project can be pinned.`);
   if (!PRIORITY.includes(record.priority)) throw recordError(`The priority of ${slug} must be ${enumPhrase(PRIORITY)}.`);
   checkIssueSource(record.issueSource, slug);
   if (record.autoOpen !== 'on' && record.autoOpen !== 'off') throw recordError(`The autoOpen of ${slug} must be off or on.`);
@@ -364,10 +402,12 @@ function safeText(value, max, fallback) {
 // Builds a valid register record from a candidate. A value that fails the scan falls back to the default.
 export function buildCandidateRecord(candidate, dataDir = DATA_DIR) {
   const slug = candidate.slug;
+  const issueRepo = githubRepoFromRemote(candidate.remote);
   const record = {
     slug,
     title: safeText(candidate.title, 80, slug),
     group: '',
+    clientTag: '',
     repo: isText(candidate.repo) && candidate.repo !== '' && path.isAbsolute(candidate.repo) && !secretClasses(candidate.repo)
       ? normalizeRepoPath(candidate.repo)
       : '',
@@ -378,7 +418,7 @@ export function buildCandidateRecord(candidate, dataDir = DATA_DIR) {
     state: candidate.state === 'open' ? 'open' : 'parked',
     pinned: false,
     priority: 'normal',
-    issueSource: null,
+    issueSource: issueRepo ? { repo: issueRepo, label: '' } : null,
     autoOpen: 'off',
     lastOpenedAt: '',
     lastActivityAt: validIso(candidate.lastActivityAt) ? candidate.lastActivityAt : '',

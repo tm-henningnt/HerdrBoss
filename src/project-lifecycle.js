@@ -125,7 +125,7 @@ function assertFactory(record, dataDir) {
   if (record.factory !== factory) throw new Error(`Project ${record.slug} belongs to factory ${record.factory}. Run this command on that factory.`);
 }
 
-function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, now = Date.now, write = writeRegister } = {}) {
+function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, by = 'owner-cli', now = Date.now, write = writeRegister } = {}) {
   return withRegisterLock(dataDir, () => {
     const register = readRegister(dataDir);
     const index = register.projects.findIndex((item) => item.slug === slug);
@@ -134,7 +134,7 @@ function writeRecord(slug, dataDir, action, update, { result = 'done', failedChe
     register.projects[index] = update({ ...previous });
     write(register, dataDir);
     try {
-      appendAudit(slug, action, dataDir, { result, failedCheck, dryRun: false, at: new Date(now()).toISOString() });
+      appendAudit(slug, action, dataDir, { result, failedCheck, by, dryRun: false, at: new Date(now()).toISOString() });
     } catch (error) {
       register.projects[index] = previous;
       try { write(register, dataDir); }
@@ -221,7 +221,7 @@ function openProject(parsed, options) {
     if (transferRefusal) throw new Error(transferRefusal);
     const registerSettings = options.registerSettings ?? {};
     const cap = registerSettings.cap ?? options.cap ?? 3;
-    const capCountsPinned = registerSettings.capCountsPinned ?? true;
+    const capCountsPinned = registerSettings.capCountsPinned ?? false;
     const projects = readRegister(dataDir).projects;
     const open = projects.filter((item) => ['open', 'parking'].includes(item.state)
       && (capCountsPinned || !item.pinned)).length;
@@ -271,14 +271,14 @@ function openProject(parsed, options) {
     const unresolved = remainingOpenFailures(final, parsed.start);
     if (!failedStep && unresolved.length) failedStep = unresolved[0].name;
     if (failedStep) {
-      appendAudit(slug, 'open', dataDir, { result: 'failed', failedCheck: failedStep });
+      appendAudit(slug, 'open', dataDir, { result: 'failed', failedCheck: failedStep, by: options.auditBy ?? 'owner-cli' });
       const item = final.items.find((candidate) => candidate.name === failedStep);
       log(`Open stopped at ${failedStep}. The project stays parked.`);
       if (item?.fix) log(`Next: herdr-boss project check ${slug} --fix ${item.fix}${item.fix === 'workspace' ? ' --start' : ''}`);
       return 1;
     }
 
-    writeRecord(slug, dataDir, 'open', (current) => ({ ...current, state: 'open', lastOpenedAt: new Date(options.now()).toISOString() }), { now: options.now });
+    writeRecord(slug, dataDir, 'open', (current) => ({ ...current, state: 'open', lastOpenedAt: new Date(options.now()).toISOString() }), { now: options.now, by: options.auditBy ?? 'owner-cli' });
     log(`Opened ${slug}.`);
     log(`Next action: ${nextAction(slug, record, dataDir)}`);
     return 0;
@@ -557,7 +557,7 @@ async function parkProject(parsed, options) {
   }
   if (!checked.ok) {
     const failedCheck = failureId(checked);
-    appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck });
+    appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck, by: options.auditBy ?? 'owner-cli' });
     return 1;
   }
 
@@ -568,14 +568,14 @@ async function parkProject(parsed, options) {
     checked = inspectPark(slug, current, options);
     showParkChecks(checked, log);
     if (!checked.ok) {
-      appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failureId(checked) });
+      appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failureId(checked), by: options.auditBy ?? 'owner-cli' });
       return 1;
     }
 
     let failedStep = 'register';
     try {
       writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parking' }), {
-        result: 'started', failedCheck: null, now: options.now, write: options.writeRegister,
+        result: 'started', failedCheck: null, now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli',
       });
       failedStep = 'workspace';
       closeWorkspaceById(slug, current, checked, options);
@@ -583,14 +583,14 @@ async function parkProject(parsed, options) {
       await releaseBrowserReservation(slug, dataDir, options);
       failedStep = 'register';
       writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parked', pinned: false }), {
-        now: options.now, write: options.writeRegister,
+        now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli',
       });
       log(`Parked ${slug}. Its project files and status stay in place.`);
       return 0;
     } catch (error) {
       let reservationError = null;
       try { await restoreBrowserReservation(slug, dataDir, options); } catch (restoreError) { reservationError = restoreError; }
-      try { appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failedStep }); } catch {}
+      try { appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failedStep, by: options.auditBy ?? 'owner-cli' }); } catch {}
       const state = (() => { try { return findRecord(slug, dataDir).state; } catch { return 'unknown'; } })();
       log(`Park stopped at ${failedStep}. Project ${slug} stays in state ${state}. ${error.message}${reservationError ? ` The browser reservation could not be restored: ${reservationError.message}` : ''}`);
       return 1;
@@ -608,7 +608,7 @@ function transitionState(parsed, options) {
   if (record.state === to) { log(`Project ${slug} is already ${to}.`); return 0; }
   if (record.state !== from) throw new Error(`Project ${slug} must be ${from} before it can ${action}.`);
   if (parsed.dryRun) { log(`Dry run: would change ${slug} from ${from} to ${to}.`); return 0; }
-  writeRecord(slug, dataDir, action, (current) => ({ ...current, state: to, ...(action === 'archive' ? { pinned: false } : {}) }), { now: options.now });
+  writeRecord(slug, dataDir, action, (current) => ({ ...current, state: to, ...(action === 'archive' ? { pinned: false } : {}) }), { now: options.now, by: options.auditBy ?? 'owner-cli' });
   log(`${action === 'archive' ? 'Archived' : 'Unarchived'} ${slug}.`);
   return 0;
 }

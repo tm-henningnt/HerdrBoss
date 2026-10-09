@@ -19,13 +19,14 @@ import {
   localFactory,
   collectImportCandidates,
   buildCandidateRecord,
+  githubRepoFromRemote,
   parseFlags,
   remoteProblem,
 } from './project-register.js';
 
 const LIST_USAGE = 'Usage: project register list [--state open|parked|archived] [--group NAME] [--json]';
-const ADD_USAGE = 'Usage: project register add SLUG [--title TEXT] [--group NAME] [--repo PATH] [--remote OWNER/REPO|URL] [--factory NAME] [--priority high|normal|low] [--next-action TEXT] [--notes TEXT] [--pinned on|off] [--auto-open on|off] [--issue-repo OWNER/REPO] [--issue-label TEXT] [--dry-run]';
-const EDIT_USAGE = 'Usage: project register edit SLUG [--title TEXT] [--group NAME] [--repo PATH] [--remote OWNER/REPO|URL] [--factory NAME] [--priority high|normal|low] [--next-action TEXT] [--notes TEXT] [--pinned on|off] [--auto-open on|off] [--issue-repo OWNER/REPO] [--issue-label TEXT] [--issue-clear] [--dry-run]';
+const ADD_USAGE = 'Usage: project register add SLUG [--title TEXT] [--group AREA] [--client-tag TEXT] [--repo PATH] [--remote OWNER/REPO|URL] [--factory NAME] [--priority high|normal|low] [--next-action TEXT] [--notes TEXT] [--pinned on|off] [--auto-open on|off] [--issue-repo OWNER/REPO] [--issue-label TEXT] [--dry-run]';
+const EDIT_USAGE = 'Usage: project register edit SLUG [--title TEXT] [--group AREA] [--client-tag TEXT] [--repo PATH] [--remote OWNER/REPO|URL] [--factory NAME] [--priority high|normal|low] [--next-action TEXT] [--notes TEXT] [--pinned on|off] [--auto-open on|off] [--issue-repo OWNER/REPO] [--issue-label TEXT] [--issue-clear] [--dry-run]';
 const IMPORT_USAGE = 'Usage: project register import [--dry-run]';
 const SYNC_USAGE = 'Usage: project register sync [--dry-run]';
 
@@ -39,10 +40,11 @@ export const SUB_USAGE = {
 
 export const REGISTER_USAGE = [LIST_USAGE, ADD_USAGE, EDIT_USAGE, IMPORT_USAGE, SYNC_USAGE].join('\n');
 
-const VALUE_FLAGS = ['--title', '--group', '--repo', '--remote', '--factory', '--priority', '--next-action', '--notes', '--pinned', '--auto-open', '--issue-repo', '--issue-label'];
+const VALUE_FLAGS = ['--title', '--group', '--client-tag', '--repo', '--remote', '--factory', '--priority', '--next-action', '--notes', '--pinned', '--auto-open', '--issue-repo', '--issue-label'];
 const FLAG_FIELDS = {
   '--title': 'title',
   '--group': 'group',
+  '--client-tag': 'clientTag',
   '--repo': 'repo',
   '--remote': 'remote',
   '--factory': 'factory',
@@ -73,11 +75,8 @@ function checkChoiceFlags(flags) {
 }
 
 function checkIssueFlags(flags, { allowClear }) {
-  if (allowClear && flags['--issue-clear'] && flags['--issue-repo'] !== undefined) {
+  if (allowClear && flags['--issue-clear'] && (flags['--issue-repo'] !== undefined || flags['--issue-label'] !== undefined)) {
     throw new Error('Give --issue-clear or the issue pair, not both.');
-  }
-  if ((flags['--issue-repo'] === undefined) !== (flags['--issue-label'] === undefined)) {
-    throw new Error('Give --issue-repo and --issue-label together.');
   }
 }
 
@@ -118,19 +117,20 @@ function addCommand(rest, { dataDir, log }) {
   if (!SLUG.test(slug)) throw new Error(SLUG_MESSAGE);
   checkChoiceFlags(flags);
   checkIssueFlags(flags, { allowClear: false });
+  const issueRepo = flags['--issue-repo'] ?? githubRepoFromRemote(flags['--remote'] ?? '');
+  if (flags['--issue-label'] !== undefined && !issueRepo) throw new Error('--issue-label needs a GitHub --remote or --issue-repo.');
   const record = {
     slug,
     title: flags['--title'] ?? slug,
     group: flags['--group'] ?? '',
+    clientTag: flags['--client-tag'] ?? '',
     repo: normalizeRepoPath(flags['--repo'] ?? ''),
     remote: flags['--remote'] ?? '',
     factory: flags['--factory'] ?? localFactory(dataDir),
     state: 'parked',
     pinned: flags['--pinned'] === 'on',
     priority: flags['--priority'] ?? 'normal',
-    issueSource: flags['--issue-repo'] !== undefined
-      ? { repo: flags['--issue-repo'], label: flags['--issue-label'] }
-      : null,
+    issueSource: issueRepo ? { repo: issueRepo, label: flags['--issue-label'] ?? '' } : null,
     autoOpen: flags['--auto-open'] ?? 'off',
     lastOpenedAt: '',
     lastActivityAt: '',
@@ -170,14 +170,25 @@ function editCommand(rest, { dataDir, log }) {
   if (flags['--pinned'] !== undefined) changes.pinned = flags['--pinned'] === 'on';
   if (flags['--auto-open'] !== undefined) changes.autoOpen = flags['--auto-open'];
   if (changes.repo !== undefined) changes.repo = normalizeRepoPath(changes.repo);
-  if (flags['--issue-repo'] !== undefined) changes.issueSource = { repo: flags['--issue-repo'], label: flags['--issue-label'] };
+  if (flags['--issue-repo'] !== undefined) changes.issueSource = { repo: flags['--issue-repo'], label: flags['--issue-label'] ?? '' };
   if (flags['--issue-clear']) changes.issueSource = null;
-  if (Object.keys(changes).length === 0) throw new Error(`Give at least one field. ${usage}`);
+  if (Object.keys(changes).length === 0 && flags['--issue-label'] === undefined) throw new Error(`Give at least one field. ${usage}`);
   const edit = () => {
     const register = readRegister(dataDir);
     const index = register.projects.findIndex((entry) => entry.slug === slug);
     if (index === -1) throw new Error(`${slug} is not in the register.`);
     const before = register.projects[index];
+    if (flags['--issue-label'] !== undefined && flags['--issue-repo'] === undefined) {
+      const issueRepo = before.issueSource?.repo ?? githubRepoFromRemote(changes.remote ?? before.remote);
+      if (!issueRepo) throw new Error('This project has no issue source. Give --issue-repo or add a GitHub remote.');
+      changes.issueSource = { repo: issueRepo, label: flags['--issue-label'] };
+    }
+    if (changes.pinned === true) {
+      if (before.state !== 'open') throw new Error('Only an open project can be pinned.');
+      if (!before.pinned && register.projects.filter((entry) => entry.state === 'open' && entry.pinned).length >= 3) {
+        throw new Error('The page supports up to three pinned projects.');
+      }
+    }
     const merged = { ...before, ...changes };
     checkRecord(merged);
     const changed = EDIT_FIELDS.filter((field) => JSON.stringify(merged[field]) !== JSON.stringify(before[field]));

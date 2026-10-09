@@ -9,7 +9,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { stripRemoteCredentials } from '../src/harness.js';
-import { remoteProblem } from '../src/project-register.js';
+import { githubRepoFromRemote, remoteProblem } from '../src/project-register.js';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli.js');
 const REPO = path.resolve(path.dirname(CLI), '..');
@@ -120,6 +120,7 @@ test('project register add writes the record with mode 0600 and one audit line',
     slug: 'acme-web',
     title: 'Acme Web',
     group: 'web',
+    clientTag: '',
     repo: repoPath,
     remote: 'acme/acme-web',
     factory: 'factory-zero',
@@ -151,6 +152,46 @@ test('project register add writes the record with mode 0600 and one audit line',
   assert.equal(lines[0].dryRun, false);
   assert.ok(!raw.includes(repoPath), 'the audit line holds no path');
   assert.ok(!raw.includes('acme/acme-web'), 'the audit line holds no remote');
+});
+
+test('project register add uses the factory triage label when the issue source has no override', (t) => {
+  const f = fixture(t);
+  const result = f.run(['project', 'register', 'add', 'cedar-tool', '--issue-repo', 'example/cedar-tool']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readRegisterFile(f).projects[0].issueSource, { repo: 'example/cedar-tool', label: '' });
+});
+
+test('project register add uses a GitHub remote as the default issue source', (t) => {
+  const f = fixture(t);
+  const result = f.run(['project', 'register', 'add', 'juniper-api', '--remote', 'example/juniper-api']);
+  assert.equal(result.status, 0, result.stderr);
+  const stored = readRegisterFile(f).projects[0];
+  assert.deepEqual(stored.issueSource, { repo: 'example/juniper-api', label: '' });
+});
+
+test('project register add can set a label override for a GitHub remote', (t) => {
+  const f = fixture(t);
+  const result = f.run(['project', 'register', 'add', 'juniper-api', '--remote', 'example/juniper-api', '--issue-label', 'security-review']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readRegisterFile(f).projects[0].issueSource, { repo: 'example/juniper-api', label: 'security-review' });
+});
+
+test('project register edit changes an issue label without repeating the issue repository', (t) => {
+  const f = fixture(t);
+  assert.equal(f.run(['project', 'register', 'add', 'juniper-api', '--remote', 'example/juniper-api']).status, 0);
+  const result = f.run(['project', 'register', 'edit', 'juniper-api', '--issue-label', 'security-review']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readRegisterFile(f).projects[0].issueSource, { repo: 'example/juniper-api', label: 'security-review' });
+});
+
+test('register recognizes GitHub remotes and ignores other hosts or nested paths', () => {
+  assert.equal(githubRepoFromRemote('example/juniper-api'), 'example/juniper-api');
+  assert.equal(githubRepoFromRemote('example/juniper-api.git'), 'example/juniper-api');
+  assert.equal(githubRepoFromRemote('https://github.com/example/juniper-api.git'), 'example/juniper-api');
+  assert.equal(githubRepoFromRemote('ssh://git@github.com/example/juniper-api.git'), 'example/juniper-api');
+  assert.equal(githubRepoFromRemote('git@github.com:example/juniper-api.git'), 'example/juniper-api');
+  assert.equal(githubRepoFromRemote('https://gitlab.com/example/juniper-api.git'), null);
+  assert.equal(githubRepoFromRemote('https://github.com/example/juniper-api/issues'), null);
 });
 
 test('project register add --dry-run writes nothing', (t) => {
@@ -221,6 +262,42 @@ test('project register edit changes the Owner fields and writes one audit line',
   assert.equal(lines[1].action, 'register-edit');
   assert.ok(!Object.hasOwn(lines[1], 'command'));
   assert.equal(lines[1].slug, 'acme-web');
+});
+
+test('project register stores the client tag separately from the project area', (t) => {
+  const f = fixture(t);
+  const added = f.run(['project', 'register', 'add', 'pine-api', '--group', 'platform', '--client-tag', 'Example Client']);
+  assert.equal(added.status, 0, added.stderr);
+  assert.ok(!added.stdout.includes('Example Client'), 'the command does not print the tag value');
+  assert.equal(readRegisterFile(f).projects[0].group, 'platform');
+  assert.equal(readRegisterFile(f).projects[0].clientTag, 'Example Client');
+
+  const edited = f.run(['project', 'register', 'edit', 'pine-api', '--client-tag', 'Sample Studio']);
+  assert.equal(edited.status, 0, edited.stderr);
+  assert.equal(edited.stdout, 'Edited pine-api: clientTag\n');
+  assert.ok(!edited.stdout.includes('Sample Studio'), 'the edit prints the field name, never the tag value');
+  assert.equal(readRegisterFile(f).projects[0].clientTag, 'Sample Studio');
+});
+
+test('project register pins only open projects and refuses a fourth pinned project', (t) => {
+  const f = fixture(t);
+  writeRegisterFile(f.dataDir, [
+    record('focus-one', { state: 'open', pinned: true }),
+    record('focus-two', { state: 'open', pinned: true }),
+    record('focus-three', { state: 'open', pinned: true }),
+    record('focus-next', { state: 'open' }),
+    record('parked-next'),
+  ]);
+  const fourth = f.run(['project', 'register', 'edit', 'focus-next', '--pinned', 'on']);
+  assert.equal(fourth.status, 1);
+  assert.match(fourth.stderr, /up to three pinned projects/);
+  assert.equal(readRegisterFile(f).projects.find((item) => item.slug === 'focus-next').pinned, false);
+
+  const parked = f.run(['project', 'register', 'edit', 'parked-next', '--pinned', 'on']);
+  assert.equal(parked.status, 1);
+  assert.match(parked.stderr, /Only an open project can be pinned/);
+  assert.equal(readRegisterFile(f).projects.find((item) => item.slug === 'parked-next').pinned, false);
+  assert.equal(fs.existsSync(f.auditPath), false, 'refused pins write no audit entry');
 });
 
 test('project register edit refuses an unknown flag, a bad value, a missing record, and an empty edit', (t) => {
@@ -314,6 +391,7 @@ test('project register import adds a record for each source, keeps edits, and is
   assert.equal(Object.keys(stored).length, 4);
   assert.equal(stored['acme-web'].repo, repoA, 'import copies the repo of the row');
   assert.equal(stored['acme-web'].remote, 'acme/acme-web');
+  assert.deepEqual(stored['acme-web'].issueSource, { repo: 'acme/acme-web', label: '' });
   assert.equal(stored['acme-web'].state, 'open', 'a Herdr workspace label opens the project');
   assert.equal(stored['acme-web'].title, 'acme-web', 'the title falls back to the slug');
   assert.equal(stored['harbor-docs'].repo, repoB);

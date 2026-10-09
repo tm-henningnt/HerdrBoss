@@ -193,8 +193,8 @@ test('the cap reads register settings and can exclude pinned open projects', asy
     record('open-project-a', { state: 'open' }),
     record('open-project-b', { state: 'open' }),
   ] }, defaults.dataDir);
-  assert.equal(await run(defaults, ['open', 'acme-web']), 1, 'the default cap is 3 and pinned projects count by default');
-  assert.ok(defaults.messages.some((line) => /open project cap is 3/.test(line)));
+  assert.equal(await run(defaults, ['open', 'acme-web']), 0, 'the default cap is 3 and pinned projects do not use a cap slot');
+  assert.equal(defaults.result().projects.find((item) => item.slug === 'acme-web').state, 'open');
 });
 
 test('lifecycle commands refuse an orch pane from another project', async (t) => {

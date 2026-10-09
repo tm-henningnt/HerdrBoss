@@ -27,6 +27,7 @@ import { visibleItems, loadFilter, saveFilter } from './review-filter.js';
 import { effectiveAsk } from './review-ask.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
+import { reconcileProjectSelection, renderProjectRegister } from './project-register-view.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, diskFreeCard, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
@@ -157,7 +158,34 @@ function setNavMenu(open) {
   $navMenu.setAttribute('aria-expanded', String(open));
 }
 
+const PROJECT_REGISTER_PREFS_KEY = 'herdr-boss-project-register-view';
+function loadProjectRegisterPrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PROJECT_REGISTER_PREFS_KEY) || '{}');
+    return {
+      query: typeof saved.query === 'string' ? saved.query.slice(0, 200) : '',
+      group: typeof saved.group === 'string' ? saved.group : 'all',
+      state: ['all', 'open', 'parked', 'archived'].includes(saved.state) ? saved.state : 'all',
+      sort: ['activity', 'priority', 'title'].includes(saved.sort) ? saved.sort : 'activity',
+      folds: { parked: saved.folds?.parked === true, archived: saved.folds?.archived === true },
+    };
+  } catch {
+    return { query: '', group: 'all', state: 'all', sort: 'activity', folds: { parked: false, archived: false } };
+  }
+}
+function saveProjectRegisterPrefs() {
+  try { localStorage.setItem(PROJECT_REGISTER_PREFS_KEY, JSON.stringify(projectRegisterPrefs)); }
+  catch { /* The page still works when browser storage is unavailable. */ }
+}
+
 let state = null;
+let projectRegisterData = null;
+let projectRegisterLoading = false;
+let projectRegisterError = '';
+let projectRegisterLoadedAt = 0;
+let projectRegisterFeedback = '';
+const projectRegisterSelected = new Set();
+const projectRegisterPrefs = loadProjectRegisterPrefs();
 let clientStore = null;
 let lastRender = '';
 // The project page patches its DOM in place when the previous render was the project page too.
@@ -1248,11 +1276,11 @@ function settingsView(s) {
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
   const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${lockNumber('watchdogMultiplier', 'Watchdog multiplier', 1, 20)}${lockNumber('watchdogCpuPercent', 'Watchdog CPU limit %', 1, 100)}<p class="setting-help">The watchdog checks each full-suite holder after its age exceeds the predicted hold times the multiplier. It sends one notice when CPU for the holder and child processes stays below the limit in two samples.</p>${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}${lockInput('agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', Object.hasOwn(d.agentMessages || {}, 'promptTimeoutSeconds') ? d.agentMessages.promptTimeoutSeconds : 25, 1, 120, 'data-policy-agent-message="promptTimeoutSeconds"')}</section>`;
-  const settingsGroups = ['Paths', 'Machine', 'Quota', 'Quota plan', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Releases', 'Analytics'];
+  const settingsGroups = ['Paths', 'Machine', 'Quota', 'Quota plan', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Releases', 'Analytics', 'Project register'];
   const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot', 'chromePath']);
   const serviceSettingLists = new Set(['allowedHosts']);
   const serviceSettingRepos = new Set(['releases.repos']);
-  const serviceSettingText = new Set(['quotaPlan.horizon', 'quota.opencodeGoResetAt']);
+  const serviceSettingText = new Set(['quotaPlan.horizon', 'quota.opencodeGoResetAt', 'register.triage.label']);
   const serviceSettingChoices = { 'quotaPlan.planMode': [['paced', 'Paced: hold when ahead of the curve'], ['burst', 'Burst: the curve is advice only']] };
   const serviceSettingSteps = { 'quotaPlan.burstPace': 0.1, 'quotaPlan.margin': 0.1, 'quotaPlan.tolerance': 0.1, 'quotaPlan.holdMargin': 0.1, 'quotaPlan.slowFactor': 0.1 };
   const serviceSettingRanges = {
@@ -1273,6 +1301,8 @@ function settingsView(s) {
     'workers.paneCloseDelayMinutes': [0, 60],
     'workers.uncollectedNoticeMinutes': [1, 1440],
     'workers.leaseGraceMinutes': [1, 1440],
+    'register.cap': [1, 20],
+    'register.triage.pollMinutes': [5, 1440],
     'watch.maxWorkers': [1, 40],
     'watch.maxWorkersByLane': [1, 40],
     'browsers.staleOwnedMinutes': [5, 1440],
@@ -1283,9 +1313,9 @@ function settingsView(s) {
     'log.maxMegabytes': [1, 1000],
     'log.keepFiles': [1, 2],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'browser.allowVisible', 'worktrees.pruneAtCollect', 'workers.autoCloseReview']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'browser.allowVisible', 'worktrees.pruneAtCollect', 'workers.autoCloseReview', 'register.capCountsPinned', 'register.triage.enabled']);
   // The group names are the keys of the service settings. The page shows the plain words.
-  const settingsGroupLabels = { Quota: 'Usage limit', 'Quota plan': 'Usage limit plan' };
+  const settingsGroupLabels = { Quota: 'Usage limit', 'Quota plan': 'Usage limit plan', 'Project register': 'Project register' };
   const serviceRows = settingsGroups.map((group) => {
     const groupRows = (s.serviceSettings || []).filter((item) => item.group === group).map((item) => {
       const value = item.value !== null && typeof item.value === 'object' ? JSON.stringify(item.value) : item.value == null ? '' : String(item.value);
@@ -1303,7 +1333,7 @@ function settingsView(s) {
         : serviceSettingChoices[item.setting]
           ? `<select data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">${serviceSettingChoices[item.setting].map(([choice, label]) => `<option value="${esc(choice)}"${choice === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`
         : serviceSettingText.has(item.setting)
-          ? `<input type="text"${item.setting === 'quota.opencodeGoResetAt' ? '' : ' required'} value="${esc(value)}" placeholder="${item.setting === 'quota.opencodeGoResetAt' ? 'Blank, or an ISO time such as 2026-10-09T10:00:00Z' : 'last-expiry or an ISO time'}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
+          ? `<input type="text"${item.setting === 'quota.opencodeGoResetAt' ? '' : ' required'} value="${esc(value)}" placeholder="${item.setting === 'quota.opencodeGoResetAt' ? 'Blank, or an ISO time such as 2026-10-09T10:00:00Z' : item.setting === 'register.triage.label' ? 'ready-for-agent' : 'last-expiry or an ISO time'}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
         : range
           ? `<input type="number" min="${range[0]}" max="${range[1]}" step="${serviceSettingSteps[item.setting] || 1}" value="${esc(value)}" placeholder="${nullableServiceSettings.has(item.setting) ? 'Day value' : ''}" data-service-setting="${esc(item.setting)}" data-service-group="${esc(group)}" aria-label="${esc(item.setting)}">`
           : `<code>${esc(value)}</code>`;
@@ -3551,6 +3581,9 @@ function mailActions(item) {
   const id = esc(item.id);
   const off = mailbox.busy ? ' disabled' : '';
   const status = `<p class="mail-status" role="status">${esc(mailbox.status[item.id] || '')}</p>`;
+  if (item.triage?.type === 'project-open') {
+    return `<div class="mail-actions mail-triage-actions"><div class="mail-buttons"><button type="button" data-triage-item="${id}" data-triage-decision="accept"${off}>Accept</button><button type="button" class="mail-decline" data-triage-item="${id}" data-triage-decision="deny"${off}>Deny</button></div>${status}</div>`;
+  }
   const attachContext = `mail-item:${item.id}`;
   const attachments = attachmentStrip(attachContext);
   const attach = attachmentPickerHtml(attachContext, appIcon, esc, { disabled: mailbox.busy });
@@ -3570,6 +3603,10 @@ function mailActions(item) {
 function mailDoneLine(item) {
   const submitted = reviewDoneLineHtml(item, { esc, clock, state: mailDeliveryState });
   if (submitted) return submitted;
+  if (item.triage?.type === 'project-open' && item.triage.decision) {
+    const text = item.triage.decision === 'accept' ? 'Project opened' : 'Proposal declined';
+    return `<p class="sub mail-answer">${text} · ${esc(clock(item.closedAt))}</p>`;
+  }
   if (item.answer) {
     const state = mailDeliveryState(item.answer);
     const replied = item.answer.repliedAt ? ` · replied ${clock(item.answer.repliedAt)}` : '';
@@ -3599,9 +3636,10 @@ function mailRowSender(s, row) {
 
 function mailRowsHtml(s, rows, folder) {
   const current = mailbox.currentConversation ? `${mailbox.currentConversation.thread}:${mailbox.currentConversation.id}` : '';
-  const selectable = folder === 'needs-you';
   return rows.map((row) => mailRowHtml(row, {
-    esc, clock: (iso) => listTime(iso), current, selectable, selected: mailSelected, icon: folder === 'needs-you' || folder === 'inbox' ? appIcon : null,
+    esc, clock: (iso) => listTime(iso), current,
+    selectable: (item) => folder === 'needs-you' && item.triage?.type !== 'project-open',
+    selected: mailSelected, icon: folder === 'needs-you' || folder === 'inbox' ? appIcon : null,
     avatar: (thread) => avatarSlot(thread, { title: avatarTitle(thread), size: 36 }),
     sender: (x) => mailRowSender(s, x),
     state: folder === 'sent' ? (item) => `${mailDeliveryState(item)}${item.repliedAt ? ` · replied ${clock(item.repliedAt)}` : ''}` : null,
@@ -3725,12 +3763,13 @@ function mailboxView(s) {
   const items = mailbox[MAIL_FOLDER_KEYS[folder]] || [];
   const counts = { 'needs-you': mailbox.needsYou.length, inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
   const label = MAIL_FOLDER_LABEL[folder];
-  const allSelected = mailbox.needsYou.length > 0 && mailbox.needsYou.every((item) => mailSelected.has(item.id));
-  const selected = mailbox.needsYou.filter((item) => mailSelected.has(item.id)).length;
+  const dismissableItems = mailbox.needsYou.filter((item) => item.triage?.type !== 'project-open');
+  const allSelected = dismissableItems.length > 0 && dismissableItems.every((item) => mailSelected.has(item.id));
+  const selected = dismissableItems.filter((item) => mailSelected.has(item.id)).length;
   // On a phone a selection shows a bar at the bottom edge, in the place of the New button. The top row then does not show.
   const selecting = appPhone() && folder === 'needs-you' && selected > 0;
   const dismissSelected = appPhone() ? '' : `<button type="button" data-mail-dismiss-selected ${mailbox.busy || !selected ? 'disabled' : ''}>Dismiss selected${selected ? ` (${selected})` : ''}</button>`;
-  const bulk = folder === 'needs-you' && mailbox.needsYou.length && !selecting ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all Needs-you items"> Select all</label>${dismissSelected}</div>` : '';
+  const bulk = folder === 'needs-you' && dismissableItems.length && !selecting ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all dismissible Needs-you items"> Select all</label>${dismissSelected}</div>` : '';
   let list;
   if (!mailbox.loaded) list = '<div class="mail-empty"><p>Loading…</p></div>';
   else if (!items.length) list = mailEmpty(folder);
@@ -3743,7 +3782,7 @@ function mailboxView(s) {
     + `<section class="mail-list-pane${selecting ? ' selecting' : ''}" data-key="mail-list" aria-label="${esc(label)}"><div class="app-bar mail-list-bar">${appMenuButton(s, 'mailbox')}<h1>${esc(label)}${mailbox.loaded ? `<span class="app-bar-count num">${items.length}</span>` : ''}</h1>${appBarIcons(s, 'mailbox')}</div>`
     + `<p class="mail-notice" role="status"${mailbox.error || mailbox.notice ? '' : ' hidden'}>${esc(mailbox.error || mailbox.notice)}</p>${bulk}`
     + `<div class="mail-list-scroll" data-key="mail-list-scroll">${list}${fleetData?.factories?.some((factory) => factory.remote) ? `<details class="fleet-mailbox-details"><summary>Fleet Mailbox</summary>${fleetMailbox(fleetData)}</details>` : ''}</div>`
-    + (selecting ? mailSelectionBarHtml({ selected, total: mailbox.needsYou.length, busy: mailbox.busy, esc, icon: appIcon }) : '')
+    + (selecting ? mailSelectionBarHtml({ selected, total: dismissableItems.length, busy: mailbox.busy, esc, icon: appIcon }) : '')
     + (selecting ? '' : `<button type="button" class="mail-fab" data-mail-compose-open${mailbox.busy ? ' disabled' : ''}>${appIcon('pencil')}<span>New</span></button>`) + '</section>'
     + `<section class="mail-conversation-pane" data-key="mail-thread-pane"${open ? '' : ' hidden'}>${conversationPanel}</section></div>`
     + appDrawer(s, 'mailbox', mailFolderLinks(folder, counts, 'app-drawer-folder'));
@@ -3933,6 +3972,23 @@ async function mailSend(item, text, question) {
   if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
 }
 
+async function mailTriageDecision(item, decision) {
+  if (mailbox.busy) return;
+  mailbox.busy = true;
+  mailbox.status[item.id] = decision === 'accept' ? 'Opening project…' : 'Closing proposal…';
+  mailbox.notice = '';
+  render();
+  try {
+    const result = await postJson(`/api/project-register/triage/${encodeURIComponent(item.id)}`, { decision });
+    delete mailbox.status[item.id];
+    mailbox.notice = decision === 'accept' ? `Opened ${result.slug}.` : `Declined the proposal for ${result.slug}.`;
+  } catch (error) {
+    mailbox.status[item.id] = error.message;
+  } finally { mailbox.busy = false; }
+  await loadMailbox();
+  if (mailbox.currentConversation) await loadMailboxConversation(mailbox.currentConversation.thread, mailbox.currentConversation.id);
+}
+
 // Close an item that the Owner answered in another place. The route is the dismiss route with answeredElsewhere. No message goes to the agent.
 async function mailCloseElsewhere(item) {
   if (mailbox.busy) return;
@@ -4014,7 +4070,7 @@ document.addEventListener('change', (e) => {
     }
     render();
   } else if (e.target.matches?.('[data-mail-select-all]')) {
-    if (e.target.checked) for (const item of mailbox.needsYou) mailSelected.add(item.id);
+    if (e.target.checked) for (const item of mailbox.needsYou.filter((record) => record.triage?.type !== 'project-open')) mailSelected.add(item.id);
     else mailSelected.clear();
     render();
   } else if (e.target.matches?.('#mail-compose-recipient')) {
@@ -4082,12 +4138,18 @@ document.addEventListener('click', (e) => {
     if (item) mailDismiss([item]);
     return;
   }
+  const triage = e.target.closest?.('[data-triage-decision]');
+  if (triage) {
+    const item = mailFind(triage.dataset.triageItem);
+    if (item) mailTriageDecision(item, triage.dataset.triageDecision);
+    return;
+  }
   if (e.target.closest?.('[data-mail-select-clear]')) { mailSelected.clear(); render(); return; }
   // The note button opens the note field of the phone action bar and moves the focus into it.
   const note = e.target.closest?.('[data-mail-note]');
   if (note) { mailNoteOpen.add(note.dataset.mailNote); render(); document.getElementById(`mail-text-${note.dataset.mailNote}`)?.focus(); return; }
   if (e.target.closest?.('[data-mail-dismiss-selected]')) {
-    mailDismiss(mailbox.needsYou.filter((item) => mailSelected.has(item.id)));
+    mailDismiss(mailbox.needsYou.filter((item) => item.triage?.type !== 'project-open' && mailSelected.has(item.id)));
     return;
   }
   const choice = e.target.closest?.('[data-mail-choice]');
@@ -5281,16 +5343,123 @@ function orgMotion(s) {
   }
 }
 
-function projectsView(s, slug) {
-  // A link to a published project opens it also when its workspace is closed, for example a link from the Board.
-  const selected = slug && (projectSlugs(s).includes(slug) || (s.projects || []).some((p) => p.slug === slug)) ? slug : defaultProject(s);
-  return [
-    '<header class="page-intro"><div><h1>Projects</h1><p>Select a project to inspect its status, work, agents, and project lead handover.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>',
-    allocationSummary(s),
-    projectSelector(s, selected),
-    selected ? `<div class="project-detail" id="project-detail">${project(s, selected)}</div>` : '',
-  ].join('');
+async function refreshProjectRegister() {
+  if (projectRegisterLoading) return;
+  projectRegisterLoading = true;
+  try {
+    const response = await fetch('/api/project-register');
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The project register did not load.');
+    projectRegisterData = result;
+    projectRegisterError = '';
+  } catch (error) {
+    projectRegisterError = error.message;
+  } finally {
+    projectRegisterLoadedAt = Date.now();
+    projectRegisterLoading = false;
+    lastRender = '';
+    render();
+  }
 }
+
+function reconcileProjectRegisterSelection() {
+  const visible = reconcileProjectSelection(projectRegisterData?.projects || [], projectRegisterPrefs, [...projectRegisterSelected]);
+  projectRegisterSelected.clear();
+  for (const slug of visible) projectRegisterSelected.add(slug);
+  return visible;
+}
+
+async function runProjectRegisterActions(action, slugs) {
+  const unique = [...new Set(slugs)].filter((slug) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug));
+  if (!unique.length) return;
+  projectRegisterFeedback = `${action} in progress.`;
+  lastRender = '';
+  render();
+  const results = [];
+  for (const slug of unique) {
+    try {
+      const response = await fetch(`/api/project-register/${encodeURIComponent(slug)}/action`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Could not ${action} the project.`);
+      results.push(`${slug}: ${action} complete`);
+    } catch (error) {
+      results.push(`${slug}: ${error.message}`);
+    }
+  }
+  projectRegisterSelected.clear();
+  projectRegisterFeedback = results.join('. ');
+  await refreshProjectRegister();
+}
+
+function projectsView(s, slug) {
+  const register = projectRegisterData;
+  const canWrite = Boolean(register && !register.readOnly);
+  const header = '<header class="page-intro"><div><h1>Projects</h1><p>Keep the projects in focus visible. Parked projects keep their work and return when you open them.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>';
+  // A project link keeps the existing status page available beside the register.
+  if (slug && (projectSlugs(s).includes(slug) || (s.projects || []).some((item) => item.slug === slug))) {
+    return `${header}<p><a class="quiet-link" href="/projects">Back to all projects</a></p>${project(s, slug)}`;
+  }
+  if (!register && !projectRegisterLoading && !projectRegisterError) return `${header}<p class="register-loading" role="status">Loading the project register…</p>`;
+  const message = projectRegisterError || (projectRegisterLoading ? 'Loading the project register…' : '');
+  return `${header}${message ? `<p class="register-loading" role="status">${esc(message)}</p>` : ''}${renderProjectRegister(register?.projects || [], {
+    filters: projectRegisterPrefs,
+    selected: [...projectRegisterSelected],
+    folds: projectRegisterPrefs.folds,
+    canWrite,
+    feedback: projectRegisterFeedback,
+  })}`;
+}
+
+document.addEventListener('input', (event) => {
+  if (!event.target.matches?.('[data-register-search]')) return;
+  projectRegisterPrefs.query = event.target.value.slice(0, 200);
+  reconcileProjectRegisterSelection();
+  saveProjectRegisterPrefs();
+  lastRender = '';
+  render();
+});
+
+document.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target.matches?.('[data-register-group]')) projectRegisterPrefs.group = target.value;
+  else if (target.matches?.('[data-register-state]')) projectRegisterPrefs.state = target.value;
+  else if (target.matches?.('[data-register-sort]')) projectRegisterPrefs.sort = target.value;
+  else if (target.matches?.('[data-register-select]')) {
+    if (target.checked) projectRegisterSelected.add(target.dataset.registerSelect);
+    else projectRegisterSelected.delete(target.dataset.registerSelect);
+  } else return;
+  if (!target.matches?.('[data-register-select]')) reconcileProjectRegisterSelection();
+  saveProjectRegisterPrefs();
+  lastRender = '';
+  render();
+});
+
+document.addEventListener('click', (event) => {
+  const filterDone = event.target.closest?.('[data-register-filter-done]');
+  if (filterDone) {
+    filterDone.closest('details')?.removeAttribute('open');
+    return;
+  }
+  const pin = event.target.closest?.('[data-register-pin]');
+  if (pin) {
+    event.preventDefault();
+    void runProjectRegisterActions(pin.getAttribute('aria-pressed') === 'true' ? 'unpin' : 'pin', [pin.dataset.registerPin]);
+    return;
+  }
+  const action = event.target.closest?.('[data-register-action]');
+  if (action) {
+    event.preventDefault();
+    void runProjectRegisterActions(action.dataset.registerAction, [action.dataset.registerSlug]);
+    return;
+  }
+  const bulk = event.target.closest?.('[data-register-bulk]');
+  if (bulk) {
+    event.preventDefault();
+    void runProjectRegisterActions(bulk.dataset.registerBulk, reconcileProjectRegisterSelection());
+  }
+});
 
 // ---------- New project wizard ----------
 // A dialog outside the page render, so a page render never touches the typed text. The state, the calls, and the polling are in
@@ -6638,7 +6807,11 @@ const HELP = {
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. A missing usage reader or login shows the reading as unknown with its reason; it is not a failure and raises no warning. Each provider row in Settings names the source of the last reading and its age. A factory reads each usage limit with the pinned CodexBar CLI first, the same code path as the Mac. It falls back to the own readers when CodexBar is missing, exits with an error, returns an error row, or times out. The own Codex reading comes from <code>codex app-server</code> and the Codex login of the factory. The reading is unknown when Codex is not installed, has no login, or has an API key login with no usage limit. A timeout, a failed read, a changed protocol, or an app server that exited is a probe failure, and the last good reading stays as stale. OpenCode Go reads its local cost history from CodexBar. The account windows need an OpenCode API key, so until the key exists the reason is <i>account windows need an API key</i>. The row also shows the reset time that you set by hand in <b>OpenCode Go reset time</b> and a local estimate labeled <i>used in this factory (local estimate)</i>. The estimate shows tokens and cost from <code>opencode stats</code> for the days in <b>OpenCode Go estimate days</b>. It is never a percent and never a usage limit. The Fleet page shows it in the card of the factory. The Claude reading comes from the status line helper of the factory and exists only while a Claude session runs there. Turn the helper off with <code>factories.claudeUsageHelper</code> in Settings. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
-    <p>Select a project card. The detail below it shows what the project lead published and what runs now.</p>
+    <p>The Projects page is the register of the projects you track. Search by title, area, client tag, or next action. Filter by area or state, and sort by last activity, priority, or title. Groups use areas. A client appears as a tag.</p>
+    <p>Open projects show first. Parked and archived projects stay in closed folds. Pin up to three open projects to keep them in focus. Select rows to open, park, or archive several projects. Select a project title to see its published status and live work.</p>
+    <p><b>Open</b> starts the project lead from the current project files and restores the workspace. <b>Park</b> closes the project's Herdr workspace after the safety checks. It keeps the repository, project status, Mailbox, and other state. Park is different from pause: a paused project keeps its panes. The read-only preview disables register actions.</p>
+    <p>In Settings, set the open project cap and optional GitHub triage. Triage starts off. When it is on, the service reads the selected issue label for parked projects and adds one proposal to the Mailbox when a slot is free. Select <b>Accept</b> to open the project, or <b>Deny</b> to wait 24 hours before another proposal for that project. Keep a project's <code>autoOpen</code> off to require Accept.</p>
+    <p>The register uses a GitHub remote as the issue source when you add a project. Use <code>--issue-repo OWNER/REPO</code> to set another source, or <code>--issue-clear</code> to remove one. Use <code>--issue-label LABEL</code> to set a label for that source; use <code>--issue-repo</code> when the project has no source yet.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>
     <h3>Set goal</h3><p><b>Set goal</b> gives the running project lead of a project a new <code>/goal</code>. A dialog shows the text, which starts as the <b>Default project lead goal</b> from Settings. Edit it if you need to. The limit is 2000 characters. The command waits until the pane of the project lead is idle, for up to 10 minutes. It waits for 2 minutes when the input box holds unsent text or a dialog is open. It sends nothing while the agent works, a dialog is open, or the input box holds typed text. A dim suggestion in the input box does not block it. A failed job adds one Mailbox item. <b>Cancel</b> stops a job that waits. <b>Set goal</b> is also allowed for a paused or stood down project. After a restart of the service, a job that ran shows <b>Interrupted</b>. The status line shows <b>Waiting for an idle pane</b>, <b>Sending the command</b>, <b>Checking that the pane shows the goal</b>, <b>Goal active</b>, or <b>Goal not set</b> with the reason.</p>
     <h3>Now</h3><p>The project lead line shows the agent app, the pane, and the state of the project lead. Select it to open the handover form. A needed or prepared handover shows the full continuity section in its place. The cards below show the decisions that wait for you, the status issues, the running workers with their state and task, the work that waits to merge, and the next task. A card without content does not show. Select a task in a card to select it on the board.</p>
@@ -6673,6 +6846,7 @@ const HELP = {
     <p>The data comes from the project's status file. When a section is missing, the project lead has not published those fields.</p>`],
   mailbox: ['Mailbox', `
     <p>Use the folders to read messages from the Boss and project leads. The page groups each conversation by its project or the Boss and by its reply chain.</p>
+    <p>A project triage item has <b>Accept</b> and <b>Deny</b>. Accept opens the parked project and starts its project lead. Deny closes the proposal and waits 24 hours before triage can propose that project again.</p>
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
     <p>The folder stays in the page address. The page remembers your last folder. When Needs you has items, it opens that folder by default. When it is empty, the page says <b>Nothing needs you</b> and links to the Inbox.</p>
     <h3>Rows</h3><p>Each row is one conversation. It shows the project or the Boss, the message count, the action tag, the subject, a preview, and the time. An unread row is bold and has a dot. Select a row to open the conversation. Select one or more check boxes in Needs you to dismiss items without an answer. The page asks you to confirm. Dismissal sends nothing. Select <b>Close as answered elsewhere</b> (the check-mark button on a row) when you answered the item in another place. The item moves to Done and no message goes out.</p><p>An item also closes when the project publishes a status in which its task no longer waits on you. When you write to the same thread after an item arrived, the item asks <b>Close this item?</b>. Select <b>Keep open</b> to hide the question for that item.</p>
@@ -7860,6 +8034,7 @@ function render(force = false) {
     requestAnimationFrame(() => { centerGraphOn(task.slug, task.id); revealCard(task.slug, task.id, 'center'); });
   }
   if (['fleet', 'mailbox'].includes(route) && !fleetData && !fleetLoading) void refreshFleet();
+  if (route === 'projects' && !projectRegisterLoading && Date.now() - projectRegisterLoadedAt > 30000) void refreshProjectRegister();
   const fleetForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-settings-form]');
   const fleetDraft = fleetForm && fleetSettings ? { ...fleetSettings, ...fleetSettingsFromForm(fleetForm, fleetSettings) } : fleetSettings;
   const sharesForm = route === 'fleet' && lastRoute === route && $app.querySelector('[data-fleet-shares-form]');
@@ -7936,6 +8111,10 @@ document.addEventListener('toggle', (e) => {
   if (e.target.dataset?.browserManage) {
     if (e.target.open) browserManageOpen.add(e.target.dataset.browserManage);
     else browserManageOpen.delete(e.target.dataset.browserManage);
+  }
+  if (e.target.dataset?.registerFold) {
+    projectRegisterPrefs.folds[e.target.dataset.registerFold] = e.target.open;
+    saveProjectRegisterPrefs();
   }
   if (e.target.dataset?.projectFold) setFoldOpen(e.target.dataset.projectFold, e.target.dataset.foldKey, e.target.open);
   if (e.target.open && e.target.querySelector?.('[data-dep-stage]')) syncDepGraphs();

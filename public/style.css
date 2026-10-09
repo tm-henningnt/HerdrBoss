@@ -214,6 +214,48 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .allocation-summary > a:hover { color: var(--accent); }
 @media (max-width: 620px) { .allocation-summary { flex-wrap: wrap; gap: 6px; } .allocation-summary .allocation-bar { flex-basis: 100%; } }
 .project-detail { display: grid; gap: 20px; padding-top: 8px; border-top: 1px solid var(--line); }
+.project-register { display: grid; gap: 16px; min-width: 0; }
+.register-toolbar { display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(0, 2fr); align-items: end; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.register-toolbar label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 650; }
+.register-toolbar input, .register-toolbar select { width: 100%; min-height: 40px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; background: var(--panel-2); color: var(--text); font: inherit; }
+.register-desktop-filters { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 8px; }
+.register-filter-sheet { display: none; }
+.register-focus, .register-state-section { display: grid; gap: 9px; min-width: 0; }
+.register-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+.register-section-title h2 { margin: 0; color: var(--text); font-size: 17px; }
+.register-focus-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.register-focus-card { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); color: var(--text); text-decoration: none; }
+.register-focus-card:hover { border-color: var(--accent); }
+.register-focus-card strong, .register-focus-card span, .register-focus-card small, .register-focus-card time { overflow-wrap: anywhere; }
+.register-focus-card span, .register-focus-card small, .register-focus-card time { color: var(--muted); }
+.register-focus-card small, .register-focus-card time { font-size: 12px; }
+.register-bulk { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--muted); }
+.register-bulk > span { flex: 1; min-width: 0; font-size: 12px; }
+.register-bulk button { min-height: 36px; }
+.register-list { display: grid; gap: 7px; min-width: 0; }
+.register-row { display: grid; grid-template-columns: 30px minmax(130px, 1.35fr) minmax(110px, 1fr) minmax(90px, .7fr) minmax(72px, .55fr) minmax(110px, 1.2fr) minmax(140px, 1fr) auto; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.register-row > * { min-width: 0; }
+.register-select { display: grid; place-items: center; }
+.register-select input { width: 18px; height: 18px; accent-color: var(--accent); }
+.register-project-name { display: grid; gap: 2px; }
+.register-project-name a { color: var(--text); font-weight: 700; overflow-wrap: anywhere; }
+.register-slug, .register-factory, .register-priority, .register-activity { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.register-group { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.register-area, .register-client-tag { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 7px; border-radius: 99px; background: var(--panel-2); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.register-client-tag { border: 1px solid var(--line); }
+.register-priority { text-transform: capitalize; }
+.register-priority.priority-high { color: var(--crit); }
+.register-priority.priority-low { color: var(--faint); }
+.register-next-action { font-size: 12px; overflow-wrap: anywhere; }
+.register-row-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.register-row-actions button, .register-pin { min-height: 34px; }
+.register-pin[aria-pressed="true"] { color: var(--accent); }
+.register-fold { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.register-fold > summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 12px; cursor: pointer; font-weight: 700; }
+.register-fold > summary span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.register-fold > .register-list { padding: 0 10px 10px; }
+.register-empty, .register-loading { color: var(--muted); font-size: 13px; }
+.register-feedback { min-height: 1em; margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .seg { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--track); gap: 2px; }
 .seg i { display: block; height: 100%; }
 .c-todo { background: var(--faint); } .c-doing { background: var(--info); } .c-review { background: var(--accent); } .c-blocked { background: var(--crit); } .c-done { background: var(--ok); }
@@ -733,6 +775,27 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
   .project-selector p, .project-selector .win-foot, .project-selector .legend { display: none; }
   .project-selector .proj-head b { font-size: 14px; }
   .project-selector .seg { height: 6px; }
+  .register-toolbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; }
+  .register-search { grid-column: 1; }
+  .register-desktop-filters { display: none; }
+  .register-filter-sheet { display: block; align-self: end; }
+  .register-filter-sheet > summary { min-width: 78px; min-height: 40px; display: grid; place-items: center; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 650; list-style: none; }
+  .register-filter-sheet > summary::-webkit-details-marker { display: none; }
+  .register-filter-sheet[open]::before { content: ""; position: fixed; inset: 0; z-index: 29; background: rgb(0 0 0 / 38%); }
+  .register-filter-options { position: fixed; z-index: 30; inset: auto 12px max(12px, env(safe-area-inset-bottom)); display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 14px 45px rgb(0 0 0 / 28%); }
+  .register-filter-options button { min-height: 44px; }
+  .register-focus-cards { grid-template-columns: 1fr; }
+  .register-bulk.is-selected { position: fixed; z-index: 15; inset: auto 12px max(12px, env(safe-area-inset-bottom)); flex-wrap: wrap; box-shadow: 0 8px 24px rgb(0 0 0 / 18%); }
+  .register-bulk.is-selected > span { flex-basis: 100%; }
+  .register-bulk.is-selected button { flex: 1; min-height: 44px; }
+  .register-row { grid-template-columns: 28px minmax(0, 1fr); grid-template-areas: "select name" "select group" "select next" "select actions"; align-items: start; gap: 6px 9px; padding: 12px; }
+  .register-select { grid-area: select; padding-top: 3px; }
+  .register-project-name { grid-area: name; }
+  .register-group { grid-area: group; }
+  .register-next-action { grid-area: next; color: var(--muted); }
+  .register-factory, .register-priority, .register-activity { display: none; }
+  .register-row-actions { grid-area: actions; justify-content: flex-start; padding-top: 2px; }
+  .register-row-actions button, .register-pin { min-height: 44px; }
 }
 
 @media (pointer: coarse) and (max-height: 500px) {

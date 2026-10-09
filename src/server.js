@@ -48,6 +48,8 @@ import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { listAgentPairs, readAgentMessages, readAgentMetadata } from './agent-messages.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
+import { createProjectRegisterApi } from './project-register-api.js';
+import { decideProjectRegisterTriage } from './project-register-triage.js';
 import { BODY_LIMIT as HOST_GUIDE_BODY_LIMIT, createHostGuideApi } from './host-guide.js';
 import { createGoalApi } from './goal-api.js';
 import { createReviewApi } from './review-api.js';
@@ -267,6 +269,25 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   }
   const messageStore = openMessageStore({ dir: DATA_DIR });
   const projectNewApi = createProjectNewApi({ dataDir: DATA_DIR, log: (level, text) => engine.log(level, text), ...projectNew });
+  const runRegisterLifecycle = async (action, args) => {
+    const { projectLifecycleCommand } = await import('./project-lifecycle.js');
+    return projectLifecycleCommand(action, args, {
+      env: {},
+      herdr: (herdrArgs, options) => engine.herdrRunner('herdr', herdrArgs, options),
+      dataDir: DATA_DIR,
+      registerSettings: { cap: engine.cfg.register?.cap, capCountsPinned: engine.cfg.register?.capCountsPinned ?? false },
+      auditBy: 'owner-page',
+      log: () => {},
+    });
+  };
+  const projectRegisterApi = createProjectRegisterApi({
+    dataDir: DATA_DIR,
+    readOnly: readOnlyPreview,
+    runLifecycle: runRegisterLifecycle,
+    runTriageDecision: (itemId, decision) => decideProjectRegisterTriage({
+      dataDir: DATA_DIR, itemId, decision, runLifecycle: runRegisterLifecycle,
+    }),
+  });
   const hostGuideApi = createHostGuideApi({ dataDir: DATA_DIR, ...hostGuide });
   // The goal routes use the Herdr runner of the engine. A test replaces run.
   const goalApi = createGoalApi({
@@ -488,6 +509,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       if (projectNewRoute) {
         const routed = await projectNewApi.handle(req.method, p, () => projectNewBody(req));
         return send(res, routed.status, routed.body);
+      }
+      if (p === '/api/project-register' || p.startsWith('/api/project-register/')) {
+        let body;
+        if (req.method === 'POST') {
+          try { body = await jsonBody(req); }
+          catch (error) { return send(res, 400, { ok: false, error: error.message }); }
+        }
+        const routed = await projectRegisterApi.handle(req.method, p, body);
+        if (routed) return send(res, routed.status, routed.body);
       }
       // A change of the host guide and each check are actions: only the owner may run them.
       if (hostGuideRoute) {

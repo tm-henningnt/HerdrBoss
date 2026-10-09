@@ -66,6 +66,32 @@ test('a row names the sender, the count, the action tag, the subject, the time, 
   assert.doesNotMatch(mailRowHtml(row, helpers), /mail-select/, 'a folder without bulk select has no check box');
 });
 
+test('a project triage row cannot be dismissed through selection or close-as-answered-elsewhere', () => {
+  const proposal = item('m-triage', {
+    kind: 'report', title: 'Open project pine-api?', action: 'approve',
+    triage: { type: 'project-open' },
+  });
+  const [row] = groupMailRows([proposal]);
+  const html = mailRowHtml(row, {
+    ...helpers,
+    selectable: (candidate) => candidate.triage?.type !== 'project-open',
+    icon: () => '<svg></svg>',
+  });
+  assert.doesNotMatch(html, /data-mail-select|data-mail-elsewhere/);
+});
+
+test('a completed triage row explains whether the project opened or the proposal was declined', () => {
+  for (const [decision, text] of [['accept', 'Project opened'], ['deny', 'Proposal declined']]) {
+    const proposal = item(`m-${decision}`, {
+      kind: 'report', title: 'Open project pine-api?', action: 'approve', closedAt: at(1), closedBy: 'owner',
+      triage: { type: 'project-open', decision },
+    });
+    const [row] = groupMailRows([proposal]);
+    const html = mailRowHtml(row, helpers);
+    assert.match(html, new RegExp(`<span class="mail-preview">${text}<\\/span>`));
+  }
+});
+
 function setup(html) {
   globalThis.document = createDocument();
   return document.html(html);
