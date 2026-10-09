@@ -1944,7 +1944,7 @@ test('a task is actionable only when every blocker is done in the same project',
   assert.deepEqual(nudgeAlerts(nudgeFixture({ tasks: explicitly }), { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } }), [], 'a blocked task is not actionable');
 });
 
-test('the nudge skips an epic card and a task that waits on the Owner', () => {
+test('the nudge skips an epic card, and an Owner wait holds the ready-work notice back', () => {
   const since = { 'w1:p1': { since: NUDGE_NOW - 20 * 60000 } };
   const epic = nudgeFixture({ tasks: [
     { id: '80', title: 'Release 1.0', status: 'todo', kind: 'epic' },
@@ -1954,13 +1954,15 @@ test('the nudge skips an epic card and a task that waits on the Owner', () => {
   const epicOnly = nudgeFixture({ tasks: [{ id: '80', title: 'Release 1.0', status: 'todo', kind: 'epic' }] });
   assert.deepEqual(nudgeAlerts(epicOnly, since), [], 'an epic card alone sends no notice');
 
+  // K34: an Owner wait is open work. The ready-work notice holds back and the open-work notice names the wait.
   const owner = nudgeFixture({ tasks: [
     { id: '76', title: 'Choose the export format', status: 'todo', waitingOn: 'owner', ask: 'PNG or SVG?', mailboxId: 'm1727' },
     { id: '74', title: 'Parse event log', status: 'todo' },
   ] });
-  assert.match(nudgeAlerts(owner, since)[0].key, /:74$/, 'an Owner wait is skipped and the next task is named');
+  assert.deepEqual(nudgeAlerts(owner, since).filter((a) => a.key.startsWith('nudge:idle:')), [], 'an Owner wait holds the ready-work notice back');
+  assert.match(nudgeAlerts(owner, since).find((a) => a.key.startsWith('nudge:idle-open:')).text, /waiting for the Owner: Choose the export format/);
   const ownerOnly = nudgeFixture({ tasks: [{ id: '76', title: 'Choose the export format', status: 'todo', waitingOn: 'owner', ask: 'PNG or SVG?', mailboxId: 'm1727' }] });
-  assert.deepEqual(nudgeAlerts(ownerOnly, since), [], 'an Owner wait alone sends no notice');
+  assert.match(nudgeAlerts(ownerOnly, since).find((a) => a.key.startsWith('nudge:idle-open:')).text, /waiting for the Owner: Choose the export format/, 'an Owner wait alone fires the open-work notice');
 
   const normal = nudgeAlerts(nudgeFixture({ tasks: [{ id: '74', title: 'Parse event log', status: 'todo' }] }), since);
   assert.equal(normal.length, 1, 'a normal ready task still notifies');

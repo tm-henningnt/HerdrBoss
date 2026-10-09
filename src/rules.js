@@ -16,6 +16,8 @@ export const STALE_STATUS_NOTICE_INTERVAL_MINUTES = 60;
 // The published text fields that must change at each publish. See staleTextStatuses().
 export const STALE_TEXT_FIELDS = ['phase', 'summary'];
 export const STALE_TEXT_DEFAULT_MINUTES = 360;
+// An open card that git already finished and whose time did not change for this many minutes looks stale.
+export const STALE_CARD_MINUTES = 360;
 const MINUTE_MS = 60000;
 export const providerName = (p) => PROVIDER_NAMES[p] || p;
 
@@ -89,26 +91,72 @@ function actionableTask(tasks, groups) {
   return best?.task || null;
 }
 
+// A done card. The published status decides first; a derived state of done also counts.
+function doneCard(task) {
+  return task?.state === 'done' || (task?.publishedStatus ?? task?.status) === 'done';
+}
+
+const OPEN_CARD_STATUS = new Set(['todo', 'ready', 'doing', 'blocked']);
+
+// An open card that git already finished. Its published status is open (todo, ready, doing, or blocked),
+// while the computed state (task.state or task.computedState, from git and the worker records) is review or
+// done. No live worker holds it, and its change time is older than STALE_CARD_MINUTES. The change time is
+// the fact time (task.source.at) when present, else the card `updated` time, else the published status time.
+// A card that diverges is exactly this case, so it is not excluded. A card in a held group or an epic card
+// is not actionable and never looks stale. A published `review` card keeps the pendingReview text instead.
+function staleCard(published, snap, entry, tasks, now) {
+  const held = heldGroupIds(published.groups);
+  const live = snap.taskWorkers?.[entry.slug] || [];
+  const hasLiveWorker = (id) => id != null && live.some((worker) => worker?.phase === 'live' && String(worker.taskId) === String(id));
+  const projectMs = Date.parse(published.publishedAt ?? published.updated);
+  const limitMs = STALE_CARD_MINUTES * MINUTE_MS;
+  return tasks.find((task) => {
+    if (!task || task.kind === 'epic' || held.has(task.group)) return false;
+    const publishedStatus = task.publishedStatus ?? task.status ?? 'todo';
+    if (!OPEN_CARD_STATUS.has(publishedStatus)) return false;
+    const computed = task.computedState ?? task.state;
+    if (computed !== 'review' && computed !== 'done') return false;
+    if (hasLiveWorker(task.id)) return false;
+    const sourceMs = Date.parse(task.source?.at);
+    const updatedMs = Date.parse(task.updated);
+    const since = Number.isFinite(sourceMs) ? sourceMs : Number.isFinite(updatedMs) ? updatedMs : (Number.isFinite(projectMs) ? projectMs : null);
+    return since != null && now - since > limitMs;
+  }) || null;
+}
+
+// A card that waits for the Owner: an Owner-wait flag, or a link to an open Mailbox item (`mailboxId`).
+// This mirrors waitsForOwner() in public/board.js. The card title names the item. A done card never waits.
+function ownerWaitTask(tasks, holds) {
+  return tasks.find((task) => task && holds(task) && !doneCard(task)
+    && (task.waitingOn === 'owner' || (typeof task.mailboxId === 'string' && task.mailboxId.trim().length > 0))) || null;
+}
+
 // The open work that holds the idle-orchestrator notice back. An open review pack, a task in status
-// `review`, a `spec` task in `doing` with no live worker, and a published phase or summary text that
-// kept the same value for staleTextMinutes all mean that the orchestrator waits instead of starting work.
-// A held group and an epic card do not hold the notice back: the ready-work picker skips them too.
-// A null reviewPacks value means that the pack reader failed, so the pack state is unknown and the
-// notice holds back. An absent value means that the caller has no pack data, which is an empty list.
+// `review`, a `spec` task in `doing` with no live worker, a published phase or summary text that kept the
+// same value for staleTextMinutes, an open card that git already finished, and a wait for the Owner all
+// mean that the orchestrator waits instead of starting work. A held group and an epic card do not hold the
+// notice back: the ready-work picker skips them too. A null reviewPacks value means that the pack reader
+// failed, so the pack state is unknown and the notice holds back. An absent value means that the caller has
+// no pack data, which is an empty list.
 function idleOpenWork(snap, entry, published, now, cfg) {
   const packsUnknown = snap.reviewPacks === null;
   const openPacks = Array.isArray(snap.reviewPacks) ? snap.reviewPacks.filter((pack) => pack.slug === entry.slug && pack.state === 'open') : [];
   const tasks = Array.isArray(published.tasks) ? published.tasks : [];
   const held = heldGroupIds(published.groups);
   const holds = (task) => !held.has(task.group) && task.kind !== 'epic';
+  const stale = staleCard(published, snap, entry, tasks, now);
   const pendingReview = tasks.find((task) => task?.status === 'review' && holds(task));
   const live = snap.taskWorkers?.[entry.slug] || [];
   const doingSpec = tasks.find((task) => task?.status === 'doing' && task?.kind === 'spec' && holds(task)
     && !live.some((worker) => worker?.phase === 'live' && String(worker.taskId) === String(task.id)));
   const limitMs = (Number.isFinite(cfg?.staleTextMinutes) ? cfg.staleTextMinutes : STALE_TEXT_DEFAULT_MINUTES) * MINUTE_MS;
-  const stale = Object.entries(snap.staleText?.[entry.slug] || {})
+  const staleText = Object.entries(snap.staleText?.[entry.slug] || {})
     .find(([, field]) => Number.isFinite(field?.since) && now - field.since >= limitMs);
-  return { packsUnknown, openPacks, pendingReview, doingSpec, stale };
+  const ownerCard = ownerWaitTask(tasks, holds);
+  const ownerWait = ownerCard
+    ? { title: String(ownerCard.title || ownerCard.ask || ownerCard.id || '').trim() || 'a card' }
+    : null;
+  return { packsUnknown, openPacks, pendingReview, doingSpec, stale: staleText, staleCard: stale, ownerWait };
 }
 
 // One scoped notice per project: an orchestrator that stayed idle while its published status still has ready work.
@@ -136,13 +184,15 @@ function idleOrchestratorNudges(snap, paneSince = {}, now = Date.now(), policy =
     const open = idleOpenWork(snap, entry, published, now, cfg);
     // The engine logs the reason when the pack reader fails. Do not fire the ready-work notice then.
     if (open.packsUnknown) continue;
-    if (open.openPacks.length || open.pendingReview || open.doingSpec || open.stale) {
+    if (open.openPacks.length || open.pendingReview || open.doingSpec || open.stale || open.staleCard || open.ownerWait) {
       const minutes = Math.round((now - since) / 60000);
       const reasons = [];
       if (open.openPacks.length) reasons.push(`${open.openPacks.length} open review ${open.openPacks.length === 1 ? 'pack' : 'packs'} (${open.openPacks.map((pack) => pack.pack).join(', ')})`);
       if (open.pendingReview) reasons.push(`task ${open.pendingReview.id ? `${open.pendingReview.id} ` : ''}"${open.pendingReview.title}" is in review`);
       if (open.doingSpec) reasons.push(`spec task ${open.doingSpec.id ? `${open.doingSpec.id} ` : ''}"${open.doingSpec.title}" is in progress without a live worker`);
       if (open.stale) reasons.push(`the published \`${open.stale[0]}\` text did not change for ${fmtDuration(Math.floor((now - open.stale[1].since) / 1000))}`);
+      if (open.staleCard) reasons.push(`task ${open.staleCard.id ? `${open.staleCard.id} ` : ''}looks stale: close or update the card`);
+      if (open.ownerWait) reasons.push(`waiting for the Owner: ${open.ownerWait.title}`);
       notices.push({
         key: `nudge:idle-open:${entry.slug || taskKeyPart(label)}`,
         project: entry.slug, taskId: null,
