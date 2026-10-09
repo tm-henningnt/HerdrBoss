@@ -1294,7 +1294,6 @@ test('an expired handover never closes a working successor pane', { timeout: 300
 test('a 400K context warning stays active and clears below the threshold or when a successor is ready', { timeout: 30000 }, (t) => {
   const out = run(t, {
     tokens: 400000,
-    policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 },
     steps: [
       { at: '2026-09-29T12:00:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
       { at: '2026-09-29T12:30:00.000Z', herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } },
@@ -1305,10 +1304,10 @@ test('a 400K context warning stays active and clears below the threshold or when
   assert.ok(warnings.every(Boolean));
   assert.equal(warnings[0].severity, 'warn');
   assert.equal(warnings[0].title, 'Context at 400K tokens: handover not ready');
-  const cleared = run(t, { tokens: 399999, policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 }, steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
+  const cleared = run(t, { tokens: 399999, steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(1) } }] });
   assert.equal(cleared.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
   const ready = run(t, {
-    tokens: 400000, handoffs: [readyRecord()], policy: { autoHandoverContextTokens: 400000, autoHandoverForceContextTokens: 500000 },
+    tokens: 400000, handoffs: [readyRecord()],
     steps: [{ at: at(1), herdr: herdrOf(pane('idle'), worker, successor), published: { alpha: status(1) } }],
   });
   assert.equal(ready.snapshots[0].alerts.some((alert) => alert.key === 'context:alpha'), false);
@@ -1592,4 +1591,27 @@ test('HO2: expiry waits for a missing Boss and retries a failed prompt before ma
   assert.equal(Object.keys(out.snapshots[2].memory.handoverExpiryBoss || {}).length, 0);
   assert.equal(Object.keys(out.memory.handoverExpiryBoss).length, 1);
   assert.deepEqual(out.mailboxAttempts, []);
+});
+
+// K70: a held project gets no context warning and no handover notice. An active project in the same state does.
+const contextWarning = (out) => JSON.stringify(out).includes('handover not ready');
+const idleSteps = (extra = {}) => [
+  { at: at(0), herdr: herdrOf(pane('working'), worker), published: { alpha: status(0, extra) } },
+  { at: at(1), herdr: herdrOf(pane('idle'), worker), published: { alpha: status(0, extra) } },
+];
+
+test('a paused project gets no context warning and no prepared successor', { timeout: 30000 }, (t) => {
+  const active = run(t, { tokens: 425000, autoHandover: false, steps: idleSteps() });
+  assert.equal(contextWarning(active), true, 'the active project is warned (control case)');
+  const paused = run(t, { tokens: 425000, autoHandover: false, steps: idleSteps({ status: 'paused' }) });
+  assert.equal(contextWarning(paused), false, 'the paused project is not warned');
+  assert.deepEqual(prepares(paused), []);
+  const stoodDown = run(t, { tokens: 425000, autoHandover: false, steps: idleSteps({ status: 'stood down' }) });
+  assert.equal(contextWarning(stoodDown), false, 'the stood-down project is not warned');
+});
+
+test('an idle orchestrator with a small context gets no context warning', { timeout: 30000 }, (t) => {
+  const small = run(t, { tokens: 50000, autoHandover: false, steps: idleSteps() });
+  assert.equal(contextWarning(small), false);
+  assert.deepEqual(prepares(small), []);
 });
