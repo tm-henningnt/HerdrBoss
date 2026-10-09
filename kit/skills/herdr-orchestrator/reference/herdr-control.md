@@ -80,3 +80,10 @@ Read this file before you inspect or control Herdr panes and agents, when a work
 - When a worker changed a file outside its scope and the orchestrator approved that file by message, run `herdr-boss worker collect <name> --accept-scope FILE[,FILE] --reason TEXT`. Use it only for files that you reviewed. The command passes only the listed outside files, refuses every other outside file, and records the files and the reason as a Scope exception in the run record and the printed report.
 - A scope refusal names the unlisted files and shows the exact allowed command form with an example. The example lists every unlisted file, comma separated, and shell-quotes the `--accept-scope` value. Copy the example and write the real reason in `--reason`.
 - `worker collect` does not count a kit-managed file, the worker's `.worker/` folder, or a path that arrived only because the worker merged the base branch into its branch as a change outside the scope. Use `--accept-scope` only for a real product change outside the scope.
+
+## Bundles
+
+- Bundle related issues into one worker brief. Group by the same files, the same area, or the same check. Give the worker a list of issues with an acceptance check for each. Aim for a worker that runs a substantial piece of work, not minutes.
+- Keep a bundle reviewable: one coherent diff, one review pass, one merge. Do not bundle across unrelated areas or across a gate boundary.
+- Give each issue in a bundle its own tracker reference and its own evidence. After TR1, `worker start` takes more than one `--issue`.
+- Tell the worker to use subagents for reads, surveys, and review, and to keep the main thread for decisions. Use cheap models for subagents (Haiku for read-only work) while Claude is throttled.
