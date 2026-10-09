@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { parsePiModels } from '../src/collect.js';
 
 const models = loadModels();

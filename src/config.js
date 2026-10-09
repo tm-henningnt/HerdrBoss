@@ -517,7 +517,7 @@ export function hostAllowedByList(hostname, list) {
   });
 }
 
-// Validate the releases.repos setting. Each entry is { name, project, kind }.
+// Validate the releases.repos setting. Each entry is { name, project, kind, requireDemoApp }.
 // name is the GitHub repository in OWNER/REPO form. project is the project slug. kind is the release kind.
 export function validateReleasesRepos(value) {
   if (!Array.isArray(value)) return { repos: [], errors: ['releases.repos must be an array.'] };
@@ -541,7 +541,10 @@ export function validateReleasesRepos(value) {
     if (typeof repo.kind !== 'string' || !repo.kind.length || repo.kind.length > 50) {
       errors.push(`${label}.kind must be a string of 1 to 50 characters.`);
     }
-    if (errors.length === before) repos.push({ name: repo.name, project: repo.project, kind: repo.kind });
+    const requireDemoApp = Object.hasOwn(repo, 'requireDemoApp') ? repo.requireDemoApp : repo.kind === 'qlik-extension';
+    if (typeof requireDemoApp !== 'boolean') errors.push(`${label}.requireDemoApp must be true or false.`);
+    if (repo.kind !== 'qlik-extension' && requireDemoApp === true) errors.push(`${label}.requireDemoApp is only available for qlik-extension repositories.`);
+    if (errors.length === before) repos.push({ name: repo.name, project: repo.project, kind: repo.kind, requireDemoApp });
   });
   return { repos, errors };
 }

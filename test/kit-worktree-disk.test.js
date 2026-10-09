@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { runKitCommand } from '../src/kit/cli.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { pruneWorktrees } from '../src/kit/worktrees.js';
 import { git, setupFixture, temporaryRepo } from './helpers/kit-fixture.js';
 

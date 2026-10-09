@@ -13,7 +13,8 @@ import { acquireLease, listLeases, ownerReleaseLease, processCwd, processLabel, 
 import { writeNight } from '../src/night.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { collectWorker, startWorker } from '../src/kit/workers.js';
+import { collectWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { readyAgent } from './helpers/ready-agent.js';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));

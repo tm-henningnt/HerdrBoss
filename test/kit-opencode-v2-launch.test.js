@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { openCodeConfigText, opencodeTuiAcceptsModelFlags, resetOpenCodeTuiFlagsCache, unsupportedOpenCodeFlag } from '../src/kit/opencode-cli.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 
@@ -100,6 +100,7 @@ function startFixture(t, name, { tuiModelFlags = false, flagError = null } = {})
   const start = (options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], model: MODEL, ...options }, {
     config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile,
     wait: () => {}, output: () => {}, tuiSupportsModelFlags: () => tuiModelFlags,
+    readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
   });
   return { f, commands, herdr, start, excludeFile };
 }

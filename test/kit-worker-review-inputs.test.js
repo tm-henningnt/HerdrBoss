@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
 import { runKitCommand } from '../src/kit/cli.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { git, setupFixture, TEST_HOME } from './helpers/kit-fixture.js';
 
 const kitBrief = path.resolve('kit/templates/worker-brief.md');
@@ -111,6 +111,7 @@ test('worker start refuses --review-worktree for a worker that may write', () =>
   assert.throws(
     () => runKitCommand('worker', ['start', 'reviewer-cli-write', '--kind', 'codex', '--task', 'x', '--allow', 'src/', '--review-worktree', target], {
       config: f.config, herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+      freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
     }),
     /--review-worktree needs --read-only/,
   );
@@ -213,6 +214,7 @@ test('worker start refuses both --base review and --review-worktree', () => {
   assert.throws(
     () => runKitCommand('worker', ['start', 'reviewer-both', '--kind', 'codex', '--task', 'x', '--read-only', '--base', 'review-target', '--review-worktree', f.root], {
       config: f.config, herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+      freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
     }),
     /Give --base BRANCH or --review-worktree PATH, not both/,
   );
@@ -235,6 +237,7 @@ test('the CLI accepts --review-worktree and writes the copied review inputs', ()
   fs.appendFileSync(path.join(target, 'README.md'), 'cli review change\n');
   const run = runKitCommand('worker', ['start', 'reviewer-cli', '--kind', 'codex', '--task', 'x', '--read-only', '--review-worktree', target], {
     config: f.config, herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {},
+    freeSpaceReader: () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }),
   });
   assert.equal(run.worktree, path.join(TEST_HOME, 'Projects', '.herdr-wt', path.basename(f.root), 'reviewer-cli'));
   assert.match(fs.readFileSync(path.join(run.worktree, '.worker/inputs/review-status.txt'), 'utf8'), /cli review change|README\.md/);

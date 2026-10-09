@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { activeLaunchRecords, clearModelFailure, MODEL_FAILURE_COOLDOWN_MS, MODEL_FAILURE_THRESHOLD, MODEL_FAILURE_WINDOW_MS, MODEL_UNAVAILABLE_LABEL, modelFailureMark, recordModelFailure } from '../src/kit/model-unavailable.js';
 import { loadModels } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 
 const PI_MODEL = 'opencode-go/space-bunny-free';

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { POLICY_DEFAULTS } from '../src/control.js';
-import { serviceSettingsView, validateServiceSettings } from '../src/config.js';
+import { serviceSettingsView, validateReleasesRepos, validateServiceSettings } from '../src/config.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -174,10 +174,10 @@ test('Settings renders the Haiku pace tolerance beside the general pace toleranc
   assert.equal(state.policy.paceHaikuTolerancePoints, 22, 'the input updates the saved policy draft');
 });
 
-test('Settings shows and saves release repository rows with all three fields', async () => {
+test('Settings shows and saves release repository rows with demo app policy', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
-  const repos = [{ name: 'example-org/example-app', project: 'example', kind: 'app' }];
+  const repos = [{ name: 'example-org/example-app', project: 'example', kind: 'qlik-extension', requireDemoApp: true }];
   const s = fixture();
   s.serviceSettings = serviceSettingsView({ releases: { repos } });
   const html = app.settingsView(s);
@@ -186,8 +186,14 @@ test('Settings shows and saves release repository rows with all three fields', a
   assert.doesNotMatch(html, /Only listed repositories can use release request/);
   assert.match(html, /data-release-repo-add/);
   assert.match(html, /data-release-repo-remove/);
-  for (const field of ['name', 'project', 'kind']) assert.match(html, new RegExp(`data-release-repo-field="${field}"`));
+  for (const field of ['name', 'project', 'kind', 'requireDemoApp']) assert.match(html, new RegExp(`data-release-repo-field="${field}"`));
+  assert.match(html, /Require separate demo app/);
   assert.match(html, /data-save-service-settings="Releases"/);
+  const defaultQlikHtml = app.settingsView({ ...s, serviceSettings: serviceSettingsView({ releases: { repos: [{ name: 'example-org/extension', project: 'extension', kind: 'qlik-extension' }] } }) });
+  assert.match(defaultQlikHtml, /<input type="checkbox" checked data-release-repo-index="0" data-release-repo-field="requireDemoApp"/);
+  assert.doesNotMatch(defaultQlikHtml, /<input type="checkbox"[^>]*disabled[^>]*data-release-repo-field="requireDemoApp"/);
+  const genericHtml = app.settingsView({ ...s, serviceSettings: serviceSettingsView({ releases: { repos: [{ name: 'example-org/app', project: 'app', kind: 'app' }] } }) });
+  assert.match(genericHtml, /<input type="checkbox"[^>]*disabled[^>]*data-release-repo-field="requireDemoApp"/);
 
   const empty = app.settingsView({ ...s, serviceSettings: serviceSettingsView({ releases: { repos: [] } }) });
   assert.match(empty, /data-release-repo-empty[^>]*>No repositories are allowed\.<\/p>/);
@@ -197,10 +203,12 @@ test('Settings shows and saves release repository rows with all three fields', a
   const inputs = [
     { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'name' }, value: 'example-org/example-app' },
     { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'project' }, value: 'example' },
-    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'kind' }, value: 'app' },
-    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'name' }, value: ' ' },
-    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'project' }, value: '' },
-    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'kind' }, value: '' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'kind' }, value: 'qlik-extension' },
+    { type: 'checkbox', checked: true, dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '0', releaseRepoField: 'requireDemoApp' } },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'name' }, value: 'example-org/optional' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'project' }, value: 'optional' },
+    { type: 'text', dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'kind' }, value: 'qlik-extension' },
+    { type: 'checkbox', checked: false, dataset: { serviceSetting: 'releases.repos', serviceGroup: 'Releases', releaseRepoIndex: '1', releaseRepoField: 'requireDemoApp' } },
   ];
   app.context.document = {
     querySelectorAll: (selector) => selector.includes('data-release-repo-field') ? inputs : [
@@ -215,8 +223,25 @@ test('Settings shows and saves release repository rows with all three fields', a
   };
   const button = { disabled: false };
   await app.saveServiceSettings('Releases', button);
-  assert.deepEqual(sent.changes, { 'releases.repos': repos });
+  assert.deepEqual(sent.changes, { 'releases.repos': [repos[0], { name: 'example-org/optional', project: 'optional', kind: 'qlik-extension', requireDemoApp: false }] });
   assert.equal(button.disabled, false);
+});
+
+test('release repository validation defaults demo apps only for Qlik extensions', () => {
+  assert.deepEqual(validateReleasesRepos([
+    { name: 'example-org/extension', project: 'extension', kind: 'qlik-extension' },
+    { name: 'example-org/app', project: 'app', kind: 'app' },
+    { name: 'example-org/optional', project: 'optional', kind: 'qlik-extension', requireDemoApp: false },
+  ]), {
+    repos: [
+      { name: 'example-org/extension', project: 'extension', kind: 'qlik-extension', requireDemoApp: true },
+      { name: 'example-org/app', project: 'app', kind: 'app', requireDemoApp: false },
+      { name: 'example-org/optional', project: 'optional', kind: 'qlik-extension', requireDemoApp: false },
+    ],
+    errors: [],
+  });
+  assert.throws(() => validateServiceSettings({ 'releases.repos': [{ name: 'example-org/extension', project: 'extension', kind: 'qlik-extension', requireDemoApp: 'yes' }] }), /requireDemoApp must be true or false/);
+  assert.throws(() => validateServiceSettings({ 'releases.repos': [{ name: 'example-org/app', project: 'app', kind: 'app', requireDemoApp: true }] }), /only available for qlik-extension repositories/);
 });
 
 test('Owner Chat renders a release report as an Approve and Reject card', async () => {

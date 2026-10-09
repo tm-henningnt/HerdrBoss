@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { codexShellEnvArgs, liveCodexCheck } from '../src/harness.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { readyAgent } from './helpers/ready-agent.js';
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
@@ -68,6 +68,7 @@ function startFixture({ browserLookup } = {}) {
   const lines = [];
   const start = (name, options = {}, env = ORCH) => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], ...options }, {
     config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: (line) => lines.push(line), browserLookup,
+    readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
   });
   return { root, config, starts, lines, start };
 }

@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
-import { collectWorker, startWorker } from '../src/kit/workers.js';
+import { collectWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { listSessions, getSession } from '../src/planner-sessions.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 

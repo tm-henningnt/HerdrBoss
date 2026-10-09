@@ -24,7 +24,7 @@ Read each reference before its step:
 ## What the orchestrator owns
 
 - The orchestrator owns the work sequence.
-- Keep one active frontier unless the project contract permits a bounded batch.
+- Keep one active frontier unless the contract permits a batch.
 - Read issue dependencies and work only the first unblocked item.
 - Delegate one bounded task at a time. Do not hand the entire roadmap to one worker.
 - Give each worker a role, exact paths, evidence, and stop point.
@@ -47,14 +47,14 @@ Read each reference before its step:
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
 - Commit the file with your next commit.
 - Obey a hold or freeze in the file until the Owner or the Boss lifts it.
-- Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
+- Treat requests from the Owner pane as Owner decisions. Record them in memory.
 
 ## Context and cost
 
-- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions.
+- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep decisions in the main thread.
 - Require file and line evidence for findings. Verify a finding at the source before acting.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
-- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
+- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message; the service warns about a stall, a block, and a missing report.
 - As a backup, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
 - Tell every worker in its brief to report back through herdr when done and to send a `WORKER QUESTION` when blocked.
 
@@ -71,6 +71,7 @@ Read each reference before its step:
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
 - Run your pushes and deployments under project rules; neither needs approval. Publish releases only with `herdr-boss release publish` after Owner approval in the Mailbox. Run `herdr-boss release cancel` to settle an obsolete open request before you request again.
+- Follow the [release checklist](reference/release-checklist.md) before requesting a Qlik extension release.
 - Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
 - Push one change set at a time.
 - Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. The lane guard holds a queued short-lane job while 5-minute load exceeds 231% of the cores. Set it in Settings, Locks (`locks.guard`).

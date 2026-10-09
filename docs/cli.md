@@ -772,18 +772,18 @@ WARNING: Never run `gh release edit`, `gh release delete`, or `gh release create
 
 Use `release add-asset` to add files to an existing draft or published release. The command uploads files only after the Owner accepts the Mailbox request. It may append a Demo app notes block after the existing release body.
 
-The setting `releases.repos` in `config.json` lists the repositories that the commands accept. Set it in **Settings → Advanced → Service settings → Releases**. Each entry has `name` (`OWNER/REPO`), `project` (the project slug, which names the Mailbox thread), and `kind`. A repository that is not in the list is refused with exit code 1. The refusal names `releases.repos` and points to this Settings page.
+The setting `releases.repos` in `config.json` lists the repositories that the commands accept. Set it in **Settings → Advanced → Service settings → Releases**. Each entry has `name` (`OWNER/REPO`), `project` (the project slug, which names the Mailbox thread), `kind`, and `requireDemoApp`. `requireDemoApp` defaults to `true` for `kind: qlik-extension` and `false` for other kinds. The Settings page shows this switch for Qlik extension repositories. A repository that is not in the list is refused with exit code 1. The refusal names `releases.repos` and points to this Settings page.
 
 | Command | Action |
 |---|---|
-| `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. Print the approval ID. |
+| `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. For a Qlik extension repo with `requireDemoApp`, require exactly one separate `.qvf` asset. Refuse a Qlik extension ZIP that contains a `.qvf` file. Print the approval ID. |
 | `herdr-boss release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE]` | Hash and scan each file and the optional notes. Post one Mailbox item of action `approve`. The release may be a draft or published. |
 | `herdr-boss release apply-asset REPO TAG --approval ID` | Check the Owner's approval, the files, the scan, and the release body. Then upload the files and append the approved Demo app notes block. |
 | `herdr-boss release cancel REPO TAG [--reason TEXT]` | Settle an open request as superseded. Only the pane that requested it or the Boss pane can run this command. |
 | `herdr-boss release publish REPO TAG --approval ID` | Check the approval, then run `gh release edit TAG --repo REPO --draft=false --latest`. |
 | `herdr-boss release status [REPO]` | Print JSON with the drafts and the last published release of each listed repository, and the open requests. |
 
-The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID when the release data still matches. The command compares notes when the request has a notes hash. It compares the asset names, sizes, and SHA-256 values. If the data changed, the command says that the request is stale. Run `release cancel` before you request again.
+The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the demo app asset with its name, size, and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID when the release data still matches. The command compares notes when the request has a notes hash. It compares the asset names, sizes, and SHA-256 values. If the data changed, the command says that the request is stale. Run `release cancel` before you request again.
 
 The add-asset item shows the repository, tag, reason, each new file with its size and SHA-256, and the scan result. When you give `--append-notes`, the item shows the Demo app block. Only one release approval can be open for a repository and tag. A repeated identical add-asset request prints the open ID. Cancel an open request before you change its files, reason, notes, or target release.
 
@@ -796,8 +796,9 @@ The request reads the notes from `--notes FILE` when you give it. The add-asset 
 1. The item exists for exactly this repository and tag, and it is open.
 2. The latest answer of the Owner is Approve, and it is newer than the request.
 3. The assets have the same names, sizes, and SHA-256 hashes as the card.
-4. The scan of the changelog and the assets passes.
-5. The release is still a draft.
+4. A required Qlik demo app still matches the card, and no Qlik extension ZIP contains a `.qvf` file.
+5. The scan of the changelog and the assets passes.
+6. The release is still a draft.
 
 After `gh release edit`, the command reads the release again. It checks that the release is published with the assets of the card. Then it writes one line to `releases/audit.jsonl` in the data directory (time, approval ID, pane, repository, tag) and closes the item with the note `published`. The command never deletes a release or a tag, and never edits the assets of a published release. `--not-latest` on the request makes the card, and the publish, use `--latest=false`.
 

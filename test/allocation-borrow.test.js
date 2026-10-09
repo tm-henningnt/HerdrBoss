@@ -8,7 +8,8 @@ import test from 'node:test';
 import { deriveControl, POLICY_DEFAULTS } from '../src/control.js';
 import { renderBulletin } from '../src/rules.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { allocationSummary, startWorker } from '../src/kit/workers.js';
+import { allocationSummary } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 
 const models = loadModels();
 const NOW = Date.parse('2026-09-27T12:00:00Z');

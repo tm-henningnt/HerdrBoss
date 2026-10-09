@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
-import { startWorker } from '../src/kit/workers.js';
+import { startWorker } from './helpers/start-worker.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { writeDiskDiagnosis } from '../src/disk-diagnosis.js';
@@ -14,7 +14,7 @@ import { writeDiskDiagnosis } from '../src/disk-diagnosis.js';
 const models = loadModels();
 const OPUS_REFUSAL = { message: "claude-opus-5-5 needs the Owner's approval. Ask the Owner to turn on the setting opus.allowWithoutForce." };
 
-function fixture(t, { rules = {}, kitModels = models, freeSpaceReader = () => ({ bsize: 1, bavail: 8 * 1024 ** 3 }), serviceConfig = { worktrees: { minFreeGb: 8 } }, diagnosticScan, diagnosisWrite } = {}) {
+function fixture(t, { rules = {}, kitModels = models, freeSpaceReader = () => ({ bsize: 1, bavail: 500 * 1024 ** 3 }), serviceConfig = { worktrees: { minFreeGb: 8 } }, diagnosticScan, diagnosisWrite } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-worker-model-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'ignore' });
