@@ -232,6 +232,17 @@ export function readDiskDiagnosis(dataDir, {
   } catch { return null; }
 }
 
+// A volume path that does not exist yet reads the free space of its nearest existing parent folder.
+export function nearestExistingPath(file, { exists = fs.existsSync } = {}) {
+  let current = path.resolve(file);
+  while (!exists(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return current;
+}
+
 function freeBytesFromStat(stat) {
   const bytes = Number(stat?.bavail) * Number(stat?.bsize);
   if (!Number.isFinite(bytes) || bytes < 0) throw new Error('invalid free space');
@@ -256,7 +267,7 @@ export function runLowDiskDiagnosis({
   dataDirPath,
   minFreeGb = 8,
   intervalMs = LOW_DISK_SCAN_INTERVAL_MS,
-  freeSpaceReader = (file) => fs.statfsSync(file),
+  freeSpaceReader = (file) => fs.statfsSync(nearestExistingPath(file)),
   scan = scanDiskUsage,
   write = writeDiskDiagnosis,
   audit = appendForcedAction,

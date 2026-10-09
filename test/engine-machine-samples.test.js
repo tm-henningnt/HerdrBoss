@@ -66,7 +66,9 @@ test('Engine.tick writes one machine sample line for each UTC minute', { timeout
     '2026-09-29T14:03:05.000Z', '2026-09-29T14:03:35.000Z', '2026-09-29T14:04:05.000Z', '2026-09-29T14:04:35.000Z', '2026-09-29T14:07:05.000Z',
   ] });
   assert.deepEqual(lines.map((line) => line.at), ['2026-09-29T14:03:00.000Z', '2026-09-29T14:04:00.000Z', '2026-09-29T14:07:00.000Z']);
-  const { at, ...rest } = lines[0];
+  const { at, diskFreeGB, worktreeFreeGB, ...rest } = lines[0];
+  // The disk figures read the real volume, so the test checks their type only.
+  for (const value of [diskFreeGB, worktreeFreeGB]) assert.ok(value === null || Number.isFinite(value), 'a disk figure is a number or null');
   assert.deepEqual(rest, {
     l1: 2.4, l5: 3.1, l15: 2.8, cpus: 10, cpu: 0, memFree: 18, memGB: 24, swapMB: 3200, swapTotalMB: 4096,
     holders: [], waiters: 0, waiterKinds: [],

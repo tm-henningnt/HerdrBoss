@@ -21,7 +21,7 @@ test('a disk scan failure is logged and does not break the engine', () => {
 
   assert.doesNotThrow(() => engine.checkLowDiskDiagnosis(Date.parse('2026-10-09T10:00:00.000Z')));
   assert.equal(engine.diskScanAt, null, 'a failed scan does not advance the scan time');
-  const logged = engine.events.find((event) => event.type === 'disk-diagnosis');
+  const logged = engine.events.find((event) => event.type === 'disk-diagnosis' && /injected scan failure/.test(event.text));
   assert.ok(logged, 'the engine logs the failed scan');
   assert.match(logged.text, /injected scan failure/);
 });

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { sharedWorktreeRoot } from './kit/config.js';
+import { nearestExistingPath } from './disk-diagnosis.js';
 
 export const MACHINE_SAMPLES_FILE = 'machine-samples.jsonl';
 export const MACHINE_SAMPLES_ROTATED_FILE = 'machine-samples.1.jsonl';
@@ -15,7 +16,7 @@ const num = (value, digits = null) => {
 const kinds = (entries) => (entries || []).map((entry) => (typeof entry?.kind === 'string' && entry.kind ? entry.kind : 'unknown'));
 
 // The free bytes on the volume that holds `volumePath`, or null when the volume is unreadable.
-export function freeBytesFromStat(volumePath, { freeSpaceReader = (file) => fs.statfsSync(file) } = {}) {
+export function freeBytesFromStat(volumePath, { freeSpaceReader = (file) => fs.statfsSync(nearestExistingPath(file)) } = {}) {
   try {
     const stat = freeSpaceReader(volumePath);
     const bytes = Number(stat?.bavail) * Number(stat?.bsize);
@@ -25,7 +26,7 @@ export function freeBytesFromStat(volumePath, { freeSpaceReader = (file) => fs.s
 
 // The free space in GB on the data-directory volume and the worktree volume, or null for an unreadable volume.
 // The worktree volume is the configured shared root. A missing setting falls back to the default root.
-export function diskFreeGb({ dataDir = DATA_DIR, worktreeRoot = null, freeSpaceReader = (file) => fs.statfsSync(file) } = {}) {
+export function diskFreeGb({ dataDir = DATA_DIR, worktreeRoot = null, freeSpaceReader = (file) => fs.statfsSync(nearestExistingPath(file)) } = {}) {
   const gb = (volumePath) => {
     const bytes = freeBytesFromStat(volumePath, { freeSpaceReader });
     return bytes === null ? null : +((bytes / 1024 ** 3).toFixed(1));
