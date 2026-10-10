@@ -980,3 +980,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Open: the MB-MENU and MB-FLICKER causes have unit evidence only (VM simulation). The live browser check at 393 px runs after the release.
 - The third r50 suite did not finish: the previous orchestrator shell ended at the handoff. The suite for this merge replaces it.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Release checkpoint r52 (TH0)
+
+- Reviewed branch: `th0` 4c285a8. TH0 (Boss, for the Owner): the cool palette of the TR1/TY1 mockups is the default dark and light theme in `public/theme.css`; warm colors stay only for warning status (`--warn`, `--st-stuck`); chart series are cool hues; warm avatar, favicon and diagram fallbacks replaced; `test/theme-contrast.test.js` checks WCAG AA for the declared pairs. No theme picker (TH1 reuses the tokens).
+- Evidence: 138 focused tests passed. Screenshot check on an isolated preview at 1280 px (Agents dark and light, Settings dark) and 393 px (Agents dark and light): cool palette, readable text, no clipping. Not checked in a browser: the Docs diagram renderer; the vendored Mermaid bundle keeps its own warm literals.
+- State: integrated only. Suite, ff-only, restart and push are pending.
