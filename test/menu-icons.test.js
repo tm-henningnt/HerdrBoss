@@ -3,8 +3,10 @@ import test from 'node:test';
 import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 
 const { MENU_ROUTES, ROUTE_IDS } = await import('../public/routes.js');
+const { mountMenu } = await import('../public/shell.js');
 const read = (p) => fs.readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8');
 const html = read('index.html');
 const app = read('app.js');
@@ -153,6 +155,78 @@ test('only the shared app and review helpers render a menu trigger', () => {
 
 test('the shared menu closes when focus leaves the primary navigation', () => {
   assert.match(app, /\$nav\.addEventListener\('focusout', \(e\) => \{[\s\S]*?\$nav\.contains\(e\.relatedTarget\)[\s\S]*?setNavMenu\(false\)/);
+});
+
+test('phone taps keep every shared-menu route target available through pointerdown, focusout, and click', () => {
+  const mountedLinks = [];
+  const nav = {
+    ownerDocument: { createElement: () => ({ dataset: {}, setAttribute() {}, removeAttribute() {} }) },
+    querySelector: () => null,
+    insertBefore: (link) => mountedLinks.push(link),
+  };
+  mountMenu(nav);
+  assert.deepEqual(mountedLinks.map((link) => link.href), MENU_ROUTES.map((route) => route.path), 'the shared menu keeps each desktop and phone route href');
+
+  const focusoutBody = /\$nav\.addEventListener\('focusout', \(e\) => \{([\s\S]*?)\n\}\);/.exec(app)?.[1];
+  const pointerdownBody = /\$nav\.addEventListener\('pointerdown', \(e\) => \{([\s\S]*?)\}\);/.exec(app)?.[1];
+  const pointerupBody = /document\.addEventListener\('pointerup', \(e\) => \{([\s\S]*?)\n\}\);/.exec(app)?.[1];
+  const clickBody = /\$nav\.addEventListener\('click', \(e\) => \{([\s\S]*?)\}\);/.exec(app)?.[1];
+  assert.ok(focusoutBody, 'the test can exercise the shared nav focusout handler');
+  assert.ok(pointerdownBody, 'the test can exercise the shared nav pointerdown handler');
+  assert.ok(pointerupBody, 'the test can exercise pointer release');
+  assert.ok(clickBody, 'the test can exercise the shared nav click handler');
+
+  for (const route of MENU_ROUTES) {
+    const link = mountedLinks.find((entry) => entry.dataset.nav === route.id);
+    assert.ok(link, `the ${route.label} entry is mounted`);
+    const state = { open: true, path: '/' };
+    const context = {
+      navPointerDown: false,
+      lastNavTrigger: {},
+      window: { innerWidth: 393 },
+      $nav: { contains: (target) => target?.insideNav === true },
+      setNavMenu: (open) => { state.open = open; },
+    };
+    const onPointerDown = vm.runInNewContext(`(e) => { ${pointerdownBody} }`, context);
+    const onFocusout = vm.runInNewContext(`(e) => { ${focusoutBody} }`, context);
+    const onPointerUp = vm.runInNewContext(`(e) => { ${pointerupBody} }`, context);
+    const onClick = vm.runInNewContext(`(e) => { ${clickBody} }`, context);
+    const target = {
+      href: link.href,
+      dataset: link.dataset,
+      insideNav: true,
+      closest: () => target,
+    };
+
+    onPointerDown({ pointerType: 'touch', target });
+    onFocusout({ target, relatedTarget: null });
+    onPointerUp({ target });
+    if (state.open) {
+      // A phone dispatches click only if the dropdown still covers the tap target.
+      state.path = target.href;
+      onClick({ target });
+    }
+    assert.equal(state.path, route.path, `a phone tap on ${route.label} opens ${route.path}`);
+    assert.equal(state.open, false, `the ${route.label} click closes the dropdown`);
+  }
+
+  const mailboxHref = /const TOP_ICON_LINKS = \{[^}]*mail: '([^']+)'/.exec(app)?.[1];
+  assert.equal(mailboxHref, '/mailbox?folder=updates', 'the phone Mailbox icon opens the Mailbox route');
+
+  const helpBody = /if \(e\.target\.closest\?\.\('\[data-nav-help\]'\)\) \{([\s\S]*?)\n  \}/.exec(app)?.[1];
+  assert.ok(helpBody, 'the test can exercise the shared Help action');
+  const helpState = { open: true, helpOpen: false, path: '/agents' };
+  const helpContext = {
+    lastNavTrigger: {},
+    setNavMenu: (open) => { helpState.open = open; },
+    setHelp: (open) => { helpState.helpOpen = open; },
+  };
+  const onHelpClick = vm.runInNewContext(`(e) => { ${helpBody} }`, helpContext);
+  const helpTarget = { closest: (selector) => selector === '[data-nav-help]' ? helpTarget : null };
+  onHelpClick({ target: helpTarget });
+  assert.equal(helpState.path, '/agents', 'Help keeps the current route');
+  assert.equal(helpState.helpOpen, true, 'Help opens the help panel');
+  assert.equal(helpState.open, false, 'Help closes the dropdown');
 });
 
 test('the app-view bar of the Mailbox, the Chat, and the Reviews holds the three icons on a phone', () => {
