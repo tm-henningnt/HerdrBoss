@@ -38,7 +38,7 @@ test('every contract has valid and invalid examples', async t => {
           const errors = validateFile(readJson(`${exampleDir}/${file}`), `${schemaDir}/${contract}.v1.schema.json`);
           if (kind === 'valid') {
             assert.deepEqual(errors, [], errors.join('\n'));
-            assert.ok(['1.0.0', '1.1.0'].includes(readJson(`${exampleDir}/${file}`).contractVersion), `${file} must use a supported 1.x version`);
+            assert.ok(['1.0.0', '1.1.0', '1.2.0'].includes(readJson(`${exampleDir}/${file}`).contractVersion), `${file} must use a supported 1.x version`);
           }
           else assert.ok(errors.length > 0, `${file} must fail`);
         });
@@ -60,7 +60,7 @@ test('every schema has its identity, version, subset check, and document entry',
     assert.match(schema.$id, /^https:\/\/contracts\.example\//);
     assert.ok(!ids.has(schema.$id), `duplicate $id: ${schema.$id}`);
     ids.add(schema.$id);
-    const expectedVersion = file === 'fleet-summary.v1.schema.json' ? '1.1.0' : '1.0.0';
+    const expectedVersion = file === 'fleet-summary.v1.schema.json' ? '1.2.0' : '1.0.0';
     assert.equal(schema.version, expectedVersion);
     assert.match(schema.description, new RegExp(`Version ${expectedVersion.replaceAll('.', '\\.')}`));
     assert.ok(doc.includes(file), `document must name ${file}`);
@@ -275,11 +275,11 @@ test('an accepted newer 1.x fleet summary keeps working and drops an unsupported
   const { acceptFleetSummary, assertFleetSummary } = await import('../../src/fleet-contract.js');
   const source = readJson(`${exampleDir}/fleet-summary.valid.complete.json`);
   const newer = structuredClone(source);
-  newer.contractVersion = '1.2.0';
+  newer.contractVersion = '1.3.0';
   newer.futureField = 'a later 1.x addition';
   const accepted = acceptFleetSummary(newer, source.dashboardUrl);
   assert.equal(accepted.drift, 'head office older');
-  assert.equal(accepted.summary.contractVersion, '1.2.0');
+  assert.equal(accepted.summary.contractVersion, '1.3.0');
   assert.equal(accepted.summary.futureField, undefined);
   assert.deepEqual(accepted.summary.workers, { running: 5, max: 12 });
   assert.equal(accepted.summary.kind, 'native');

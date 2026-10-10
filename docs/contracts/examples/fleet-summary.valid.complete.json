@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "contractVersion": "1.1.0",
+  "contractVersion": "1.2.0",
   "factoryId": "factory-zero",
   "name": "factory-zero",
   "kind": "native",
