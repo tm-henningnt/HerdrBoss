@@ -85,6 +85,7 @@ function setup(t) {
     finishedAt: '2026-10-01T11:30:00.000Z',
     pane: 'ws-fixture:p2',
     worktree,
+    startCommit: execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   };
   fs.writeFileSync(path.join(runs, 'fixture-worker.json'), JSON.stringify(run));
   fs.writeFileSync(path.join(data, 'project-repos.json'), JSON.stringify([{ slug: run.project, repo: checkout }]));
