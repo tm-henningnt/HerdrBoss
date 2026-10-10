@@ -914,3 +914,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - **Open follow-ups of approved work (not started):** a2 findings (nested archive check, null-config gate bypass, publish-time message); reg: auto-park and activity refresh; gui: remaining screenshot matrix; ledger entries use `--accept-scope` when the orchestrator adds a file.
 - **Next tasks in order:** integrate batch 2; TR1/TY1 pack; SC1 scaffold build waits for the TY1 layout accept; PL1 (Planning page); messaging MSG2, MSG4, then MSG3; PR1-OPEN rest; G4h swap thresholds (go from the Boss, needs 7 days of samples).
 - **Worktrees:** `integrate-r41`, `integrate-r43`, `integrate-r44`, `probe-main`, `ap1`, `a2`, `gui`, `reg`, `sc1`, `sc1g`, `tr1`, `k61`, `ls2c` (keep until K64). Prune merged and clean ones with `herdr-boss worktree prune --apply`.
+
+## Release checkpoint r45 (batch 2)
+
+- Reviewed branches: `gui` (PG2, WD1, BM1B, MK1), `reg` (PR1-GUI, PR1-TRIAGE, PR1-OPEN partial), `sc1g` (SC1 guides draft, `test/guide-scan.test.js`). Merged in `integrate-r45`.
+- Conflicts resolved: `public/app.js` (service setting booleans), `test/settings-render.test.js` (both tests kept).
+- Verified: `node --check` on changed files, `test/settings-render.test.js` 34 of 34, docs gate passed.
+- State: integrated only. Suite, ff-only, restart, service check and push are pending.
