@@ -69,10 +69,11 @@ export function parseProjectNewArgs(args, { factory = false } = {}) {
   };
 }
 
-function unregisterCommand(args, { dataDir, log }) {
+function unregisterCommand(args, { dataDir, log, env, herdr }) {
   if (args.length !== 1 || !SLUG.test(args[0])) throw new Error(PROJECT_UNREGISTER_USAGE);
   const [slug] = args;
-  const result = unregisterProjectRepo(slug, { dataDir });
+  verifyProjectCaller(env, herdr, 'project unregister', { targetSlug: slug, action: 'unregister' });
+  const result = unregisterProjectRepo(slug, { dataDir, home: env.HOME, env });
   if (!result.removed) throw new Error(`Unknown project slug: ${slug}.`);
   log(`Project ${slug} unregistered. Registry backup written.`);
   return 0;
@@ -138,7 +139,7 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
 export function projectCommand(args, { env = process.env, herdr, dataDir, log = console.log, hooks, flowOptions = {}, lifecycleOptions = {} } = {}) {
   const [action, ...rest] = args;
   if (action === 'type') return projectTypeCommand(rest, { log });
-  if (action === 'unregister') return unregisterCommand(rest, { dataDir, log });
+  if (action === 'unregister') return unregisterCommand(rest, { dataDir, log, env, herdr });
   if (['open', 'park', 'archive', 'unarchive'].includes(action)) {
     return import('./project-lifecycle.js').then(({ projectLifecycleCommand }) => projectLifecycleCommand(action, rest, {
       env, herdr, dataDir, log, hooks, flowOptions, ...lifecycleOptions,

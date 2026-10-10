@@ -195,6 +195,8 @@ export function unpinProject(slug, options = {}) {
   assertPinDirectoryWritable(options);
   return withPrivateMutation(directory, () => {
     const current = readIndex(directory);
+    if (!current.some(project => project.slug === slug)) return false;
+    options.beforeWrite?.();
     fs.rmSync(pinFile({ slug }, directory), { force: true });
     writeDataFile(path.join(directory, 'index.json'), JSON.stringify({ schema: 1, projects: current.filter(project => project.slug !== slug) }) + '\n', directory);
     const prefix = pinFile({ slug }, directory) + '\0';

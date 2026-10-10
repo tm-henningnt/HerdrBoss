@@ -245,6 +245,41 @@ test('harness check reports a missing stop-own rule with the rules file and the 
   assert.equal(fs.readFileSync(rulesFile, 'utf8'), original);
 });
 
+test('harness check accepts combined Codex release rules and mixed single rules', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const file = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const original = fs.readFileSync(file, 'utf8');
+  const releaseRules = /prefix_rule\(pattern=\["herdr-boss", "release", "(?:request|publish)"\], decision="allow"\)\n/g;
+  const base = original.replace(releaseRules, '');
+  const combined = 'prefix_rule(pattern=["herdr-boss","release",["request","publish","status"]], decision="allow")\n';
+  for (const rules of [original, base + combined, base + combined + 'prefix_rule(pattern=["herdr-boss", "release", "request"], decision="allow")\n']) {
+    fs.writeFileSync(file, rules);
+    const result = run(f, ['harness', 'check']);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    for (const command of ['request', 'publish']) assert.match(result.stdout, new RegExp(`^ok +codex rules: release ${command} is allowed`, 'm'));
+    assert.equal(fs.readFileSync(file, 'utf8'), rules);
+  }
+});
+
+test('harness check keeps Codex release conflicts and rejects malformed alternations', (t) => {
+  const f = fixture(t);
+  healthy(f, []);
+  const file = path.join(f.home, '.codex', 'rules', 'herdr.rules');
+  const base = fs.readFileSync(file, 'utf8').replace(/prefix_rule\(pattern=\["herdr-boss", "release", "(?:request|publish)"\], decision="allow"\)\n/g, '');
+  fs.writeFileSync(file, base + 'prefix_rule(pattern=["herdr-boss","release",["request","publish"]], decision="allow")\nprefix_rule(pattern=["herdr-boss","release","publish"], decision="forbidden")\n');
+  const conflict = run(f, ['harness', 'check']);
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stdout, /^ok +codex rules: release request is allowed/m);
+  assert.match(conflict.stdout, /^bad +codex rules: .*release publish.*conflict/m);
+  for (const pattern of ['["herdr-boss","release",[]]', '["herdr-boss","release",["request",["publish"]]]', '["herdr-boss","release",["request",1]]']) {
+    fs.writeFileSync(file, base + `prefix_rule(pattern=${pattern}, decision="allow")\n`);
+    const result = run(f, ['harness', 'check']);
+    assert.equal(result.status, 1);
+    for (const command of ['request', 'publish']) assert.match(result.stdout, new RegExp(`^missing +codex rules: .*release ${command}`, 'm'));
+  }
+});
+
 // K19: release checks report the two required command permissions and leave both files unchanged.
 test('harness check reports missing release request and publish rules for Claude and Codex', (t) => {
   const f = fixture(t);
