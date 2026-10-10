@@ -933,3 +933,11 @@ Owner queue (credentials, billing, and Owner-applied settings):
   - /settings at 1920 px: opencode model IDs break inside a token. At 2560 px: the Usage limit mode select truncates. The bottom card row fills about 60 percent of the width.
   - /allocation: the first select of each project lead succession row has no label.
   - Not captured: the Project register group and the Show tenant hosts switch (below the fold; no scroll command).
+
+## Release checkpoint r46
+
+- Reviewed branches: `pr1open` fe0e1c7 (PR1-OPEN: activity refresh, auto-park, `register.autoParkHours`; a2 follow-ups: archive budgets, unsupported archive refusal, null-config gate, publish-time cause) and `msg` f32a486 (MSG2 live updates, MSG3 one shared menu with the logo as the phone Menu button, MSG4 docs and help; client ids on Owner message POSTs). Each passed a Haiku diff review and one fix round. Focused tests: pr1open 203 of 203, msg 72 of 72.
+- Decision: park may close a workspace whose lead agent is idle. The park check blocks only on working or blocked agents.
+- Decision: an Owner message POST carries a client id; a repeated id returns the stored record, a reused id with another payload returns 409. No migration of stored messages.
+- Kit: `pr1open` adds a kit revision entry and restores SKILL.md wording. The Boss relays it after release.
+- State: integrated in `integrate-r46`. Suite, ff-only, restart, service check, push and the browser checks (CLI post to visible update within 3 seconds; 1280x800 and 393x852, light and dark) are pending.
