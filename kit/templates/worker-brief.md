@@ -187,6 +187,8 @@ Do not print full process command lines or environments. Do not use `pgrep -fl`,
 
 Never print a config value, a tenant host, a client id or an app id. Filter `jq` and `cat` output to non-sensitive fields.
 
+Pipe every command output that could hold an identifier through `herdr-boss redact`.
+
 Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 
 For a browser task, use only the project browser.

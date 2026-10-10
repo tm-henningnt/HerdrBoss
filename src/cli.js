@@ -203,6 +203,7 @@ const USAGE = `herdr-boss <command>
   usage summary         Summarize project and provider usage.
   spend [--days N] [--json]  Print the token use and estimated cost per day and role for all harnesses.
   store import|export messages  Import or export messages through SQLite.
+  redact                  Redact command output from stdin to stdout.
   secret set NAME [--provider P --label L --expires ISO]  Store a value from stdin. Owner terminal only.
   secret list             Print names and metadata. Available in agent panes.
   secret remove NAME      Remove a value after you type the name again. Owner terminal only.
@@ -534,7 +535,7 @@ async function verifyQuotaMutationCaller() {
 }
 
 // These commands read the service themselves, or the owner is already there.
-const LAUNCHD_NOTICE_SKIP = new Set(['doctor', 'install', 'uninstall', 'logs', 'serve']);
+const LAUNCHD_NOTICE_SKIP = new Set(['doctor', 'install', 'uninstall', 'logs', 'serve', 'redact']);
 
 // A Homebrew node upgrade keeps the launchd job down, so every other command names the repair before its own
 // output. Return the printed line, or an empty string. A failed check prints nothing and changes no exit code.
@@ -600,6 +601,11 @@ async function main() {
   if (cmd === 'secret') {
     const { secretCommand } = await import('./secret-cli.js');
     process.exitCode = await secretCommand(args, { env: process.env, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
+    return;
+  }
+  if (cmd === 'redact') {
+    const { redactCommand } = await import('./redact-cli.js');
+    process.exitCode = await redactCommand(args, { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
     return;
   }
   if (cmd === 'scratch') {

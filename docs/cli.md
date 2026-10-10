@@ -32,6 +32,7 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss secret list` | Print secret names and metadata. It also works in an agent pane. |
 | `herdr-boss secret remove NAME` | Ask for the name again, then remove the sealed values. Run it in an Owner terminal. |
 | `herdr-boss secret check [NAME]` | Check each value and print `ok` or `failed`. Run it in an Owner terminal. |
+| `herdr-boss redact` | Read command output from stdin, redact it, and write it to stdout. |
 | `herdr-boss account probe` | Read login structure and configuration field names at an Owner terminal. Print no values. Write no files. |
 
 ### Account probe
@@ -51,6 +52,23 @@ Run the probe while a tool is active for the passive check. After its content re
 The CLI reuses `verifyNightCaller`, as `factory token` does. It requires the Owner role and TTYs on stdin and stdout. It refuses the Boss and every agent pane before login reads. The guard also refuses any present `HERDR_ENV`, `HERDR_PANE`, `HERDR_PANE_*`, `HERDR_WORKSPACE_ID`, or `HERDR_WORKTREE` variable, even if empty. The standalone copy uses the same variable and TTY checks without Herdr. This prevents accidents and pane leaks. It does not stop a hostile process of the same OS user.
 
 Exit 0 means the report finished. It does not mean every check passed. Exit 1 means usage, TTY, or probe failure. Exit 3 means caller refusal. A failure prints fixed text with no raw file, parser, or process diagnostics.
+
+### Redact command output
+
+Pipe command output that could hold an identifier through `herdr-boss redact`. For example, use `some-command | herdr-boss redact`. The command reads stdin and writes only the redacted text to stdout. It does not print the private host list or create a data file.
+
+The filter applies these rules in order:
+
+1. Replace whole GUIDs with `<uuid>`.
+2. Replace hex strings of 24 or more characters with `<hex>`.
+3. Replace configured tenant hosts and matching Qlik Cloud host names with `<host>`.
+4. Replace bearer values, JWTs, common token prefixes, and private-key blocks with `<token>` or `<key>`.
+5. Keep secret field names and replace their values with `<secret>`.
+6. Keep app, space, and user ID field names and replace their values with `<id>`.
+
+To set tenant hosts, add a `redact.tenantHosts` array of host names to `~/.config/herdr-boss/config.json`. The command reads this file each time it runs. Do not put tenant hosts in a command, a report, a fixture, or a repository file. If the list is missing, the filter still replaces host names that match the Qlik Cloud pattern.
+
+The command preserves clean lines and their line endings. It joins a line with the next indented line only when the join reveals one sensitive value split by terminal wrapping. It keeps at most 65,536 characters for an input line and stops with exit code 1 if a line is longer. It exits 0 when it finishes redacting the input. It exits 2 when you give it an argument.
 
 ### Secret commands
 

@@ -97,6 +97,7 @@ Read each reference before its step:
 - For a behavior change, add a `file` or `diff` item for the docs change, or a `markdown` item with the `Docs-Exempt: <reason>`. See [the docs rules](reference/ledger-and-evidence.md#evidence-tiers).
 - Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
 - Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
+- Pipe every command output that could hold an identifier through `herdr-boss redact`.
 - Publish with `herdr-boss review publish <slug> <folder> --judge-pass TEXT`. Import an existing HTML folder with `herdr-boss review import <slug> <folder>`.
 - Do not wait; continue independent work. The result arrives as an [owner] prompt with the verdict and a fetch command.
 - Read the result with `herdr-boss review result <slug> <pack> --json`. Fix denied items and notes. Record Owner decisions from pack notes in `docs/orchestration/memory.md`.
