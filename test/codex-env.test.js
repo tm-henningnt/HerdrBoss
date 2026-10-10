@@ -10,6 +10,7 @@ import { codexShellEnvArgs, liveCodexCheck } from '../src/harness.js';
 import { loadModels, loadProjectConfig } from '../src/kit/config.js';
 import { startWorker } from './helpers/start-worker.js';
 import { readyAgent } from './helpers/ready-agent.js';
+import { CODEX_READY_SCREEN } from './helpers/kit-fixture.js';
 
 // Worker worktrees default to ~/Projects/.herdr-wt. Keep them out of the real home folder.
 const TEST_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-codexenv-home-')));
@@ -54,7 +55,7 @@ function startFixture({ browserLookup } = {}) {
       ? { pane: { pane_id: 'ws:orch', workspace_id: 'ws', label: 'orch' } }
       : { pane: { pane_id: args[2], workspace_id: 'ws', foreground_cwd: paneCwd } };
     if (args[0] === 'pane' && args[1] === 'process-info') return { process_info: { shell_pid: 10, foreground_process_group_id: 10 } };
-    if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
+    if (args[0] === 'pane' && args[1] === 'read') return { text: `% \n${CODEX_READY_SCREEN}` };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
     if (args[0] === 'agent' && args[1] === 'get') return readyAgent();
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
