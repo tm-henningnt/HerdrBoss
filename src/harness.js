@@ -280,8 +280,8 @@ export function projectList(dataDir = DATA_DIR) {
   return readProjectRepos(dataDir).map((row) => `${row.repo} (${remoteName(row.remote)})`).join(', ');
 }
 
-export function fillTemplate(text, { home = homeDir(), dataDir = DATA_DIR, url = 'http://127.0.0.1:4477' } = {}) {
-  const values = { HOME: home, UID: String(process.getuid?.() ?? ''), HERDR_BOSS_REPO: ROOT, HERDR_BOSS_URL: url, PROJECT_LIST: projectList(dataDir) };
+export function fillTemplate(text, { home = homeDir(), dataDir = DATA_DIR, url = 'http://127.0.0.1:4477', uid = process.getuid?.() } = {}) {
+  const values = { HOME: home, UID: String(uid ?? ''), HERDR_BOSS_REPO: ROOT, HERDR_BOSS_URL: url, PROJECT_LIST: projectList(dataDir) };
   return text.replaceAll('{{HOME}}/Projects/.herdr-wt', sharedWorktreeRoot(home, dataDir))
     .replace(/\{\{([A-Z_]+)\}\}/g, (all, name) => (name in values ? values[name] : all));
 }
@@ -555,6 +555,75 @@ export function syncHarness({ codexOnly = false, recordFacts = recordHarnessFact
   if (!codexOnly) lines.push('', ...claudeLines(options));
   if (!options.dryRun) recordFactsSafely({ home: homeDir(), dataDir: DATA_DIR, modelsFile: MODELS_FILE, ...options }, recordFacts);
   return { ...codex, ok: codex.ok && rules.ok, changed: codex.changed || rules.changed, lines };
+}
+
+// Only factory exec calls this setup. Local harness sync keeps its manual setup contract.
+export function setupFactoryHarnessHome({ home, dataDir = path.join(home, '.herdr-boss'), projectRoot = path.join(home, 'work'), uid = process.getuid?.(), ...options } = {}) {
+  if (!home || !path.isAbsolute(home) || !Number.isInteger(uid) || uid < 0) throw new Error('The factory harness home or numeric user ID is invalid.');
+  const filled = (name) => fillTemplate(fs.readFileSync(path.join(TEMPLATES, name), 'utf8'), { ...options, home, dataDir, uid });
+  const changed = new Set();
+  const save = (file, text, item) => {
+    let previous = '';
+    try { previous = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (previous === text) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    if (previous) backupRegistry(file, previous);
+    fs.renameSync(temporaryFile(file, text), file);
+    changed.add(item);
+  };
+  const configFile = codexConfigFile(home);
+  let config = '';
+  try { config = fs.readFileSync(configFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const parsed = parseCodexRoots(config);
+  if (parsed.error === `no ${SECTION} section`) config += `\n${filled('codex-sandbox.toml')}`;
+  else if (parsed.error === 'no writable_roots array in the section') config = config.replace(SECTION, `${SECTION}\nwritable_roots = []`);
+  else if (parsed.error) throw new Error('The factory Codex writable_roots cannot be synchronized.');
+  save(configFile, config, 'Codex writable_roots');
+
+  const rulesFile = codexRulesFile(home);
+  let rules = '';
+  try { rules = fs.readFileSync(rulesFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  for (const pattern of [['herdr-boss', 'worker', 'stop-own'], ...RELEASE_COMMANDS.map(command => ['herdr-boss', 'release', command])]) {
+    if (['forbidden', 'conflict'].includes(codexPrefixRuleState(rules, pattern))) throw new Error('The factory Codex rules conflict with the harness template.');
+  }
+  if (!rules) rules = filled('codex-herdr.rules');
+  else {
+    const existing = new Set(rules.split('\n').map(line => line.trim()));
+    const missing = filled('codex-herdr.rules').split('\n').filter(line => line.startsWith('prefix_rule(') && !existing.has(line.trim()));
+    if (missing.length) rules = `${rules.trimEnd()}\n${missing.join('\n')}\n`;
+  }
+  for (const command of RELEASE_COMMANDS) {
+    if (codexPrefixRuleState(rules, ['herdr-boss', 'release', command]) !== 'allow') rules += `prefix_rule(pattern=["herdr-boss", "release", "${command}"], decision="allow")\n`;
+  }
+  save(rulesFile, rules, 'Codex rules');
+
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const settingsRead = readJson(settingsFile);
+  if (settingsRead.error && settingsRead.error !== 'missing') throw new Error('The factory Claude settings are invalid.');
+  const settings = settingsRead.value ?? {};
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)
+    || settings.autoMode != null && (typeof settings.autoMode !== 'object' || Array.isArray(settings.autoMode))) throw new Error('The factory Claude autoMode settings are invalid.');
+  const template = JSON.parse(filled('claude-automode.json'));
+  const repos = [...readProjectRepos(dataDir).map(row => row.repo), path.join(projectRoot, 'factory-project')];
+  template.environment = template.environment.map(line => claudeLineLabel(line) === PROJECTS_LABEL ? recommendedProjectsLine(line, repos, home) : line);
+  const autoMode = settings.autoMode ?? {};
+  for (const field of ['environment', 'allow']) {
+    if (autoMode[field] != null && (!Array.isArray(autoMode[field]) || autoMode[field].some(line => typeof line !== 'string'))) throw new Error('The factory Claude autoMode lines are invalid.');
+  }
+  const environment = [...(autoMode.environment ?? [])];
+  for (const line of template.environment) {
+    const label = claudeLineLabel(line);
+    const index = environment.findIndex(current => label ? claudeLineLabel(current) === label : current === line);
+    if (index < 0) environment.push(line); else environment[index] = line;
+  }
+  const allow = [...new Set(['$defaults', ...(autoMode.allow ?? []), ...template.allow, ...Object.values(CLAUDE_RELEASE_RULES)])];
+  settings.autoMode = { ...autoMode, environment, allow };
+  save(settingsFile, `${JSON.stringify(settings, null, 2)}\n`, 'Claude autoMode');
+  save(path.join(home, '.pi', 'agent', 'extensions', 'herdr-guard.ts'), filled('pi-herdr-guard.ts'), 'Pi guard');
+  const synced = syncHarness({ ...options, home, dataDir, codexOnly: true });
+  if (!synced.ok) throw new Error('The factory harness sync failed. Check the factory harness settings.');
+  if (synced.changed) changed.add('Codex writable_roots');
+  return { changed: [...changed] };
 }
 
 function readJson(file) {

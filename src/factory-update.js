@@ -10,6 +10,7 @@ import { KIT_MANAGED_PATHS } from './kit/workers.js';
 import { ensureFactoryGitIdentity } from './factory-role.js';
 import { ensureClaudeHelper } from './factory-claude-install.js';
 import { ensureCodexbar } from './factory-codexbar-install.js';
+import { syncFactoryHarness } from './factory-harness.js';
 
 const WORKER_LABEL = 'herdr-factory-spike';
 const OWNER_NAME = /^(?=.{1,31}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?![\s\S])/;
@@ -590,6 +591,7 @@ async function updateService(name, factory, docker, owner, flags, initial) {
     mergeStarted = true;
     await runStep('git merge', '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
     await runStep('kit install', '', () => dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', '--workdir', '/home/factory/herdr-boss', `hf-${name}`, 'herdr-boss', 'kit', 'install']));
+    await runStep('harness setup', '', () => syncFactoryHarness(docker, name, factory.io));
     await runStep('git identity', '', () => ensureFactoryGitIdentity(docker, name));
     await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']));
     const health = await waitForCleanTick(docker, name, initial, timeoutMs);

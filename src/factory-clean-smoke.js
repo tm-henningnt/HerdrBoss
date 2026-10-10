@@ -69,6 +69,17 @@ async function folders(docker, record, mode, names = []) {
   return result;
 }
 
+async function projectRecords(docker, record, mode, names = []) {
+  const script = `try {
+    const { cleanupSmokeProjectRecords } = await import('/home/factory/herdr-boss/src/factory-smoke-records.js');
+    console.log(JSON.stringify(cleanupSmokeProjectRecords(process.argv[1], JSON.parse(process.argv[2]))));
+  } catch { console.log(JSON.stringify({ error: 'The smoke project records could not be checked or removed. Cleanup refused.' })); }`;
+  const result = parseJson(await dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', record.containerName,
+    'node', '--input-type=module', '-e', script, mode, JSON.stringify(names)]));
+  if (result.error) throw new Error(result.error);
+  return result;
+}
+
 async function workspaces(docker, record) {
   const value = parseJson(await dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', record.containerName, 'herdr', 'workspace', 'list']));
   const rows = value.result?.workspaces ?? value.workspaces;
@@ -105,9 +116,14 @@ export async function factoryCleanSmokeCommand(args, io) {
   for (const workspace of selected) io.stdout.write(`  ${JSON.stringify(workspace.label)}\n`);
   io.stdout.write(`Folders: ${folderNames.length}\n`);
   for (const folder of folderNames) io.stdout.write(`  ${JSON.stringify(folder)}\n`);
+  const { projects } = await projectRecords(docker, record, 'list');
+  if (!Array.isArray(projects) || projects.some(slug => !/^smoke-[a-z0-9-]*$/.test(slug) || slug.length > 64)) throw new Error('The factory smoke project inventory is invalid.');
+  io.stdout.write(`Project records: ${projects.length}\n`);
+  for (const slug of projects) io.stdout.write(`  ${JSON.stringify(slug)}\n`);
   await folders(docker, record, 'check', folderNames);
+  await projectRecords(docker, record, 'check', projects);
   if (flags.includes('--dry-run')) { io.stdout.write('Dry run. No smoke resources changed.\n'); return 0; }
-  if (!selected.length && !folderNames.length) { io.stdout.write('No smoke resources to remove.\n'); return 0; }
+  if (!selected.length && !folderNames.length && !projects.length) { io.stdout.write('No smoke resources to remove.\n'); return 0; }
   if (!flags.includes('--yes')) await confirm(name, io);
   // A workspace renamed during confirmation no longer belongs to this cleanup.
   const current = await workspaces(docker, record);
@@ -115,10 +131,12 @@ export async function factoryCleanSmokeCommand(args, io) {
     throw new Error('The smoke workspace inventory changed. Run clean-smoke again.');
   }
   await folders(docker, record, 'check', folderNames);
+  await projectRecords(docker, record, 'check', projects);
   for (const workspace of selected) {
     await dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', record.containerName, 'herdr', 'workspace', 'close', workspace.workspace_id]);
   }
   const removed = await folders(docker, record, 'remove', folderNames);
-  io.stdout.write(`Removed ${selected.length} smoke workspaces and ${removed.count} smoke folders.\n`);
+  const unregistered = await projectRecords(docker, record, 'remove', projects);
+  io.stdout.write(`Removed ${selected.length} smoke workspaces, ${removed.count} smoke folders, and ${unregistered.count} smoke project records and their git pins.\n`);
   return 0;
 }

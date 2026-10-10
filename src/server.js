@@ -688,12 +688,20 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         catch (error) { return send(res, error.status || 503, { error: error.status ? error.message : 'The handover cannot be read.' }); }
       }
       if (p === '/api/fleet/transfer' && req.method === 'POST') {
-        const result = await projectTransfer.submit(await jsonBody(req));
-        return send(res, result.status, result.body);
+        try {
+          const result = await projectTransfer.submit(await jsonBody(req));
+          return send(res, result.status, result.body);
+        } catch {
+          return send(res, 400, { error: 'Transfer failed at harness: The transfer request is invalid. Run the same command again.' });
+        }
       }
       if (p === '/api/fleet/transfer' && req.method === 'GET') {
-        const result = projectTransfer.jobStatus(url.searchParams.get('slug'), url.searchParams.get('jobId'));
-        return send(res, result.status, result.body);
+        try {
+          const result = projectTransfer.jobStatus(url.searchParams.get('slug'), url.searchParams.get('jobId'));
+          return send(res, result.status, result.body);
+        } catch {
+          return send(res, 503, { error: 'Transfer failed at workspace: The transfer status could not be read. Run the same command again.' });
+        }
       }
       if (p === '/api/fleet/shares' && req.method === 'GET') {
         try { return send(res, 200, fleetShares.view()); }

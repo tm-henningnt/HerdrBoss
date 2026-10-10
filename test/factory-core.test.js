@@ -13,6 +13,8 @@ import { updateFleet } from '../src/factory-store.js';
 import { assertPollerRegistry } from './helpers/factory-registry.js';
 import { createDockerTransport } from '../src/factory-transport.js';
 import { validateFile } from './factory/schema-check.js';
+import { runFactoryHarness } from './helpers/factory-harness.js';
+import { checkHarness } from '../src/harness.js';
 
 const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', herdrReachable: true, tickAgeSeconds: 1, clockOffsetSeconds: null };
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'fa1' };
@@ -40,6 +42,8 @@ function fixture(name = 'demo') {
   let buildSnapshot;
   const docker = { async run(args, options) {
     calls.push({ args, options });
+    const harness = runFactoryHarness(args, { HOME: root, HERDR_BOSS_DIR: path.join(root, 'data') });
+    if (harness) return harness;
     const json = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
     const missing = (kind) => ({ code: 1, stdout: '', stderr: `Error: No such ${kind}` });
     if (args[0] === 'image' && args[1] === 'inspect') return imageAvailable ? json([{ Config: { Labels: {
@@ -87,6 +91,76 @@ function fixture(name = 'demo') {
     stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => output.push(value) } };
   return { root, calls, io, docker, volumes, output, supervisorLog, get container() { return container; }, set imageAvailable(value) { imageAvailable = value; }, set failS6Start(value) { failS6Start = value; }, set failHealth(value) { failHealth = value; }, get buildSnapshot() { return buildSnapshot; }, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+test('configure installs and synchronizes harness settings inside the fake factory only', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+  assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 0);
+  const rules = fs.readFileSync(path.join(f.root, '.codex', 'rules', 'herdr.rules'), 'utf8');
+  assert.match(rules, /gui\/2468/);
+  assert.doesNotMatch(rules, /\{\{UID\}\}/);
+  const config = fs.readFileSync(path.join(f.root, '.codex', 'config.toml'), 'utf8');
+  assert.match(config, /\[sandbox_workspace_write\]/);
+  assert.ok(config.includes(path.join(f.root, '.herdr-boss')));
+  const settings = JSON.parse(fs.readFileSync(path.join(f.root, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(settings.autoMode.allow[0], '$defaults');
+  assert.ok(settings.autoMode.environment.some(line => line.includes(path.join(f.root, 'work')) && line.includes('docs/orchestration/herdr-boss.md')));
+  assert.ok(fs.existsSync(path.join(f.root, '.pi', 'agent', 'extensions', 'herdr-guard.ts')));
+  const failures = checkHarness({ home: f.root, dataDir: path.join(f.root, 'data') }).filter(row =>
+    ['codex writable_roots', 'codex rules', 'claude autoMode', 'pi'].includes(row.area) && row.status !== 'ok');
+  assert.deepEqual(failures.map(row => row.item), []);
+  assert.ok(f.calls.some(({ args }) => args.includes('factory') && args.includes('HOME=/home/factory') && args.some(word => word.includes('setupFactoryHarnessHome'))));
+  assert.match(f.output.join(''), /Harness setup: [0-9]+ changed/);
+  assert.equal(f.output.join('').includes(f.root), false);
+  const before = fs.readFileSync(path.join(f.root, '.claude', 'settings.json'), 'utf8');
+  assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 0);
+  assert.equal(fs.readFileSync(path.join(f.root, '.claude', 'settings.json'), 'utf8'), before);
+  assert.match(f.output.join(''), /Harness setup: 0 changed/);
+});
+
+test('factory harness setup preserves unrelated settings and adds a missing writable_roots array', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  fs.mkdirSync(path.join(f.root, '.codex'), { recursive: true });
+  fs.mkdirSync(path.join(f.root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, '.codex', 'config.toml'), 'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n');
+  const settings = { theme: 'light', statusLine: { command: 'sample-status' }, permissions: { deny: ['sample-deny'] },
+    autoMode: { environment: ['Owner note'], allow: ['Owner allow'] } };
+  fs.writeFileSync(path.join(f.root, '.claude', 'settings.json'), JSON.stringify(settings));
+  assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+  const current = JSON.parse(fs.readFileSync(path.join(f.root, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(current.theme, 'light'); assert.deepEqual(current.statusLine, settings.statusLine);
+  assert.deepEqual(current.permissions, settings.permissions);
+  assert.ok(current.autoMode.environment.includes('Owner note'));
+  assert.ok(current.autoMode.allow.includes('Owner allow'));
+  const codex = fs.readFileSync(path.join(f.root, '.codex', 'config.toml'), 'utf8');
+  assert.match(codex, /sandbox_mode = "workspace-write"/); assert.match(codex, /network_access = true/);
+  assert.ok(codex.includes('writable_roots = ['));
+  assert.equal(f.output.join('').includes('Owner note'), false);
+});
+
+test('factory harness setup refuses a forbidden stop-own rule and keeps the rules file', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+  const file = path.join(f.root, '.codex', 'rules', 'herdr.rules');
+  const forbidden = 'prefix_rule(pattern=["herdr-boss", "worker", "stop-own"], decision="forbidden")\n';
+  fs.writeFileSync(file, forbidden);
+  assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), forbidden);
+  assert.match(f.output.join(''), /harness setup failed/);
+});
+
+test('a host outage during harness setup keeps the configure host-unreachable state', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+  const run = f.docker.run.bind(f.docker);
+  f.docker.run = async (args, options) => {
+    if (args.some(word => word.includes('setupFactoryHarnessHome'))) throw Object.assign(new Error('The factory host is unreachable.'), { code: 'FACTORY_HOST_UNREACHABLE' });
+    return run(args, options);
+  };
+  assert.equal(await factoryCommand(['configure', 'demo', '--step', 'service'], f.io), 1);
+  const flow = JSON.parse(fs.readFileSync(path.join(f.io.env.HERDR_FACTORIES_DIR, 'demo', 'flow.json'), 'utf8'));
+  assert.equal(flow.state, 'host-unreachable');
+});
 
 test('new starts a factory with four labeled volumes, loopback ports and bounded resources', async () => {
   const f = fixture();
