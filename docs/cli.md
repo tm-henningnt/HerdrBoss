@@ -622,6 +622,8 @@ herdr-boss project transfer plan|start|switch|cancel <slug> --to <factory>
 
 Use `plan` to check the target factory, the kit revision, and the GitHub remote. The plan changes nothing. The remote must be reachable.
 
+The target dashboard must use HTTPS or loopback HTTP. If the connection is unsafe, create the HTTPS Serve route. Then run `herdr-boss factory connect NAME` and retry the transfer. See the Windows host runbook below.
+
 Use `start` to freeze a project for transfer. It lists a dirty tree, unpushed commits, an unpushed branch, or a running worker and stops when it finds one. It refuses while the source project lead is working or waiting for input. When the checks pass, Herdr Boss locks the project on both factories. It closes an idle project lead on the source, clones the repository on the target, installs the kit, creates the project record, and starts a fresh project lead. The new lead reads `docs/orchestration/memory.md`. The command posts a decision to the source Mailbox and exits with code 3.
 
 After you answer the Mailbox item, run `switch`. It waits with code 3 until it finds a clear answer. `Accept the switch` marks the source project as transferred and unlocks both factories. `Deny the switch` removes the target project and restarts the source project lead.
@@ -2232,6 +2234,8 @@ Each host stores its Codex sandbox setting. `user-namespaces` selects the tested
 
 After it creates a factory, `factory new` prints a Tailscale tag, policy lines, and a command for the host. Paste the lines into the tailnet policy file. Run the printed command on the host and approve the tag when the factory joins. The command does not change the tailnet. Port 443 is the HTTPS port of Tailscale Serve. A personal-only host has no client-factory grant.
 
+The output also gives an alternative for one shared `tag:factory` with `acls`. That block includes ports 22, 443, 4477, and 4478 in its rule and its `tests` line. Use one policy form. Merge its entries into the existing policy. Keep the other rules. See the Windows host runbook below for the shared tag form.
+
 ```sh
 herdr-boss factory new NAME [--host HOST] [--profile personal] [--image TAG] [--dashboard-port PORT] [--ssh-port PORT]
 herdr-boss factory build NAME [--host HOST] [--image TAG]
@@ -2274,22 +2278,22 @@ The service check measures `/api/health` through container loopback. It also che
 
 `connect` makes a registered container factory available to Fleet. Run it first for one factory. Check the result before you connect the next factory. The command gets the stable factory ID from the factory. It sets the dashboard base URL and imports a read credential through the private fleet command. The credential files have mode 600. The command prints no credential, address, key path, or Docker context name.
 
-The command uses `tailscale serve` in the WSL distribution. It forwards to the container loopback dashboard port. The command reuses a matching Serve route before it tries to change Serve. It accepts an HTTP route and the default HTTPS route. It refuses a port that belongs to another Serve route. It runs Serve as the factory SSH user. It does not retry with root rights or install a proxy service. It never replaces the factory container or binds a port to all host interfaces.
+The command uses `tailscale serve` in the WSL distribution. It forwards to the container loopback dashboard port. It reuses a matching HTTPS route. It replaces a matching plain HTTP route with HTTPS on port 443. It refuses a listener that belongs to another Serve route. It registers only the HTTPS dashboard address. It runs Serve as the factory SSH user. It never runs a command with root rights.
 
-If Serve refuses the change with an access denied message, `connect` prints the exact masked error and exits 3. The connection waits for the Owner. Run one of these commands in the WSL Owner terminal:
+If Serve refuses the change with an access denied message, `connect` prints the exact masked error and exits 3. The connection waits for the Owner. Run these two commands in the WSL Owner terminal:
 
 ```sh
-sudo tailscale set --operator=USER
+sudo tailscale serve --http=PORT off
 sudo tailscale serve --bg PORT
 ```
 
-Replace `USER` with the registered host user. The terminal hint prints that name. Replace `PORT` with the registered loopback dashboard port. Use the first command to let the factory user configure Serve. Use the second command to create one forward with root rights. Its default HTTPS listener forwards to that dashboard port. Retry `factory connect NAME` after the Owner step. The command reuses the existing forward and does not need the operator right for that path.
+Replace `PORT` with the registered loopback dashboard port. Enable HTTPS certificates in the tailnet settings. The first command removes the old HTTP listener. The second command creates the HTTPS listener on port 443. To let the host user configure Serve, run `sudo tailscale set --operator=USER`. Replace `USER` with the registered host user. Retry `factory connect NAME` after the HTTPS route exists. An existing HTTPS forward needs no operator right for this check.
 
 `connect` saves a private progress record. Run the same command again after a failed step. It keeps one factory registration. It reuses the current private credential export in the factory. It creates a new credential only when that export is missing or no longer current. The factory retains this private export for a later resume. A new credential keeps the previous credential valid for ten minutes. Dashboard requests still need Owner access. The read credential permits only GET summary and health.
 
 The command checks that the tailnet health route requires Owner access before it imports a credential. It enables **Poll registered factories** through the local dashboard API. It does not restart factory zero. It restarts the remote supervised service only when its allowed host list changes. `connect --check NAME` sends one summary request. It prints one line: name, state, and summary age. An unknown age prints `unknown`. Exit code 0 means that the factory answered with a valid summary. Exit code 1 means that a check or connection step failed. Exit code 3 means that the Owner must enable Serve or configure a forward. Another Serve failure, such as a stopped Tailscale daemon or a missing login, exits 1 with the code `serve-failed` and the masked error. The command does not wait for the Owner in that case. Private connection settings remain outside the dashboard because they hold connection fields.
 
-`connect --undo NAME` reverses what `connect` created. It turns off the Serve forward for the registered dashboard port only, and only when `connect` created that forward. It never runs `serve reset`. It removes the allowed host entry that `connect` added, and restarts the remote supervised service. It removes the imported read credential of that factory. It turns off **Poll registered factories** when no other factory stays registered. It removes the registration from `fleet.json` as the last step. The private token export file in the factory stays. Run the command again after a failed step. A second run prints that nothing is left to undo.
+`connect --undo NAME` reverses what `connect` created. It turns off the HTTPS listener only when `connect` created it. A connection record from an older release removes its HTTP listener instead. An HTTPS route that the Owner created stays. Undo never runs `serve reset`. It removes the allowed host entry that `connect` added, and restarts the remote supervised service. It removes the imported read credential of that factory. It turns off **Poll registered factories** when no other factory stays registered. It removes the registration from `fleet.json` as the last step. The private token export file in the factory stays. Run the command again after a failed step. A second run prints that nothing is left to undo.
 
 `attach` connects Herdr on this Mac to a registered container factory. Run it on the Mac, after `connect` or on its own. Herdr takes an SSH target, so the command uses plain OpenSSH. It does not publish a new port.
 
@@ -2335,6 +2339,91 @@ A Docker context over SSH stores the address in the Docker context store. To lis
 An IPv6 token must have `::` or eight hex groups. Clock times remain visible.
 
 Use [the Windows host runbook](windows-host.md) to set up WSL2, systemd, Docker Engine, key login, Tailscale, and the Windows boot task. The image spike uses an approved Docker context. List only its name with `docker context ls --format '{{.Name}}'`. Keep the real name outside reports and the repository.
+
+### Windows host runbook
+
+Use placeholders only. Replace `DISTRO`, `HOST`, `CONTEXT`, `USER`, `NAME`, `PORT`, `SLUG`, and `FACTORY_ID` with your private values. `PORT` is the factory's loopback dashboard port. The first port is 4478. Keep connection values outside the repository and reports.
+
+1. Prepare WSL2 with systemd, Docker Engine, SSH key login, and Tailscale. Follow [the Windows host steps](windows-host.md). Keep the startup task and its five-minute repeating trigger. In WSL, check `systemctl is-active docker ssh tailscaled`. Each service must show `active`.
+2. Set the Tailscale tag and policy. For one shared tag, merge this block into the policy. Keep all existing rules. The source must include the Owner device and the head office. Add the head office tag to `src` when that device is tagged.
+
+   ```json
+   {
+     "tagOwners": { "tag:factory": ["autogroup:admin"] },
+     "acls": [
+       { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:factory:22,443,4477,4478"] }
+     ],
+     "tests": [
+       { "src": "autogroup:member", "accept": ["tag:factory:22,443,4477,4478"] }
+     ]
+   }
+   ```
+
+   Save the policy only after its tests pass. In the WSL Owner terminal, run `sudo tailscale up --advertise-tags=tag:factory`. Approve that tag in the Tailscale admin console. Port 22 permits host SSH. Port 443 permits HTTPS Serve. Ports 4477 and 4478 cover the dashboard ports in the shared policy. Docker must still bind the dashboard to loopback.
+3. Register the private Docker context from the host tool machine. Then create the factory.
+
+   ```sh
+   herdr-boss factory host add HOST --docker-context CONTEXT --runtime docker-engine-wsl2 --personal-only true --codex-sandbox unavailable
+   herdr-boss factory new NAME --host HOST --dashboard-port PORT
+   herdr-boss factory status NAME
+   ```
+
+   Use `user-namespaces` only after the Codex sandbox check passes. Check service health before you continue. Run each agent app login at an Owner terminal when it is needed.
+4. Enable HTTPS certificates in the tailnet settings. In the WSL Owner terminal, repair an old HTTP listener with these two commands:
+
+   ```sh
+   sudo tailscale serve --http=PORT off
+   sudo tailscale serve --bg PORT
+   ```
+
+   The HTTPS listener uses port 443. It forwards to the loopback dashboard port. If the HTTP listener is absent, create the HTTPS listener with the second command. Use `sudo tailscale set --operator=USER` when the host user must manage Serve. Check the route with `tailscale serve status` at the Owner terminal. Keep its output private. The [Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) describes these listener options.
+5. Connect from the host tool machine.
+
+   ```sh
+   herdr-boss factory connect NAME
+   herdr-boss factory connect --check NAME
+   ```
+
+   The check must show a healthy factory. If it reports `dashboard-unreachable`, check port 443 in the rule and its tests. If it exits 3, run the printed WSL commands. Retry connect after the HTTPS route exists.
+6. Update the service when the factory has no working worker, suite, push, or handover.
+
+   ```sh
+   herdr-boss factory update NAME --tier service --dry-run
+   herdr-boss factory update NAME --tier service
+   herdr-boss factory status NAME
+   ```
+
+   The update prints `Commit: before -> after`. Status shows `commit` for the running service and `checkoutHead` for the checkout. Check that they agree after the restart. Use the image tier only for an image change.
+7. Prepare a project transfer. Register the target guidance credential through the private provisioning channel. Run `fleet guide-token rotate --out-file PRIVATE_EXPORT` in the target factory. Import it at the source with `fleet guide-token set FACTORY_ID --from-file PRIVATE_EXPORT`. Use the CLI credential procedure below. Keep the export out of reports and repositories.
+
+   ```sh
+   herdr-boss project transfer plan SLUG --to NAME
+   herdr-boss project transfer start SLUG --to NAME
+   ```
+
+   Push project work and finish workers before start. The start command asks for the switch in the source Mailbox. Answer that item. Then run `herdr-boss project transfer switch SLUG --to NAME`. Use `cancel` before the switch to keep the project at the source. Check the fresh project lead at the target after an accepted switch.
+8. Run a small service and Herdr smoke test. Use a new `smoke-setup` name. Create its folder under the factory work root only.
+
+   ```sh
+   herdr-boss factory shell NAME -- curl -fsS http://127.0.0.1:4477/api/health
+   herdr-boss factory shell NAME -- herdr status server
+   herdr-boss factory shell NAME -- mkdir /home/factory/work/smoke-setup
+   herdr-boss factory shell NAME -- herdr workspace create --cwd /home/factory/work/smoke-setup --label smoke-setup --no-focus
+   herdr-boss factory clean-smoke NAME --dry-run
+   herdr-boss factory clean-smoke NAME
+   ```
+
+   Health must return 200. Herdr must answer. The new workspace must appear. Read the cleanup names before you confirm. Type `clean-smoke NAME` on stdin. Run the dry-run again to check that no smoke resource remains. This test does not run the image test or a full suite.
+
+### Clean smoke resources
+
+```
+herdr-boss factory clean-smoke NAME [--dry-run] [--yes]
+```
+
+A smoke run uses the `smoke-` prefix for its Herdr workspace label and project folder name. Put each smoke folder directly under `/home/factory/work`. The command lists matching workspace labels and folder names with counts. It prints no folder path. It closes only matching workspace IDs. It removes only matching folders under that work root.
+
+Without `--yes`, type the exact phrase `clean-smoke NAME` on stdin. A wrong or absent answer stops cleanup. `--yes` skips confirmation. `--dry-run` lists and checks the resources without confirmation or removal. The command refuses symbolic links in the work root, matching folders, or their contents. It refuses a path that resolves outside the work root. It checks folders before it closes a workspace. A non-smoke name stays. A regular file directly in the work root stays. The command changes no project registry row. Run it again after a failure to finish the remaining cleanup.
 
 ### Update a factory
 

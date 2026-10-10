@@ -153,7 +153,8 @@ function safeDashboard(record) {
   try { url = new URL(record.dashboardUrl); } catch { refuse('The target factory is not available in the factory list.'); }
   const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(url.hostname);
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || !(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))) {
-    refuse('The target factory does not have a safe dashboard connection.');
+    const name = SLUG.test(record.name) ? record.name : 'NAME';
+    refuse(`The target factory does not have a safe dashboard connection. Create the HTTPS Serve route. Then run herdr-boss factory connect ${name} and retry the transfer.`);
   }
   return url.origin;
 }

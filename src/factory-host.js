@@ -17,6 +17,7 @@ export const FACTORY_HOST_USAGE = [
   '       factory ssh HOST -- COMMAND...',
   '       factory docker HOST -- ARGS...',
   '       factory connect [--check|--undo] NAME',
+  '       factory clean-smoke NAME [--dry-run] [--yes]',
   '       factory attach NAME [--undo]',
   '       factory login NAME claude|codex|opencode',
   '       factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]',
@@ -347,6 +348,10 @@ export async function factoryCommand(args, io = {}) {
   if (sub === 'connect') {
     const { factoryConnectCommand } = await import('./factory-connect.js');
     return factoryConnectCommand(rest, context);
+  }
+  if (sub === 'clean-smoke') {
+    const { factoryCleanSmokeCommand } = await import('./factory-clean-smoke.js');
+    return factoryCleanSmokeCommand(rest, context);
   }
   if (sub === 'attach') {
     const { factoryAttachCommand } = await import('./factory-attach.js');

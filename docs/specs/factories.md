@@ -202,6 +202,47 @@ The Owner talks to each factory Boss directly. The head office is code, not an a
 - The host joins the tailnet with a host tag. sshd in the WSL2 distribution accepts only key login. The host tool on the Mac drives Docker through that SSH path. Agents may use the key through the host tool without a confirmation for each use. `factory destroy` and `factory restore` need the Owner's typed confirmation (ADR 0023).
 - A runbook in `docs/` lists each setup step.
 
+#### Windows host runbook
+
+Use placeholders only. Keep host names, tailnet names, addresses, and tenant data outside this repository. Use `NAME` for a factory, `PORT` for its loopback dashboard port, and `SLUG` for a project. Follow [the command runbook](../cli.md#windows-host-runbook) and [the Windows setup steps](../windows-host.md).
+
+1. Install Docker Engine and Tailscale in WSL2. Enable systemd. Use key login for host SSH. Keep the boot task and its repeating trigger.
+2. Approve the host tag in Tailscale. For a tailnet with one shared tag, merge this alternative into the existing policy. Keep the other rules. Include the head office in the rule source.
+
+   ```json
+   {
+     "tagOwners": { "tag:factory": ["autogroup:admin"] },
+     "acls": [
+       { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:factory:22,443,4477,4478"] }
+     ],
+     "tests": [
+       { "src": "autogroup:member", "accept": ["tag:factory:22,443,4477,4478"] }
+     ]
+   }
+   ```
+
+   Port 22 permits host SSH. Port 443 permits HTTPS Serve. The two dashboard ports stay in the rule and its tests. Save only after the policy tests pass. `factory new` prints both the per-factory grants form and this shared-tag `acls` form. Use one form.
+3. Create the factory with the host tool. Keep Docker ports bound to loopback. Check factory health.
+4. Enable HTTPS certificates in the tailnet settings. In the WSL Owner terminal, replace an old plain HTTP forward:
+
+   ```sh
+   sudo tailscale serve --http=PORT off
+   sudo tailscale serve --bg PORT
+   ```
+
+   The second command publishes HTTPS on port 443. Connect after that route exists with `herdr-boss factory connect NAME`. Check with `factory connect --check NAME`. Connect reuses a matching HTTPS route. It replaces a matching HTTP forward when the factory user can change Serve. Otherwise it gives the repair commands. It never registers a plain HTTP tailnet address.
+5. Run `herdr-boss factory update NAME --tier service` after the idle checks pass. Read the printed `before -> after` commits. Run `factory status NAME`. Compare the running service `commit` with the checkout `checkoutHead`.
+6. Provision the target guidance credential privately. Run `herdr-boss project transfer plan SLUG --to NAME` from the source. Finish workers and push work before `start`. Answer the source Mailbox item before `switch`. Use `cancel` before the switch when the project must stay at the source. An unsafe connection refusal names the HTTPS route and `factory connect NAME` as the repair.
+7. Check service health and the Herdr server. Create a `smoke-setup` folder under the factory work root. Create a Herdr workspace with that label and folder. Check that both exist. Run `herdr-boss factory clean-smoke NAME --dry-run`. Read the names. Run `herdr-boss factory clean-smoke NAME` and type `clean-smoke NAME`. Run the dry-run again to check the cleanup.
+
+#### Smoke naming and cleanup contract
+
+A smoke run uses the prefix `smoke-` for its Herdr workspace label and project folder name. The factory work root is `/home/factory/work`. Put smoke folders directly under that root. The Owner script and `factory clean-smoke NAME` use this same contract.
+
+The command lists matching workspaces and folders with counts and names. It prints no folder paths. Without `--yes`, it requires the exact phrase `clean-smoke NAME` on stdin. A wrong or absent phrase stops cleanup. `--yes` skips that confirmation. `--dry-run` lists and checks without confirmation or removal.
+
+The command closes only workspaces whose labels start with `smoke-`. It removes only folders whose names start with `smoke-`. It refuses symbolic links in the root, matching folders, or their contents. It refuses a path that resolves outside the work root. It checks all matching folders before it closes a workspace. It checks the names again after confirmation. Every other workspace and folder stays. Regular files directly under the work root stay. Project registry rows stay. A repeat after a failure removes only the remaining matching resources.
+
 ### Wizard
 
 - A resumable state machine in the style of `project new`. A finished step is skipped when its check still passes. Exit code 3 means it waits for the Owner. No secret enters the Mailbox.

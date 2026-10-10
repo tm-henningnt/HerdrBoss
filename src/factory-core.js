@@ -394,6 +394,18 @@ function tailnetPolicyText(name, personalOnly) {
     ...grants.map((grant, index) => `  ${grantLine(grant)}${index < grants.length - 1 ? ',' : ''}`),
     ']',
     `tailscale up --advertise-tags=${tag}`,
+    '// Alternative: one shared tag with acls. Use this block instead of the grants above.',
+    '// Merge these entries into the existing policy. Keep its other rules.',
+    '"tagOwners": {',
+    '  "tag:factory": ["autogroup:admin"]',
+    '},',
+    '"acls": [',
+    '  {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:factory:22,443,4477,4478"]}',
+    '],',
+    '"tests": [',
+    '  {"src": "autogroup:member", "accept": ["tag:factory:22,443,4477,4478"]}',
+    ']',
+    'tailscale up --advertise-tags=tag:factory',
     '',
   ].join('\n');
 }

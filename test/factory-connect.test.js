@@ -21,7 +21,7 @@ function fixture(t, hostUser = 'factory') {
   writeFleet(env, { schema: 1, contractVersion: '1.0.0', minimumFactoryVersion: '0.1.0', hosts: [{ hostId: 'example-host', transport: 'ssh', connectionRef: 'example-host', runtime: 'docker-engine-wsl2', personalOnly: true, codexSandbox: 'user-namespaces' }], factories: [{ factoryId: 'win1', name: 'win1', hostId: 'example-host', kind: 'container', containerName: 'hf-win1', hostname: 'win1.localhost', ports: { dashboard: 4478, ssh: 2222 }, profile: 'personal', dashboardUrl: 'http://win1.localhost:4478', version: '0.1.0', kitRevision: 'abcdef012345', image: { builtAt: '2026-10-03T00:00:00Z', pinsHash: 'a'.repeat(64) } }] });
   writePrivate(factoryFile(env, 'win1'), { name: 'win1', hostId: 'example-host', ports: { dashboard: 4478, ssh: 2222 } });
   const calls = [], output = [];
-  let url = 'http://win1.localhost:4478', failImport = false, blocked = false, serveConflict = false, serveUnavailable = false, serveReady = false, openDashboard = false, serveFailure = null, serveStatusFailure = null, allowedChanged = false, headOffice = false;
+  let url = 'http://win1.localhost:4478', failImport = false, blocked = false, serveConflict = false, serveUnavailable = false, serveReady = false, serveConfig = null, openDashboard = false, serveFailure = null, serveStatusFailure = null, allowedChanged = false, headOffice = false;
   const json = (body) => ({ code: 0, stdout: JSON.stringify(body), stderr: '' });
   const settings = () => ({ factoryId: 'factory-win1', name: 'win1', dashboardUrl: url, headOffice: false, shareItemTitles: true, accounts: [] });
   const docker = { async run(args, options) {
@@ -40,10 +40,13 @@ function fixture(t, hostUser = 'factory') {
     calls.push({ type: 'host', args });
     if (serveStatusFailure && args.includes('serve') && args.includes('status')) return { code: 1, stdout: '', stderr: serveStatusFailure };
     if (args.includes('status') && !args.includes('serve')) return json({ BackendState: 'Running', Self: { DNSName: 'example.invalid.', TailscaleIPs: ['192.0.2.1'] } });
-    if (args.includes('status')) return json(serveReady ? { TCP: { [serveReady === 'https' ? 443 : 4478]: { [serveReady === 'https' ? 'HTTPS' : 'HTTP']: true } }, Web: { [`example.invalid:${serveReady === 'https' ? 443 : 4478}`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4478' } } } } } : serveConflict ? { Web: { 'example.invalid:4478': { Handlers: { '/': { Proxy: 'http://127.0.0.1:9999' } } } } } : {});
-    if (args.includes('serve') && args.includes('off')) return json({});
+    if (args.includes('status')) return json(serveConfig || (serveReady ? { TCP: { [serveReady === 'https' ? 443 : 4478]: { [serveReady === 'https' ? 'HTTPS' : 'HTTP']: true } }, Web: { [`example.invalid:${serveReady === 'https' ? 443 : 4478}`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4478' } } } } } : serveConflict ? { Web: { 'example.invalid:4478': { Handlers: { '/': { Proxy: 'http://127.0.0.1:9999' } } } } } : {}));
     if (serveFailure && args.includes('serve')) return { code: 1, stdout: '', stderr: serveFailure };
-    if (args.includes('serve')) return serveUnavailable ? { code: 1, stdout: '', stderr: 'sending serve config: Access denied: serve config denied\nUse sudo tailscale serve --bg --http=4478 http://192.0.2.1:4478\n' } : json({});
+    if (args.includes('serve')) {
+      if (serveUnavailable) return { code: 1, stdout: '', stderr: 'sending serve config: Access denied: serve config denied\nUse sudo tailscale serve --bg --http=4478 http://192.0.2.1:4478\n' };
+      serveReady = args.includes('off') ? false : args.includes('--http=4478') ? 'http' : 'https';
+      return json({});
+    }
     throw new Error('Unexpected fake host call.');
   } };
   const io = { env, isContainer: () => false, transportFactory: () => docker, hostTransportFactory: () => host,
@@ -63,7 +66,7 @@ function fixture(t, hostUser = 'factory') {
       assert.equal(options.headers.authorization, `Bearer ${token}`);
       return new Response(JSON.stringify({ ...fixtureSummary, factoryId: 'factory-win1', name: 'win1', dashboardUrl: url }), { headers: { 'content-type': 'application/json' } });
     } };
-  return { root, env, calls, output, io, set failImport(value) { failImport = value; }, set blocked(value) { blocked = value; }, set serveConflict(value) { serveConflict = value; }, set serveUnavailable(value) { serveUnavailable = value; }, set serveReady(value) { serveReady = value; }, set openDashboard(value) { openDashboard = value; }, set serveFailure(value) { serveFailure = value; }, set serveStatusFailure(value) { serveStatusFailure = value; }, set allowedChanged(value) { allowedChanged = value; } };
+  return { root, env, calls, output, io, set failImport(value) { failImport = value; }, set blocked(value) { blocked = value; }, set serveConflict(value) { serveConflict = value; }, set serveUnavailable(value) { serveUnavailable = value; }, set serveReady(value) { serveReady = value; }, set serveConfig(value) { serveConfig = value; }, set openDashboard(value) { openDashboard = value; }, set serveFailure(value) { serveFailure = value; }, set serveStatusFailure(value) { serveStatusFailure = value; }, set allowedChanged(value) { allowedChanged = value; } };
 }
 
 test('connect uses private provisioning and a tailnet proxy, and repeated calls keep one registration', async (t) => {
@@ -76,10 +79,11 @@ test('connect uses private provisioning and a tailnet proxy, and repeated calls 
   const fleet = JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json')));
   assert.equal(fleet.factories.length, 1);
   assert.equal(fleet.factories[0].factoryId, 'factory-win1');
-  assert.equal(fleet.factories[0].dashboardUrl, 'http://example.invalid:4478');
+  assert.equal(fleet.factories[0].dashboardUrl, 'https://example.invalid');
   assert.equal(fs.statSync(path.join(f.root, '.config', 'herdr-boss', 'fleet-remotes.json')).mode & 0o777, 0o600);
   assert.doesNotMatch(f.output.join(''), /hf_read_|example.invalid|192\.0\.2\.1|example-key|example-context|PRIVATE/);
-  assert.ok(f.calls.some((call) => call.type === 'host' && call.args.includes('--http=4478') && call.args.includes('http://127.0.0.1:4478')));
+  assert.ok(f.calls.some((call) => call.type === 'host' && call.args.includes('--bg') && call.args.at(-1) === '4478'));
+  assert.equal(f.calls.filter((call) => call.type === 'host' && call.args.includes('--bg')).length, 1);
   assert.equal(f.calls.some((call) => call.type === 'docker' && ['rm', 'stop', 'create'].includes(call.args[0])), false);
   assert.doesNotMatch(JSON.stringify(f.calls), /0\.0\.0\.0|"::"|funnel/);
 });
@@ -138,13 +142,57 @@ test('connect waits for the Owner without a root fallback when the operator righ
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories.length, 1);
 });
 
-test('connect reuses an Owner-provisioned HTTP or HTTPS Serve route without an operator right', async (t) => {
-  for (const mode of ['http', 'https']) {
-    const f = fixture(t); f.serveUnavailable = true; f.serveReady = mode;
-    assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
-    assert.equal(f.calls.some((call) => call.type === 'host' && call.args.includes('--bg')), false);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories[0].dashboardUrl, mode === 'https' ? 'https://example.invalid' : 'http://example.invalid:4478');
-  }
+test('connect reuses an Owner-provisioned HTTPS Serve route without an operator right', async (t) => {
+  const f = fixture(t); f.serveUnavailable = true; f.serveReady = 'https';
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
+  assert.equal(f.calls.some((call) => call.type === 'host' && call.args.includes('--bg')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories[0].dashboardUrl, 'https://example.invalid');
+});
+
+test('connect replaces a plain HTTP dashboard forward with HTTPS before registration', async (t) => {
+  const f = fixture(t); f.serveReady = 'http';
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
+  assert.deepEqual(f.calls.filter((call) => call.type === 'host' && call.args.includes('serve') && !call.args.includes('status')).map((call) => call.args), [
+    ['tailscale', 'serve', '--http=4478', 'off'],
+    ['tailscale', 'serve', '--bg', '4478'],
+  ]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories[0].dashboardUrl, 'https://example.invalid');
+});
+
+test('connect gives the two HTTPS repair commands and certificate hint when plain HTTP cannot be replaced', async (t) => {
+  const f = fixture(t); f.serveReady = 'http'; f.serveUnavailable = true;
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 3);
+  assert.match(f.output.join(''), /sudo tailscale serve --http=4478 off\n  sudo tailscale serve --bg 4478/);
+  assert.match(f.output.join(''), /Enable HTTPS certificates in the tailnet/);
+  assert.match(f.output.join(''), /factory connect win1/);
+  assert.equal(f.calls.some((call) => call.type === 'docker' && call.args.includes('init')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories[0].dashboardUrl, 'http://win1.localhost:4478');
+  assert.equal(fs.existsSync(path.join(f.root, '.config', 'herdr-boss', 'fleet-remotes.json')), false);
+});
+
+test('connect keeps an unrelated HTTPS route when a plain HTTP dashboard forward exists', async (t) => {
+  const f = fixture(t);
+  f.serveConfig = { TCP: { 443: { HTTPS: true }, 4478: { HTTP: true } }, Web: {
+    'example.invalid:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:9999' } } },
+    'example.invalid:4478': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4478' } } },
+  } };
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 1);
+  assert.match(f.output.join(''), /serve-route-conflict/);
+  assert.equal(f.calls.some((call) => call.type === 'host' && (call.args.includes('--bg') || call.args.includes('off'))), false);
+});
+
+test('connect prints the HTTPS repair and certificates hint when an HTTP upgrade fails after removal', async (t) => {
+  const f = fixture(t); f.serveReady = 'http';
+  const host = f.io.hostTransportFactory();
+  f.io.hostTransportFactory = () => ({ async run(args) {
+    if (args.includes('--bg')) return { code: 1, stdout: '', stderr: 'HTTPS is not enabled in this tailnet' };
+    return host.run(args);
+  } });
+  assert.equal(await factoryCommand(['connect', 'win1'], f.io), 1);
+  assert.match(f.output.join(''), /Enable HTTPS certificates in the tailnet/);
+  assert.match(f.output.join(''), /sudo tailscale serve --http=4478 off\n  sudo tailscale serve --bg 4478/);
+  assert.equal(f.calls.some((call) => call.type === 'docker' && call.args.includes('init')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories[0].dashboardUrl, 'http://win1.localhost:4478');
 });
 
 test('connect refuses a dashboard proxy that bypasses Owner access', async (t) => {
@@ -227,7 +275,7 @@ test('only an access denied message waits for the Owner; other Serve failures fa
 test('the runbook states only the current Serve rule', () => {
   const text = fs.readFileSync(new URL('../docs/factory-host-runbook.md', import.meta.url), 'utf8');
   assert.doesNotMatch(text, /did not permit Serve|password is required|diagnostic root status/i);
-  assert.match(text, /operator right or an existing Serve forward/);
+  assert.match(text, /operator right or an existing HTTPS Serve forward/);
 });
 
 test('connect --undo removes only what connect created and a second undo finds nothing left', async (t) => {
@@ -239,7 +287,7 @@ test('connect --undo removes only what connect created and a second undo finds n
   assert.equal(await factoryCommand(['connect', '--undo', 'win1'], f.io), 0);
   assertPollerRegistry(f.env);
   const hostCalls = f.calls.filter((call) => call.type === 'host').map((call) => call.args.join(' '));
-  assert.deepEqual(hostCalls, ['tailscale serve --http=4478 off']);
+  assert.deepEqual(hostCalls, ['tailscale serve --https=443 off']);
   assert.ok(f.calls.some((call) => call.type === 'docker' && call.args.some((arg) => arg.includes('connect-undo') && arg.includes('allowedHosts'))));
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(remotes))), ['other-factory']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.HERDR_FACTORIES_DIR, 'fleet.json'))).factories.length, 0);
@@ -253,7 +301,7 @@ test('connect --undo removes only what connect created and a second undo finds n
 });
 
 test('connect --undo keeps an Owner-provisioned forward and an existing allowed host', async (t) => {
-  const f = fixture(t); f.serveReady = 'http';
+  const f = fixture(t); f.serveReady = 'https';
   assert.equal(await factoryCommand(['connect', 'win1'], f.io), 0);
   f.calls.length = 0;
   assert.equal(await factoryCommand(['connect', '--undo', 'win1'], f.io), 0);

@@ -46,6 +46,8 @@ const serveError = (result, host) => {
   return Object.assign(failure(/access denied/i.test(output) ? 'serve-owner-required' : 'serve-failed'), { publicError: maskLine(output, host, true) });
 };
 
+const httpsRepair = (record) => `Enable HTTPS certificates in the tailnet settings.\nRun these two commands in the WSL Owner terminal:\n  sudo tailscale serve --http=${record.ports.dashboard} off\n  sudo tailscale serve --bg ${record.ports.dashboard}\nThen retry factory connect ${record.name}.`;
+
 async function endpoint(host, record, container, io, created) {
   const transport = io.hostTransportFactory ? io.hostTransportFactory(host) : createHostTransport(host, io);
   const status = await transport.run(['tailscale', 'status', '--json']);
@@ -61,7 +63,8 @@ async function endpoint(host, record, container, io, created) {
   const config = await transport.run(['tailscale', 'serve', 'status', '--json']);
   if (config.code === 0) {
     const current = parse(config.stdout);
-    // Reuse the Owner's default HTTPS forward or an existing HTTP forward.
+    const httpPorts = [];
+    // Reuse HTTPS only. Transfer credentials must never go over a plain HTTP tailnet route.
     for (const [site, web] of Object.entries(current.Web || {})) {
       const split = site.lastIndexOf(':');
       const name = site.slice(0, split).toLowerCase();
@@ -73,19 +76,26 @@ async function endpoint(host, record, container, io, created) {
         matching = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname) && Number(url.port) === port && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash;
       } catch { /* An unrelated handler cannot supply the factory endpoint. */ }
       const tcp = current.TCP?.[listeningPort];
-      if (name === hostname && matching && (tcp?.HTTPS || tcp?.HTTP)) return validateDashboardUrl(`${tcp.HTTPS ? 'https' : 'http'}://${hostname}:${listeningPort}`);
+      if (name !== hostname || !matching) continue;
+      if (tcp?.HTTPS === true) return validateDashboardUrl(`https://${hostname}:${listeningPort}`);
+      if (tcp?.HTTP === true) {
+        if (Object.keys(web.Handlers).length !== 1) throw failure('serve-route-conflict');
+        httpPorts.push(listeningPort);
+      }
     }
     const site = `${hostname}:${port}`;
     const handler = current.Web?.[site]?.Handlers?.['/'];
     if (handler && handler.Proxy !== target) throw failure('serve-route-conflict');
-    if (current.TCP?.[port] && !current.TCP[port].HTTP) throw failure('serve-route-conflict');
-    if (handler?.Proxy !== target) {
-      const args = ['tailscale', 'serve', '--bg', `--http=${port}`, target];
-      const result = await transport.run(args);
-      if (result.code !== 0) throw serveError(result, host);
-      created.serve = true;
+    // The default HTTPS listener must be free. Keep every unrelated Serve route intact.
+    if (current.TCP?.[443] || Object.keys(current.Web || {}).some((site) => site.endsWith(':443'))) throw failure('serve-route-conflict');
+    for (const httpPort of httpPorts) {
+      const result = await transport.run(['tailscale', 'serve', `--http=${httpPort}`, 'off']);
+      if (result.code !== 0) throw Object.assign(serveError(result, host), { httpsRepair: true });
     }
-    return validateDashboardUrl(`http://${hostname}:${port}`);
+    const result = await transport.run(['tailscale', 'serve', '--bg', String(port)]);
+    if (result.code !== 0) throw Object.assign(serveError(result, host), { httpsRepair: httpPorts.length > 0 });
+    created.serve = { protocol: 'https', port: 443 };
+    return validateDashboardUrl(`https://${hostname}`);
   }
   throw serveError(config, host);
 }
@@ -155,7 +165,9 @@ async function undo(name, io) {
   try {
     if (created.serve) {
       const transport = io.hostTransportFactory ? io.hostTransportFactory(host) : createHostTransport(host, io);
-      const result = await transport.run(['tailscale', 'serve', `--http=${record.ports.dashboard}`, 'off']);
+      // Older connection records own an HTTP listener. New records own HTTPS on port 443.
+      const listener = created.serve === true ? `--http=${record.ports.dashboard}` : '--https=443';
+      const result = await transport.run(['tailscale', 'serve', listener, 'off']);
       if (result.code !== 0 && !/no (serve )?config|not found|does not exist|nothing to/i.test(`${result.stdout}${result.stderr}`)) throw failure('serve-failed');
       created.serve = false; writePrivate(createdFile, created); removed.push('serve forward');
     }
@@ -270,14 +282,14 @@ export async function factoryConnectCommand(args, io) {
     if (error.code === 'serve-owner-required') {
       try { writePrivate(journal, { schema: 1, name: record.name, stage, state: 'waiting', error: error.code }); }
       catch { io.stderr.write(`${record.name} connect failed: private-store-unavailable.\n`); return 1; }
-      io.stderr.write(`${record.name} waiting for the Owner.\n${error.publicError?.trim() || 'Tailscale Serve is unavailable.'}\nRun one command in the WSL Owner terminal:\n  sudo tailscale set --operator=${host.user}\n  sudo tailscale serve --bg ${record.ports.dashboard}\nThen retry factory connect ${record.name}.\n`);
+      io.stderr.write(`${record.name} waiting for the Owner.\n${error.publicError?.trim() || 'Tailscale Serve is unavailable.'}\n${httpsRepair(record)}\nTo let the host user configure Serve, run:\n  sudo tailscale set --operator=${host.user}\n`);
       return 3;
     }
     const allowed = ['serve-failed', 'tailnet-unavailable', 'unsafe-dashboard-binding', 'serve-route-conflict', 'dashboard-auth-required', 'dashboard-unreachable', 'contract-mismatch', 'container-stopped', 'credential-invalid', 'duplicate-factory-id', 'registration-changed', 'head-office-unavailable'];
     const reason = isHostUnreachable(error) ? 'unreachable' : allowed.includes(error.code) ? error.code : 'connect-failed';
     try { writePrivate(journal, { schema: 1, name: record.name, stage, state: 'failed', error: reason }); }
     catch { io.stderr.write(`${record.name} connect failed: private-store-unavailable.\n`); return 1; }
-    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}.${reason === 'serve-failed' && error.publicError?.trim() ? `\n${error.publicError.trim()}` : ''}${reason === 'dashboard-unreachable' ? `\nThe tailnet access rules may not allow port ${error.port}; add it next to port 22.` : ''} Retry factory connect.\n`);
+    io.stderr.write(`${record.name} connect failed: ${stage} ${reason}.${reason === 'serve-failed' && error.publicError?.trim() ? `\n${error.publicError.trim()}` : ''}${reason === 'dashboard-unreachable' ? `\nThe tailnet access rules may not allow port ${error.port}; add it next to port 22.` : ''}${error.httpsRepair ? `\n${httpsRepair(record)}` : ' Retry factory connect.'}\n`);
     return 1;
   }
 }
