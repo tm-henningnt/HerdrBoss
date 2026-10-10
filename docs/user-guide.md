@@ -32,6 +32,8 @@ On **Resource allocation**, set the ordered choices for automatic project lead h
 
 ## Projects page
 
+Run `herdr-boss publish SLUG FILE --sync` to update the published task states. For a GitHub project, the sync sets a task to `done` only when its issue is closed as completed. An open issue stays `doing` or `todo`. If GitHub cannot be read, the sync keeps the card as it is and prints the reason. Set `partlyDone: true` on a task when part of its work remains. The sync keeps that task out of `done`. See the [status schema](project-status.md).
+
 The Projects page starts with cards for open projects. The allocation bar stays above either view. Each card shows the register state, area, client tag, share, and status dot. Select a card to see its published status, tasks, workers, locks, browser, policy, register fields, issue source, triage settings, and project actions.
 
 Select **Register** to search and manage open, parked, archived, and policy-only projects. Select **Add** for a project that is in policy but not in the register. A project with its kit installed but without a workspace or project lead shows the missing step. Use its start button to finish setup.

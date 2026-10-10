@@ -4,7 +4,7 @@ The published status holds the plan: task list, titles, order. The service compu
 
 ## Fact sources
 
-The sources are listed from the strongest to the weakest. The first source that applies decides the computed state.
+These sources control the read-only service overlay. They are listed from the strongest to the weakest. The first source that applies decides the computed state. The [publish sync](#publish-with-sync) uses the GitHub completion rules below before it writes a card state.
 
 1. **Commits on the base branch.** A commit that names the task id gives `done`. The card shows the short commit id.
 2. **Worker records.** A live worker gives `doing`. A collected worker gives `review`. A collected worker whose branch is merged gives `done`.
@@ -97,7 +97,15 @@ The engine finds the orchestrator pane in the live Herdr pane list at each tick,
 
 ## Publish with sync
 
-`herdr-boss publish SLUG FILE --sync` reads the same facts as the service: git log of the base branch, the worker records and the issue tracker. It sets `status` of each card that diverges to its computed state before it installs the status. A stuck card gets `doing`. It prints one line with the number of cards that changed. It prints one `sync:` line for each changed card on standard error. A commit fact adds its short id and the first 60 characters of its subject: `sync: G4 doing -> done (abc1234: G4: record samples)`. A card without a fact keeps its status. The `--force` check for a live worker runs after the sync. Without `--sync` the status stays as the file has it. The code is in `src/board-sync.js`.
+Run `herdr-boss publish SLUG FILE --sync` to set card states before the status is installed. The command reads worker records and repository facts. For a repository with a GitHub origin, GitHub controls completion. A numeric task ID or an issue URL identifies the issue. An issue URL must name the same repository as the origin. The command reads all issue pages, with creation time and completion reason. It reads commits reachable from the GitHub default branch. It does not fetch or change a branch.
+
+The sync sets a card to `done` only when GitHub reports `state: closed` and `state_reason: completed`. The closed issue can complete the card without a commit. A merged worker cannot override an open issue. An open issue gives `doing` when the card was doing or has a live worker. Otherwise, it gives `todo`. An issue closed as not planned also stays out of `done`. A failed GitHub read, a missing issue, or a missing completion reason keeps the card as it is. The command prints the reason.
+
+A commit adds completion evidence only with an explicit closing keyword or trailer. Use `Closes #N`, `Fixes #N`, `Resolves #N`, or a separate `Task: N` line in the commit body. A qualified reference such as `Closes example/demo#9` or a GitHub issue URL must name this repository. The author time must be after the issue creation time. Bare numbers, parenthesized numbers, branch names, and merge subjects do not count. A closing keyword in a merge body can count. The newest valid commit supplies the short ID.
+
+A card with `partlyDone: true` never moves to `done` through the sync. This rule also applies to a project without a GitHub origin. Such a project keeps the base-branch and worker rules for other cards. A numeric ID or issue URL without readable GitHub facts cannot complete a card.
+
+The command prints the number of changed cards. It prints one `sync: ID from -> to` line on standard error for each changed card. A valid commit adds its short ID and the first 60 characters of its subject. When an open issue has an ignored commit, the line reads `sync: 9 kept open: GitHub open (abc1234)`. A stuck card gets `doing`. The `--force` check for a live worker runs after the sync. Without `--sync`, the status stays as the file has it. The code is in `src/board-sync.js`.
 
 ## Cache
 

@@ -25,6 +25,7 @@ export function validateProject(p) {
   }
   for (const [i, t] of (p.tasks || []).entries()) {
     if (!t) continue;
+    if (Object.hasOwn(t, 'partlyDone') && typeof t.partlyDone !== 'boolean') errs.push(`tasks[${i}].partlyDone must be true or false`);
     if (t.blockedBy != null && (!Array.isArray(t.blockedBy) || t.blockedBy.some((id) => typeof id !== 'string'))) errs.push(`tasks[${i}].blockedBy must be an array of task IDs (strings)`);
     if (t.labels != null && (!Array.isArray(t.labels) || t.labels.some((label) => typeof label !== 'string'))) errs.push(`tasks[${i}].labels must be an array of strings`);
     for (const key of ['id', 'parent', 'group', 'kind', 'url', 'assignee', 'updated', 'note', 'worker']) if (t[key] != null && typeof t[key] !== 'string') errs.push(`tasks[${i}].${key} must be a string`);

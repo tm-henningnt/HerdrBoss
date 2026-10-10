@@ -1315,11 +1315,11 @@ async function main() {
       };
       if (sync) {
         if (top && data && typeof data === 'object' && Array.isArray(data.tasks)) {
-          const { syncStatuses } = await import('./board-sync.js');
-          const { readCommits, readIssues } = await import('./board-facts.js');
+          const { syncStatuses, readSyncFacts } = await import('./board-sync.js');
           const workers = await readFacts();
           const branch = projectConfig?.baseBranch || 'main';
-          const changed = syncStatuses(data, { workers, facts: { commits: await readCommits(top, { branch }), issues: await readIssues(top) } });
+          const facts = await readSyncFacts(top, { branch });
+          const changed = syncStatuses(data, { workers, facts, log: (line) => console.error(line) });
           for (const { id, from, to, commit } of changed) {
             const evidence = commit ? ` (${commit.short}: ${commit.subject.slice(0, 60)})` : '';
             console.error(`sync: ${id} ${from} -> ${to}${evidence}`);

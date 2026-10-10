@@ -30,6 +30,8 @@ The counts show the tasks in each column after the project, who, and search filt
 
 The page updates in place. It keeps the scroll position, the focus, and the search text.
 
+Run `herdr-boss publish SLUG FILE --sync` to update the published task states. For a GitHub project, the sync sets a task to `done` only when GitHub closes its issue as completed. An open issue stays open. A failed GitHub read keeps the published card as it is. Set `partlyDone: true` in the status file when work remains. The sync never moves that card to `done`.
+
 ## Phone
 
 On a phone the page shows one column at a time. The tab bar shows each column with its count. Select a tab or swipe sideways to change the column. The row of project chips replaces the swimlanes. Select a chip to show one project, and select **All** to show all projects. The project name on a card is not a link on a phone.

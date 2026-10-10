@@ -30,7 +30,7 @@ Only `project` is required. Omit the fields that you do not use.
   "phase": "Build",
   "phases": ["Plan", "Build", "Review", "Release"],
   "tasks": [
-    { "id": "74", "title": "Parse event log", "status": "doing", "worker": "pm-74", "note": "Tests pass, docs remain." },
+    { "id": "74", "title": "Parse event log", "status": "doing", "partlyDone": true, "worker": "pm-74", "note": "Tests pass, docs remain." },
     { "id": "73", "title": "Render graph", "status": "review", "worker": "pm-73" },
     { "id": "75", "title": "Export to PNG", "status": "todo" },
     { "id": "76", "title": "Choose the export format", "status": "blocked", "waitingOn": "owner", "ask": "PNG or SVG?", "mailboxId": "m1727" }
@@ -58,6 +58,7 @@ Only `project` is required. Omit the fields that you do not use.
 | `tasks[].id` | string | A short ID, for example an issue number. |
 | `tasks[].title` | string | Required for each task. |
 | `tasks[].status` | string | One of `todo`, `doing`, `review`, `blocked`, `done`. The default is `todo`. A task in status `review` holds the idle-orchestrator nudge back, unless it is in a held group or is an epic. |
+| `tasks[].partlyDone` | boolean | Optional. Set `true` when part of the task remains. The publish sync never moves this card to `done`. Set `false` or omit the field when the task can be completed. Publish refuses a value that is not a boolean, including `null`. |
 | `tasks[].worker` | string | The Herdr agent name of the worker. The page shows the live status of that agent. |
 | `tasks[].note` | string | One line of detail. |
 | `tasks[].waitingOn` | string | Optional. One of `owner`, `boss`, `task`, `external`. It names the party that holds the task. The project page shows a wait label and, for the Owner, a decision group. |
