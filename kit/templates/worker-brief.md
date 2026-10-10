@@ -34,6 +34,8 @@ Run a long command in the foreground, or wait for a background job with the tool
 
 List processes only with `pgrep -l NAME` or `ps -o pid,ppid,etime,comm`.
 
+Search safely. Run every search or listing command over a repository, a log, or a pane through a filter that removes identifiers and hosts (UUIDs, tenant hosts, tokens). Return paths, line numbers, and counts per class. Never return the matching text. Never run a broad search over a sibling repository: use a pattern that cannot match an identifier, and name the exact files.
+
 Never use `ps e`, `ps -E`, `ps eww`, `ps aux`, `ps -ef`, or `pgrep -fl`. They print command lines and environments, and those can hold another session's token.
 
 Stop only a process that you started, by the PID that you saved when you started it. Save `$!` right after a background start, for example `setopt NO_BG_NICE; npm run serve:live > .worker/tmp/serve.log 2>&1 & echo $! > .worker/tmp/serve.pid`, or use the PID that the server prints. {{stopRule}} A name pattern can stop another project's server.
