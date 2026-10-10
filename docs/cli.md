@@ -2266,7 +2266,7 @@ The default image tag is `herdr-boss-factory:<pins hash>`. The tool reuses that 
 
 The private connection file is `registry.json`. The fleet file is `fleet.json`. Each factory has `factory.json` and `flow.json` in its own folder. The tool writes files with mode 600. The fleet file holds a connection reference, with no address, key path, or Docker context name. `factory list --json` prints only the contract fields of each host, also for an old inline record. It skips invalid factory rows and prints each row's field diagnostic to stderr. It does not rewrite the file. `new` checks the container settings before each start, also when it resumes. Do not put these runtime files in a repository.
 
-`status` shows the container state, health, service schema, kit revision, factory version, image build date, pins hash, running container image ID, tag image ID, live Boss pane state, active worker count, and disk use. The two image IDs show whether the running container uses its recorded image tag. An unavailable reading is `null`. A remote timeout reports `host-unreachable`. This state differs from a stopped or unhealthy container. Normal remote Docker calls have a 15-second limit. Builds have a longer limit. A service check retries only while it fails.
+`status` shows the container state, health, service schema, kit revision, factory version, running service commit, checkout `HEAD`, image build date, pins hash, running container image ID, tag image ID, live Boss pane state, active worker count, and disk use. The service commit was read when the service started. `checkoutHead` is the current Git `HEAD`. A difference means the checkout changed after the service started. The two image IDs show whether the running container uses its recorded image tag. An unavailable reading is `null`. A remote timeout reports `host-unreachable`. This state differs from a stopped or unhealthy container. Normal remote Docker calls have a 15-second limit. Builds have a longer limit. A service check retries only while it fails.
 
 `configure` checks `container`, `volumes`, `herdr`, and `service` in order. It checks finished steps again before it skips their work. `--resume` retains the flow record. `--step service` stops after the service check and exits 0. The container check rejects host mounts, host devices, a host PID, network, IPC, or user namespace, an unconfined AppArmor profile, added capabilities, a privileged container, and a missing Codex security profile. A failed safety check disables Codex in that factory policy.
 
@@ -2352,6 +2352,8 @@ herdr-boss factory update NAME --tier image [--dry-run] [--allow-boss-restart]
 ```
 
 The service tier installs or repairs the Claude usage helper after the service restart. See `herdr-boss claude-statusline`.
+
+After a successful update, the command prints the short checkout commit before and after the update.
 
 The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, `git identity`, or `restart`.
 

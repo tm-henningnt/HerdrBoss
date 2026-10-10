@@ -709,7 +709,26 @@ async function runFactoryUpdate(args, io, track) {
     io.stdout.write(`Would update factory ${name} at the ${tier} tier. No factory resources changed.\n`);
     return 0;
   }
-  if (tier === 'service') return updateService(name, factory, docker, owner, flags, state);
+  const readCommit = async () => {
+    try {
+      const value = (await gitText(docker, name, ['rev-parse', 'HEAD'])).trim();
+      return /^[a-f0-9]{40,64}$/i.test(value) ? value.toLowerCase() : null;
+    } catch { return null; }
+  };
+  const beforeCommit = await readCommit();
+  if (tier === 'service') {
+    const result = await updateService(name, factory, docker, owner, flags, state);
+    if (result === 0) {
+      const afterCommit = await readCommit();
+      io.stdout.write(`Commit: ${beforeCommit?.slice(0, 7) || 'unknown'} -> ${afterCommit?.slice(0, 7) || 'unknown'}.\n`);
+    }
+    return result;
+  }
   const orchestrators = await captureOrchestrators(docker, name, state);
-  return updateImage(name, factory, docker, owner, flags, state, orchestrators, state.bossPane);
+  const result = await updateImage(name, factory, docker, owner, flags, state, orchestrators, state.bossPane);
+  if (result === 0) {
+    const afterCommit = await readCommit();
+    io.stdout.write(`Commit: ${beforeCommit?.slice(0, 7) || 'unknown'} -> ${afterCommit?.slice(0, 7) || 'unknown'}.\n`);
+  }
+  return result;
 }

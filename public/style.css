@@ -666,6 +666,7 @@ section[id], div[id="agents"] { scroll-margin-top: 105px; }
 .page-intro { display: flex; justify-content: space-between; align-items: start; gap: 24px; padding: 10px 0 16px; border-bottom: 1px solid var(--line); }
 .page-intro h1 { margin: 0; font-size: 28px; line-height: 1.15; font-weight: 670; letter-spacing: -.025em; }
 .page-intro p { margin: 7px 0 0; color: var(--muted); max-width: 65ch; }
+.page-intro .settings-version { overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.4; }
 .capacity-readout { display: grid; justify-items: end; gap: 1px; min-width: 165px; }
 .capacity-readout strong { font: 650 25px var(--mono); letter-spacing: -.03em; }
 .capacity-readout strong span { color: var(--muted); font-weight: 450; }

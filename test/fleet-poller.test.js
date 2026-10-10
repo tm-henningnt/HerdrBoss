@@ -35,6 +35,7 @@ test('the poller carries registry kind and preserves optional fields from a newe
   registry(registryFile, [{ ...factory('factory-b', 'https://example.invalid'), kind: 'container', containerName: 'hf-factory-b',
     hostname: 'factory-b.example.invalid', ports: { dashboard: 4477, ssh: 22 }, image: { builtAt: '2026-10-01T00:00:00Z', pinsHash: 'a'.repeat(64) } }]);
   const newer = { ...fixture, factoryId: 'factory-b', name: 'factory-b', dashboardUrl: 'https://example.invalid', contractVersion: '1.2.0',
+    commit: 'abc1234', startedAt: '2026-10-02T08:00:00Z',
     kind: 'container', workers: { running: 2, max: 8 }, harnesses: [{ harness: 'claude', login: 'expired', checkedAt: '2026-10-02T09:59:30Z' }],
     boss: { running: true, harness: 'claude' }, pending: [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }], backup: { lastAt: null },
     machine: { ...fixture.machine, diskFreePercent: 34, diskFreeMb: 51200, utcOffsetMinutes: 120 } };
@@ -48,6 +49,8 @@ test('the poller carries registry kind and preserves optional fields from a newe
   assert.ok(row, JSON.stringify(poller.view()));
   assert.equal(row.kind, 'container');
   assert.equal(row.summary.contractVersion, '1.2.0');
+  assert.equal(row.summary.commit, 'abc1234');
+  assert.equal(row.summary.startedAt, '2026-10-02T08:00:00Z');
   assert.deepEqual(row.summary.workers, { running: 2, max: 8 });
   assert.deepEqual(row.summary.pending, [{ step: 'login-claude', since: '2026-10-02T09:00:00Z' }]);
   assert.equal(row.summary.machine.utcOffsetMinutes, 120);

@@ -48,6 +48,8 @@ function fixture() {
     if (args[0] === 'volume' && args[1] === 'inspect') return volumes.has(args[2]) ? ok([volumes.get(args[2])]) : missing();
     if (args[0] === 'image' && args[1] === 'inspect') return ok([image]);
     if (args[0] === 'exec' && args.includes('herdr') && args.includes('get')) return ok({ result: { pane: { pane_id: 'pane:1', workspace_id: 'workspace:1', label: 'orch', cwd: '/home/factory/work/project' } } });
+    if (args[0] === 'exec' && args.includes('node') && String(args.at(-1)).includes('/api/state')) return ok({ commit: 'ccccccc' });
+    if (args[0] === 'exec' && args.includes('git') && args.includes('rev-parse')) return ok('a'.repeat(40));
     if (args[0] === 'exec' && args.includes('node')) return ok(factoryState);
     return ok();
   } };
@@ -105,6 +107,7 @@ function updateFixture() {
     if (args[0] === 'exec' && args.includes('claude-helper')) { if (helperReply instanceof Error) throw helperReply; return helperReply || ok('installed\n'); }
     if (args[0] === 'exec' && args.includes('herdr') && args.includes('get')) return ok({ result: { pane: { pane_id: 'pane:1', workspace_id: 'workspace:1', label: 'orch', cwd: '/home/factory/work/project' } } });
     if (args[0] === 'exec' && args.includes('node')) {
+      if (String(args.at(-1)).includes('/api/state')) return ok({ commit: 'ccccccc', commitDate: '2026-10-10', kitRevision: 'abcdef012345', startedAt: new Date(tickAt).toISOString() });
       if (String(args.at(-1)).includes('schema_version')) {
         if (!container) return missing();
         if (container.Config.Image !== 'example-factory:test' && !container.State.Running) return missing();
@@ -213,6 +216,8 @@ test('factory status reports the running image ID, its tag image ID, and the Bos
     assert.equal(status.containerImageId, 'sha256:running-image');
     assert.equal(status.tagImageId, 'sha256:tag-image');
     assert.equal(status.bossPane, false);
+    assert.equal(status.commit, 'ccccccc');
+    assert.equal(status.checkoutHead, 'aaaaaaa');
 
     f.output.length = 0;
     f.state = { ...f.state, bossPane: true };
@@ -345,6 +350,7 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.equal(f.calls.some(({ args }) => args[0] === 'container' && args[1] === 'rm' && args[2] === 'hf-demo'), false);
     assert.ok(f.calls.some(({ args }) => args[0] === 'run' && args.includes('herdr-factory=demo') && args.includes('herdr-factory-spike=ft15')));
     assert.match(f.output.join(''), /updated factory demo service/i);
+    assert.match(f.output.join(''), /aaaaaaa -> bbbbbbb/);
     assert.doesNotMatch(f.output.join(''), /Boss pane is gone/i);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json')), false);
   } finally { f.cleanup(); }

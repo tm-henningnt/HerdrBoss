@@ -20,7 +20,7 @@ export function assertFleetSummary(body) {
   return body;
 }
 // The contract version that this head office reads and writes.
-const SUPPORTED_VERSION = '1.1.0';
+const SUPPORTED_VERSION = '1.2.0';
 function versionDrift(version) {
   if (version === SUPPORTED_VERSION) return null;
   const [a, b] = [version, SUPPORTED_VERSION].map((value) => value.split('.').map(Number));

@@ -115,6 +115,21 @@ export async function readHealth(docker, name, verifyHostname = false) {
   return health;
 }
 
+async function readRunningCommit(docker, name) {
+  const script = "fetch('http://127.0.0.1:4477/api/state').then(async r => { if (!r.ok) process.exitCode = 1; else { const s = await r.json(); process.stdout.write(JSON.stringify(s.version || {})); } }).catch(() => { process.exitCode = 1; });";
+  try {
+    const value = JSON.parse(await dockerCall(docker, ['exec', '--user', 'factory', `hf-${name}`, 'node', '-e', script], { timeout: 5000 }));
+    return typeof value.commit === 'string' && /^[a-f0-9]{7,40}$/i.test(value.commit) ? value.commit.toLowerCase() : null;
+  } catch { return null; }
+}
+
+async function readCheckoutHead(docker, name) {
+  try {
+    const value = (await dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', `hf-${name}`, 'git', '-C', '/home/factory/herdr-boss', 'rev-parse', '--short=7', 'HEAD'])).trim();
+    return /^[a-f0-9]{7,40}$/i.test(value) ? value.slice(0, 7).toLowerCase() : null;
+  } catch { return null; }
+}
+
 export function managedFactory(env, name) {
   assertName(name);
   const fleet = readFleet(env);
@@ -144,8 +159,12 @@ async function reachableStatus(name, io) {
   let workers = null;
   let bossPane = null;
   let disk = null;
+  let commit = null;
+  let checkoutHead = null;
   if (container?.State?.Running) {
     try { health = await readHealth(docker, name); } catch (error) { if (isHostUnreachable(error)) throw error; }
+    commit = await readRunningCommit(docker, name);
+    checkoutHead = await readCheckoutHead(docker, name);
     try {
       const script = 'const fs=require("fs");const s=JSON.parse(fs.readFileSync("/home/factory/.herdr-boss/state.json","utf8"));console.log(JSON.stringify({workers:s.control?.runningWorkers??null,bossPane:Boolean(s.control?.bossHandoff?.pane)}));';
       const result = JSON.parse(await dockerCall(docker, ['exec', '--user', 'factory', record.containerName, 'node', '-e', script]));
@@ -164,6 +183,7 @@ async function reachableStatus(name, io) {
   let compatible = true;
   try { assertVersion(health?.version || record.version, effectiveMinimum(fleet)); } catch { compatible = false; }
   return { name, state, health: container?.State?.Health?.Status || null, schema: health?.schema ?? null, kitRevision: health?.kitRevision ?? null,
+    commit, checkoutHead,
     version: health?.version ?? null, imageBuildDate: labels['org.opencontainers.image.created'] || null, pinsHash: labels['org.herdr-boss.pins-sha256'] || null,
     containerImageId: container?.Image || null, tagImageId: image?.Id || null, bossPane, workers, disk, minimumFactoryVersion: effectiveMinimum(fleet), compatible };
 }
@@ -173,7 +193,7 @@ async function statusFactory(name, io) {
   catch (error) {
     if (!isHostUnreachable(error)) throw error;
     const { fleet } = managedFactory(io.env, name);
-    return { name, state: 'host-unreachable', health: 'host-unreachable', schema: null, kitRevision: null, version: null, imageBuildDate: null, pinsHash: null,
+    return { name, state: 'host-unreachable', health: 'host-unreachable', schema: null, kitRevision: null, commit: null, checkoutHead: null, version: null, imageBuildDate: null, pinsHash: null,
       containerImageId: null, tagImageId: null, bossPane: null, workers: null, disk: null, minimumFactoryVersion: effectiveMinimum(fleet), compatible: null };
   }
 }

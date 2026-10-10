@@ -150,6 +150,19 @@ test('Settings renders editable roots and saves paths as strings', async () => {
   assert.equal(button.disabled, false);
 });
 
+test('Settings header shows the running commit, kit revision, and start time', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.version = { commit: 'abc1234', commitDate: '2026-10-10', kitRevision: 'd5a92aea96a1', startedAt: '2026-10-10T08:30:00.000Z' };
+  const html = app.settingsView(s);
+  assert.match(html, /data-service-version/);
+  assert.match(html, /commit abc1234, 2026-10-10/);
+  assert.match(html, /kit d5a92aea96a1/);
+  assert.match(html, /started \d{2}:\d{2}/);
+  assert.match(css, /\.page-intro \.settings-version \{ overflow-wrap: anywhere;/);
+});
+
 test('Settings renders and saves the collect-time worktree pruning switch', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });

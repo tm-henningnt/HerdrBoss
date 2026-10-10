@@ -98,9 +98,17 @@ function versionInfo(row, reference) {
   const summary = row.summary;
   if (!summary) return { text: UNKNOWN, reason: 'never seen' };
   const version = typeof summary.version === 'string' && summary.version ? summary.version : UNKNOWN;
-  const kit = typeof summary.kitRevision === 'string' && summary.kitRevision ? summary.kitRevision : UNKNOWN;
-  if (version === UNKNOWN && kit === UNKNOWN) return { text: UNKNOWN, reason: 'no version reading' };
-  const reading = `${version} / ${kit}`;
+  const kit = typeof summary.kitRevision === 'string' && /^[a-f0-9]{12,64}$/i.test(summary.kitRevision) ? summary.kitRevision : UNKNOWN;
+  const commit = typeof summary.commit === 'string' && /^[a-f0-9]{7,40}$/i.test(summary.commit) ? summary.commit : UNKNOWN;
+  const started = Date.parse(summary.startedAt || '');
+  const generated = Date.parse(summary.generatedAt || '');
+  const age = num(row.ageSeconds) ? row.ageSeconds : Number.isFinite(generated) ? Math.max(0, (Date.now() - generated) / 1000) : null;
+  const uptimeSeconds = Number.isFinite(started) && Number.isFinite(generated) && num(age)
+    ? Math.max(0, Math.floor((generated - started) / 1000 + age)) : null;
+  const uptime = ageText(uptimeSeconds) || UNKNOWN;
+  const details = `commit ${commit} · kit ${kit} · uptime ${uptime}`;
+  if (version === UNKNOWN && commit === UNKNOWN && kit === UNKNOWN && uptime === UNKNOWN) return { text: UNKNOWN, reason: 'no version reading' };
+  const reading = `${details}${version === UNKNOWN ? '' : ` · version ${version}`}`;
   return { text: row.freshness === 'cached' ? `last good ${reading}` : reading, drift: driftText(row, reference) };
 }
 // The cached-facts health: the summary health status with the summary age (design section 2).
@@ -245,12 +253,12 @@ export function fleetComparison(factories, reference = null) {
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Worst usage limit</span>${valueHtml(quota)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Spend</span>${valueHtml(spend)}</span>`
       + `<span class="cmp-cell hide-phone"><span class="cmp-k">Owner</span>${valueHtml(owner)}</span>`
-      + `<span class="cmp-cell hide-phone"><span class="cmp-k">Version / kit</span>${valueHtml(version)}</span>`
+      + `<span class="cmp-cell hide-phone"><span class="cmp-k">Commit / kit / uptime</span>${valueHtml(version)}</span>`
       + `<span class="cmp-sum">${esc(sum)}${drift}</span>`
       + `</div>`;
   });
   return `<section class="fleet-compare" data-fleet-comparison aria-label="Factory comparison"><div class="cmp-row cmp-head" aria-hidden="true">`
-    + ['Factory', 'Kind', 'Health', 'Last seen', 'Workers', 'Worst usage limit', 'Spend', 'Owner', 'Version / kit'].map((heading) => `<span class="cmp-cell">${esc(heading)}</span>`).join('')
+    + ['Factory', 'Kind', 'Health', 'Last seen', 'Workers', 'Worst usage limit', 'Spend', 'Owner', 'Commit / kit / uptime'].map((heading) => `<span class="cmp-cell">${esc(heading)}</span>`).join('')
     + `</div>${rows.join('')}</section>`;
 }
 
@@ -406,7 +414,7 @@ export function fleetFactoryCard(row, reference = null, role = null) {
     fact('Disk', disk),
     fact('Clock', clock),
     fact('Health (summary)', summaryHealthInfo(row)),
-    fact('Version / kit', version),
+    fact('Commit / kit / uptime', version),
     fact('Boss (fact)', bossInfo(row)),
     fact('Workers', workersInfo(row)),
     fact('Logins', loginsInfo(row)),

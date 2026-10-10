@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.example/factories/1.0.0/schema/fleet-summary.v1.schema.json",
   "title": "Fleet summary",
-  "version": "1.1.0",
-  "description": "Version 1.1.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
+  "version": "1.2.0",
+  "description": "Version 1.2.0. See docs/contracts/factories.md for producers, consumers, and refusal rules.",
   "type": "object",
   "properties": {
     "schema": {
@@ -24,6 +24,23 @@
     },
     "kitRevision": {
       "$ref": "common.v1.schema.json#/$defs/kitRevision"
+    },
+    "commit": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-fA-F0-9]{7,40}$"
+    },
+    "startedAt": {
+      "oneOf": [
+        {
+          "$ref": "common.v1.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "generatedAt": {
       "$ref": "common.v1.schema.json#/$defs/timestamp"
