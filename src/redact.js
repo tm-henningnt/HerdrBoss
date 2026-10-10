@@ -172,9 +172,9 @@ export function createRedactor(tenantHosts = [], literals = {}, { onFinding = ()
     // 8. Qlik object IDs have 24 alphanumeric characters, with a letter and a digit.
     text = text.replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9]{24}(?![A-Za-z0-9_-])/g,
       (match) => /[A-Za-z]/.test(match) && /[0-9]/.test(match) ? mask('qlik-id') : match);
-    // 9. Extension IDs have 5, 8 and 17 characters. Each group needs a letter and a digit.
-    text = text.replace(/(?<![A-Za-z0-9-])[A-Za-z0-9]{5}-[A-Za-z0-9]{8}-[A-Za-z0-9]{17}(?![A-Za-z0-9-])/g,
-      (match) => match.split('-').every((group) => /[A-Za-z]/.test(group) && /[0-9]/.test(group)) ? mask('ext-id') : match);
+    // 9. Extension IDs have 32 characters in two or three groups of 5 to 17 letters and digits.
+    text = text.replace(/(?<![A-Za-z0-9-])[A-Za-z0-9]{5,17}(?:-[A-Za-z0-9]{5,17}){1,2}(?![A-Za-z0-9-])/g,
+      (match) => match.length === 32 && match.split('-').every((group) => /[A-Za-z]/.test(group) && /[0-9]/.test(group)) ? mask('ext-id') : match);
     return text.replace(new RegExp(`${marker}(\\d+)${marker}`, 'g'), (match, index) => {
       const kind = classes[Number(index)];
       onFinding(kind);

@@ -70,9 +70,11 @@ The filter applies these rules in order:
 6. Keep secret field names and replace their values with `<secret>`.
 7. Keep app, space, and user ID field names and replace their values with `<id>`.
 8. Replace Qlik object IDs with `<qlik-id>`. The shape has 24 letters and digits. It must contain a letter and a digit. An adjacent letter, digit, underscore, or hyphen prevents a match.
-9. Replace extension IDs with `<ext-id>`. The shape has three groups with 5, 8, and 17 letters and digits. A hyphen separates each group. Each group must contain a letter and a digit. An adjacent letter, digit, or hyphen prevents a match.
+9. Replace extension IDs with `<ext-id>`. The shape has two or three groups of ASCII letters and digits. Each group has 5 to 17 characters. One hyphen separates each group. The total length is 32 characters, including the hyphens. Each group must contain a letter and a digit. An adjacent letter, digit, or hyphen prevents a match.
 
 The shape rules accept uppercase and lowercase letters. They preserve words that contain only letters. Short git commit IDs stay unchanged. A hex string of at least 24 characters uses the earlier `<hex>` rule. ID and secret fields keep a complete tag from an earlier rule, including inside quotes.
+
+An extension ID with a group that contains only letters or only digits does not match the shape rule. Add it as a private literal if it needs redaction.
 
 To set tenant hosts, add a `redact.tenantHosts` array of host names to `~/.config/herdr-boss/config.json`. The command reads this file each time it runs. Do not put tenant hosts in a command, a report, a fixture, or a repository file. If the list is missing, the filter still replaces host names that match the Qlik Cloud pattern.
 
