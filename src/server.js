@@ -44,7 +44,7 @@ import { createProjectTransfer } from './project-transfer.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
 import { buildFleetRollup } from './fleet-rollup.js';
 import { readFleetLogins } from './fleet-login.js';
-import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validThread, validateOwnerSend, withMailAnswers } from './messages.js';
+import { appendMessage, chatSummaries, isMailAnswer, isMailRecord, messagesById, chatThreadPage, closeMailboxItem, closeResolvedOnPublish, dismissMailboxItems, keepMailboxItemsOpen, groupMessagesByConversation, listThread, mailboxCounts, mailboxFolders, mailboxView, markMailboxRead, messageChannel, messagesWithReplyState, readMessages, validOwnerClientId, validThread, validateOwnerSend, ownerSendMatches, withMailAnswers } from './messages.js';
 import { assertSqliteAvailable } from './sqlite-store.js';
 import { openMessageStore } from './message-store.js';
 import { listAgentPairs, readAgentMessages, readAgentMetadata } from './agent-messages.js';
@@ -1211,7 +1211,18 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       }
       if (p === '/api/messages' && req.method === 'POST') {
         const knownThreads = new Set(['boss', ...Object.keys(engine.state?.control?.projects || {})]);
-        const result = validateOwnerSend(await jsonBody(req), { knownThreads, records: readMessages(), now: Date.now() });
+        const body = await jsonBody(req);
+        if (body?.clientId !== undefined && !validOwnerClientId(body.clientId)) return send(res, 400, { error: 'clientId must be 1 to 128 letters, numbers, or . _ : - characters.' });
+        const records = readMessages();
+        const existing = body?.clientId ? records.find((record) => record.from === 'owner' && record.clientId === body.clientId) : null;
+        if (existing) {
+          if (!ownerSendMatches(existing, body)) return send(res, 409, { error: 'This clientId already belongs to a different message.' });
+          const reply = existing.replyTo ? records.find((record) => record.id === existing.replyTo) : null;
+          if (reply && !reply.closedAt && isMailRecord(reply)) closeMailboxItem(reply.id);
+          const mailbox = refreshMailbox(readMessages(), true);
+          return send(res, 200, { ok: true, message: existing, mailbox });
+        }
+        const result = validateOwnerSend(body, { knownThreads, records, now: Date.now() });
         if (result.error) return send(res, result.status, { error: result.error });
         const message = appendMessage(result.fields);
         // Only a mail item closes. An Owner message that names a plain chat reply leaves that reply as it is.

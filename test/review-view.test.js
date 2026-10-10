@@ -33,7 +33,7 @@ const helpers = (extra = {}) => ({
   avatar: (slug) => `<span class="avatar" data-slug="${esc(slug)}"></span>`,
   projectLabel: (slug) => (slug === 'shop' ? 'Shop' : slug),
   time: () => '08:12',
-  menuButton: '<button data-app-drawer>Menu</button>',
+  menuButton: '<button data-nav-trigger aria-controls="primary-nav" aria-label="Menu">Logo</button>',
   ...extra,
 });
 
@@ -175,7 +175,7 @@ test('the pack list has one h1, the Open and Done folders, and plain empty and e
   assert.match(view, /<h1[^>]*>Reviews/);
   assert.match(view, /href="\/reviews\?folder=open"[^>]*aria-current="page"/);
   assert.match(view, /href="\/reviews\?folder=done"/);
-  assert.match(view, /data-app-drawer/, 'the phone menu button');
+  assert.match(view, /data-nav-trigger/, 'the shared phone menu button');
   assert.match(packListHtml({ folder: 'open', open: [], done: [], error: '' }, helpers()), /No review waits for you\./);
   assert.match(packListHtml({ folder: 'done', open: [], done: [], error: '' }, helpers()), /No finished reviews\./);
   assert.match(packListHtml({ folder: 'open', open: null, done: null, error: '' }, helpers()), /Loading reviews/);
@@ -457,14 +457,22 @@ test('the list keys follow the Gmail set, and a text field takes every key excep
 
 // ---------- Menu entry and Mailbox button ----------
 
-test('the menu has a Reviews entry after the Board, on the desktop bar and in the phone drawer', async () => {
+test('the shared menu has a Reviews entry after the Board on every page', async () => {
   const registry = await import('../public/routes.js');
   const ids = registry.MENU_ROUTES.map((r) => r.id);
   assert.equal(ids[ids.indexOf('board') + 1], 'reviews');
-  assert.equal(registry.DRAWER_ROUTES.map((r) => r.id)[registry.DRAWER_ROUTES.findIndex((r) => r.id === 'board') + 1], 'reviews');
   assert.equal(registry.NAV_LABEL.reviews, 'Reviews');
   assert.match(app, /reviews: \['Reviews', `/, 'the page help');
   assert.ok(registry.APP_VIEW_ROUTES.includes('reviews'), 'the reviews page is a phone app view');
+});
+
+test('the Reviews list, pack, and missing-page bars use one shared menu button', () => {
+  const views = [
+    packListHtml({ folder: 'open', open: [], done: [], error: '' }, helpers()),
+    packPageHtml(fullPack(), {}, helpers()),
+    review.reviewMessageHtml('Review', 'This page is missing.', helpers()),
+  ];
+  for (const view of views) assert.equal((view.match(/data-nav-trigger/g) || []).length, 1);
 });
 
 test('a review item in the Mailbox opens the pack with Open review instead of the answer form', () => {

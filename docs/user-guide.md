@@ -4,6 +4,10 @@ Choose the chapter for your task.
 
 Use Chat for ordinary messages. Use the Mailbox to answer, approve, or decide. A reply keeps the same conversation thread.
 
+The dashboard uses one menu on every page. It includes every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open it. The Mailbox menu also shows its folders.
+
+Mailbox counts and lists refresh every second. Open Mailbox conversations, Owner Chat lists and conversations, and Agents lists and open pairs refresh every second. A CLI message appears without a page reload. The top-bar badges, Needs-you heading, and list use one Mailbox count source. The page refreshes its reads when you return online or show it again. A sent message first shows **Sending…**, then **Sent. Waiting for delivery.** It shows **delivered** with a time, or **failed** with the reason. Open the conversation in **Sent** and select **Retry** after a failure. Retry uses the same client ID, so it does not create a duplicate. Select **Clear** to remove the failed message from this browser.
+
 - [I want to see what is happening](guide/see.md)
 - [I want to answer a Mailbox question](guide/answer.md)
 - [I want to review a pack](guide/review.md)

@@ -4,8 +4,8 @@ import fs from 'node:fs';
 
 const routes = await import('../public/routes.js');
 const shell = await import('../public/shell.js');
-const { ROUTES, ROUTE_IDS, NAV_LABEL, MENU_ROUTES, DRAWER_ROUTES, APP_VIEW_ROUTES, KEYED_ROUTES, HELP_FILES, HELP_INLINE, matchRoute, helpRoute, resolveAlias, taskFromQuery, HASH } = routes;
-const { mountMenu, syncMenu, drawerLinksHtml, readLocation } = shell;
+const { ROUTES, ROUTE_IDS, NAV_LABEL, MENU_ROUTES, APP_VIEW_ROUTES, KEYED_ROUTES, HELP_FILES, HELP_INLINE, matchRoute, helpRoute, resolveAlias, taskFromQuery, HASH } = routes;
+const { mountMenu, syncMenu, readLocation } = shell;
 const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 
 const PAGES = ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'settings', 'docs', 'mailbox', 'chat', 'add-host'];
@@ -93,9 +93,8 @@ test('the phone shell and the keyed patch rules come from the registry', () => {
   assert.deepEqual(KEYED_ROUTES, ['fleet', 'board', 'reviews', 'projects', 'allocation', 'analytics', 'settings', 'mailbox', 'chat']);
 });
 
-test('the one menu host lists 11 routes in order and the phone drawer lists 8', () => {
+test('the one menu host lists all 11 section routes for every page', () => {
   assert.deepEqual(MENU_ROUTES.map((r) => r.id), ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'settings', 'docs']);
-  assert.deepEqual(DRAWER_ROUTES.map((r) => r.path), ['/', '/board', '/reviews', '/agents', '/projects', '/browsers', '/allocation', '/analytics']);
   const html = read('public/index.html');
   const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)[1];
   assert.doesNotMatch(nav, /data-nav=/, 'index.html holds no page link; the registry fills the menu');
@@ -104,22 +103,26 @@ test('the one menu host lists 11 routes in order and the phone drawer lists 8', 
 });
 
 function fakeNav() {
+  const folders = { id: 'mail-folder-menu', dataset: {} };
+  const help = { id: 'nav-help', dataset: {} };
   const roamgate = { id: 'roamgate-link', dataset: {} };
-  const children = [roamgate];
+  const children = [folders, help, roamgate];
   const nav = {
     children,
-    querySelector: (selector) => (selector === '#roamgate-link' ? roamgate : null),
+    querySelector: (selector) => ({ '#mail-folder-menu': folders, '#nav-help': help, '#roamgate-link': roamgate }[selector] || null),
     insertBefore: (node, before) => children.splice(children.indexOf(before), 0, node),
-    querySelectorAll: () => children.filter((c) => c !== roamgate),
+    querySelectorAll: () => children.filter((c) => c.dataset.nav),
   };
   nav.ownerDocument = { createElement: () => { const attrs = {}; return { dataset: {}, attrs, setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; } }; } };
-  return { nav, children, roamgate };
+  return { nav, children, folders, help, roamgate };
 }
 
-test('mountMenu fills the menu host and keeps Roamgate last', () => {
-  const { nav, children, roamgate } = fakeNav();
+test('mountMenu fills the shared host before its context links and keeps Roamgate last', () => {
+  const { nav, children, folders, help, roamgate } = fakeNav();
   mountMenu(nav);
-  assert.deepEqual(children.slice(0, -1).map((a) => [a.dataset.nav, a.href, a.textContent]), MENU_ROUTES.map((r) => [r.id, r.path, r.label]));
+  assert.deepEqual(children.slice(0, MENU_ROUTES.length).map((a) => [a.dataset.nav, a.href, a.textContent]), MENU_ROUTES.map((r) => [r.id, r.path, r.label]));
+  assert.equal(children[MENU_ROUTES.length], folders);
+  assert.equal(children[MENU_ROUTES.length + 1], help);
   assert.equal(children.at(-1), roamgate);
 });
 
@@ -137,14 +140,6 @@ test('syncMenu sets the label and marks the current page; Add a host marks Fleet
   syncMenu({ nav, label, route: 'mailbox' });
   assert.equal(label.textContent, 'Mailbox');
   assert.deepEqual(current(), [], 'Mailbox has no menu entry');
-});
-
-test('the drawer links keep the eight pages and mark the current one', () => {
-  const html = drawerLinksHtml('board');
-  assert.deepEqual([...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]), DRAWER_ROUTES.map((r) => r.path));
-  assert.equal([...html.matchAll(/aria-current="page"/g)].length, 1);
-  assert.match(html, /<a href="\/board" aria-current="page"><span>Board<\/span><\/a>/);
-  assert.doesNotMatch(drawerLinksHtml('mailbox'), /aria-current/);
 });
 
 test('app.js reads the registry and keeps no second route table', () => {

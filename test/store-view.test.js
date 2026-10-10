@@ -28,9 +28,9 @@ class FakeEventSource {
   close() { this.closed = true; }
 }
 
-function makeStore({ fetchImpl = async () => ({ ok: true, json: async () => ({ value: 1 }) }), setIntervalImpl, clearIntervalImpl } = {}) {
+function makeStore({ fetchImpl = async () => ({ ok: true, json: async () => ({ value: 1 }) }), setIntervalImpl, clearIntervalImpl, isHidden, nowImpl, resources, pages } = {}) {
   FakeEventSource.sources = [];
-  const resources = {
+  const defaults = {
     state: { url: '/api/state', intervalMs: 30000 },
     counts: { url: '/api/counts', intervalMs: 30000 },
     optional: { url: '/api/optional', intervalMs: 30000 },
@@ -39,10 +39,12 @@ function makeStore({ fetchImpl = async () => ({ ok: true, json: async () => ({ v
   return createClientStore({
     fetchImpl,
     EventSourceImpl: FakeEventSource,
-    resources,
-    pages: { overview: ['state', 'counts'], board: ['state', 'counts'] },
+    resources: resources || defaults,
+    pages: pages || { overview: ['state', 'counts'], board: ['state', 'counts'] },
     setIntervalImpl: setIntervalImpl || ((fn) => ({ fn })),
     clearIntervalImpl: clearIntervalImpl || (() => {}),
+    isHidden,
+    nowImpl,
   });
 }
 
@@ -56,15 +58,22 @@ test('an SSE state event updates the cached value and notifies its page', () => 
   assert.deepEqual(updates, [{ updatedAt: 'now', projects: [] }]);
 });
 
-test('each route names its shared reads and only its page reads', () => {
+test('message counts are shared and the Chat list belongs to the Chat page', () => {
   const routes = ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'settings', 'docs', 'mailbox', 'chat', 'add-host'];
   assert.deepEqual(Object.keys(PAGE_READS), routes);
   for (const route of routes) {
-    for (const name of ['mailboxCounts', 'chats', 'roamgate']) assert.ok(PAGE_READS[route].includes(name), `${route} reads shared ${name}`);
+    assert.ok(PAGE_READS[route].includes('roamgate'), `${route} reads shared roamgate`);
+    if (route !== 'mailbox') assert.ok(PAGE_READS[route].includes('mailboxCounts'), `${route} reads shared mailboxCounts`);
+    if (route !== 'chat') assert.ok(!PAGE_READS[route].includes('chats'), `${route} does not refresh the Chat list`);
   }
+  assert.ok(PAGE_READS.chat.includes('chats'));
+  assert.ok(PAGE_READS.chat.includes('agentChatRefresh'));
+  assert.ok(!PAGE_READS.chat.includes('agentRefresh'));
+  assert.ok(PAGE_READS.projects.includes('agentRefresh'));
   assert.ok(PAGE_READS.overview.includes('handoffs'));
   assert.ok(PAGE_READS.board.includes('mailboxCounts'));
   assert.ok(PAGE_READS.mailbox.includes('mailboxList'));
+  assert.ok(!PAGE_READS.mailbox.includes('mailboxCounts'), 'Mailbox counts come from its list response');
   assert.ok(PAGE_READS.fleet.includes('fleetBundle'));
   assert.ok(PAGE_READS.analytics.includes('machineHours'));
   assert.ok(!PAGE_READS.board.includes('analytics'));
@@ -131,10 +140,85 @@ test('two simultaneous reads of one resource share one fetch', async () => {
     return new Promise((resolve) => { resolveFetch = resolve; });
   } });
   const first = store.readUrl('/api/optional', { force: true });
-  const second = store.readUrl('/api/optional', { force: true });
+  const second = store.readUrl('/api/optional');
   assert.equal(calls, 1);
   resolveFetch({ ok: true, json: async () => ({ value: 'shared' }) });
   assert.deepEqual(await Promise.all([first, second]), [{ value: 'shared' }, { value: 'shared' }]);
+});
+
+test('a forced read during an in-flight read schedules one shared follow-up read', async () => {
+  let calls = 0;
+  const resolvers = [];
+  let markFollowupStarted;
+  const followupStarted = new Promise((resolve) => { markFollowupStarted = resolve; });
+  const store = makeStore({ fetchImpl: () => {
+    calls += 1;
+    if (calls === 2) markFollowupStarted();
+    return new Promise((resolve) => resolvers.push(resolve));
+  } });
+  const first = store.readUrl('/api/optional', { force: true });
+  const forcedA = store.readUrl('/api/optional', { force: true });
+  const forcedB = store.readUrl('/api/optional', { force: true });
+  assert.equal(calls, 1);
+  resolvers[0]({ ok: true, json: async () => ({ value: 'first' }) });
+  assert.deepEqual(await first, { value: 'first' });
+  await followupStarted;
+  assert.equal(calls, 2, 'one follow-up starts after the first read settles');
+  resolvers[1]({ ok: true, json: async () => ({ value: 'follow-up' }) });
+  assert.deepEqual(await Promise.all([forcedA, forcedB]), [{ value: 'follow-up' }, { value: 'follow-up' }]);
+});
+
+test('poll timers skip hidden pages and back off after errors up to 30 seconds', async () => {
+  let hidden = true;
+  let now = 0;
+  let calls = 0;
+  let fail = true;
+  const timers = [];
+  const store = makeStore({
+    fetchImpl: async () => {
+      calls += 1;
+      if (fail) throw new Error('offline');
+      return { ok: true, json: async () => ({ value: calls }) };
+    },
+    resources: { poll: { url: '/api/poll', intervalMs: 1000 } },
+    pages: { polling: ['poll'] },
+    isHidden: () => hidden,
+    nowImpl: () => now,
+    setIntervalImpl(fn, delay) { const timer = { fn, delay }; timers.push(timer); return timer; },
+  });
+  await store.setPage('polling');
+  calls = 0;
+  const timer = timers[0];
+  await timer.fn();
+  assert.equal(calls, 0, 'a hidden-page timer does not read');
+  hidden = false;
+  await timer.fn();
+  assert.equal(calls, 1);
+  await timer.fn();
+  assert.equal(calls, 1, 'the first error doubles the retry interval to two seconds');
+  now += 2000;
+  await timer.fn();
+  assert.equal(calls, 2);
+  now += 4000;
+  await timer.fn();
+  assert.equal(calls, 3);
+  now += 8000;
+  await timer.fn();
+  assert.equal(calls, 4);
+  now += 16000;
+  await timer.fn();
+  assert.equal(calls, 5);
+  now += 29999;
+  await timer.fn();
+  assert.equal(calls, 5, 'the retry delay caps at 30 seconds');
+  now += 1;
+  fail = false;
+  await timer.fn();
+  assert.equal(calls, 6);
+  now += 1000;
+  await timer.fn();
+  assert.equal(calls, 7, 'a successful read resets the interval to one second');
+  store.stop();
 });
 
 test('Chat reads a fresh list when it opens', () => {
@@ -169,7 +253,7 @@ test('two simultaneous reads of an arbitrary URL share one fetch', async () => {
     return new Promise((resolve) => { resolveFetch = resolve; });
   } });
   const first = store.readUrl('/external/shared', { force: true });
-  const second = store.readUrl('/external/shared', { force: true });
+  const second = store.readUrl('/external/shared');
   assert.equal(calls, 1);
   resolveFetch({ ok: true, json: async () => ({ value: 'shared' }) });
   assert.deepEqual(await Promise.all([first, second]), [{ value: 'shared' }, { value: 'shared' }]);

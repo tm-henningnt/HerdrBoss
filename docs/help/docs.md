@@ -16,6 +16,10 @@ Edit the Markdown file that the line **Source** names. Do not edit a generated f
 
 A picture comes from `docs/images/`. Write its path in the Markdown, relative to the file. A picture from outside `docs/` does not show.
 
+## Shared menu
+
+Every page uses the same menu. It lists every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The menu shows its open state.
+
 ## Diagrams
 
 A Mermaid code block becomes a diagram. The page loads the diagram library only when the page has a diagram. The diagram follows the light or the dark theme of the page. A diagram that is wider than the screen scrolls sideways in its own box. When a diagram does not draw, the page shows its source in a fold and the line **The diagram could not be drawn.**.

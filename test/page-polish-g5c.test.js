@@ -30,7 +30,8 @@ test('a delivered or relayed message without a time shows no stray dash', () => 
   assert.equal(mailDeliveryState({ status: 'relayed' }), 'relayed by the Boss');
   assert.match(mailDeliveryState({ status: 'sent', sentAt: new Date().toISOString() }), /^delivered \d\d:\d\d$/);
   assert.equal(mailDeliveryState({ status: 'failed' }), 'failed: unknown error');
-  assert.equal(mailDeliveryState({}), 'queued');
+  assert.equal(mailDeliveryState({ status: 'sending' }), 'Sending…');
+  assert.equal(mailDeliveryState({ status: 'queued' }), 'Sent. Waiting for delivery.');
 });
 
 test('the quota chart names one hour in the singular', () => {
@@ -98,7 +99,7 @@ test('the phone browser viewer gives the address field its own row', () => {
 });
 
 test('muted text on a current or open row keeps 4.5:1 contrast', () => {
-  assert.match(css, /\[aria-current="page"\] > \.mail-folder-count, \[aria-current="page"\] > \.app-drawer-count\s*\{[^}]*color:\s*var\(--text\)/);
+  assert.match(css, /\[aria-current="page"\] > \.mail-folder-count\s*\{[^}]*color:\s*var\(--text\)/);
   assert.match(css, /\.mail-entry\[aria-current="true"\] \.mail-side time\s*\{[^}]*color:\s*var\(--text\)/);
   assert.match(rule('.chat-bubble.from-owner .chat-bubble-time'), /color:/);
 });

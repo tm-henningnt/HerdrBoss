@@ -616,14 +616,14 @@ export function packPageHtml(pack, ui, h) {
   }
   const submitConfirm = ui.submitConfirm ? submitOpenConfirmHtml(pack, esc) : '';
   return `<div class="review-page${ui.item ? ' item-open' : ''}${collapsed ? ' side-collapsed' : ''}" data-key="review-page:${esc(pack.slug)}/${esc(pack.pack)}" style="--review-side: ${collapsed ? SIDEBAR_RAIL : sideWidth}px${openItem && (open || openItem.reopened === true) ? `; --review-answer: ${answerWidth}px` : ''}">`
-    + `<div class="app-bar review-app-bar">${bar}</div>`
+    + `<div class="app-bar review-app-bar">${h.menuButton || ''}${bar}</div>`
     + `<div class="review-body" data-key="review-body">${open ? conflictsHtml(pack, ui.conflicts, esc) : ''}${head}${list}${main}</div>${foot}${submitConfirm}</div>`;
 }
 
 // A page for a missing pack or a load error, with the same app bar.
 export function reviewMessageHtml(title, text, h, { alert = false, retry = false } = {}) {
   const { esc } = h;
-  return `<div class="review-page" data-key="reviews:message"><div class="app-bar review-app-bar"><a href="/reviews" class="app-icon-button" aria-label="Back to Reviews">${icon('back')}</a><h1>${esc(title)}</h1></div>`
+  return `<div class="review-page" data-key="reviews:message"><div class="app-bar review-app-bar">${h.menuButton || ''}<a href="/reviews" class="app-icon-button" aria-label="Back to Reviews">${icon('back')}</a><h1>${esc(title)}</h1></div>`
     + `<div class="review-scroll"><div class="review-empty"${alert ? ' role="alert"' : ''}><p>${esc(text)}</p>${retry ? '<button type="button" class="review-button" data-review-retry>Try again</button>' : ''}</div></div></div>`;
 }
 
