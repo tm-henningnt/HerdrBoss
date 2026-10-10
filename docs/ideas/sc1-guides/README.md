@@ -1,16 +1,61 @@
 # Qlik extension knowledge guides
 
-This folder holds draft guides for the Qlik type. It does not choose the final type layout.
+This folder holds draft guides for Qlik extensions. It does not choose the final guide layout.
 
-| Guide | Main sources |
-| --- | --- |
-| [Qlik CLI operations](qlik-cli-operations.md) | extension repo B, docs/demo-app.md, docs/serve-live.md, demo/rebuild.sh, demo/export-demo-app.sh, scripts/upload.ts, scripts/lib/qlik.ts; extension repo A, scripts/demo-app.cjs, docs/development.md; extension repo C, docs/agents/QlikValidation.md, docs/architecture/DeliveryProcess.md, scripts/demo-app-asset.mjs, scripts/verify-script.mjs; extension repo D, docs/development.md; extension repo E, docs/agents/QlikValidation.md, demo/atlas/README.md, scripts/orchestrator/hosted/cdp.mjs. |
-| [Nebula.js and the extension API](nebula-extension-api.md) | extension repo B, src/index.ts, src/definition.ts, src/component.ts, src/properties.ts, docs/guides/styling-panel-for-extensions.md; extension repo C, extensions/tm-pm-processmap/src/index.ts, src/qae/ext.ts, src/qae/panel.ts; extension repo D, src/index.ts, src/qae/ext.ts, src/qae/data.ts; extension repo A, src/index.ts, src/qae/data.ts, src/qae/property-panel.ts; extension repo E, extensions/temporal-patterns/src/index.ts, extensions/comparison-charts/src/property-panel.ts, packages/qlik-viz-core/src/authoring-sections.ts. |
-| [Qlik MCP tools](qlik-mcp-tools.md) | extension repo E, docs/agents/QlikValidation.md; extension repo C, docs/agents/QlikValidation.md. |
-| [Qlik Engine data and sessions](qlik-engine-data-sessions.md) | extension repo A, src/qae/data.ts, src/host/pager.ts, src/host/hooks.ts; extension repo B, src/data.ts, src/paging.ts, src/selection.ts, scripts/serve-live/qlik-api-qix.stub.d.ts; extension repo C, extensions/tm-pm-processmap/src/cubes.ts, packages/qlik-host/src/paging.ts, scripts/verify-script.mjs; extension repo D, src/qae/object-properties.ts, src/host/paging.ts, src/host/pager.ts; extension repo E, spec/spec-architecture-shared-qlik-core.md, packages/qlik-viz-core/src/engine-pages.ts, scripts/orchestrator/sweep-qerror.sh. |
-| [Themes and dark mode](themes-dark-mode.md) | extension repo A, src/render/theme.ts, test/renderer/theme-colors.test.ts; extension repo B, src/theme.ts, scripts/serve-live/themes/tm-sv-dark-test.json, docs/release/hosted-review.md; extension repo C, packages/qlik-host/src/theme.ts, packages/extension-shell/src/theme.ts, docs/guide/visualizations.md; extension repo D, src/render/theme.ts, docs/development.md; extension repo E, extensions/process-explorer/src/theme.ts, themes/tm-vis-suite-dark-test/theme.json, packages/qlik-viz-core/test/theme-locale.test.ts. |
-| [Hosted and local-browser evidence](hosted-local-browser-evidence.md) | extension repo B, docs/evidence.md, docs/release/hosted-review.md, docs/serve-live.md; extension repo C, docs/agents/QlikValidation.md, docs/architecture/DeliveryProcess.md; extension repo A, docs/development.md, docs/product/sharing-and-reporting.md; extension repo D, docs/development.md, docs/licensing.md; extension repo E, docs/agents/QlikValidation.md. |
-| [Common errors and fixes](common-errors.md) | extension repo C, docs/agents/TenantDefectPatterns.md, docs/guide/data-quality.md, docs/guide/visualizations.md; extension repo B, docs/serve-live.md, docs/verify.md, docs/demo-app.md; extension repo D, docs/development.md; extension repo A, docs/development.md, docs/user-guide.md; extension repo E, docs/agents/QlikValidation.md, scripts/orchestrator/sweep-qerror.sh. |
+## Guide sources
+
+### [Qlik CLI operations](qlik-cli-operations.md)
+
+- Extension repo B covers demo setup, local serving, export, upload, and Qlik API use.
+- Extension repo A covers development and demo app handling.
+- Extension repo C covers hosted validation, delivery, demo assets, and script checks.
+- Extension repo D covers development.
+- Extension repo E covers hosted validation and browser automation.
+
+### [Nebula.js and the extension API](nebula-extension-api.md)
+
+- Extension repo B covers extension entry points, properties, components, and Styling panels.
+- Extension repo C covers extension entry points and property panels.
+- Extension repo D covers extension entry points and data handling.
+- Extension repo A covers extension entry points, data, and property panels.
+- Extension repo E covers extension entry points and shared authoring sections.
+
+### [Qlik MCP tools](qlik-mcp-tools.md)
+
+- Extension repo E documents MCP validation.
+- Extension repo C documents MCP validation.
+
+### [Qlik Engine data and sessions](qlik-engine-data-sessions.md)
+
+- Extension repo A covers data reads, paging, and host hooks.
+- Extension repo B covers Engine reads, paging, selections, and local serving.
+- Extension repo C covers cube reads, paging, and script verification.
+- Extension repo D covers object properties and paging.
+- Extension repo E defines the shared Engine page validator and Qlik error checks.
+
+### [Themes and dark mode](themes-dark-mode.md)
+
+- Extension repo A covers host themes and palette fallbacks.
+- Extension repo B covers host themes and hosted review.
+- Extension repo C covers theme handling and visualization guidance.
+- Extension repo D covers host themes and development.
+- Extension repo E covers theme support and a theme test artifact.
+
+### [Hosted and local-browser evidence](hosted-local-browser-evidence.md)
+
+- Extension repo B covers evidence, hosted review, and local serving.
+- Extension repo C covers validation and delivery.
+- Extension repo A covers development and sharing.
+- Extension repo D covers development and licensing.
+- Extension repo E covers hosted validation.
+
+### [Common errors and fixes](common-errors.md)
+
+- Extension repo C covers tenant defects, validation, data quality, and visualization.
+- Extension repo B covers serving, verification, demo setup, and evidence.
+- Extension repo D covers development.
+- Extension repo A covers development and user guidance.
+- Extension repo E covers hosted validation and Qlik error checks.
 
 ## Evidence status
 

@@ -24,14 +24,21 @@ Sources: extension repo B, src/definition.ts:98-132; extension repo D, docs/deve
 
 A Qlik theme is a theme artifact. Do not upload it as an extension.
 
-The documented commands create and update a theme:
+Run this command from the root directory of extension repo E:
 
     qlik theme create --file <theme-archive>
+
+Expected result: The selected context contains the new theme.
+
+Run this command from the root directory of extension repo E:
+
     qlik theme patch <theme-id> --file <theme-archive>
 
-Use `themes/tm-vis-suite-dark-test/theme.json` in extension repo E as the test theme source. Do not copy theme values into this guide.
+Expected result: The selected context contains the updated theme.
 
-Sources: extension repo E, docs/agents/QlikValidation.md:248-253; extension repo E, themes/tm-vis-suite-dark-test/theme.json.
+Use the theme test artifact in extension repo E as the test theme source. Do not copy theme values into this guide.
+
+Sources: extension repo E, hosted theme validation; extension repo E, theme test artifact.
 
 ## Check dark mode
 

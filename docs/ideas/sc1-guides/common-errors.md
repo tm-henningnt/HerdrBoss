@@ -15,7 +15,24 @@ Use the error message and the failed boundary to select a fix. Read the affected
 | Chart reports that it is too small | The object has insufficient width or height for the chart content. | Increase the object size. Recheck long labels and segment counts. |
 | Read-back matches but chart is blank | Archive byte equality does not prove that the chart renders. | Open the object in the normal Qlik client and inspect its layout and render state. |
 
-Sources: extension repo C, docs/agents/TenantDefectPatterns.md:9-35; extension repo C, docs/agents/QlikValidation.md:73-88, 94-104; extension repo B, src/data.ts:163-174; extension repo B, src/paging.ts:1-11, 23-55; extension repo B, src/selection.ts:92-108; extension repo B, docs/serve-live.md:41-49; extension repo B, docs/demo-app.md:111-113; extension repo B, docs/evidence.md:49-83; extension repo E, docs/agents/QlikValidation.md:248-266.
+## Sources
+
+- Extension repo C's tenant defect guide describes defect patterns.
+- Extension repo C's validation guide defines Qlik checks.
+- Extension repo C's data quality guide covers data defects.
+- Extension repo C's visualization guide covers chart defects.
+- Extension repo B's data module reads Engine data.
+- Extension repo B's paging module validates page results.
+- Extension repo B's selection module handles selections.
+- Extension repo B's serving guide documents local startup.
+- Extension repo B's verification guide documents project checks.
+- Extension repo B's demo guide documents exports.
+- Extension repo B's evidence guide describes evidence limits.
+- Extension repo D's development guide describes local setup.
+- Extension repo A's development guide describes local setup.
+- Extension repo A's user guide describes usage.
+- Extension repo E's validation guide documents hosted checks.
+- Extension repo E's sweep tool reads Qlik error results.
 
 ## Fix order
 

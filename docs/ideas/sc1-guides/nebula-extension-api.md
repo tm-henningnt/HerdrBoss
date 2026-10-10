@@ -56,7 +56,7 @@ Static panel definitions do not prove dynamic lists or host re-render behavior. 
 
 Shared authoring sections define the order for data roles, optional controls, appearance, license, and about panels.
 
-Sources: extension repo B, src/definition.ts:98-132, 424-438; extension repo E, extensions/comparison-charts/src/property-panel.ts:4-14; extension repo E, packages/qlik-viz-core/src/authoring-sections.ts:1-33.
+Sources: extension repo B, src/definition.ts:98-132, 424-438; extension repo E, extension property panel; extension repo E, shared authoring sections.
 
 ## Keep rendering alive after denied writes
 

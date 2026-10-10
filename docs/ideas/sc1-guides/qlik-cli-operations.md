@@ -38,7 +38,7 @@ The export requires public sheets and zero sensitive-data scan counts.
 
 The sample README documents manual import of its exported QVF into a Qlik Cloud space. Treat that as UI import evidence, not CLI syntax.
 
-Sources: extension repo B, package.json; extension repo B, docs/demo-app.md:152-158; extension repo B, demo/export-demo-app.sh:50-76; extension repo E, demo/atlas/README.md:37.
+Sources: extension repo B, demo export configuration; extension repo B, docs/demo-app.md:152-158; extension repo B, demo export workflow; extension repo E, sample app README.
 
 CLI app import syntax is unverified in the sources cited here.
 
@@ -72,9 +72,25 @@ The exact qlik-cli reload syntax is not verified in this guide's source set. Use
 
 ## Use inline tables for a controlled Engine check
 
-Place small invented fixtures in the app load script. Keep their fields separate from production tables when the test needs independent rows.
+1. Place small invented fixtures in the app load script.
 
-Reload the app. Read the resulting table through the documented evaluation path. Compare every result with expected fixture data.
+   Expected result: The script contains the test rows.
+
+2. Keep their fields separate from production tables when the test needs independent rows.
+
+   Expected result: The test rows form separate model tables.
+
+3. Reload the app.
+
+   Expected result: The app reloads with the test data.
+
+4. Read the resulting table through the documented evaluation path.
+
+   Expected result: The evaluation returns the reloaded table.
+
+5. Compare every result with the expected fixture data.
+
+   Expected result: Every result matches its expected fixture data.
 
 The extension repo B demo source uses inline tables that have no fields in common with its main Facts table. The extension repo C runner reads reloaded tables through qlik app eval.
 

@@ -13,7 +13,7 @@ export const GUIDE_PATTERNS = [
   ['guid', /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i],
   ['tenant host', /\b[a-z0-9-]+\.(?:[a-z]{2}\.)?qlikcloud\.com\b/i],
   ['jwt', /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
-  ['token', /\b(?:ghp|gho|github_pat|sk|xox[bp])[-_][A-Za-z0-9_-]{16,}/],
+  ['token', /(?<![A-Za-z0-9])(?:ghp|gho|github_pat|sk|xox[bp])[-_][A-Za-z0-9_-]{16,}/],
   ['PEM private key', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/],
   ['home path', /\/Users\/[a-z][a-z0-9._-]*\//i],
 ];
@@ -31,6 +31,11 @@ test('the guide scan finds each pattern class and passes a placeholder', () => {
   assert.deepEqual(scanGuideText('/Users/someone/Projects/Tallmaker/project'), ['home path']);
 });
 
+test('the guide scan finds token prefixes after an underscore', () => {
+  const plantedToken = ['KEY_', 'ghp_', '0123456789abcdef'].join('');
+  assert.deepEqual(scanGuideText(plantedToken), ['token']);
+});
+
 test('the guide scan rejects PEM private keys', () => {
   const pemHeader = ['-----BEGIN ', 'RSA ', 'PRIVATE KEY-----'].join('');
   assert.deepEqual(scanGuideText(pemHeader), ['PEM private key']);
@@ -39,10 +44,30 @@ test('the guide scan rejects PEM private keys', () => {
 test('the knowledge base guides hold no GUID, tenant host, token or home path', () => {
   for (const dir of GUIDE_DIRS) {
     const folder = path.join(repo, dir);
-    if (!fs.existsSync(folder)) continue;
-    for (const name of fs.readdirSync(folder).filter((file) => file.endsWith('.md'))) {
-      const findings = scanGuideText(fs.readFileSync(path.join(folder, name), 'utf8'));
-      assert.deepEqual(findings, [], `${dir}/${name} holds a ${findings.join(', ')}`);
+    assert.ok(fs.existsSync(folder) && fs.statSync(folder).isDirectory(), `${dir} exists`);
+
+    const textFiles = [];
+    const visit = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const file = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          visit(file);
+        } else if (entry.isFile()) {
+          try {
+            new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file));
+            textFiles.push(file);
+          } catch (error) {
+            if (!(error instanceof TypeError)) throw error;
+          }
+        }
+      }
+    };
+    visit(folder);
+
+    for (const file of textFiles) {
+      const findings = scanGuideText(fs.readFileSync(file, 'utf8'));
+      const relativeFile = path.relative(repo, file).split(path.sep).join('/');
+      assert.deepEqual(findings, [], `${relativeFile} holds a ${findings.join(', ')}`);
     }
   }
 });
