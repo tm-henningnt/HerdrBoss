@@ -322,3 +322,7 @@ Summary: The release checklist names the pre-gate approval rule and the Boss-onl
 ## d5a92aea96a1
 Impact: useful
 Summary: The demo app helper reads the sheet state per sheet, refuses when the state is unknown, and names the cause of each refusal.
+
+## b1979f0bd028
+Impact: useful
+Summary: Add the ordered streaming herdr-boss redact command and require workers to pipe output that could hold identifiers through it.
