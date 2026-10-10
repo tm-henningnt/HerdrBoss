@@ -920,4 +920,16 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Reviewed branches: `gui` (PG2, WD1, BM1B, MK1), `reg` (PR1-GUI, PR1-TRIAGE, PR1-OPEN partial), `sc1g` (SC1 guides draft, `test/guide-scan.test.js`). Merged in `integrate-r45`.
 - Conflicts resolved: `public/app.js` (service setting booleans), `test/settings-render.test.js` (both tests kept).
 - Verified: `node --check` on changed files, `test/settings-render.test.js` 34 of 34, docs gate passed.
-- State: integrated only. Suite, ff-only, restart, service check and push are pending.
+- Four extra fix commits were needed after the merge: board layout test, `project lead` wording, doc length (new `docs/guide/focus.md`), browser help moved to `docs/help/browsers.md`, `--faint` text color, service setting list.
+- Released: `main` 275001a. Full suite exit 0 on the final tree. `suite --reuse` reused it. Service restarted, `/api/state` returned 200. Pushed.
+- Open: GUI screenshot matrix of batch 2 (393, 768, 1280, 1920, 2560 px, light and dark), TR1/TY1 judge pass, PR1-OPEN auto-park and activity refresh, a2 follow-ups.
+
+## GUI screenshot matrix of batch 2 (2026-10-10)
+
+- Captured by a Haiku subagent at 393, 768, 1280, 1920 and 2560 px, light (`?theme=light`) and dark (`?theme=dark`), for /projects, /allocation, /settings and /browsers. /projects shows no defect. The /browsers screenshot hang that the subagent reported did not reproduce: the page renders and the capture takes under 1 second.
+- Reported, to verify at the source before a fix (queued as GUI-FIX1, after the `msg` bundle merges because both edit `public/style.css` and `public/app.js`):
+  - /allocation at 393 px: number inputs clip the last digit; the lead-goal and Boss-rules text is cut.
+  - /allocation at 1920 and 2560 px: the share bar fills about 84 percent although the total is 100 of 100.
+  - /settings at 1920 px: opencode model IDs break inside a token. At 2560 px: the Usage limit mode select truncates. The bottom card row fills about 60 percent of the width.
+  - /allocation: the first select of each project lead succession row has no label.
+  - Not captured: the Project register group and the Show tenant hosts switch (below the fold; no scroll command).
