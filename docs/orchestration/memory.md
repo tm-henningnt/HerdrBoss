@@ -1035,3 +1035,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Evidence: 143 real taps over 13 pages, all correct; live update tick, back button, swipe and Help checked; 15 new touch tests (3 fail without the fixes); 126 focused tests passed. Screenshots at 393 px dark and light. Not verified: WebKit (not installed) and a physical iPhone. The Owner symptom may differ from cause 1; if the phone still fails, ask for the page and the tapped entry.
 - Rule: a browser task needs a Claude, OpenCode or Pi worker, because Codex cannot launch Chromium.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Release checkpoint r56 (MB-MENU3, alone)
+
+- Reviewed branch: `mm3` commit on top of MB-MENU2. Cause: on open, the menu focuses its first link. On iOS Safari a tap on a link gives the link no focus, so the focus moves to the body (`relatedTarget` null). The `focusout` handler then closed the menu before the click, the menu became display none, and the click never reached the anchor. A second cause: the click handler closed the menu synchronously in the click dispatch. Fix in `public/nav-menu.js`: `focusout` closes only when focus moves to a real element outside the menu; a click on an entry closes the menu in `requestAnimationFrame`, after the anchor default action; links stay real anchors.
+- Evidence: 8 tests failed before the fix and 38 pass after (touch model with an iOS focus mode, pointerup/touchend/blur on an entry, close in the next frame). Project browser at 393x852 with touch emulation: 110 of 110 taps navigated, also with an iOS simulation (focus move prevented, active element blurred). Not verified: real WebKit (Playwright install timed out) and a physical iPhone. Light-mode screenshot not taken.
+- Lesson: Chromium touch emulation focuses the tapped link and iOS does not. Tests of focus-dependent handlers need a no-focus mode.
+- State: integrated only. Suite, ff-only, restart and push are pending.
