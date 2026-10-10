@@ -68,9 +68,10 @@ document.addEventListener('submit', async (event) => {
     const response = await fetch('/api/fleet/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error('Check the name, base URL, and account scopes.');
     fleetSettings = await response.json(); fleetMessage = 'Saved.';
+    clearFormDirtyRegion(form);
     form.querySelector('[data-fleet-feedback]').textContent = fleetMessage;
   } catch (error) { form.querySelector('[data-fleet-feedback]').textContent = error.message; }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; autoRender(); }
 });
 document.addEventListener('input', (event) => {
   if (event.target.closest?.('[data-fleet-nudge-form]') && !fleetNudgeSaving) fleetNudgeId = null;
@@ -105,9 +106,11 @@ document.addEventListener('submit', async (event) => {
     if (!response.ok) throw new Error(result.error || 'The guidance could not be saved.');
     if (shares) {
       fleetShares = result;
+      clearFormDirtyRegion(form);
       fleetSharesFeedback = result.deliveries.some((row) => row.status === 'pending') ? 'Shares saved. Some factories are pending. The next successful poll retries delivery.' : 'Shares saved and delivered.';
       feedback.textContent = fleetSharesFeedback;
     } else {
+      clearFormDirtyRegion(form);
       fleetNudgeFeedback = result.status === 'delivered' ? 'Nudge delivered to the factory Boss.' : 'Nudge pending. Retry with Send nudge.';
       feedback.textContent = fleetNudgeFeedback;
       if (result.status === 'delivered') { form.elements.text.value = ''; fleetNudgeId = null; }
@@ -117,6 +120,7 @@ document.addEventListener('submit', async (event) => {
     if (shares) fleetSharesSaving = false; else fleetNudgeSaving = false;
     for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = false;
     button.disabled = shares && fleetSharesFromForm(form, fleetShares, false).accounts.some((account) => account.shares.reduce((sum, row) => sum + row.share, 0) > 100);
+    autoRender();
   }
 });
 document.addEventListener('submit', async (event) => {
@@ -138,6 +142,7 @@ document.addEventListener('submit', async (event) => {
   if (button) button.disabled = true;
   try {
     const result = await postJson('/api/quota-plan/codex/announce', body, OWNER_PAGE_HEADERS);
+    clearFormDirtyRegion(form);
     quotaPlanUi.at = null;
     quotaPlanUi.message = `Reset announced for ${result.announcement.at}.`;
     try {
@@ -203,6 +208,8 @@ const projectRegisterSelected = new Set();
 const projectRegisterPrefs = loadProjectRegisterPrefs();
 let clientStore = null;
 let lastRender = '';
+let lastRenderedPath = '';
+const dirtyFormRegions = new Map();
 // The project page patches its DOM in place when the previous render was the project page too.
 let lastRoute = null;
 let models = {};
@@ -607,12 +614,15 @@ async function updateNight(action) {
   nightMessage = action === 'start' ? 'Starting the watch…' : 'Stopping the watch…';
   lastRender = '';
   render(true);
+  let saved = false;
   try {
     const result = await postJson(`/api/watch/${action}`, action === 'start' ? { ...body, quietHours } : {});
+    saved = true;
     if (result.night) state.night = result.night;
     nightMessage = action === 'start' ? `On watch ${watchUntilPhrase(result.night)}.${result.warning ? ` ${result.warning}` : ''}` : 'Watch stopped.';
   } catch (error) { nightMessage = error.message; }
   finally {
+    if (saved && action === 'start') clearDirtyWatchForms();
     nightBusy = false;
     await refreshState();
     lastRender = '';
@@ -1062,6 +1072,7 @@ async function savePrices(reset, button) {
     priceTable = result;
     for (const key of Object.keys(priceDraft)) delete priceDraft[key];
     priceMessage = reset ? 'Prices reset to the defaults.' : 'Saved.';
+    clearFormDirtyRegion(document.getElementById('price-settings'));
     lastRender = '';
     render();
   } catch (error) {
@@ -1222,6 +1233,7 @@ function avatarSettings(s) {
 async function uploadAvatar(slug, input) {
   const file = input.files && input.files[0];
   if (!file) return;
+  clearFormDirtyRegion(input);
   if (file.size > AVATAR_MAX_BYTES) { avatarMessages[slug] = `The file is larger than 512 KB. Choose a smaller image.`; lastRender = ''; render(true); return; }
   avatarMessages[slug] = 'Uploading…';
   lastRender = ''; render(true);
@@ -2660,6 +2672,7 @@ document.addEventListener('submit', async (e) => {
   render();
   try {
     await saveResourcePool({ action: poolEditor.action, pool });
+    clearFormDirtyRegion(form);
     leaseMessage = `${poolEditor.action === 'create' ? 'Added' : 'Updated'} resource pool ${pool.name}.`;
     Object.assign(poolEditor, { open: false, values: null, status: '', portEnv: [] });
     await refreshLeaseState();
@@ -3191,28 +3204,32 @@ async function saveRoutineEditor(key) {
     title: draft.title, model: draft.model, prompt: draft.prompt,
     ...(draft.kind === 'every' ? { every: Number(draft.every) } : { beforeEnd: draft.beforeEnd }),
   };
+  let saved = false;
   try {
     await sendJson('PUT', `/api/watch/routines/${encodeURIComponent(id)}`, body);
+    saved = true;
     delete routineDrafts[key];
     delete watchForm.routines[id];
     routineMessages[key] = 'Saved.';
   } catch (error) { routineMessages[key] = error.message; }
   await refreshState();
-  lastRender = '';
-  render(true);
+  if (saved) renderAfterSuccessfulFormSave(document.querySelector(`[data-routine-details="${CSS.escape(key)}"]`));
+  else { lastRender = ''; render(true); }
 }
 
 async function resetRoutineEditor(key) {
   if (!confirm('Reset this routine to the kit text?\n\nA routine that you added is deleted.')) return;
+  let saved = false;
   try {
     await sendJson('DELETE', `/api/watch/routines/${encodeURIComponent(key)}`);
+    saved = true;
     delete routineDrafts[key];
     delete watchForm.routines[key];
     routineMessages[key] = 'Reset.';
   } catch (error) { routineMessages[key] = error.message; }
   await refreshState();
-  lastRender = '';
-  render(true);
+  if (saved) renderAfterSuccessfulFormSave(document.querySelector(`[data-routine-details="${CSS.escape(key)}"]`));
+  else { lastRender = ''; render(true); }
 }
 
 // The stand-down card of the Watch page. It parks the idle project orchestrators and undoes it. The undo button shows
@@ -4083,6 +4100,7 @@ async function mailSendReply(form) {
   render();
   try {
     const result = await postJson('/api/messages', { thread, kind: 'message', text, clientId: pending.clientId, ...(replyTo ? { replyTo } : {}), ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearFormDirtyRegion(form);
     mailbox.conversationRecords = mailbox.conversationRecords.map((record) => record.id === pending.id ? result.message : record);
     clearAttachmentDraft(context);
     mailbox.replyDraft = '';
@@ -4127,6 +4145,7 @@ async function mailSendNewMessage(form) {
   render();
   try {
     const result = await postJson('/api/messages', { thread, kind: 'message', text, clientId: pending.clientId, ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearFormDirtyRegion(form);
     mailbox.sent = mailbox.sent.map((record) => record.id === pending.id ? result.message : record);
     mailbox.conversationRecords = mailbox.conversationRecords.map((record) => record.id === pending.id ? result.message : record);
     if (mailbox.currentConversation?.id === pending.id) mailbox.currentConversation = { thread, id: result.message.id };
@@ -4213,6 +4232,7 @@ async function mailSend(item, text, question) {
   mailbox.busy = true; mailbox.status[item.id] = 'Sending…'; mailbox.notice = ''; render();
   try {
     await postJson('/api/messages', { thread: item.thread, kind: 'message', text, replyTo: item.id, clientId: ownerClientId(), ...(attached.ids.length ? { attachments: attached.ids } : {}) });
+    clearFormDirtyRegion($app.querySelector(`[data-mail-form="${CSS.escape(item.id)}"]`));
     clearAttachmentDraft(context);
     delete mailDrafts[item.id];
     delete mailbox.status[item.id];
@@ -4941,6 +4961,7 @@ async function chatSend(retry = null) {
   chat.draft = '';
   chat.status = 'Sending…';
   if (field) field.value = '';
+  if (!retry) clearFormDirtyRegion($app.querySelector('[data-chat-compose]'));
   if (!retry) clearAttachmentDraft(attachmentContext);
   chat.pending[thread] = [...chatPendingFor(thread).filter((item) => item.id !== pending.id), pending];
   chat.scroll = null;
@@ -4966,13 +4987,16 @@ async function chatSendAction(record, text) {
   chat.busy = true;
   chat.status = 'Sending…';
   render();
+  const form = [...$app.querySelectorAll('[data-chat-card-form]')].find((candidate) => candidate.dataset.chatCardForm === record.id);
   try {
     await postJson('/api/messages', { thread: record.thread, kind: 'message', text, replyTo: record.id, clientId: ownerClientId() });
+    clearFormDirtyRegion(form);
     delete chat.drafts[record.id];
     delete chat.cardStatus[record.id];
     chat.results[record.id] = `${chatResultLabel(text)} ${clock(new Date().toISOString())}`;
     chat.status = 'Queued. Herdr Boss delivers it when the agent is working, idle, or done. The item is closed.';
   } catch (error) {
+    clearFormDirtyRegion(form);
     chat.cardStatus[record.id] = error.message;
     chat.status = error.message;
   } finally { chat.busy = false; render(); }
@@ -5223,12 +5247,13 @@ document.addEventListener('click', (e) => {
 document.addEventListener('submit', (e) => {
   if (!e.target.matches?.('[data-agent-filters]')) return;
   e.preventDefault();
+  clearFormDirtyRegion(e.target);
   agentsNavigate({ q: e.target.querySelector('[data-agent-q]').value.trim(), pair: '' });
 });
 
 document.addEventListener('change', (e) => {
-  if (e.target.matches?.('[data-agent-project]')) agentsNavigate({ project: e.target.value, pair: '' });
-  else if (e.target.matches?.('[data-agent-q]')) agentsNavigate({ q: e.target.value.trim(), pair: '' });
+  if (e.target.matches?.('[data-agent-project]')) { clearFormDirtyRegion(e.target); agentsNavigate({ project: e.target.value, pair: '' }); }
+  else if (e.target.matches?.('[data-agent-q]')) { clearFormDirtyRegion(e.target); agentsNavigate({ q: e.target.value.trim(), pair: '' }); }
 });
 
 document.addEventListener('keydown', (e) => {
@@ -5676,6 +5701,7 @@ document.addEventListener('input', (event) => {
   projectRegisterPrefs.query = event.target.value.slice(0, 200);
   reconcileProjectRegisterSelection();
   saveProjectRegisterPrefs();
+  clearFormDirtyRegion(event.target);
   lastRender = '';
   render();
 });
@@ -5689,6 +5715,7 @@ document.addEventListener('change', (event) => {
     if (target.checked) projectRegisterSelected.add(target.dataset.registerSelect);
     else projectRegisterSelected.delete(target.dataset.registerSelect);
   } else return;
+  clearFormDirtyRegion(target);
   if (!target.matches?.('[data-register-select]')) reconcileProjectRegisterSelection();
   saveProjectRegisterPrefs();
   lastRender = '';
@@ -7180,6 +7207,7 @@ const HELP = {
     <p>A free item that answers a connection shows <b>Unleased</b> with the process ID, the process name, the age, and the owner project when Herdr Boss knows it. Such a port is not on any lease, so Herdr Boss cannot show the server on the Project page. After 10 minutes Herdr Boss sends one notice to the project lead of the owner, with the commands to take the port and bind the lease. A listener with no known owner stays a warning in this panel.</p>
     <h3>Manage pools</h3><p>Select <b>Add pool</b> to create a pool. Enter ports, ranges such as 8000-8009, or items. Separate them with commas or lines. A pool holds at most 100 ports from 1024 to 65535. Enter the project split as JSON. Set the environment variable, lease TTL, reclaim check, grace period, idle minutes, and the wait default. Add a value by port to hand a worker a variable, for example a client ID, that matches its port. The value is stored in the private config file on this machine only, and the page shows <b>set</b> instead of the value. Select <b>Change</b> to replace it. An empty value clears it. Keep ports 9222 to 9299 out of custom pools. Select <b>Edit</b> to change a config pool. Select <b>Remove</b>, then confirm the pool name, to remove it. A held item blocks removal and any update that drops it. The exception is a lease that is unbound and has had no listener for the idle minutes. Herdr Boss saves the change to <code>config.json</code> and applies it at once. The built-in <code>project-browsers</code> pool has no edit or remove controls. The read-only preview refuses pool changes.</p>`],
   settings: ['Settings', `
+    <p>A form keeps unsaved input while the page refreshes.</p>
     <h3>Codex shared Git</h3><p>Set <code>projects.SLUG.codexSharedGit</code> in Advanced. Select <b>Apply policy</b>. Run <code>herdr-boss harness sync</code>, then restart Codex. The default is on. The HerdrBoss default is off until live verification. The common <code>.git</code> directory gives write access to <code>hooks/</code>, <code>config</code>, <code>refs/</code>, <code>objects/</code>, <code>HEAD</code>, <code>info/</code>, and <code>worktrees/</code>. Herdr Boss stores pins in the private ~/.config/herdr-boss/git-pins/ folder. It hashes hooks, the whole repo config, worktree config, info/attributes, and configured hooksPath files. Push and suite use the private records even without project-repos.json. A missing or unreadable prior pin fails closed. The caller check is not a security boundary against a same-user process. The private folder is protected because the Codex sandbox cannot write it. Push and suite refuse a pin difference before taking a lock. Ask the Boss. Do not run the hook. After review, the Owner, Boss, or that project lead can run <code>harness pin PROJECT --reason TEXT</code>. The reason is required and audited. The Owner terminal needs a TTY on stdin and stdout. If the private folder is not writable, pin refuses before changing pins or the audit. Output lists at most 10 sanitized names, with 64 characters per name and a remaining count. Only the Boss can use <code>--force --reason TEXT</code> for push or suite. The reason is required and audited.</p>
     <h3>Data directory and roots</h3><p>The service starts only when its configured data directory and live data directory match after path normalization. The live data directory is always <code>~/.herdr-boss</code>. <code>HERDR_BOSS_DIR</code> selects the data directory. Two different paths to the same directory do not pass the check. Use <code>--read-only-preview</code> with a separate temporary directory for a preview.</p>
     <p>Open <b>Advanced</b>, then find <b>Paths</b> in <b>Service settings</b>. Set <code>worktreeRoot</code> and <code>projectRoot</code>, then select <b>Save</b>. Use an absolute path or a path that starts with <code>~</code>. A root must not contain a <code>..</code> segment and must not be <code>/</code>. The defaults are <code>~/Projects/.herdr-wt</code> and <code>~/Projects</code>. A project <code>worktreeRoot</code> in <code>.herdr-boss.json</code> takes precedence for its workers. Run <code>herdr-boss harness sync</code> after a worktree root change. Existing projects and worktrees stay in place.</p>
@@ -8267,6 +8295,117 @@ function markOwnerActive(e) {
 document.addEventListener('input', markOwnerActive, { capture: true, passive: true });
 document.addEventListener('scroll', markOwnerActive, { capture: true, passive: true });
 
+const FORM_EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
+const FORM_REGION_SELECTOR = 'form, [data-service-group], [data-release-repos-editor], #price-settings, [data-night-form], [data-routine-details], .watch-routines, .watch-adhoc, .routine-editor, .settings-card, .panel, #control-plane, #settings-plane';
+
+function formEditRegion(target) {
+  if (!target || !$app.contains(target)) return null;
+  const form = target.closest?.('form');
+  if (form) return form;
+  const specific = target.closest?.('[data-service-group], [data-release-repos-editor], #price-settings, [data-night-form], [data-routine-details], .watch-routines, .watch-adhoc, .routine-editor, .settings-card');
+  if (specific) return specific;
+  return target.closest?.('#control-plane, #settings-plane') ? target.closest?.('.panel') || target.closest?.('#control-plane, #settings-plane') : null;
+}
+
+function markFormDirty(target, region = formEditRegion(target)) {
+  if (!region || !$app.contains(region)) return;
+  let entry = dirtyFormRegions.get(region);
+  if (!entry || entry.path !== location.pathname) entry = { path: location.pathname, targets: new Set() };
+  entry.targets.add(target);
+  dirtyFormRegions.set(region, entry);
+}
+
+function clearFormDirtyRegion(target) {
+  if (!target) return;
+  const region = target.matches?.(FORM_REGION_SELECTOR) ? target : formEditRegion(target);
+  if (region) dirtyFormRegions.delete(region);
+}
+
+function clearServiceSettingsDirty(group) {
+  for (const [region, entry] of dirtyFormRegions) {
+    if (group === 'Releases' && region.matches?.('[data-release-repos-editor]')) {
+      dirtyFormRegions.delete(region);
+      continue;
+    }
+    if ([...entry.targets].some((target) => target.getAttribute?.('data-service-group') === group)) dirtyFormRegions.delete(region);
+  }
+}
+
+function clearDirtyFormRegionsFor(selector) {
+  for (const [region, entry] of dirtyFormRegions) {
+    if ([...entry.targets].some((target) => target.closest?.(selector))) dirtyFormRegions.delete(region);
+  }
+}
+
+function clearDirtyWatchForms() {
+  clearDirtyFormRegionsFor('[data-night-form], [data-routine-details], .watch-routines, .watch-adhoc');
+}
+
+function clearPolicyDirtyForms() {
+  for (const [region, entry] of dirtyFormRegions) {
+    const policyTarget = [...entry.targets].some((target) => target.closest?.('#control-plane, #settings-plane')
+      && !target.closest?.('#price-settings, #service-settings, [data-service-group], [data-release-repos-editor], [data-night-form], [data-routine-details], .watch-routines, .watch-adhoc, .routine-editor, [data-resource-pool-form]'));
+    if (policyTarget) dirtyFormRegions.delete(region);
+  }
+}
+
+function hasDirtyFormRegion() {
+  let dirty = false;
+  for (const [region, entry] of dirtyFormRegions) {
+    if (entry.path !== location.pathname || !$app.contains(region)) dirtyFormRegions.delete(region);
+    else dirty = true;
+  }
+  return dirty;
+}
+
+function formRefreshBlocked() {
+  if (hasDirtyFormRegion()) return true;
+  const active = document.activeElement;
+  return location.pathname === lastRenderedPath && $app.contains(active) && active.matches?.(FORM_EDITABLE_SELECTOR) === true;
+}
+
+function trackFormEdit(event) { markFormDirty(event.target); }
+
+function trackFormBlur(event) {
+  if (!$app.contains(event.target) || !event.target.matches?.(FORM_EDITABLE_SELECTOR)) return;
+  Promise.resolve().then(() => autoRender());
+}
+
+function trackFormAction(event) {
+  const target = event.target;
+  const add = target.closest?.('[data-release-repo-add]');
+  const remove = target.closest?.('[data-release-repo-remove]');
+  if (add || remove) {
+    const button = add || remove;
+    markFormDirty(button, button.closest?.('[data-release-repos-editor]'));
+    return;
+  }
+  const cancel = target.closest?.('[data-form-cancel], [data-pool-cancel], [data-mail-back], [data-browser-bookmark-cancel], input[type="reset"], button');
+  if (!cancel || !$app.contains(cancel)) return;
+  const label = (cancel.getAttribute?.('aria-label') || cancel.textContent || '').trim().toLowerCase();
+  if (!cancel.matches?.('[data-form-cancel], [data-pool-cancel], [data-mail-back], [data-browser-bookmark-cancel], input[type="reset"]') && label !== 'cancel') return;
+  if (cancel.matches?.('[data-mail-back]')) clearDirtyFormRegionsFor('[data-mail-compose], [data-mail-reply]');
+  else clearFormDirtyRegion(cancel);
+  Promise.resolve().then(() => autoRender());
+}
+
+function trackFormReset(event) {
+  clearFormDirtyRegion(event.target);
+  Promise.resolve().then(() => autoRender());
+}
+
+document.addEventListener('input', trackFormEdit, true);
+document.addEventListener('change', trackFormEdit, true);
+document.addEventListener('focusout', trackFormBlur, true);
+document.addEventListener('click', trackFormAction, true);
+document.addEventListener('reset', trackFormReset, true);
+
+function renderAfterSuccessfulFormSave(target) {
+  clearFormDirtyRegion(target);
+  lastRender = '';
+  render(true);
+}
+
 // The scroll containers to keep for each route. A position is restored only when its key is the same after the render.
 function keptScrollKeys(route, mailbox, chat) {
   if (route === 'mailbox') {
@@ -8309,6 +8448,10 @@ function restoreScroll(route, scroll) {
 function render(force = false) {
   if (!state) return;
   if (!policyDirty) { policyDraft = null; allocationMeta = null; policyStale = false; }
+  if (!force && formRefreshBlocked()) {
+    $updated.textContent = `updated ${ago(state.updatedAt)}`;
+    return;
+  }
   if (!force && policyDirty && ['/allocation', '/settings'].includes(location.pathname) && document.activeElement?.closest?.('#control-plane, #settings-plane')) {
     $updated.textContent = `updated ${ago(state.updatedAt)}`;
     return;
@@ -8366,6 +8509,7 @@ function render(force = false) {
     for (const field of $app.querySelectorAll('textarea[data-grow-textarea]')) fitTextarea(field);
     lastRoute = route;
     lastRender = html;
+    lastRenderedPath = location.pathname;
     if (watchField) {
       const field = document.getElementById(watchField.id);
       if (field) {
@@ -9020,6 +9164,7 @@ async function saveServiceSettings(group, button) {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Service settings could not be saved.');
+    clearServiceSettingsDirty(group);
     const notes = storedValueNotes(changes, result.settings);
     serviceSettingsMessages[group] = ['Saved.', ...notes].join(' ');
     if (state) {
@@ -9389,9 +9534,11 @@ document.addEventListener('submit', async (e) => {
       previewMessage(navigateSlug, 'Opening page…');
       setTimeout(() => refreshBrowserPreview(navigateSlug, true), 800);
     }
+    clearFormDirtyRegion(form);
+    autoRender();
   } catch (error) {
     if (sizeSlug) { browserMessages[sizeSlug] = error.message; lastRender = ''; render(); }
-    else if (startSlug || renameSlug) { browserMessages[startSlug || renameSlug] = error.message; browserBookmarkDraft = null; lastRender = ''; render(); }
+    else if (startSlug || renameSlug) { browserMessages[startSlug || renameSlug] = error.message; lastRender = ''; render(); }
     else previewMessage(navigateSlug, error.message);
   } finally { button.disabled = false; }
 });
@@ -9798,6 +9945,7 @@ document.addEventListener('click', async (e) => {
   }
   if (e.target.closest?.('[data-distribute-remaining]')) { distributeRemaining(); return; }
   if (e.target.closest?.('[data-reload-shares]')) {
+    clearPolicyDirtyForms();
     policyDirty = false; policyDraft = null; allocationMeta = null; policyStale = false; saveMessage = '';
     lastRender = ''; render(true);
     return;
@@ -9820,6 +9968,7 @@ document.addEventListener('click', async (e) => {
       if (!response.ok) throw new Error((result.errors || [result.error || 'The policy could not be saved.']).join(' '));
       policyDraft = result.policy;
       policyDirty = false;
+      clearPolicyDirtyForms();
       saveMessage = ['Policy saved.', ...(result.notes || [])].join(' ');
       for (const kind of Object.keys(settingsMessages)) delete settingsMessages[kind];
       state.policy = result.policy;

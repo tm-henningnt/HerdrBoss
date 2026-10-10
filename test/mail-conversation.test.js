@@ -46,7 +46,10 @@ function loadRenderContext({ mailbox, document, patch }) {
     priceDraft: {},
     pendingHash: null,
     lastRender: '',
+    lastRenderedPath: '',
     lastRoute: 'mailbox',
+    dirtyFormRegions: new Map(),
+    FORM_EDITABLE_SELECTOR: 'input, textarea, select, [contenteditable="true"]',
     APP_VIEW_ROUTES: ['mailbox', 'chat'],
     KEYED_ROUTES: ['mailbox'],
     MAIL_FOLDER_KEYS: { 'needs-you': 'needsYou', inbox: 'inbox', updates: 'updates', sent: 'sent', done: 'done' },
@@ -125,7 +128,7 @@ function loadRenderContext({ mailbox, document, patch }) {
     'mailFind', 'mailboxView', 'mailConversationView', 'mailConversationKey',
     'mailConversationMessage', 'mailReplyFormShown', 'mailDeliveryState', 'render',
   ];
-  const helpers = ['mailDeduplicateClientRecords'].filter((name) => {
+  const helpers = ['mailDeduplicateClientRecords', 'hasDirtyFormRegion', 'formRefreshBlocked'].filter((name) => {
     try { declaration(name); return true; } catch { return false; }
   });
   const escSource = /\nconst esc = .*\n/.exec(app)?.[0];
