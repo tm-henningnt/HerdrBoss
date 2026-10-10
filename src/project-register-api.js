@@ -75,10 +75,11 @@ export function createProjectRegisterApi({ dataDir, readOnly = false, runLifecyc
       if (method === 'GET' && pathname === '/api/project-register') {
         const register = readRegister(dataDir);
         const known = new Set(register.projects.map((record) => record.slug));
-        const registered = register.projects.map((record) => {
-          const onboarding = getOnboarding(record.slug);
-          return { ...publicRecord(record), ...(onboarding ? { onboarding } : {}) };
-        });
+        const registered = [];
+        for (const record of register.projects) {
+          const onboarding = await getOnboarding(record.slug);
+          registered.push({ ...publicRecord(record), ...(onboarding ? { onboarding } : {}) });
+        }
         const policyOnly = [...new Set(policyProjects().filter((slug) => SLUG.test(slug) && !known.has(slug)))].map((slug) => ({
           slug, title: slug, state: 'policy-only', registered: false, inPolicy: true,
         }));

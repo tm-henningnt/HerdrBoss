@@ -34,7 +34,9 @@ On **Resource allocation**, set the ordered choices for automatic project lead h
 
 The Projects page starts with cards for open projects. The allocation bar stays above either view. Each card shows the register state, area, client tag, share, and status dot. Select a card to see its published status, tasks, workers, locks, browser, policy, register fields, issue source, triage settings, and project actions.
 
-Select **Register** to search and manage open, parked, archived, and policy-only projects. Select **Add** for a project that is in policy but not in the register. A project with its kit installed but without a workspace or project lead shows the missing step and **Start orchestrator**.
+Select **Register** to search and manage open, parked, archived, and policy-only projects. Select **Add** for a project that is in policy but not in the register. A project with its kit installed but without a workspace or project lead shows the missing step. Use its start button to finish setup.
+
+The service imports the project register at start and after project status or policy changes. It waits for the Herdr project lists before it imports. If a list fails, the service keeps the saved register states. The Register view waits for these lists before it shows the setup state. A read-only preview keeps the saved register. It does not import projects or read the live setup state.
 
 The Overview, Board, Allocation, and Projects page use the project register and policy to show project state and share. The open project cap limits new opens and automatic opens. It does not stop an import or a project that already has a live project lead.
 

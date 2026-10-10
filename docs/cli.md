@@ -212,6 +212,8 @@ The script refuses the live data directory, a directory inside it, and a symlink
 
 Choose an unused local port if 4478 is busy.
 
+A read-only preview keeps the saved project register. It does not import projects at start or after a project status or policy change. It does not call Herdr to import projects or read the live setup state.
+
 `HERDR_BOSS_DIR` selects the data directory. The live data directory is always `~/.herdr-boss`.
 
 A preview collects and evaluates, so it writes `state.json`, `rules.json`, `bulletin.md`, and quota history into its data directory. A preview therefore requires `HERDR_BOSS_DIR` to name a separate directory that the service does not use. The directory does not have to be empty. A directory that holds files from an earlier preview is valid. The command refuses to start when `HERDR_BOSS_DIR` is unset. It also refuses when the path resolves to the live data directory or to `~/.herdr-boss`. A symlink in the path gives the same refusal. The refusal happens before the command creates or migrates a data directory.

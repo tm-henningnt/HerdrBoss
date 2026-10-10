@@ -45,7 +45,7 @@ function request(port, route, { method = 'GET', token, body, cookie, host, rawBo
     req.on('error', reject); req.end(rawBody || (body ? JSON.stringify(body) : undefined));
   });
 }
-async function start(t, { fetchImpl, preview = false } = {}) {
+async function start(t, { fetchImpl, preview = false, herdrRunner } = {}) {
   for (const name of ['fleet-guidance.json', 'fleet-shares.json', 'head-office-role.json']) fs.rmSync(path.join(root, name), { force: true });
   writeFleetFile(path.join(root, 'factory-identity.json'), { factoryId: 'factory-a' });
   writeFleetFile(path.join(root, 'fleet-accounts.json'), [account]);
@@ -53,9 +53,14 @@ async function start(t, { fetchImpl, preview = false } = {}) {
   const cfg = { ...loadConfig(), host: '127.0.0.1', port: 0, tickSeconds: 3600, allowedHosts: ['*.localhost'] };
   const engine = new EventEmitter();
   engine.state = { updatedAt: new Date(clock()).toISOString(), herdr: { panes: [{ id: 'wA:pA', workspace: 'Boss', label: 'boss', agent: 'codex', status: 'idle' }] }, kit: { current: 'abcdef012345' }, quotas: [], projects: [], machine: {} };
-  engine.tick = async () => engine.state; engine.log = () => {};
+  let firstTick;
+  const ready = new Promise((resolve) => { firstTick = resolve; });
+  engine.tick = async () => { firstTick(); return engine.state; }; engine.log = () => {};
   const delivered = [];
-  engine.herdrRunner = async (binary, args) => { delivered.push({ binary, args }); return '{}'; };
+  engine.herdrRunner = herdrRunner || (async (binary, args) => {
+    if (args[0] === 'agent' && args[1] === 'prompt') delivered.push({ binary, args });
+    return '{}';
+  });
   engine.promptService = Engine.prototype.promptService;
   const privateDir = path.join(root, 'private-guidance');
   const app = serve(cfg, { liveDataDir: root, readOnlyPreview: preview, createEngine: () => engine,
@@ -63,12 +68,85 @@ async function start(t, { fetchImpl, preview = false } = {}) {
     fleet: { privateDir, now: clock, registryFile: path.join(root, 'empty-registry.json'), ...(fetchImpl ? { fetchImpl } : {}) } });
   t.after(async () => { await app.close(); });
   if (!app.server.listening) await once(app.server, 'listening');
+  await ready;
   return { app, cfg, port: app.server.address().port, privateDir, delivered };
 }
 async function credentials(privateDir) {
   const { createFleetGuideAccess, createFleetReadAccess } = await import('../src/fleet-access.js');
   return { guide: createFleetGuideAccess({ privateDir, now: clock }).rotate(), read: createFleetReadAccess({ privateDir, now: clock }).rotate() };
 }
+
+test('a preview skips register imports at startup', { timeout: 10000 }, async (t) => {
+  const calls = [];
+  const policyFile = path.join(root, 'policy.json');
+  writeFleetFile(policyFile, { ...POLICY_DEFAULTS, projects: {} });
+  t.after(() => fs.rmSync(policyFile, { force: true }));
+  await start(t, { preview: true, herdrRunner: async (binary, args) => {
+    calls.push({ binary, args });
+    return '{}';
+  } });
+  const registerFile = path.join(root, 'project-register.json');
+  assert.equal(calls.length, 0, 'preview startup does not call the register runner');
+  assert.equal(fs.existsSync(registerFile), false, 'preview startup does not import records');
+  assert.equal(fs.existsSync(path.join(root, 'locks', 'project-register')), false, 'preview startup does not take the register lock');
+});
+
+test('service startup imports open projects from asynchronous wrapped Herdr replies', { timeout: 10000 }, async (t) => {
+  const slug = 'register-start-sample';
+  const replies = {
+    workspace: { workspaces: [{ workspace_id: 'wR', label: slug }] },
+    pane: { panes: [
+      { pane_id: 'wOther:pOther', workspace_id: 'wOther', label: 'orch' },
+      { pane_id: 'wR:pR', workspace_id: 'wR', label: 'orch' },
+    ] },
+    agent: { agents: [{ pane_id: 'wR:pR', name: `${slug}-orch` }] },
+  };
+  const calls = [];
+  const { port } = await start(t, { herdrRunner: async (_binary, args) => {
+    calls.push(args);
+    return JSON.stringify({ result: replies[args[0]] });
+  } });
+  t.after(() => {
+    for (const name of ['project-register.json', 'project-audit.jsonl']) fs.rmSync(path.join(root, name), { force: true });
+  });
+  const result = await request(port, '/api/project-register');
+  assert.equal(result.status, 200);
+  const project = result.body.projects.find((row) => row.slug === slug);
+  assert.ok(project, 'startup imports a project with a live project lead');
+  assert.equal(project.state, 'open');
+  assert.equal(project.onboarding.workspace, true);
+  assert.equal(project.onboarding.orchestrator, true);
+  assert.deepEqual(calls.slice(0, 3), [['workspace', 'list'], ['pane', 'list'], ['agent', 'list']]);
+});
+
+test('service startup catches rejected Herdr lists and keeps saved register states', { timeout: 10000 }, async (t) => {
+  const { buildCandidateRecord, writeRegister } = await import('../src/project-register.js');
+  const slug = 'register-unavailable-sample';
+  const policyFile = path.join(root, 'policy.json');
+  writeFleetFile(policyFile, { ...POLICY_DEFAULTS, projects: { [slug]: { share: 100 } } });
+  writeRegister({ version: 1, projects: [buildCandidateRecord({ slug, state: 'open' }, root)] }, root);
+  t.after(() => {
+    for (const name of ['policy.json', 'project-register.json', 'project-audit.jsonl']) fs.rmSync(path.join(root, name), { force: true });
+  });
+  const { port } = await start(t, { herdrRunner: async () => { throw new Error('Herdr is unavailable.'); } });
+  const result = await request(port, '/api/project-register');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.projects.find((row) => row.slug === slug).state, 'open');
+});
+
+test('a preview reads saved register records without calling Herdr for onboarding', { timeout: 10000 }, async (t) => {
+  const { buildCandidateRecord, writeRegister } = await import('../src/project-register.js');
+  const slug = 'register-preview-sample';
+  writeRegister({ version: 1, projects: [buildCandidateRecord({ slug, state: 'open' }, root)] }, root);
+  t.after(() => fs.rmSync(path.join(root, 'project-register.json'), { force: true }));
+  const calls = [];
+  const { port } = await start(t, { preview: true, herdrRunner: async (_binary, args) => { calls.push(args); return '{}'; } });
+  const result = await request(port, '/api/project-register');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.projects.find((row) => row.slug === slug).state, 'open');
+  assert.equal(result.body.readOnly, true);
+  assert.equal(calls.length, 0);
+});
 
 test('guidance needs fleetGuide even on loopback; read, Owner, absent, and wrong credentials cannot submit', async (t) => {
   const { port, privateDir, cfg } = await start(t);
