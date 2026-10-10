@@ -195,5 +195,21 @@ for (const backend of ['json', 'sqlite']) test(`${backend}: unresolved To do ite
   const item = todo.postTodo(fileText(), {}, { ...context, now: old });
   assert.equal(context.store.all().length, 1);
   todo.actOnTodo({ id: item.id, action: 'done' }, context);
-  assert.equal(context.store.all().length, 1);
+  assert.equal(context.store.all().filter((record) => record.kind === 'todo').length, 1);
+  assert.equal(context.store.all().length, 2, 'the retained item and its queued notice share the store');
+});
+
+test('only the verified poster project can cancel its open item, and the Owner sees the note', (t) => {
+  const context = fixture(t);
+  const item = todo.postTodo(fileText(), {}, context);
+  const foreign = { ...context, control: { projects: { beta: { workspace: 'wA' } } } };
+  assert.throws(() => todo.cancelTodo(item.key, 'No longer needed.', foreign), (error) => error.status === 403);
+  assert.equal(context.store.all()[0].state, 'open');
+  assert.throws(() => todo.cancelTodo(item.key, 'password=' + 'invented'.repeat(4), context), /secret/);
+  const result = todo.cancelTodo(item.key, 'The preview was replaced.', context);
+  assert.equal(result.item.state, 'cancelled');
+  assert.equal(result.item.cancelNote, 'The preview was replaced.');
+  assert.equal(result.item.closedBy, 'poster');
+  assert.equal(todo.todoView(context.store.all()).todoHistory[0].cancelNote, 'The preview was replaced.');
+  assert.throws(() => todo.cancelTodo(item.key, '', context), (error) => error.status === 409);
 });

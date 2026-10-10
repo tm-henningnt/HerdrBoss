@@ -12,20 +12,25 @@ export function todoListHtml(items, history, { drafts, status, busy }, { esc, ma
     const action = (key, label) => `<button type="button" data-todo-id="${id}" data-todo-action="${key}"${off}>${label}</button>`;
     const reasonId = `todo-reason-${id}`;
     const timeId = `todo-until-${id}`;
+    const answerId = `todo-answer-${id}`;
     let form = '';
     if (draft && !closed) {
-      const reasonLabel = draft.action === 'answer' ? 'Note (optional)' : 'Reason';
-      const field = draft.action === 'snooze'
+      const reasonLabel = draft.action === 'answer' ? 'Answer or note' : 'Reason';
+      const textAnswer = draft.action === 'answer' && item.type !== 'decide';
+      const field = textAnswer
+        ? `<label for="${answerId}">Answer</label><textarea id="${answerId}" data-todo-answer="${id}" maxlength="2000" rows="3" required${off}>${esc(draft.answer || '')}</textarea>`
+        : draft.action === 'snooze'
         ? `<label for="${timeId}">Snooze until</label><input id="${timeId}" type="datetime-local" data-todo-until="${id}" value="${esc(draft.until || '')}" required${off}>`
         : `<label for="${reasonId}">${reasonLabel}</label><textarea id="${reasonId}" data-todo-reason="${id}" maxlength="2000" rows="3"${draft.action === 'answer' ? '' : ' required'}${off}>${esc(draft.reason || '')}</textarea>`;
-      const submit = draft.action === 'answer'
-        ? `<button type="submit" data-todo-decision="accept"${off}>Accept</button><button type="submit" data-todo-decision="deny"${off}>Deny</button>`
+      const submit = textAnswer ? `<button type="submit"${off}>Save Answer</button>` : draft.action === 'answer'
+        ? `<button type="submit" data-todo-decision="accept"${off}>Accept</button><button type="submit" data-todo-decision="deny"${off}>Deny</button><button type="submit"${off}>Save Answer</button>`
         : `<button type="submit"${off}>${{ blocked: 'Save Blocked', snooze: 'Snooze', 'not-now': 'Save Not now' }[draft.action]}</button>`;
       form = `<form class="todo-action-form" data-key="todo-form:${id}" data-todo-form="${id}" aria-label="${esc(draft.action)}">${field}<div class="todo-actions">${submit}<button type="button" data-todo-cancel="${id}"${off}>Cancel</button></div></form>`;
     }
-    const saved = last ? `<p class="todo-saved">${esc(last.decision || item.state)}${last.reason ? ` · ${esc(last.reason)}` : ''}${item.snoozedUntil ? ` · until ${esc(new Date(item.snoozedUntil).toLocaleString())}` : ''}</p>` : '';
+    const saved = item.closedBy === 'poster' ? `<p class="todo-saved">cancelled${item.cancelNote ? ` · ${esc(item.cancelNote)}` : ''}</p>`
+      : last ? `<p class="todo-saved">${esc(last.decision || item.state)}${last.answer ? ` · ${esc(last.answer)}` : ''}${last.reason ? ` · ${esc(last.reason)}` : ''}${item.snoozedUntil ? ` · until ${esc(new Date(item.snoozedUntil).toLocaleString())}` : ''}</p>` : '';
     const buttons = closed ? '' : item.state === 'open'
-      ? `${item.type === 'decide' ? action('answer', 'Answer') : ''}${action('done', item.type === 'read' ? 'Mark read' : 'Done')}${action('blocked', 'Blocked')}${action('snooze', 'Snooze')}${action('not-now', 'Not now')}`
+      ? `${action('answer', 'Answer')}${action('done', item.type === 'read' ? 'Mark read' : 'Done')}${action('blocked', 'Blocked')}${action('snooze', 'Snooze')}${action('not-now', 'Not now')}`
       : action('reopen', 'Reopen');
     return `<li class="todo-row" data-key="todo:${id}"><div class="todo-meta"><span>${esc(project)}</span><span class="todo-type">${esc(item.type)}</span><span>${esc(item.priority)}</span><time datetime="${esc(item.createdAt || item.at)}" title="${esc(item.createdAt || item.at)}">${age}</time></div>`
       + `<h2 class="todo-title">${esc(item.title)}</h2><p class="todo-blocks"><strong>Blocks:</strong> ${esc(item.blocks)}</p><p class="todo-poster">Asked by ${esc(item.poster?.role || item.from)}${item.poster?.pane ? ` · ${esc(item.poster.pane)}` : ''}</p>`

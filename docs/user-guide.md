@@ -14,14 +14,18 @@ Open the Mailbox. Select **To do** in its folders or the header icon. The badge 
 
 - Select **Done** after the steps or checklist are complete.
 - Select **Mark read** after you read an information item.
-- Select **Answer**, then **Accept** or **Deny**, for a decision. Add a note if needed.
+- Select **Answer**, then **Accept** or **Deny**, for a decision. Add a note if needed. To give an answer text, type it and select **Save Answer**.
 - Select **Blocked**. Give a reason. Select **Save Blocked**.
 - Select **Snooze**. Choose a future time. Select **Snooze** in the form. The item returns at that time.
 - Select **Not now**. Give a reason. Select **Save Not now**. This cancels the item.
 
 Open **Blocked, snoozed and closed** to inspect the saved action and reason. Select **Reopen** for a blocked or snoozed item. On a phone, the row text and action buttons wrap. A typed reason stays while the list refreshes.
 
-The Boss and project leads can post directly with `herdr-boss todo post FILE`. A grant item names what to grant. Enter its value only through the approved credential flow. The item never holds that value. The service saves each Owner action. The poster does not receive a notice yet. See the [CLI reference](cli.md#owner-to-do-list) for the file format and limits.
+The Boss and project leads can post directly with `herdr-boss todo post FILE`. A grant item names what to grant. Enter its value only through the approved credential flow. The item never holds that value. The service saves each Owner action. It tells the poster pane the title, action, and reason or answer. It also gives the Snooze time. It keeps a notice pending while the pane is absent. A failed prompt gets one retry on a later tick. A repeated request sends no second notice.
+
+The poster project can cancel its own open item with `herdr-boss todo cancel KEY --note TEXT`. The cancelled item and note stay in the history. You can also answer from an Owner terminal outside an agent pane with `herdr-boss say --reply-to ITEMID "TEXT"`. An answer closes the item and tells the poster.
+
+The Boss runs `herdr-boss todo migrate` to import open Mailbox asks that wait for the Owner. The command prints the imported count. It closes each old ask with a reference to its To do item. A repeat run adds no duplicate. The Boss posts asks from memory files later. See the [CLI reference](cli.md#owner-to-do-list) for the file format and limits.
 
 ## See the running version
 

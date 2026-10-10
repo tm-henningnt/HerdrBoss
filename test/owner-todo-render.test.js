@@ -89,3 +89,57 @@ test('phone To do rows wrap content and actions, use cool tokens, and keep acces
   assert.match(css, /\.todo-type\s*\{[^}]*color:\s*var\(--accent\)/);
   assert.match(css, /\.todo-status\s*\{[^}]*color:\s*var\(--muted\)/, 'Saving status uses a cool neutral token.');
 });
+
+test('a phone Owner can submit a text answer and see its saved text', async () => {
+  const ui = await app(393);
+  ui.setMail({ todo: [item()], todoHistory: [], loaded: true });
+  ui.setRender(() => {});
+  ui.todoChoose('m-todo', 'answer');
+  for (const handler of ui.handlers.get('input')) handler({ target: { dataset: { todoAnswer: 'm-todo' }, value: 'The phone labels are clear.', closest: () => null, matches: () => false } });
+  const html = ui.mailboxView(state);
+  assert.match(html, /data-todo-action="answer"/);
+  assert.match(html, /data-todo-answer="m-todo"/);
+  assert.match(html, /The phone labels are clear/);
+  let body;
+  ui.setPost(async (_url, sent) => { body = sent; return { mailbox: { todoOpen: 0 } }; });
+  ui.setLoad(async () => {}); ui.setRender(() => {});
+  await ui.todoSubmit('m-todo');
+  assert.equal(body.answer, 'The phone labels are clear.');
+  ui.setMail({ todo: [], todoHistory: [item({ state: 'done', ownerActions: [{ action: 'answer', answer: body.answer }] })] });
+  assert.match(ui.mailboxView(state), /The phone labels are clear/);
+});
+
+test('a phone decision can also take an answer text instead of Accept or Deny', async () => {
+  const ui = await app(393);
+  ui.setMail({ todo: [item({ type: 'decide' })], todoHistory: [], loaded: true });
+  ui.setDraft('m-todo', { action: 'answer', reason: 'Use the smaller preview.' });
+  assert.match(ui.mailboxView(state), />Save Answer<\/button>/);
+  let body;
+  ui.setPost(async (_url, sent) => { body = sent; return { mailbox: { todoOpen: 0 } }; });
+  ui.setLoad(async () => {}); ui.setRender(() => {});
+  await ui.todoSubmit('m-todo');
+  assert.equal(body.answer, 'Use the smaller preview.');
+});
+
+test('a poster cancellation shows its note to the Owner on the phone', async () => {
+  const ui = await app(393);
+  ui.setMail({ todo: [], todoHistory: [item({ state: 'cancelled', closedBy: 'poster', cancelNote: 'The preview was replaced.' })], loaded: true });
+  assert.match(ui.mailboxView(state), /cancelled.*The preview was replaced/);
+});
+
+for (const [action, draft] of [
+  ['snooze', { until: '2099-10-10T14:30' }], ['not-now', { reason: 'The work can wait.' }],
+]) test(`the existing phone ${action} form submits its required field`, async () => {
+  const ui = await app(393);
+  ui.setMail({ todo: [item()], todoHistory: [], loaded: true });
+  ui.setDraft('m-todo', { action, ...draft });
+  const html = ui.mailboxView(state);
+  assert.match(html, new RegExp(action === 'snooze' ? 'type="datetime-local"[^>]*data-todo-until' : 'data-todo-reason'));
+  let body;
+  ui.setPost(async (_url, sent) => { body = sent; return { mailbox: { todoOpen: 0 } }; });
+  ui.setLoad(async () => {}); ui.setRender(() => {});
+  await ui.todoSubmit('m-todo');
+  assert.equal(body.action, action);
+  if (action === 'snooze') assert.equal(body.until, new Date(draft.until).toISOString());
+  else assert.equal(body.reason, draft.reason);
+});

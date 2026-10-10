@@ -3685,10 +3685,10 @@ function todoFind(id) {
 function todoChoose(id, action) {
   if (mailbox.busy || !todoFind(id)) return;
   if (['done', 'reopen'].includes(action)) { todoSubmit(id, action); return; }
-  todoDrafts[id] = { action, reason: '', until: '' };
+  todoDrafts[id] = { action, reason: '', until: '', answer: '' };
   delete todoStatus[id];
   render();
-  document.getElementById(`${action === 'snooze' ? 'todo-until' : 'todo-reason'}-${id}`)?.focus({ preventScroll: true });
+  document.getElementById(`${action === 'snooze' ? 'todo-until' : action === 'answer' && todoFind(id).type !== 'decide' ? 'todo-answer' : 'todo-reason'}-${id}`)?.focus({ preventScroll: true });
 }
 
 async function todoSubmit(id, directAction = null, decision = null) {
@@ -3696,6 +3696,7 @@ async function todoSubmit(id, directAction = null, decision = null) {
   if (mailbox.busy || !item) return;
   const draft = todoDrafts[id] || {};
   const action = directAction || draft.action;
+  const answer = action === 'answer' && !decision ? draft.answer || draft.reason || '' : '';
   let until;
   if (action === 'snooze') {
     const time = Date.parse(draft.until);
@@ -3704,7 +3705,7 @@ async function todoSubmit(id, directAction = null, decision = null) {
   }
   mailbox.busy = true; todoStatus[id] = 'Saving…'; render();
   try {
-    const result = await postJson('/api/todo/action', { id, action, reason: draft.reason || '', ...(until ? { until } : {}), ...(decision ? { decision } : {}), updatedAt: item.updatedAt });
+    const result = await postJson('/api/todo/action', { id, action, reason: answer ? '' : draft.reason || '', ...(answer ? { answer } : {}), ...(until ? { until } : {}), ...(decision ? { decision } : {}), updatedAt: item.updatedAt });
     if (state) state.mailbox = result.mailbox;
     clearFormDirtyRegion($app.querySelector(`[data-todo-form="${CSS.escape(id)}"]`));
     delete todoDrafts[id]; delete todoStatus[id];
@@ -3715,9 +3716,9 @@ async function todoSubmit(id, directAction = null, decision = null) {
 }
 
 document.addEventListener('input', (event) => {
-  const id = event.target.dataset?.todoReason || event.target.dataset?.todoUntil;
+  const id = event.target.dataset?.todoReason || event.target.dataset?.todoUntil || event.target.dataset?.todoAnswer;
   if (!id || !todoDrafts[id]) return;
-  todoDrafts[id][event.target.dataset.todoReason ? 'reason' : 'until'] = event.target.value;
+  todoDrafts[id][event.target.dataset.todoReason ? 'reason' : event.target.dataset.todoAnswer ? 'answer' : 'until'] = event.target.value;
 });
 document.addEventListener('click', (event) => {
   const button = event.target.closest?.('[data-todo-action]');
@@ -7386,7 +7387,7 @@ const HELP = {
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than the stale-status limit and a worker worked after the publish or new commits landed. A paused project is never stale. A status older than 30 minutes also adds a reminder to the shared info digest for that project's project lead. The digest normally goes when the project lead is idle or done. If an item has been due for more than 3 hours, the digest can go while the project lead works. The pane gets a digest at most once in 2 hours. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the project lead has not published those fields.</p>`],
   mailbox: ['Mailbox', `
-    <h3>To do</h3><p>Select the To do icon or folder for open Owner actions from every project and the Boss. The badge counts open items. Items sort by priority, then by age. Each row shows what waits and who asked. Open <b>Why and steps</b> for the full ask.</p><p>Select <b>Done</b> or <b>Mark read</b> to finish an item. <b>Answer</b> opens Accept and Deny for a decision. <b>Blocked</b> and <b>Not now</b> require a reason. Not now cancels the item. <b>Snooze</b> hides it until a future time. Open <b>Blocked, snoozed and closed</b> to inspect saved actions or reopen an unresolved item. These actions are saved. The poster does not receive a notice yet.</p><p>The Boss and an orchestrator post with <code>herdr-boss todo post FILE [--priority P] [--blocks TEXT]</code>. The file needs Title, Why, Steps, Expected result, How to answer, What it blocks, and Type sections. Types are decide, do, check, grant, and read. Use placeholder hosts. A grant names what to grant and holds no value. The service uses the verified caller project. An open duplicate updates the item. Each project can post at most 10 items or updates per minute.</p>
+    <h3>To do</h3><p>Select the To do icon or folder for open Owner actions from every project and the Boss. The badge counts open items. Items sort by priority, then by age. Each row shows what waits and who asked. Open <b>Why and steps</b> for the full ask.</p><p>Select <b>Done</b> or <b>Mark read</b> to finish an item. <b>Answer</b> opens Accept and Deny for a decision. Type an answer and select <b>Save Answer</b> to give an answer text. <b>Blocked</b> and <b>Not now</b> require a reason. Not now cancels the item. <b>Snooze</b> hides it until a future time. These forms work on a phone too. Open <b>Blocked, snoozed and closed</b> to inspect saved actions or reopen an unresolved item. The service tells the poster pane the title, action, and reason or answer. A Snooze notice includes the time. It includes no full ask or secret. A missing pane leaves the notice pending. A failed prompt gets one retry on a later tick. A repeated request sends no second notice.</p><p>The Boss and an orchestrator post with <code>herdr-boss todo post FILE [--priority P] [--blocks TEXT]</code>. The file needs Title, Why, Steps, Expected result, How to answer, What it blocks, and Type sections. Types are decide, do, check, grant, and read. Use placeholder hosts. A grant names what to grant and holds no value. The service uses the verified caller project. An open duplicate updates the item. Each project can post at most 10 items or updates per minute.</p><p>The poster project can cancel an open item with <code>herdr-boss todo cancel KEY --note TEXT</code>. The Owner sees the cancelled state and note. From an Owner terminal outside an agent pane, use <code>herdr-boss say --reply-to ITEMID TEXT</code> to save an answer and tell the poster. The Boss uses <code>herdr-boss todo migrate</code> to import waiting Mailbox asks. The command prints the count. A repeat import adds no duplicate. Each old ask closes with a reference to its To do item. The Boss posts asks from memory files later.</p>
     <p>Use the folders to read messages from the Boss and project leads. The page groups each conversation by its project or the Boss and by its reply chain.</p>
     <p>A project triage item has <b>Accept</b> and <b>Deny</b>. Accept opens the parked project and starts its project lead. Deny closes the proposal and waits 24 hours before triage can propose that project again.</p>
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
