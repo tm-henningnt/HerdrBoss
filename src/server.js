@@ -12,9 +12,9 @@ import { checkMachineTools } from './collect.js';
 import { ownerReleaseLease, withResourcePoolMutation, readLeases, leasePools, publicPool, hasIdleRule, tcpListeningAsync } from './leases.js';
 import { PROJECTS_DIR, DATA_DIR, DEFAULT_SESSION_FILE, PRIVATE_ACCESS_DIR, assertPreviewDataDir, assertLiveDataDir, hostAllowedByList, writeServiceSettings, applyServiceSettings, serviceSettingsView, validateResourcePools, writeResourcePools } from './config.js';
 import { writeProject, listProjects, SLUG } from './projects.js';
-import { readRegister } from './project-register.js';
+import { importProjectRegister, readRegister } from './project-register.js';
 import { loadModels } from './kit/config.js';
-import { loadPolicy, savePolicy, policyShareGuard } from './control.js';
+import { backupPolicyFile, loadPolicy, removePolicyProjectDraft, savePolicy, policyShareGuard } from './control.js';
 import { recordUsage, usageSummary } from './usage.js';
 import { spendSummary, clampSpendDays, loadPrices, defaultPrices, readPriceOverrides, writePriceOverrides, COST_LABEL } from './spend.js';
 import { readDenials, denialSummary } from './denials.js';
@@ -50,6 +50,8 @@ import { openMessageStore } from './message-store.js';
 import { listAgentPairs, readAgentMessages, readAgentMetadata } from './agent-messages.js';
 import { BODY_LIMIT as PROJECT_NEW_BODY_LIMIT, createProjectNewApi } from './project-new-api.js';
 import { createProjectRegisterApi } from './project-register-api.js';
+import { projectRegisterCommand } from './project-register-cli.js';
+import { checkProject } from './project-new-check.js';
 import { decideProjectRegisterTriage } from './project-register-triage.js';
 import { BODY_LIMIT as HOST_GUIDE_BODY_LIMIT, createHostGuideApi } from './host-guide.js';
 import { createGoalApi } from './goal-api.js';
@@ -279,7 +281,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       env: {},
       herdr: (herdrArgs, options) => engine.herdrRunner('herdr', herdrArgs, options),
       dataDir: DATA_DIR,
-      registerSettings: { cap: engine.cfg.register?.cap, capCountsPinned: engine.cfg.register?.capCountsPinned ?? false },
+      registerSettings: { cap: engine.cfg?.register?.cap ?? cfg.register?.cap ?? 3, capCountsPinned: engine.cfg?.register?.capCountsPinned ?? cfg.register?.capCountsPinned ?? false },
       auditBy: 'owner-page',
       log: () => {},
     });
@@ -288,6 +290,20 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     dataDir: DATA_DIR,
     readOnly: readOnlyPreview,
     runLifecycle: runRegisterLifecycle,
+    policyProjects: () => Object.keys(loadPolicy().projects || {}),
+    runRegisterAdd: (slug) => projectRegisterCommand(['add', slug], {
+      env: {}, herdr: (args, options) => engine.herdrRunner('herdr', args, options), dataDir: DATA_DIR, log: () => {},
+    }),
+    openCount: () => readRegister(DATA_DIR).projects.filter((record) => ['open', 'parking'].includes(record.state)).length,
+    cap: engine.cfg?.register?.cap ?? cfg.register?.cap ?? 3,
+    getOnboarding: (slug) => {
+      try {
+        const check = checkProject(slug, { dataDir: DATA_DIR, home: os.homedir(), requireWorkspace: true,
+          herdr: (args, options) => engine.herdrRunner('herdr', args, options) });
+        const good = (name) => check.items.some((item) => item.name === name && item.ok);
+        return { kitInstalled: good('kit'), workspace: good('workspace'), orchestrator: good('orchestrator') };
+      } catch { return null; }
+    },
     runTriageDecision: (itemId, decision) => decideProjectRegisterTriage({
       dataDir: DATA_DIR, itemId, decision, runLifecycle: runRegisterLifecycle,
     }),
@@ -344,6 +360,13 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   let timer;
   let tickPromise;
   let debounce;
+  let policyDebounce;
+  const importRegister = () => importProjectRegister({
+    dataDir: DATA_DIR,
+    herdr: (args, options) => engine.herdrRunner('herdr', args, options),
+    log: (line) => engine.log('register', line),
+    warn: (line) => engine.log('warning', line),
+  });
 
   // The Chat page ignores a record with mailAnswer set. The service knows the parent record, and the page may not.
   const annotateMessage = (data) => {
@@ -352,11 +375,20 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     const parent = readMessages().find((item) => item.id === record.replyTo);
     return isMailAnswer(record, messagesById(parent ? [parent] : [])) ? { ...data, record: { ...record, mailAnswer: true } } : data;
   };
-  const dashboardState = (data) => ({
-    ...data,
-    ...(Array.isArray(engine.dashboardManagedBrowsers) ? { managedBrowsers: engine.dashboardManagedBrowsers } : {}),
-    projectRegisterSlugs: readRegister().projects.map(({ slug }) => slug),
-  });
+  const dashboardState = (data) => {
+    const register = readRegister(DATA_DIR).projects;
+    const policy = loadPolicy();
+    return {
+      ...data,
+      ...(Array.isArray(engine.dashboardManagedBrowsers) ? { managedBrowsers: engine.dashboardManagedBrowsers } : {}),
+      projectRegisterSlugs: register.map(({ slug }) => slug),
+      projectRegister: register.map((record) => ({
+        slug: record.slug, title: record.title, group: record.group, clientTag: record.clientTag,
+        state: record.state, pinned: record.pinned, priority: record.priority,
+        share: policy.projects?.[record.slug]?.share ?? 0,
+      })),
+    };
+  };
   const pageRequest = (req, { eventSource = false, url } = {}) => {
     if (!eventSource || req.headers['x-herdr-boss-caller'] === 'page' || url?.searchParams.get('caller') !== 'page') return req;
     const marked = Object.create(req);
@@ -445,12 +477,25 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       if (!engine.state) return;
+      try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
       engine.state.projects = decorateProjects(listProjects());
       broadcast('state', engine.state);
     }, 300);
   });
   projectsWatcher.on('error', (error) => {
     if (!closed) engine.log('error', `Project watcher failed: ${error.message}`);
+  });
+  const policyWatcher = fs.watch(DATA_DIR, (_event, filename) => {
+    if (String(filename || '') !== 'policy.json') return;
+    clearTimeout(policyDebounce);
+    policyDebounce = setTimeout(() => {
+      if (closed) return;
+      try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
+      void engine.tick();
+    }, 300);
+  });
+  policyWatcher.on('error', (error) => {
+    if (!closed) engine.log('error', `Policy watcher failed: ${error.message}`);
   });
 
   // The one policy save path of the page routes. The Allocation page and the stand-down buttons both call it, so
@@ -464,6 +509,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
     if (refusal) return { status: refusal.status, body: { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum } };
     savePolicy(draft, loadModels(), options);
+    try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
     const state = await engine.tick();
     return { status: 200, body: { ok: true, policy: loadPolicy(), control: state?.control, notes } };
   };
@@ -903,6 +949,23 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         return send(res, 200, { ok: true, unit: 'USD per million tokens', costLabel: COST_LABEL, prices: loadPrices(DATA_DIR), defaults: defaultPrices(), overrides: readPriceOverrides(DATA_DIR) });
       }
       if (p === '/api/policy' && req.method === 'GET') return send(res, 200, loadPolicy());
+      const removePolicyMatch = /^\/api\/policy\/projects\/([^/]+)$/.exec(p);
+      if (removePolicyMatch && req.method === 'DELETE') {
+        let slug;
+        try { slug = decodeURIComponent(removePolicyMatch[1]); } catch { return send(res, 400, { ok: false, error: 'The project slug is not valid.' }); }
+        if (!SLUG.test(slug)) return send(res, 400, { ok: false, error: 'The project slug is not valid.' });
+        const saved = loadPolicy();
+        if (!Object.hasOwn(saved.projects || {}, slug)) return send(res, 404, { ok: false, error: 'The project is not in policy.' });
+        const next = removePolicyProjectDraft(saved, slug);
+        const validation = savePolicy(next, loadModels(), { dryRun: true });
+        if (validation.length) return send(res, 400, { ok: false, errors: validation });
+        const refusal = policyShareGuard(saved, next, { confirmed: true, allowSum: true });
+        if (refusal) return send(res, refusal.status, { ok: false, error: refusal.error });
+        try { backupPolicyFile(path.join(DATA_DIR, 'policy.json'), DATA_DIR); }
+        catch (error) { return send(res, 500, { ok: false, error: `The policy backup could not be written: ${error.message}` }); }
+        const result = await applyPolicyDraft(next, req, { confirmed: true, allowSum: true });
+        return send(res, result.status, result.status === 200 ? { ...result.body, backupCreated: true } : result.body);
+      }
       if (p === '/api/policy' && req.method === 'PUT') {
         const body = await jsonBody(req);
         if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { ok: false, error: 'The body must be a JSON object.' });
@@ -1442,7 +1505,9 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     void fleetPoller.stop();
     clearTimeout(timer);
     clearTimeout(debounce);
+    clearTimeout(policyDebounce);
     projectsWatcher.close();
+    policyWatcher.close();
     stopMessageWatch();
     stopReleaseWatch();
   });
@@ -1455,6 +1520,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     finally { tickPromise = null; }
     if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };
+  try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
   loop();
   fleetPoller.start();
   const close = async () => {

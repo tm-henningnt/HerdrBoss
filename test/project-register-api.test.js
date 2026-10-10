@@ -19,7 +19,7 @@ function fixture(t) {
   return { dataDir, record };
 }
 
-test('project register API returns display fields without private repository or issue-source details', async (t) => {
+test('project register API returns display and issue-triage fields without repository paths or notes', async (t) => {
   const { dataDir } = fixture(t);
   const api = createProjectRegisterApi({ dataDir, readOnly: true });
   const response = await api.handle('GET', '/api/project-register');
@@ -29,8 +29,9 @@ test('project register API returns display fields without private repository or 
     slug: 'pine-api', title: 'Pine API', group: 'platform', clientTag: 'Example Client', factory: 'factory-zero',
     state: 'parked', pinned: false, priority: 'high', lastOpenedAt: '', lastActivityAt: '2026-10-08T12:00:00.000Z',
     nextAction: 'Review sample flow', createdAt: '2026-10-01T00:00:00.000Z',
+    issueSource: { repo: 'example/pine-api', label: 'ready-for-agent' }, autoOpen: 'off',
   });
-  assert.doesNotMatch(JSON.stringify(response.body), /private-project-path|example\/pine-api|Internal sample note/);
+  assert.doesNotMatch(JSON.stringify(response.body), /private-project-path|Internal sample note/);
 });
 
 test('project register API starts a project through the shared lifecycle action', async (t) => {
@@ -40,6 +41,25 @@ test('project register API starts a project through the shared lifecycle action'
   const response = await api.handle('POST', '/api/project-register/pine-api/action', { action: 'open' });
   assert.deepEqual(calls, [['open', ['pine-api', '--start']]]);
   assert.deepEqual(response, { status: 200, body: { ok: true, action: 'open', slug: 'pine-api' } });
+});
+
+test('project register API shows policy-only projects and adds them through the register add path', async (t) => {
+  const { dataDir } = fixture(t);
+  const addCalls = [];
+  const api = createProjectRegisterApi({
+    dataDir,
+    policyProjects: () => ['north-star'],
+    runRegisterAdd: async (slug) => { addCalls.push(slug); return 0; },
+  });
+
+  const listed = await api.handle('GET', '/api/project-register');
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.projects.find((project) => project.slug === 'north-star'), {
+    slug: 'north-star', title: 'north-star', state: 'policy-only', registered: false, inPolicy: true,
+  });
+  const added = await api.handle('POST', '/api/project-register/north-star/action', { action: 'add' });
+  assert.deepEqual(addCalls, ['north-star']);
+  assert.deepEqual(added, { status: 200, body: { ok: true, action: 'add', slug: 'north-star' } });
 });
 
 test('project register API refuses mutation in preview and validates action bodies', async (t) => {

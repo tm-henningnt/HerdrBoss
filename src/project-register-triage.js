@@ -102,7 +102,6 @@ export function createProjectRegisterTriage({
       const label = typeof settings.label === 'string' && settings.label.trim() ? settings.label.trim() : 'ready-for-agent';
       const at = now();
       const register = readRegisterFn(dataDir);
-      if (!withinCap(register, cap, capCountsPinned)) return { created: 0, checked: 0, skipped: 'cap' };
       const records = readMessagesFn({ dir: dataDir });
       if (authItemPending(records)) return { created: 0, checked: 0, skipped: 'auth-waiting' };
       const candidates = [];
@@ -134,6 +133,7 @@ export function createProjectRegisterTriage({
       if (!candidates.length) return { created: 0, checked };
       const [selected] = sortCandidates(candidates);
       if (selected.project.autoOpen === 'on') {
+        if (!withinCap(register, cap, capCountsPinned)) return { created: 0, checked, skipped: 'cap' };
         let result;
         try { result = await runLifecycle('open', [selected.project.slug, '--start']); }
         catch { return { created: 0, checked, skipped: 'open-failed' }; }

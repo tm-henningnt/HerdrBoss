@@ -22,6 +22,16 @@ Mailbox counts and lists refresh every second. Open Mailbox conversations, Owner
 - [I want to see the usage limits of a factory](guide/factory.md#sign-in-the-agent-apps-and-start-the-factory-boss)
 - [Something went wrong](guide/trouble.md)
 
+## Projects page
+
+The Projects page starts with cards for open projects. The allocation bar stays above either view. Each card shows the register state, area, client tag, share, and status dot. Select a card to see its published status, tasks, workers, locks, browser, policy, register fields, issue source, triage settings, and project actions.
+
+Select **Register** to search and manage open, parked, archived, and policy-only projects. Select **Add** for a project that is in policy but not in the register. A project with its kit installed but without a workspace or project lead shows the missing step and **Start orchestrator**.
+
+The Overview, Board, Allocation, and Projects page use the project register and policy to show project state and share. The open project cap limits new opens and automatic opens. It does not stop an import or a project that already has a live project lead.
+
+On Allocation, select **Show parked** to show parked or archived projects with a zero share. **Remove from policy** saves a backup, deletes the policy entry, and sets the other shares to a total of 100%. Run `herdr-boss project open SLUG` to add a policy entry again.
+
 ## Approve proposed work
 
 An orchestrator may propose work. It starts no unapproved work.

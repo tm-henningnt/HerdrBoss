@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { filterProjectRegister, projectActivityAge, reconcileProjectSelection, renderProjectRegister } from '../public/project-register-view.js';
+import { filterProjectVisibility } from '../public/project-visibility.js';
 
 const records = [
   { slug: 'pine-api', title: 'Pine API', group: 'platform', clientTag: 'Example Client', state: 'open', priority: 'high', pinned: true, nextAction: 'Review the sample flow', lastActivityAt: '2026-10-08T12:00:00Z' },
@@ -58,4 +59,36 @@ test('read-only register disables mutations while keeping project links availabl
   assert.match(html, /data-register-action="park"[^>]*disabled/);
   assert.match(html, /data-register-pin="pine-api"[^>]*disabled/);
   assert.match(html, /href="\/projects\/pine-api"/);
+});
+
+test('register shows policy-only projects with Add and half-onboarded projects with Start orchestrator', () => {
+  const halfOnboarded = {
+    ...records[2],
+    onboarding: { kitInstalled: true, workspace: false, orchestrator: false },
+  };
+  const policyOnly = {
+    slug: 'north-star', title: 'North Star', state: 'policy-only', registered: false, inPolicy: true,
+  };
+  const html = renderProjectRegister([...records, halfOnboarded, policyOnly], {
+    canWrite: true, openCount: 7, cap: 3,
+  });
+
+  assert.match(html, /north-star/);
+  assert.match(html, /Policy only/);
+  assert.match(html, /data-register-action="add" data-register-slug="north-star"/);
+  assert.match(html, /Missing workspace and project lead/);
+  assert.match(html, /data-register-action="open" data-register-slug="cedar-tool"[^>]*>Start orchestrator/);
+  assert.match(html, /7 projects are open.*cap is 3.*new opens/i);
+});
+
+test('shared project visibility hides parked and archived projects only when their share is zero', () => {
+  const projects = [
+    { slug: 'active', state: 'open', share: 0 },
+    { slug: 'parked-zero', state: 'parked', share: 0 },
+    { slug: 'archived-zero', state: 'archived', share: 0 },
+    { slug: 'parked-shared', state: 'parked', share: 15 },
+  ];
+
+  assert.deepEqual(filterProjectVisibility(projects).map((project) => project.slug), ['active', 'parked-shared']);
+  assert.deepEqual(filterProjectVisibility(projects, { showParked: true }).map((project) => project.slug), projects.map((project) => project.slug));
 });

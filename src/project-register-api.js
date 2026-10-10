@@ -2,10 +2,10 @@ import { appendAudit, readRegister, SLUG, withRegisterLock, writeRegister } from
 
 const VIEW_FIELDS = Object.freeze([
   'slug', 'title', 'group', 'clientTag', 'factory', 'state', 'pinned', 'priority',
-  'lastOpenedAt', 'lastActivityAt', 'nextAction', 'createdAt',
+  'lastOpenedAt', 'lastActivityAt', 'nextAction', 'createdAt', 'issueSource', 'autoOpen',
 ]);
 const LIFECYCLE_ACTIONS = new Set(['open', 'park', 'archive', 'unarchive']);
-const PAGE_ACTIONS = new Set([...LIFECYCLE_ACTIONS, 'pin', 'unpin']);
+const PAGE_ACTIONS = new Set([...LIFECYCLE_ACTIONS, 'pin', 'unpin', 'add']);
 
 function publicRecord(record) {
   return Object.fromEntries(VIEW_FIELDS.filter((field) => Object.hasOwn(record, field)).map((field) => [field, record[field]]));
@@ -65,15 +65,24 @@ function setPinned(slug, pinned, dataDir, now) {
   });
 }
 
-// Keep the Projects page API narrow. It never sends repository paths, remotes, notes, or issue sources to the browser.
-export function createProjectRegisterApi({ dataDir, readOnly = false, runLifecycle = async () => 0, runTriageDecision = null, now = Date.now } = {}) {
+// Keep the Projects page API narrow. It never sends repository paths, remotes, or notes to the browser.
+export function createProjectRegisterApi({ dataDir, readOnly = false, runLifecycle = async () => 0, runTriageDecision = null,
+  policyProjects = () => [], runRegisterAdd = async () => 1, getOnboarding = () => null, openCount = () => null, cap = 3, now = Date.now } = {}) {
   if (!dataDir) throw new TypeError('A project register data directory is required.');
 
   return {
     async handle(method, pathname, body) {
       if (method === 'GET' && pathname === '/api/project-register') {
         const register = readRegister(dataDir);
-        return { status: 200, body: { projects: register.projects.map(publicRecord), readOnly } };
+        const known = new Set(register.projects.map((record) => record.slug));
+        const registered = register.projects.map((record) => {
+          const onboarding = getOnboarding(record.slug);
+          return { ...publicRecord(record), ...(onboarding ? { onboarding } : {}) };
+        });
+        const policyOnly = [...new Set(policyProjects().filter((slug) => SLUG.test(slug) && !known.has(slug)))].map((slug) => ({
+          slug, title: slug, state: 'policy-only', registered: false, inPolicy: true,
+        }));
+        return { status: 200, body: { projects: [...registered, ...policyOnly], readOnly, openCount: openCount(), cap } };
       }
       const itemId = decodeTriageItem(pathname);
       if (itemId !== null) {
@@ -102,6 +111,16 @@ export function createProjectRegisterApi({ dataDir, readOnly = false, runLifecyc
       }
       const action = body.action;
       if (!PAGE_ACTIONS.has(action)) return errorResponse(400, 'The project action is not supported.');
+      if (action === 'add') {
+        if (!policyProjects().includes(slug)) return errorResponse(404, 'The project is not in policy.');
+        try {
+          const code = await runRegisterAdd(slug);
+          if (code !== undefined && code !== 0) return errorResponse(409, 'The project could not be added to the register.');
+          return { status: 200, body: { ok: true, action: 'add', slug } };
+        } catch {
+          return errorResponse(409, 'The project could not be added to the register.');
+        }
+      }
       if (action === 'pin' || action === 'unpin') return setPinned(slug, action === 'pin', dataDir, now);
 
       try {

@@ -15,7 +15,7 @@ const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src',
 const REPO = path.resolve(path.dirname(CLI), '..');
 const TMP = path.resolve(os.tmpdir()).startsWith(REPO) ? '/tmp' : os.tmpdir();
 
-// A fake herdr answers the caller check (pane get) and the workspace list (workspace list).
+// A fake herdr answers the caller check and returns empty project state unless a test sets explicit rows.
 // FAKE_HERDR_LABEL picks the pane label. FAKE_HERDR_FAIL_WORKSPACE makes the workspace list fail.
 const HERDR_SCRIPT = `#!/bin/sh
 if [ "$1" = "pane" ] && [ "$2" = "get" ]; then
@@ -24,7 +24,27 @@ if [ "$1" = "pane" ] && [ "$2" = "get" ]; then
 fi
 if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then
   if [ -n "$FAKE_HERDR_FAIL_WORKSPACE" ]; then exit 1; fi
-  printf '%s\\n' '{"workspaces":[{"id":"ws-1","label":"acme-web"},{"id":"ws-2","label":"kite-sdk"}]}'
+  if [ -n "$FAKE_HERDR_WORKSPACES" ]; then
+    printf '%s\\n' "$FAKE_HERDR_WORKSPACES"
+  else
+    printf '%s\\n' '{"workspaces":[]}'
+  fi
+  exit 0
+fi
+if [ "$1" = "pane" ] && [ "$2" = "list" ]; then
+  if [ -n "$FAKE_HERDR_PANES" ]; then
+    printf '%s\\n' "$FAKE_HERDR_PANES"
+  else
+    printf '%s\\n' '{"panes":[]}'
+  fi
+  exit 0
+fi
+if [ "$1" = "agent" ] && [ "$2" = "list" ]; then
+  if [ -n "$FAKE_HERDR_AGENTS" ]; then
+    printf '%s\\n' "$FAKE_HERDR_AGENTS"
+  else
+    printf '%s\\n' '{"agents":[]}'
+  fi
   exit 0
 fi
 printf '%s\\n' '{}'
@@ -376,7 +396,12 @@ test('project register import adds a record for each source, keeps edits, and is
   fs.mkdirSync(path.join(f.dataDir, 'projects'));
   fs.writeFileSync(path.join(f.dataDir, 'projects', 'kite-sdk.json'), JSON.stringify({ project: 'Kite SDK', updated: '2026-10-01T00:00:00.000Z' }));
 
-  const first = f.run(['project', 'register', 'import']);
+  const liveHerdr = {
+    FAKE_HERDR_WORKSPACES: JSON.stringify({ workspaces: [{ id: 'ws-a', label: 'acme-web' }, { id: 'ws-k', label: 'kite-sdk' }] }),
+    FAKE_HERDR_PANES: JSON.stringify({ panes: [{ pane_id: 'p-a', workspace_id: 'ws-a', label: 'orch' }, { pane_id: 'p-k', workspace_id: 'ws-k', label: 'orch' }] }),
+    FAKE_HERDR_AGENTS: JSON.stringify({ agents: [{ pane_id: 'p-a', name: 'acme-web-orch' }, { pane_id: 'p-k', name: 'kite-sdk-orch' }] }),
+  };
+  const first = f.run(['project', 'register', 'import'], { ...f.base, ...liveHerdr });
   assert.equal(first.status, 0, first.stderr);
   assert.equal(first.stdout, [
     'new acme-web (open)',
@@ -407,13 +432,64 @@ test('project register import adds a record for each source, keeps edits, and is
   const edited = f.run(['project', 'register', 'edit', 'acme-web', '--group', 'web']);
   assert.equal(edited.status, 0, edited.stderr);
 
-  const second = f.run(['project', 'register', 'import']);
+  const second = f.run(['project', 'register', 'import'], { ...f.base, ...liveHerdr });
   assert.equal(second.status, 0, second.stderr);
   assert.equal(second.stdout, '0 new records.\n');
   const after = Object.fromEntries(readRegisterFile(f).projects.map((entry) => [entry.slug, entry]));
   assert.equal(Object.keys(after).length, 4, 'import adds no second record for a slug');
   assert.equal(after['acme-web'].group, 'web', 'import keeps the edit of the Owner');
   assert.equal(readAudit(f).length, 5, 'the second import writes no audit line');
+});
+
+test('project register import matches names without case or punctuation and refreshes only derived fields', (t) => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.dataDir, 'projects'));
+  fs.writeFileSync(path.join(f.dataDir, 'projects', 'alpha-store.json'), JSON.stringify({
+    project: 'Status title must not replace the Owner title', updated: '2026-10-09T12:00:00.000Z',
+  }));
+  const ownerRecord = record('alpha-store', {
+    title: 'Owner title', group: 'Owner area', nextAction: 'Owner action', state: 'parked',
+    lastActivityAt: '2026-10-01T00:00:00.000Z',
+  });
+  writeRegisterFile(f.dataDir, [ownerRecord]);
+  const herdr = {
+    FAKE_HERDR_WORKSPACES: JSON.stringify({ workspaces: [{ id: 'ws-alpha', label: 'Project Alpha', name: 'Alpha_Store' }] }),
+    FAKE_HERDR_PANES: JSON.stringify({ panes: [{ pane_id: 'p-alpha', workspace_id: 'ws-alpha', label: 'orch' }] }),
+    FAKE_HERDR_AGENTS: JSON.stringify({ agents: [{ pane_id: 'p-alpha', name: 'alpha-store-orch', agent_status: 'idle' }] }),
+  };
+
+  const first = f.run(['project', 'register', 'import'], { ...f.base, ...herdr });
+  assert.equal(first.status, 0, first.stderr);
+  let stored = readRegisterFile(f).projects[0];
+  assert.equal(stored.state, 'open', 'the normalized live workspace and orchestrator keep the project open');
+  assert.equal(stored.lastActivityAt, '2026-10-09T12:00:00.000Z', 'published activity is derived');
+  assert.equal(stored.title, 'Owner title', 'the import keeps the Owner title');
+  assert.equal(stored.group, 'Owner area', 'the import keeps the Owner area');
+  assert.equal(stored.nextAction, 'Owner action', 'the import keeps the Owner next action');
+  const auditCount = readAudit(f).length;
+
+  const second = f.run(['project', 'register', 'import'], { ...f.base, ...herdr });
+  assert.equal(second.status, 0, second.stderr);
+  stored = readRegisterFile(f).projects[0];
+  assert.equal(stored.state, 'open');
+  assert.equal(stored.title, 'Owner title');
+  assert.equal(readAudit(f).length, auditCount, 'a repeated import writes no additional audit line');
+});
+
+test('project register import opens every live project above the configured open cap', (t) => {
+  const f = fixture(t);
+  const projects = ['alpha-store', 'birch-api', 'cedar-tool', 'delta-web'];
+  const workspaces = projects.map((slug, index) => ({ id: `ws-${index}`, label: slug.toUpperCase().replace('-', ' ') }));
+  const panes = projects.map((slug, index) => ({ pane_id: `p-${index}`, workspace_id: `ws-${index}`, label: 'orch' }));
+  const agents = projects.map((_slug, index) => ({ pane_id: `p-${index}`, name: `project-${index}-orch` }));
+  const result = f.run(['project', 'register', 'import'], {
+    ...f.base,
+    FAKE_HERDR_WORKSPACES: JSON.stringify({ workspaces }),
+    FAKE_HERDR_PANES: JSON.stringify({ panes }),
+    FAKE_HERDR_AGENTS: JSON.stringify({ agents }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readRegisterFile(f).projects.map((entry) => [entry.slug, entry.state]), projects.map((slug) => [slug, 'open']));
 });
 
 test('project register import --dry-run prints the same lines and writes nothing', (t) => {
@@ -443,7 +519,7 @@ test('project register import warns and parks every record when Herdr lists no w
 
   const result = f.run(['project', 'register', 'import'], { ...f.base, FAKE_HERDR_FAIL_WORKSPACE: '1' });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /Warning: Herdr did not list the workspaces/);
+  assert.match(result.stderr, /Warning: Herdr did not list its workspaces and project leads/);
   assert.equal(result.stdout, 'new acme-web (parked)\n1 new records.\n');
   assert.equal(readRegisterFile(f).projects[0].state, 'parked');
 });

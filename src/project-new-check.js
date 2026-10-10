@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
+import { normalizeProjectName } from './project-register.js';
 import { assertTempDataDir } from './data-dir-guard.js';
 import { claudeLines, readProjectRepos, stripRemoteCredentials, syncCodex } from './harness.js';
 import { HOOK_COMMAND, KIT_FILE, checkAgentsFile, installedKitRevision, kitRevision } from './kit/agents-check.js';
@@ -207,13 +208,15 @@ export function checkProject(slug, options = {}) {
       const herdr = options.herdr;
       if (!herdr) throw new Error('no Herdr runner');
       workspaces = rows(herdr(['workspace', 'list']), 'workspaces');
-      const found = workspaces.find((w) => (state.ids?.workspaceId && workspaceOf(w) === state.ids.workspaceId) || w.label === slug);
+      const found = workspaces.find((w) => (state.ids?.workspaceId && workspaceOf(w) === state.ids.workspaceId)
+        || [w.label, w.name].some((name) => normalizeProjectName(name) === normalizeProjectName(slug)));
       if (found) {
         panes = rows(herdr(['pane', 'list', '--workspace', workspaceOf(found)]), 'panes');
         agents = rows(herdr(['agent', 'list']), 'agents');
       }
     } catch (error) { problem = `cannot read Herdr: ${first(error.message)}`; }
-    const found = workspaces?.find((w) => (state.ids?.workspaceId && workspaceOf(w) === state.ids.workspaceId) || w.label === slug);
+    const found = workspaces?.find((w) => (state.ids?.workspaceId && workspaceOf(w) === state.ids.workspaceId)
+      || [w.label, w.name].some((name) => normalizeProjectName(name) === normalizeProjectName(slug)));
     if (problem) { missing('workspace', problem, 'workspace'); missing('orchestrator', problem, 'workspace'); }
     else if (!found) { missing('workspace', `Herdr has no workspace labeled ${slug}`, 'workspace'); missing('orchestrator', 'there is no workspace', 'workspace'); }
     else {
