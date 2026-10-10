@@ -1,17 +1,16 @@
-<!-- herdr-boss kit v=4384c4db2e96 -->
+<!-- herdr-boss kit v=0d76ed813630 -->
 Herdr Boss writes this file. Do not edit it. Run herdr-boss kit install to update it.
 
 # Herdr Boss orchestration kit
 
 These are the shared operating rules for the orchestrator of this project.
 
-
 - Use the Herdr Boss orchestrator skill when you coordinate workers or resume an unknown project state.
 - Orchestrators and workers may read another Herdr Boss project repository to learn how it solved a problem.
 - Do not edit another project's repository.
 - Do not copy secrets, tenant hosts, client names, or app IDs into this project.
 - Cite each source file in `docs/orchestration/memory.md`.
-- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a tracked file fails the docs gate.
+- A license is never inline. Do not ship a license, token, key text, or licensed state in a release, bundle, demo, fixture, or test app. Do this also for tests. Keep the license in the license extension that the Owner issues to the tenant, the carrier extension. A public verification key is allowed in code. A token is not allowed. Tests may create a throwaway key pair and sign tokens in memory at run time. Nothing signed or key-shaped is committed, shipped or written to a fixture file. A token-shaped string in a tracked file fails the docs gate. The release scan accepts one path in a `.qvf` asset only: the Qlik Engine inline table path `/home/engine/<uuid>.inline` that `qlik app export` writes. The card counts these paths as allowed. Any other path, and the same string in a zip or in the notes, fails the scan.
 - Read this file and `docs/orchestration/memory.md` at start and at resume, before you choose work. The session start hook prints both files.
 - When a `Kit updated` notice arrives, run `herdr-boss kit update` and continue. The command prints the current kit file. Do not read the file again.
 - Commit a changed kit file, `AGENTS.md` stub, or hook with your next commit. Do not make a separate commit for it.
@@ -30,7 +29,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Run `herdr-boss models` and `herdr-boss lanes` for the current models and lanes. Never copy model lists or harness facts into project files.
 - Read `~/.herdr-boss/bulletin.md` before each worker dispatch.
 - Follow its worker cap, your project's effective slots, and provider pacing rules. The effective slots include borrowed slots. Your project always keeps its own base slots unless it is idle or paused. Use an authorized override only when needed.
-- When a lane is ahead of pace, start ready work on a lane from the bulletin **Use now** line. Do not wait for the ahead lane.
+- Use a lane from the bulletin **Use now** line for approved work. Do not wait for the ahead lane.
 - Read `kit/browser-service.md` for project browser commands.
 - Browser output removes credentials, query strings, and fragments. The `--full` flag shows hosts in full. It keeps the credential filter. Use invented values in reports and tests.
 - Before a browser restart, finish browser commands and disconnect CDP drivers. Restart waits up to 30 seconds, then refuses if a command or client remains. It restores saved web pages and blank tabs in separate windows. Restore drops query strings, fragments, and path parameters. It skips login and callback paths and sign-in hosts. Read the new tab IDs after a restart.
@@ -45,7 +44,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Run each `herdr-boss browser` command and each `ps` or `pgrep` command alone. Do not join it to other commands with `&&`, `;`, or a pipe.
 - Put the relevant Owner decisions into each worker brief.
 - Keep Git branches, worktrees, commits, and merges under orchestrator control.
-- Use subagents for diff reviews, long report reads, log searches, and code surveys. Keep the main thread for decisions and dispatch.
+- Use subagents for diff reviews, long report reads, log searches, and code surveys inside approved work. Get the Owner's yes before a survey, review, or audit that is itself new work. Keep the main thread for decisions and dispatch.
 - Take back only findings with file and line evidence from a subagent. Verify a finding at the source before you act.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
 - After a dispatch, end the turn. The `WORKER REPORT` or `WORKER QUESTION` message arrives as a new prompt. Do not poll panes and do not run sleep or until loops.
@@ -89,7 +88,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
 - Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
-- Send a picture with `herdr-boss say --image FILE "TEXT"`; `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
+- Send a picture with `herdr-boss say --image FILE "TEXT"`; the Boss's `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
@@ -99,6 +98,37 @@ These are the shared operating rules for the orchestrator of this project.
 - Never run `docker system prune`, `docker builder prune`, `docker image prune`, `docker container prune`, `docker volume prune`, `docker rm`, `docker rmi`, or `docker volume rm` on a shared daemon. The exception is a resource that carries the label `herdr-factory-spike=<worker>`. Give every Docker resource that you create this label. Use a dedicated buildx builder or Docker context for factory work, and remove only that one.
 - Stop only processes that you or your workers started, by their saved PID. Never use `pkill`, `killall`, or `kill` with a name pattern.
 - A lease stays with a live holder until its TTL, also before you serve on the port. Take the lease with `worker start --lease` or `lease acquire` before you start a server.
+
+## Work approval
+
+- An orchestrator may propose work. It starts no unapproved work.
+- Approved work is a backlog task, an Owner goal, a fix for a finding of approved work, or a defect fix.
+- A subagent read or survey inside approved work is allowed. Get the Owner's yes before a survey, review, or audit that is itself new work outside these approved categories.
+- Get the Owner's yes before a refactor, a new feature, a new test program, or a release outside an Owner request.
+- Make one Mailbox decision card for each proposal. State what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
+- The Boss alone runs `mail post` for proposals. Write a proposal file with these headings and fields:
+
+  ```md
+  ## What
+  Describe the work.
+
+  ## Why
+  State the reason.
+
+  ## Cost
+  Lane: <lane>
+  Size: <size>
+
+  ## Recommendation
+  Recommend Accept or Deny.
+
+  ## Choices
+  - Accept
+  - Deny
+  ```
+
+- Run `herdr-boss proposal check FILE`. Fix every reported error.
+- Send the Boss the absolute file path and card type `decide`: `herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."` The Boss posts it with `herdr-boss mail post --to owner --action decide FILE`.
 
 ## CI minutes
 
