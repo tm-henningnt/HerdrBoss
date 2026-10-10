@@ -11,7 +11,7 @@ import { loadModels } from './kit/config.js';
 import { agentReadyVisible, createHerdrRunner, deliverPrompt, isAgentPaneBusy, readAgentText, waitForAgentReady, waitForWorkerPane } from './kit/workers.js';
 import { appendMessage } from './messages.js';
 import { writeProject } from './projects.js';
-import { TRUST_HARNESSES, hasTrustCue, matchTrustPrompt } from './trust-prompts.js';
+import { TRUST_HARNESSES, watchTrustPrompt } from './trust-prompts.js';
 
 const GOAL_CHECKS = 3;
 const GOAL_CHECK_WAIT_MS = 2000;
@@ -118,9 +118,6 @@ function trustTimeoutText({ pane, kind, slug }) {
 function watchTrust({ name, pane, kind, slug, folder, since, herdr, hooks, context }) {
   const now = hooks.now ?? Date.now;
   const wait = hooks.wait ?? pauseMs;
-  const deadline = since + TRUST_WINDOW_MS;
-  let waited = 0;
-  let detected = Boolean(context.ids.trustDetectedItem);
   const read = () => {
     try {
       const response = herdr(['pane', 'read', pane, '--source', 'recent-unwrapped', '--lines', '60', '--format', 'text']);
@@ -131,21 +128,16 @@ function watchTrust({ name, pane, kind, slug, folder, since, herdr, hooks, conte
     try { const status = herdr(['agent', 'get', name]); return (status?.agent ?? status)?.agent_status === 'working'; } catch { return false; }
   };
   const post = (text) => appendMessage({ thread: 'boss', from: 'boss', to: 'owner', kind: 'reply', text, action: 'answer', replyTo: null, status: 'new' }, { dir: context.dataDir }).id;
-  for (;;) {
-    const text = read();
-    if (!hasTrustCue(text)) {
-      if (agentReadyVisible(kind, text) || working()) return;
-    } else if (!detected && matchTrustPrompt(kind, text, folder).match) {
-      detected = true;
+  const result = watchTrustPrompt({
+    kind, folder, read, isReady: (text) => agentReadyVisible(kind, text), working,
+    now, since, wait, timeoutMs: TRUST_WINDOW_MS, pollMs: TRUST_POLL_MS,
+    detected: Boolean(context.ids.trustDetectedItem),
+    onMatch: () => {
       context.remember({ trustDetectedItem: post(trustItemText({ pane, kind, slug, folder })) });
       try { fs.appendFileSync(path.join(context.dataDir, 'events.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), type: 'project-new', text: 'trust prompt detected', pane, folder, harness: kind })}\n`); } catch { /* The event log is not required for the flow. */ }
-    }
-    if (Math.max(now() - since, waited) >= TRUST_WINDOW_MS) break;
-    const delay = Math.max(1, Math.min(TRUST_POLL_MS, deadline - now(), TRUST_WINDOW_MS - waited));
-    wait(delay);
-    waited += delay;
-  }
-  if (!detected && !context.ids.trustTimeoutItem) context.remember({ trustTimeoutItem: post(trustTimeoutText({ pane, kind, slug })) });
+    },
+  });
+  if (result.timedOut && !result.detected && !context.ids.trustTimeoutItem) context.remember({ trustTimeoutItem: post(trustTimeoutText({ pane, kind, slug })) });
 }
 
 // Point the published status at the workspace. A status that does not exist yet is left alone.

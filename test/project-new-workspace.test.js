@@ -467,6 +467,21 @@ test('the known Codex dialog is detected the same way', () => {
   } finally { f.cleanup(); }
 });
 
+test('project open leaves a Codex trust prompt with the other choice selected for the Owner', () => {
+  const f = fixture();
+  try {
+    const herdr = fakeHerdr();
+    const { result } = runTrust(f, herdr, () => codexDialog(folderOf(f))
+      .replace(' › 1. Trust and continue', '   1. Trust and continue')
+      .replace('   2. Open restricted', ' › 2. Open restricted'), { kind: 'codex' });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(mailbox(f).length, 1);
+    assert.match(mailbox(f)[0].text, /may wait for input/);
+    assert.deepEqual(eventsOf(f), []);
+    noKeys(herdr);
+  } finally { f.cleanup(); }
+});
+
 test('the pane is read by pane id every 2 seconds and stops when the agent is ready', () => {
   const f = fixture();
   try {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { TRUST_HARNESSES, matchTrustPrompt, hasTrustCue } from '../src/trust-prompts.js';
+import { TRUST_HARNESSES, matchTrustPrompt, hasTrustCue, watchTrustPrompt } from '../src/trust-prompts.js';
 
 const FOLDER = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-trust-')));
 test.after(() => fs.rmSync(FOLDER, { recursive: true, force: true }));
@@ -98,4 +98,64 @@ test('hasTrustCue sees a dialog on screen, also one that does not match', () => 
   assert.equal(hasTrustCue(claudeScreen({ folder: '/elsewhere' })), true);
   assert.equal(hasTrustCue(codexScreen()), true);
   assert.equal(hasTrustCue('❯\n? for shortcuts'), false);
+});
+
+test('Codex requires the other choice to be present and unselected', () => {
+  assert.equal(matchTrustPrompt('codex', codexScreen().replace('  2. Open restricted', '› 2. Open restricted'), FOLDER).match, false);
+  assert.equal(matchTrustPrompt('codex', codexScreen().replace('  2. Open restricted\n', ''), FOLDER).match, false);
+});
+
+test('the shared watcher detects once and stops at readiness without sending input', () => {
+  let elapsed = 0;
+  let matches = 0;
+  const result = watchTrustPrompt({
+    kind: 'codex', folder: FOLDER,
+    read: () => elapsed < 4000 ? codexScreen() : 'ready',
+    isReady: (text) => text === 'ready',
+    onMatch: () => { matches++; }, now: () => elapsed,
+    wait: (ms) => { elapsed += ms; },
+  });
+  assert.deepEqual(result, { ready: true, detected: true, timedOut: false });
+  assert.equal(matches, 1);
+  assert.equal(elapsed, 4000);
+});
+
+test('the shared watcher does not answer an expired watch', () => {
+  let reads = 0;
+  let matches = 0;
+  const result = watchTrustPrompt({
+    kind: 'codex', folder: FOLDER,
+    read: () => { reads++; return codexScreen(); },
+    isReady: () => false, onMatch: () => { matches++; },
+    now: () => 50_000, since: 0, timeoutMs: 45_000, wait: () => {},
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(reads, 0);
+  assert.equal(matches, 0);
+});
+
+test('the shared watcher bounds a persistent prompt even with a static clock', () => {
+  let matches = 0;
+  let waited = 0;
+  const result = watchTrustPrompt({
+    kind: 'codex', folder: FOLDER, read: () => codexScreen(), isReady: () => false,
+    onMatch: () => { matches++; }, now: () => 0,
+    timeoutMs: 1000, pollMs: 250, wait: (ms) => { waited += ms; },
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(matches, 1);
+  assert.equal(waited, 1000);
+});
+
+test('the shared watcher does not answer when a pane read exceeds its time limit', () => {
+  let elapsed = 0;
+  let matches = 0;
+  const result = watchTrustPrompt({
+    kind: 'codex', folder: FOLDER,
+    read: () => { elapsed = 46_000; return codexScreen(); },
+    isReady: () => false, onMatch: () => { matches++; }, now: () => elapsed,
+    timeoutMs: 45_000, wait: (ms) => { elapsed += ms; },
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(matches, 0);
 });
