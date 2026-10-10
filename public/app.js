@@ -158,6 +158,16 @@ function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   for (const trigger of document.querySelectorAll('[data-nav-trigger]')) trigger.setAttribute('aria-expanded', String(open));
 }
+let navPointerDown = false;
+$nav.addEventListener('pointerdown', (e) => { navPointerDown = Boolean(e.target.closest?.('a, button')); });
+document.addEventListener('pointerup', (e) => {
+  if (!navPointerDown) return;
+  navPointerDown = false;
+  if ($nav.contains(e.target)) return;
+  setNavMenu(false);
+  lastNavTrigger = null;
+});
+document.addEventListener('pointercancel', () => { navPointerDown = false; });
 function syncBrandMenuLabel() {
   if (isPhone() && !document.body.classList.contains('app-view')) $brand.setAttribute('aria-label', 'Menu');
   else $brand.removeAttribute('aria-label');
@@ -7322,6 +7332,7 @@ document.addEventListener('keydown', (e) => {
 });
 $nav.addEventListener('click', (e) => { if (e.target.closest('a')) setNavMenu(false); });
 $nav.addEventListener('focusout', (e) => {
+  if (navPointerDown) return;
   if (e.relatedTarget && $nav.contains(e.relatedTarget)) return;
   setNavMenu(false);
   lastNavTrigger = null;
