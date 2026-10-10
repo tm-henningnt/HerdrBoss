@@ -315,8 +315,11 @@ test('worker collect ignores the worker report files in the scope check and the 
     commands: ['focused check'], evidenceTier: ['unit'], unverified: [], stoppedEarly: false,
   }));
   assert.throws(() => collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
-    config: f.config, output: () => {}, listWorktreeProcesses: () => [{ pid: 99, command: 'node', cwd: f.root }],
-  }), /still has processes in its worktree.*pid 99/);
+    config: f.config, output: () => {}, listWorktreeProcesses: () => [
+      { pid: run.shellPid, ppid: 1, command: 'zsh', cwd: f.root },
+      { pid: 99, ppid: run.shellPid, command: 'node', cwd: f.root },
+    ],
+  }), /still has processes that block collection.*pid 99/);
   const summary = collectWorker('own-files', { record: true, outcome: 'done', gatePassed: true }, {
     config: f.config, output: () => {}, recordUsageFn: () => ({ errors: [], duplicate: false }), listWorktreeProcesses: () => [],
   });

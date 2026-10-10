@@ -439,7 +439,7 @@ test('worker collect --record refuses invalid reports and scopes without printin
     { name: 'collect-report-worktree-refusal', changedPath: null, reportPatch: { worktree: '/missing/worktree' }, error: /does not match run worktree/ },
     { name: 'collect-report-issue-refusal', issue: 74, reportPatch: { issue: 75 }, error: /Report issue 75 does not match run issue 74/ },
     { name: 'collect-branch-refusal', changedPath: null, branchMismatch: true, error: /Worktree branch other does not match run branch main/ },
-    { name: 'collect-process-refusal', changedPath: null, leftover: true, error: /still has processes in its worktree/ },
+    { name: 'collect-process-refusal', changedPath: null, leftover: true, error: /still has processes that block collection/ },
   ];
 
   for (const scenario of cases) {
@@ -476,7 +476,10 @@ test('worker collect --record refuses invalid reports and scopes without printin
       config: f.config,
       output: (line) => output.push(line),
       listWorktreeProcesses: scenario.leftover
-        ? () => [{ pid: 100, ppid: 1, command: 'node', cwd: run.worktree }]
+        ? () => [
+          { pid: run.shellPid, ppid: 1, command: 'zsh', cwd: run.worktree },
+          { pid: 100, ppid: run.shellPid, command: 'node', cwd: run.worktree },
+        ]
         : () => [],
       recordUsageFn: () => ({ errors: [], duplicate: false }),
     }), (error) => {
@@ -565,21 +568,124 @@ test('worker collect advises its caller shell to leave the worktree and ignores 
   assert.ok(output.includes(`cd ${fixture.config.mainRoot}`));
 });
 
-test('worker collect names a separate background shell that keeps the worktree cwd', (t) => {
+test('worker collect allows a no-worktree run when the orchestrator process tree uses the project root', (t) => {
+  const f = setupFixture(null);
+  git(f.root, 'add', '-A');
+  git(f.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const run = startWorker('collect-no-worktree-orchestrator', {
+    kind: 'codex', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true,
+  }, { config: f.config, models: loadModels(), herdr: f.herdr, env: f.env, rulesFile: f.rulesFile, output: () => {} });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  writeWorkerReport(run, { changedPaths: [] });
+  const output = [];
+
+  const summary = collectWorker(run.name, { noRecord: true }, {
+    config: f.config, output: (line) => output.push(line), callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 400, ppid: 1, command: 'zsh', cwd: f.root },
+      { pid: 500, ppid: 400, command: 'node', cwd: f.root },
+      { pid: 501, ppid: 400, command: 'codex-code-mode-host', cwd: f.root },
+      { pid: 502, ppid: 501, command: 'node_repl', cwd: f.root },
+    ],
+  });
+
+  assert.equal(summary.name, run.name);
+  assert.ok(output.some((line) => /worker shell PID and its process tree/.test(line)));
+});
+
+test('worker collect blocks a leftover child of the recorded worker shell and names its ancestor', (t) => {
+  const fixture = setupKitPathFixture('collect-worker-child');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  assert.throws(() => collectWorker('collect-worker-child', { noRecord: true }, {
+    config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: fixture.run.shellPid, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
+      { pid: 700, ppid: fixture.run.shellPid, command: 'node_repl', cwd: fixture.run.worktree },
+    ],
+  }), (error) => {
+    assert.match(error.message, /pid 700, ancestor zsh.*worker descendant/);
+    assert.match(error.message, /herdr-boss worker stop-own 'collect-worker-child' --pid 700/);
+    assert.doesNotMatch(error.message, /node_repl .*args|cwd|environment/i);
+    return true;
+  });
+});
+
+test('worker collect ignores an orchestrator shell and its tools when they use the worker worktree cwd', (t) => {
+  const fixture = setupKitPathFixture('collect-orchestrator-worktree');
+  t.after(fixture.clean);
+  fixture.writeReport([]);
+  const output = [];
+  const summary = collectWorker('collect-orchestrator-worktree', { noRecord: true }, {
+    config: fixture.config, output: (line) => output.push(line), callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [
+      { pid: 400, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
+      { pid: 500, ppid: 400, command: 'node', cwd: fixture.run.worktree },
+      { pid: 501, ppid: 400, command: 'codex-code-mode-host', cwd: fixture.run.worktree },
+      { pid: 502, ppid: 501, command: 'node_repl', cwd: fixture.run.worktree },
+    ],
+  });
+
+  assert.equal(summary.name, 'collect-orchestrator-worktree');
+  assert.ok(output.includes(`cd ${fixture.config.mainRoot}`));
+});
+
+test('worker collect applies the documented fallback when a run record has no worker shell PID', (t) => {
+  const noWorktree = setupFixture(null);
+  git(noWorktree.root, 'add', '-A');
+  git(noWorktree.root, 'commit', '--allow-empty', '-m', 'fixture configuration');
+  const noWorktreeRun = startWorker('collect-old-no-worktree', {
+    kind: 'codex', task: 'x', allow: ['.orchestration/runs/'], noWorktree: true,
+  }, { config: noWorktree.config, models: loadModels(), herdr: noWorktree.herdr, env: noWorktree.env, rulesFile: noWorktree.rulesFile, output: () => {} });
+  const oldNoWorktreeRecord = JSON.parse(fs.readFileSync(noWorktreeRun.recordFile, 'utf8'));
+  delete oldNoWorktreeRecord.shellPid;
+  fs.writeFileSync(noWorktreeRun.recordFile, JSON.stringify(oldNoWorktreeRecord));
+  writeWorkerReport(noWorktreeRun, { changedPaths: [] });
+  const noWorktreeOutput = [];
+  t.after(() => fs.rmSync(noWorktree.root, { recursive: true, force: true }));
+
+  const noWorktreeSummary = collectWorker(noWorktreeRun.name, { noRecord: true }, {
+    config: noWorktree.config, output: (line) => noWorktreeOutput.push(line), callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [{ pid: 800, ppid: 1, command: 'zsh', cwd: noWorktree.root }],
+  });
+  assert.equal(noWorktreeSummary.name, noWorktreeRun.name);
+  assert.ok(noWorktreeOutput.some((line) => /no worker shell PID is recorded.*skipped project-root cwd checks/.test(line)));
+
+  const worktree = setupKitPathFixture('collect-old-worktree');
+  t.after(worktree.clean);
+  const oldWorktreeRecord = JSON.parse(fs.readFileSync(worktree.run.recordFile, 'utf8'));
+  delete oldWorktreeRecord.shellPid;
+  fs.writeFileSync(worktree.run.recordFile, JSON.stringify(oldWorktreeRecord));
+  worktree.writeReport([]);
+  assert.throws(() => collectWorker('collect-old-worktree', { noRecord: true }, {
+    config: worktree.config, output: () => {}, callerPid: 500, callerPpid: 400,
+    listWorktreeProcesses: () => [{ pid: 801, ppid: 1, command: 'node', cwd: worktree.run.worktree }],
+  }), (error) => {
+    assert.match(error.message, /legacy worktree cwd rule/);
+    assert.match(error.message, /pid 801/);
+    return true;
+  });
+});
+
+test('worker collect ignores an unrelated background shell that only has the worktree cwd', (t) => {
   const fixture = setupKitPathFixture('collect-background-shell');
   t.after(fixture.clean);
   fixture.writeReport([]);
-  assert.throws(() => collectWorker('collect-background-shell', { noRecord: true }, {
+  const summary = collectWorker('collect-background-shell', { noRecord: true }, {
     config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
     listWorktreeProcesses: () => [
       { pid: 600, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
     ],
-  }), new RegExp(`your own background shell \\(pid 600, command zsh\\) has its cwd in the worktree\\. Change directory or stop it\\.`));
+  });
+  assert.equal(summary.name, 'collect-background-shell');
 });
 
-test('worker collect names a leftover process by pid and command name only', (t) => {
+test('worker collect uses the legacy cwd rule for records without a worker PID and prints command names only', (t) => {
   const fixture = setupKitPathFixture('collect-leftover-name');
   t.after(fixture.clean);
+  const oldRecord = JSON.parse(fs.readFileSync(fixture.run.recordFile, 'utf8'));
+  delete oldRecord.shellPid;
+  fs.writeFileSync(fixture.run.recordFile, JSON.stringify(oldRecord));
   fixture.writeReport([]);
   assert.throws(() => collectWorker('collect-leftover-name', { noRecord: true }, {
     config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
@@ -587,9 +693,9 @@ test('worker collect names a leftover process by pid and command name only', (t)
       { pid: 700, ppid: 42, command: 'node', cwd: fixture.run.worktree },
     ],
   }), (error) => {
-    assert.match(error.message, /still has processes in its worktree: node \(pid 700\)\. Stop them before collection\./);
-    assert.ok(!/ppid/.test(error.message), 'the refusal must not print the parent pid');
-    assert.ok(!/cwd/.test(error.message), 'the refusal must not print the working directory');
+    assert.match(error.message, /legacy worktree cwd rule.*node \(pid 700, ancestor unknown\)/);
+    assert.ok(!/ppid|parent pid/i.test(error.message), 'the refusal must not print the parent pid');
+    assert.ok(!error.message.includes(fixture.run.worktree), 'the refusal must not print the working directory');
     return true;
   });
 });
@@ -601,8 +707,8 @@ test('worker collect prints one stop-own command for each stoppable worktree pro
   assert.throws(() => collectWorker('collect-leftover-guidance', { noRecord: true }, {
     config: fixture.config, output: () => {}, callerPid: 500, callerPpid: 400,
     listWorktreeProcesses: () => [
-      { pid: 700, ppid: 42, command: 'node', args: 'node --private-arg hidden', cwd: fixture.run.worktree },
-      { pid: 701, ppid: 1, command: 'python', args: 'python --private-arg hidden', cwd: fixture.run.worktree },
+      { pid: 700, ppid: fixture.run.shellPid, command: 'node', args: 'node --private-arg hidden', cwd: fixture.run.worktree },
+      { pid: 701, ppid: fixture.run.shellPid, command: 'python', args: 'python --private-arg hidden', cwd: fixture.run.worktree },
     ],
   }), (error) => {
     assert.match(error.message, /herdr-boss worker stop-own 'collect-leftover-guidance' --pid 700/);
@@ -624,7 +730,7 @@ test('worker collect tells the caller to close a pane whose shell PID changed', 
       : {},
     listWorktreeProcesses: () => [
       { pid: currentShellPid, ppid: 1, command: 'zsh', cwd: fixture.run.worktree },
-      { pid: currentShellPid + 1, ppid: 1, command: 'node', cwd: fixture.run.worktree },
+      { pid: currentShellPid + 1, ppid: currentShellPid, command: 'node', cwd: fixture.run.worktree },
     ],
   }), (error) => {
     assert.match(error.message, new RegExp(`close the finished pane with herdr pane close '${fixture.run.pane}'`));

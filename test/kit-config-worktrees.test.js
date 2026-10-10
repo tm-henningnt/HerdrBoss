@@ -320,7 +320,7 @@ test('worker process check finds only cwd paths inside the exact worktree', () =
   ]);
 });
 
-test('worker process collection excludes worker runtime and shared daemon but flags workloads and unknown ancestry', () => {
+test('worker process collection flags descendants and ignores unrelated worktree processes', () => {
   const cwd = path.resolve('/tmp/worker-tree');
   const processes = [
     { pid: 10, ppid: 1, command: 'zsh', cwd },
@@ -332,7 +332,7 @@ test('worker process collection excludes worker runtime and shared daemon but fl
     { pid: 22, ppid: 11, command: 'node', args: 'watcher --watch src', cwd },
     { pid: 23, ppid: 1, command: 'node', args: 'unknown process', cwd },
   ];
-  assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd, shellPid: 10 }).map(({ pid }) => pid), [10, 20, 21, 22, 23]);
+  assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd, shellPid: 10 }).map(({ pid }) => pid), [11, 20, 21, 22]);
   assert.deepEqual(filterCollectProcesses(processes, { worktree: cwd }).map(({ pid }) => pid), [10, 11, 20, 21, 22, 23]);
 });
 

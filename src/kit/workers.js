@@ -193,23 +193,50 @@ function isShellProcess(item) {
   return /^(?:-?)(?:zsh|bash|fish|sh|dash|ksh|tcsh|csh)$/i.test(String(item?.command ?? ''));
 }
 
-export function filterCollectProcesses(processes, { worktree, shellPid = null, callerPid = null, callerPpid = null } = {}) {
-  const root = path.resolve(worktree);
-  const callerTree = callerProcessTree(processes, callerPid, callerPpid);
-  const callerPids = new Set(callerTree.map((item) => Number(item.pid)));
+function processCommandName(item) {
+  const command = String(item?.command ?? '').trim().split(/\s+/)[0];
+  return command ? path.basename(command) : 'unknown';
+}
+
+function callerProcessBranch(processes, callerPid, callerPpid) {
+  const tree = callerProcessTree(processes, callerPid, callerPpid);
+  const shellIndex = tree.findIndex(isShellProcess);
+  const boundary = shellIndex >= 0 ? tree.slice(0, shellIndex + 1) : tree.slice(0, 2);
+  return new Set(boundary.map((item) => Number(item.pid)));
+}
+
+function processHasAncestor(process, ancestorPid, byPid) {
+  const target = Number(ancestorPid);
+  if (!Number.isSafeInteger(target) || target <= 1) return false;
+  const seen = new Set();
+  let current = process;
+  while (current && Number(current.pid) > 1 && !seen.has(Number(current.pid))) {
+    if (Number(current.pid) === target) return true;
+    seen.add(Number(current.pid));
+    const parentPid = Number(current.ppid);
+    if (parentPid === target) return true;
+    current = parentPid > 1 ? byPid.get(parentPid) : null;
+  }
+  return false;
+}
+
+function belongsToProcessBranch(process, branchPids, byPid) {
+  if (!branchPids.size) return false;
+  for (const pid of branchPids) {
+    if (processHasAncestor(process, pid, byPid)) return true;
+  }
+  return false;
+}
+
+function processAncestorName(process, byPid) {
+  const parent = byPid.get(Number(process.ppid));
+  return processCommandName(parent);
+}
+
+function legacyCollectProcesses(processes, root, callerPids) {
   const inTree = processes.filter((item) => isInWorktree(item, root));
   const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
   const daemon = (item) => /(?:^|\/)Codex\.app\/Contents\/Resources\/app-server-daemon(?:\s|$)/.test(String(item.executable ?? item.args ?? ''));
-  const workerRuntime = (item) => {
-    const visited = new Set();
-    let current = item;
-    while (current && !visited.has(Number(current.pid))) {
-      if (Number(current.pid) === Number(shellPid) && Number(shellPid) > 0) return true;
-      visited.add(Number(current.pid));
-      current = byPid.get(Number(current.ppid));
-    }
-    return false;
-  };
   const sharedRuntime = (item) => {
     const visited = new Set();
     let current = item;
@@ -222,11 +249,55 @@ export function filterCollectProcesses(processes, { worktree, shellPid = null, c
   };
   const workload = (item) => /(?:\bnode\s+--test\b|\b(?:jest|vitest|mocha|playwright)\b|\b(?:nodemon|watcher|watchpack|chokidar)\b|\b(?:vite|webpack|next)\s+(?:dev|serve)\b|\b(?:server|serve)\.js\b)/i.test(String(item.args ?? ''));
   return inTree.filter((item) => {
-    if (callerPids.has(Number(item.pid))) return false;
+    if (belongsToProcessBranch(item, callerPids, byPid)) return false;
     if (Number(item.ppid) === 1 || workload(item)) return true;
-    if (daemon(item) || sharedRuntime(item) || workerRuntime(item)) return false;
+    if (daemon(item) || sharedRuntime(item)) return false;
     return true;
   });
+}
+
+export function filterCollectProcesses(processes, {
+  worktree, shellPid = null, callerPid = null, callerPpid = null, noWorktree = false, currentPaneShellPid = null,
+} = {}) {
+  const root = path.resolve(worktree);
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const callerPids = callerProcessBranch(processes, callerPid, callerPpid);
+  const workerShell = Number(shellPid);
+  const hasWorkerShell = Number.isSafeInteger(workerShell) && workerShell > 1;
+  if (!hasWorkerShell) return noWorktree ? [] : legacyCollectProcesses(processes, root, callerPids);
+  return processes.filter((item) => {
+    if (belongsToProcessBranch(item, callerPids, byPid)) return false;
+    if (Number(item.pid) === workerShell) return false;
+    if (processHasAncestor(item, workerShell, byPid)) return true;
+    const paneShell = Number(currentPaneShellPid);
+    return Number.isSafeInteger(paneShell) && paneShell > 1 && paneShell !== workerShell
+      && processHasAncestor(item, paneShell, byPid);
+  });
+}
+
+function collectProcessBlockers(processes, options) {
+  const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
+  const workerShell = Number(options.shellPid);
+  const hasWorkerShell = Number.isSafeInteger(workerShell) && workerShell > 1;
+  const paneShell = Number(options.currentPaneShellPid);
+  return filterCollectProcesses(processes, options).map((process) => {
+    const changedPaneShell = Number.isSafeInteger(paneShell) && paneShell > 1 && paneShell !== workerShell
+      && processHasAncestor(process, paneShell, byPid);
+    return {
+      process,
+      ancestor: processAncestorName(process, byPid),
+      reason: hasWorkerShell
+        ? (changedPaneShell && Number(process.pid) === paneShell ? 'worker pane shell changed' : 'worker descendant remains active')
+        : 'legacy worktree cwd rule',
+    };
+  });
+}
+
+function collectProcessRule(noWorktree, hasWorkerShell) {
+  if (noWorktree && !hasWorkerShell) return 'Collection rule: no worker shell PID is recorded; skipped project-root cwd checks for this no-worktree run.';
+  if (noWorktree) return 'Collection rule: checked the recorded worker shell PID and its process tree; project-root cwd matches outside that tree do not block collection.';
+  if (!hasWorkerShell) return 'Collection rule: no worker shell PID is recorded; used the legacy worktree cwd rule.';
+  return 'Collection rule: checked the recorded worker shell PID and its process tree.';
 }
 
 export function listCwdProcesses() {
@@ -2694,24 +2765,40 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
     const processList = listWorktreeProcesses(run.worktree);
     const root = path.resolve(run.worktree);
+    const noWorktree = run.noWorktree === true || root === path.resolve(config.root);
+    const workerShellPid = Number(run.shellPid);
+    const hasWorkerShell = Number.isSafeInteger(workerShellPid) && workerShellPid > 1;
     const callerShell = callerProcessTree(processList, callerPid, callerPpid)
       .find((item) => isShellProcess(item) && isInWorktree(item, root));
-    const leftovers = filterCollectProcesses(processList, { worktree: run.worktree, shellPid: run.shellPid, callerPid, callerPpid });
-    const backgroundShell = leftovers.find(isShellProcess);
-    const hasShellBlocker = leftovers.some(isShellProcess);
-    const currentPaneShellPid = hasShellBlocker && run.pane ? workerPaneShellPid(run.pane, herdr) : null;
-    const currentPaneShellBlocker = currentPaneShellPid == null ? null : leftovers.find((item) => isShellProcess(item) && Number(item.pid) === currentPaneShellPid);
-    const stopCommands = leftovers
-      .filter((process) => process !== currentPaneShellBlocker && stopOwnRefusal(process.pid, name, run, processList, callerPid, callerPpid) === null)
-      .map((process) => `herdr-boss worker stop-own ${shellQuote(name)} --pid ${process.pid}`);
+    const processByPid = new Map(processList.map((item) => [Number(item.pid), item]));
+    const callerPids = callerProcessBranch(processList, callerPid, callerPpid);
+    const hasPossiblePaneShell = processList.some((item) => isShellProcess(item)
+      && Number(item.pid) !== workerShellPid && !belongsToProcessBranch(item, callerPids, processByPid));
+    const currentPaneShellPid = hasPossiblePaneShell && run.pane ? workerPaneShellPid(run.pane, herdr) : null;
+    const processRule = collectProcessRule(noWorktree, hasWorkerShell);
+    const blockers = collectProcessBlockers(processList, {
+      worktree: run.worktree, shellPid: run.shellPid, callerPid, callerPpid, noWorktree, currentPaneShellPid,
+    });
+    const currentPaneShellBlocker = currentPaneShellPid == null || currentPaneShellPid === workerShellPid
+      ? null : blockers.find(({ process }) => Number(process.pid) === currentPaneShellPid);
+    const stopCommands = blockers.flatMap(({ process, reason }) => {
+      if (reason !== 'worker descendant remains active') return [];
+      const paneShellDescendant = currentPaneShellPid != null && currentPaneShellPid !== workerShellPid
+        && processHasAncestor(process, currentPaneShellPid, processByPid);
+      const stopRun = paneShellDescendant ? { ...run, shellPid: currentPaneShellPid } : run;
+      return stopOwnRefusal(process.pid, name, stopRun, processList, callerPid, callerPpid) === null
+        ? [`herdr-boss worker stop-own ${shellQuote(name)} --pid ${process.pid}`]
+        : [];
+    });
     const stopSteps = stopCommands.length ? ` Next step for each stoppable process:\n${stopCommands.map((command) => `- ${command}`).join('\n')}` : '';
     if (currentPaneShellBlocker && currentPaneShellPid !== Number(run.shellPid)) {
-      throw new Error(`Worker pane ${run.pane} now has shell PID ${currentPaneShellPid}; the run recorded shell PID ${run.shellPid}. Next step: close the finished pane with herdr pane close ${shellQuote(run.pane)}, then collect again with herdr-boss worker collect ${shellQuote(name)}.${stopSteps}`);
+      const listed = blockers.map(({ process, ancestor, reason }) => `${processCommandName(process)} (pid ${process.pid}, ancestor ${ancestor}): ${reason}`).join('; ');
+      throw new Error(`${processRule} Worker pane ${run.pane} has shell PID ${currentPaneShellPid}; the run recorded shell PID ${run.shellPid}. Blockers: ${listed}. Next step: close the finished pane with herdr pane close ${shellQuote(run.pane)}, then collect again with herdr-boss worker collect ${shellQuote(name)}.${stopSteps}`);
     }
-    if (backgroundShell) {
-      throw new Error(`your own background shell (pid ${backgroundShell.pid}, command ${backgroundShell.command}) has its cwd in the worktree. Change directory or stop it.${stopSteps}`);
+    if (blockers.length) {
+      const listed = blockers.map(({ process, ancestor, reason }) => `${processCommandName(process)} (pid ${process.pid}, ancestor ${ancestor}): ${reason}`).join('; ');
+      throw new Error(`${processRule} Worker ${name} still has processes that block collection: ${listed}. Resolve each blocker before collection.${stopSteps}`);
     }
-    if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid})`).join('; ')}. Stop them before collection.${stopSteps}`);
     if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
     if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
     const selectedBaseline = workerBaseline(run, options);
@@ -2944,6 +3031,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       }
     }
     if (scopeException) output(`Scope exception\n- files: ${scopeException.files.join(', ')}\n- reason: ${scopeException.reason}`);
+    output(processRule);
     output(JSON.stringify(summary, null, 2));
     for (const warning of summary.artifactWarnings) output(`Warning: ${warning}`);
     if (usageWarning) output(usageWarning);
