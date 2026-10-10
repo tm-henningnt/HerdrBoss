@@ -334,11 +334,11 @@ async function waitFor(docker, name, predicate, message, timeoutMs = 10_000) {
   throw new Error(message);
 }
 
-async function quiesce(docker, name, timeoutMs = 10_000) {
+async function quiesce(docker, name, timeoutMs = 10_000, pauseContainer = true) {
   stoppedAt.set(name, Date.now());
   await dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-d', '/run/service/herdr-boss-serve']);
   await waitFor(docker, name, async () => (await serviceState(docker, name)) === 'false', 'The factory service did not stop.', timeoutMs);
-  await dockerCall(docker, ['pause', `hf-${name}`]);
+  if (pauseContainer) await dockerCall(docker, ['pause', `hf-${name}`]);
 }
 
 // `stoppedAt` stays set until `factoryUpdateCommand` ends. `recoverService` reads it after each resume.
@@ -493,14 +493,73 @@ async function recreate(docker, name, record, host, owner, imageTag, onStartAtte
   await dockerCall(docker, ['start', record.containerName]);
 }
 
-// `kit install` generates the kit files in the factory checkout. A local change in them blocks the fast-forward.
-// Restore only those files. Return the other changed tracked files so the merge error can name them.
-async function restoreGeneratedKitFiles(docker, name) {
-  const status = await gitText(docker, name, ['status', '--porcelain', '--untracked-files=no']);
-  const changed = status.split('\n').filter(Boolean).map((line) => line.slice(3).replace(/^"|"$/g, ''));
-  const generated = changed.filter((file) => KIT_MANAGED_PATHS.includes(file));
-  if (generated.length) await gitText(docker, name, ['checkout', 'HEAD', '--', ...generated]);
-  return changed.filter((file) => !KIT_MANAGED_PATHS.includes(file));
+// Read and save documentation inside the factory. Only saved paths leave the factory.
+const SAVE_UPDATE_NOTES_SCRIPT = `
+import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+const files = JSON.parse(process.argv[1]);
+const memory = 'docs/orchestration/memory.md';
+const notesFile = '/home/factory/work/boss-notes/memory.md';
+const patchDir = '/home/factory/work/boss-notes/update-patches';
+const gitDiff = (args, paths) => execFileSync('git', ['-C', '/home/factory/herdr-boss', '--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', ...args, '--', ...paths], { maxBuffer: 32 * 1024 * 1024 });
+const patches = [];
+const documents = files.filter(file => file !== memory);
+const added = [];
+for (const phase of [{ args: ['--cached'], suffix: '-index' }, { args: [], suffix: '' }]) {
+  if (documents.length) {
+    const patch = gitDiff([...phase.args, '--binary'], documents);
+    if (patch.length) {
+      fs.mkdirSync(patchDir, { recursive: true, mode: 0o700 });
+      const file = patchDir + '/' + new Date().toISOString().replaceAll(':', '-') + '-' + randomBytes(6).toString('hex') + phase.suffix + '.patch';
+      fs.writeFileSync(file, patch, { flag: 'wx', mode: 0o600 });
+      patches.push(file);
+    }
+  }
+  const diff = files.includes(memory) ? gitDiff([...phase.args, '--unified=0'], [memory]).toString('utf8') : '';
+  let inHunk = false;
+  for (const line of diff.split('\\n')) {
+    if (line.startsWith('@@ ')) inHunk = true;
+    else if (inHunk && line.startsWith('+')) added.push(line.slice(1));
+  }
+}
+if (added.length) {
+  fs.mkdirSync('/home/factory/work/boss-notes', { recursive: true, mode: 0o700 });
+  fs.appendFileSync(notesFile, added.join('\\n') + '\\n', { mode: 0o600 });
+}
+console.log(JSON.stringify({ patches, notesFile: added.length ? notesFile : null }));
+`;
+
+// Save local documentation before restoring the files that would block the fast-forward.
+async function saveLocalDocumentation(docker, name, io) {
+  const status = await runStep('git status', '', () => gitText(docker, name, ['status', '--porcelain', '-z', '--untracked-files=no']));
+  const entries = status.split('\0');
+  const paths = new Set();
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    paths.add(entry.slice(3));
+    // Porcelain -z puts the old path after a rename or copy, without a status prefix.
+    if (/[RC]/.test(entry.slice(0, 2))) {
+      const oldPath = entries[++index];
+      if (entry.slice(0, 2).includes('R')) paths.add(oldPath);
+    }
+  }
+  const changed = [...paths];
+  const documents = changed.filter(file => /\.(?:md|markdown|rst|adoc|txt)$/i.test(file) || /^(?:README|LICENSE|COPYING)$/.test(file));
+  const source = changed.filter(file => !documents.includes(file) && !KIT_MANAGED_PATHS.includes(file));
+  if (source.length) {
+    const quoted = source.map(file => "'" + file.replaceAll("'", "'\\''") + "'").join(' ');
+    const patch = '~/work/boss-notes/update-patches/local-changes-' + new Date().toISOString().replaceAll(':', '-') + '.patch';
+    const command = `mkdir -p ~/work/boss-notes/update-patches && git -C /home/factory/herdr-boss diff --binary HEAD -- ${quoted} > ${patch}`;
+    throw new Error(`Local changes are not documentation: ${source.map(file => JSON.stringify(file)).join(', ')}. Save them in the factory with: ${command}`);
+  }
+  if (documents.length) {
+    const saved = JSON.parse(await runStep('save local documentation', 'The local files were kept.', () => dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', `hf-${name}`, 'node', '--input-type=module', '-e', SAVE_UPDATE_NOTES_SCRIPT, JSON.stringify(documents)])));
+    for (const file of saved.patches) io.stdout.write(`Saved local documentation patch: ${file}.\n`);
+    if (saved.notesFile) io.stdout.write(`Saved local memory notes: ${saved.notesFile}.\n`);
+  }
+  return changed.filter(file => documents.includes(file) || KIT_MANAGED_PATHS.includes(file));
 }
 
 async function updateService(name, factory, docker, owner, flags, initial) {
@@ -519,12 +578,17 @@ async function updateService(name, factory, docker, owner, flags, initial) {
   let mergeStarted = false;
   let failure = null;
   try {
-    await quiesce(docker, name, factory.io.updateTimeoutMs ?? 10_000);
+    await quiesce(docker, name, factory.io.updateTimeoutMs ?? 10_000, false);
+    // Include the saved files in the work-volume backup so a migration rollback keeps them.
+    let documents;
+    try { documents = await saveLocalDocumentation(docker, name, factory.io); }
+    catch (error) { await abortBeforeChange(docker, name, 'service', error); }
+    await dockerCall(docker, ['pause', `hf-${name}`]);
     backup = await takeQuiescedBackup(name, docker, factory.io);
     await assertUpdateStillSafe(docker, name, 'service', false);
+    if (documents.length) await runStep('git restore', '', () => gitText(docker, name, ['--literal-pathspecs', 'restore', '--source=HEAD', '--staged', '--worktree', '--', ...documents]));
     mergeStarted = true;
-    const localChanges = await runStep('git status', '', () => restoreGeneratedKitFiles(docker, name));
-    await runStep('git merge', localChanges.length ? `Local changes in: ${localChanges.join(', ')}.` : '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
+    await runStep('git merge', '', () => gitText(docker, name, ['merge', '--ff-only', 'FETCH_HEAD']));
     await runStep('kit install', '', () => dockerCall(docker, ['exec', '--user', 'factory', '-e', 'HOME=/home/factory', '--workdir', '/home/factory/herdr-boss', `hf-${name}`, 'herdr-boss', 'kit', 'install']));
     await runStep('git identity', '', () => ensureFactoryGitIdentity(docker, name));
     await runStep('restart', '', () => dockerCall(docker, ['exec', `hf-${name}`, S6_SVC, '-u', '/run/service/herdr-boss-serve']));

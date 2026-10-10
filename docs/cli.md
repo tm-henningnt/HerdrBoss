@@ -2453,7 +2453,17 @@ Without `--yes`, type the exact phrase `clean-smoke NAME` on stdin. A wrong or a
 
 Use the service tier to fast-forward the `code` volume. It restarts only the Herdr Boss service. Existing panes stay available.
 
-Before the merge, the service tier restores the generated kit files in the factory checkout: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. It then runs `herdr-boss kit install` in the checkout after the merge. A local change in any other tracked file stops the update at the git merge step. The error names the changed files. The update does not restore `docs/orchestration/memory.md`. The factory Boss keeps its notes in `~/work/boss-notes/memory.md`, outside the checkout. The service tier also sets the Git identity of the factory user when it is missing, with the same values as `factory boss start`. It keeps an identity that exists.
+Before the merge, the service tier saves local changes in tracked documentation inside the factory. It puts timestamped patches in `~/work/boss-notes/update-patches/`. Each patch has mode 0600. It saves staged edits and working-file edits in separate patches when both exist. A staged patch ends in `-index.patch`. It saves the files before the backup, so a data-migration rollback keeps them. It restores the tracked files only after the backup and the fresh idle check.
+
+The service tier appends added note lines from `docs/orchestration/memory.md` to `~/work/boss-notes/memory.md` instead of a patch. It keeps the existing factory notes. It prints each saved path. It then restores the documentation in the index and the working tree from `HEAD`. A repeated successful update copies only new local changes. A clean checkout creates no notes or patches. Untracked files stay in the checkout.
+
+Documentation includes `.md`, `.markdown`, `.rst`, `.adoc`, and `.txt` files, and the root files `README`, `LICENSE`, and `COPYING`. A script in `docs/` is not documentation. If another tracked file has a local change, the update stops before it saves or restores any local file. The error names each file and prints an exact patch command to run inside the factory.
+
+The generated kit files remain an exception: `docs/orchestration/herdr-boss.md`, `AGENTS.md`, and `.claude/settings.json`. The service tier saves documentation changes in these files before it restores them. It restores the generated `.claude/settings.json` without a patch. It runs `herdr-boss kit install` in the checkout after the merge.
+
+Review a saved patch before you apply it in the factory checkout. Apply a staged patch first with `git apply --index PATCH`. Then apply its working-file patch with `git apply PATCH`. Keep factory notes in `~/work/boss-notes/memory.md`, outside the checkout.
+
+The service tier also sets the Git identity of the factory user when it is missing, with the same values as `factory boss start`. It keeps an identity that exists.
 
 Use the image tier to replace the labeled container on the same four volumes. Build the pinned image first with `herdr-boss factory build NAME`. The update backs up data, work, and home.
 
@@ -2468,7 +2478,7 @@ The service tier installs or repairs the Claude usage helper after the service r
 
 After a successful update, the command prints the short checkout commit before and after the update.
 
-The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git merge`, `git identity`, or `restart`.
+The service tier runs git as the user `factory`. If the `code` volume repository has no `origin` remote, the command adds the public Herdr Boss repository URL without credentials. It refuses a non-HTTPS URL. It refuses an existing `origin` that names another repository. An error names the failing step: `git rev-parse`, `git remote add`, `git fetch`, `git status`, `save local documentation`, `git restore`, `git merge`, `git identity`, or `restart`.
 
 An update is refused while a worker works, a suite or push holds the full-suite lock, or a handover is prepared or in progress. `--dry-run` checks the factory and prints the selected tier without changing Docker resources.
 
