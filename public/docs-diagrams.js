@@ -18,14 +18,14 @@ export function themeVariables(doc) {
   const read = (name, fallback) => (style?.getPropertyValue?.(name) || '').trim() || fallback;
   return {
     background: 'transparent',
-    primaryColor: read('--panel-2', '#f8f6f2'),
-    primaryTextColor: read('--text', '#1d1b18'),
-    primaryBorderColor: read('--line', '#e3dfd7'),
-    lineColor: read('--muted', '#6f6a61'),
+    primaryColor: read('--panel-2', '#eef2f7'),
+    primaryTextColor: read('--text', '#1d2530'),
+    primaryBorderColor: read('--line', '#d7dee8'),
+    lineColor: read('--muted', '#596779'),
     secondaryColor: read('--panel', '#ffffff'),
     tertiaryColor: read('--panel', '#ffffff'),
-    clusterBkg: read('--panel-2', '#f8f6f2'),
-    clusterBorder: read('--line', '#e3dfd7'),
+    clusterBkg: read('--panel-2', '#eef2f7'),
+    clusterBorder: read('--line', '#d7dee8'),
     edgeLabelBackground: read('--panel', '#ffffff'),
     fontFamily: read('--sans', 'sans-serif'),
   };

@@ -131,5 +131,5 @@ test('the theme variables read the dashboard colors and fall back without a docu
   const variables = themeVariables(document);
   assert.equal(variables.primaryTextColor, '#111111');
   assert.equal(variables.background, 'transparent');
-  assert.equal(themeVariables(undefined).primaryTextColor, '#1d1b18');
+  assert.equal(themeVariables(undefined).primaryTextColor, '#1d2530');
 });

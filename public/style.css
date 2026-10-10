@@ -494,7 +494,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .control-actions.pending { position: fixed; right: 24px; bottom: calc(20px + var(--kb-inset, 0px)); z-index: 10; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 28px color-mix(in srgb, #000 30%, transparent); color: var(--text); }
 @media (max-width: 620px) { .control-actions.pending { left: 16px; right: 16px; justify-content: space-between; } }
 @media (max-width: 760px) { .settings-grid { grid-template-columns: 1fr; } .harness-columns, .harness-model { grid-template-columns: minmax(0, 1fr) 136px; gap: 4px 8px; } .harness-model > span[aria-hidden] { display: none; } .harness-model > button { grid-column: 2; justify-self: end; margin-bottom: 6px; } .setting-line.goal-setting { align-items: stretch; flex-direction: column; } .setting-line.goal-setting textarea { width: 100%; } }
-button { border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; padding: 7px 11px; font: 600 12px var(--sans); cursor: pointer; }
+button { border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); padding: 7px 11px; font: 600 12px var(--sans); cursor: pointer; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* Inline setting help. The button is a 44 px target on a phone; the visible circle stays small. */
 .info-btn { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 26px; height: 26px; min-width: 26px; margin: -4px 0 -4px 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font: 600 11px var(--sans); cursor: pointer; }
@@ -519,8 +519,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   .setting-popup { font-size: 16px; }
 }
 
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button { color: #1d1b18; } }
-:root[data-theme="dark"] button { color: #1d1b18; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button { color: var(--on-accent); } }
+:root[data-theme="dark"] button { color: var(--on-accent); }
 button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor: default; }
 /* The root prefix outranks the dark-theme button color, so a quiet button keeps readable text in both themes. */
 :root button.quiet { background: transparent; color: var(--muted); border-color: var(--line); padding: 4px 8px; font-weight: 500; }
@@ -543,12 +543,12 @@ button:hover { filter: brightness(1.08); } button:disabled { opacity: .5; cursor
 .browser-card-head p { margin: 0; color: var(--muted); font-size: 12px; }
 .browser-head-actions { display: flex; align-items: center; gap: 8px; }
 .browser-card button { padding: 5px 8px; background: var(--panel-2); border-color: var(--line); color: var(--text); }
-.browser-card .browser-navigate button[type="submit"], .browser-card-idle [data-browser-mode="visible"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.browser-card .browser-navigate button[type="submit"], .browser-card-idle [data-browser-mode="visible"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card button { color: var(--text); } }
 :root[data-theme="dark"] .browser-card button { color: var(--text); }
 .browser-card [data-browser-refresh]:disabled { opacity: .7; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card .browser-navigate button[type="submit"], :root:not([data-theme="light"]) .browser-card-idle [data-browser-mode="visible"] { color: #1d1b18; } }
-:root[data-theme="dark"] .browser-card .browser-navigate button[type="submit"], :root[data-theme="dark"] .browser-card-idle [data-browser-mode="visible"] { color: #1d1b18; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .browser-card .browser-navigate button[type="submit"], :root:not([data-theme="light"]) .browser-card-idle [data-browser-mode="visible"] { color: var(--on-accent); } }
+:root[data-theme="dark"] .browser-card .browser-navigate button[type="submit"], :root[data-theme="dark"] .browser-card-idle [data-browser-mode="visible"] { color: var(--on-accent); }
 .browser-card .browser-preview-toggle { font-size: 12px; }
 .browser-manage { position: relative; }
 .browser-manage summary { list-style: none; cursor: pointer; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); font-size: 12px; }
@@ -2629,10 +2629,10 @@ body.app-view textarea, body.app-view input { caret-color: var(--accent); }
 #app .rv-pin[hidden] { display: none; }
 #app .rv-pin.rv-pin-static { position: relative; margin: 0; transform: none; box-shadow: none; }
 #app .rv-pin.rv-pin-static::before { content: none; }
-.rv-stage .rv-zoom { position: absolute; top: 10px; right: 10px; padding: 3px 8px; border-radius: 6px; background: rgb(20 18 16 / 0.72); color: #f4f2ee; font: 600 11.5px var(--mono); pointer-events: none; }
+.rv-stage .rv-zoom { position: absolute; top: 10px; right: 10px; padding: 3px 8px; border-radius: 6px; background: rgb(18 23 32 / 0.72); color: #f5f6f8; font: 600 11.5px var(--mono); pointer-events: none; }
 .rv-zoom::after { content: attr(data-zoom); }
 .rv-stage:not(.rv-zoomed) .rv-zoom { display: none; }
-.rv-hint { position: absolute; bottom: 14px; left: 50%; display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 7px 12px; border-radius: 999px; background: rgb(20 18 16 / 0.82); color: #f4f2ee; font-size: 12.5px; white-space: nowrap; pointer-events: none; transform: translateX(-50%); animation: rv-hint 3s ease-out both; }
+.rv-hint { position: absolute; bottom: 14px; left: 50%; display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 7px 12px; border-radius: 999px; background: rgb(18 23 32 / 0.82); color: #f5f6f8; font-size: 12.5px; white-space: nowrap; pointer-events: none; transform: translateX(-50%); animation: rv-hint 3s ease-out both; }
 .rv-hint .app-icon { width: 16px; height: 16px; }
 .rv-hint-mouse { display: none; }
 @media (hover: hover) and (pointer: fine) { .rv-hint-touch { display: none; } .rv-hint-mouse { display: inline; } }

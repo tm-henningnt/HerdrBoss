@@ -352,7 +352,7 @@ test('the activity log moves to Analytics and old Logs links keep working', asyn
 });
 
 test('one series color set for light and dark', () => {
-  for (const hex of ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#3987e5', '#d95926', '#199e70', '#c98500', '#d55181']) assert.match(css, new RegExp(hex, 'i'));
+  for (const hex of ['#2a78d6', '#078d9b', '#1baf7a', '#7653c8', '#a2498c', '#3987e5', '#5dc3ce', '#199e70', '#a293f4', '#dc91ce']) assert.match(css, new RegExp(hex, 'i'));
   assert.match(css, /\.viz-scroll \{[^}]*overflow-x: auto/);
 });
 
