@@ -16,10 +16,11 @@ function editor({ table, inputs = [], response }) {
   const document = {
     querySelectorAll: () => inputs,
     querySelector: () => status,
+    getElementById: () => null,
   };
   const fetch = async (url, init) => { calls.push({ url, init }); return { ok: response.ok, json: async () => response.body }; };
   const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  const api = new Function('document', 'fetch', 'esc', 'render', 'helpButton', `let lastRender = 'x';\n${block}\nreturn { pricesPanel, savePrices, setTable: (t) => { priceTable = t; }, draft: priceDraft, message: () => priceMessage, table: () => priceTable, lastRender: () => lastRender };`)(document, fetch, esc, () => {}, () => '');
+  const api = new Function('document', 'fetch', 'esc', 'render', 'helpButton', 'clearFormDirtyRegion', `let lastRender = 'x';\n${block}\nreturn { pricesPanel, savePrices, setTable: (t) => { priceTable = t; }, draft: priceDraft, message: () => priceMessage, table: () => priceTable, lastRender: () => lastRender };`)(document, fetch, esc, () => {}, () => '', () => {});
   api.setTable(table);
   return { ...api, calls, status };
 }

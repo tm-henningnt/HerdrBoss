@@ -622,7 +622,7 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   S('capacity', 'succession.ladder', 'Project lead succession', {
-    what: 'The ordered list of kind, model, and effort choices that automatic handover tries. It skips the current provider, unavailable usage limits, and global or project exclusions.',
+    what: 'The ordered list of kind, model, and effort choices that automatic handover tries. The selectors offer choices allowed by policy and current usage limits. A saved choice that is no longer allowed stays visible with an unavailable mark. Automatic handover skips the current provider and global or project exclusions.',
     default: 'The list in policy.json', unit: 'List of choices', range: 'Up to 20 choices',
     raise: 'A longer list gives automatic handover more successors to try.',
     lower: 'A shorter list can leave no successor. A choice outside the list is never selected automatically.',

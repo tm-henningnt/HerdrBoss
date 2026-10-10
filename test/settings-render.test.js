@@ -9,6 +9,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { POLICY_DEFAULTS } from '../src/control.js';
 import { serviceSettingsView, validateReleasesRepos, validateServiceSettings } from '../src/config.js';
+import { createDocument, find } from './fake-dom.js';
+import { patchHtml } from '../public/keyed.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -60,7 +62,7 @@ async function views(code = source) {
     }
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, projectsView, project, removePolicyProject, setShowParkedAllocation, setProjectPageMode: (v) => { projectPageMode = v; }, getProjectPageSelected: () => projectPageSelected, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setProjectRegister: (v) => { projectRegisterData = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, render, projectsView, project, removePolicyProject, setShowParkedAllocation, setProjectPageMode: (v) => { projectPageMode = v; }, getProjectPageSelected: () => projectPageSelected, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setProjectRegister: (v) => { projectRegisterData = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -727,6 +729,178 @@ test('each project lead succession select keeps its accessible label', async () 
   const html = app.allocationView(s);
   const kindSelect = /<select[^>]*data-ladder-kind="0"[^>]*>/g.exec(html)?.[0] || '';
   assert.match(kindSelect, /aria-label="Choice 1 harness"/);
+});
+
+test('Allocation keeps a saved succession choice visible and marked when policy or catalog no longer allows it', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.allowedKinds = ['codex'];
+  s.policy.orchestratorLadder = [{ kind: 'claude', model: 'removed-model', effort: 'high' }];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  const row = /<div class="succession-row"[^>]*>[\s\S]*?<\/div>/.exec(html)?.[0] || '';
+  assert.match(row, /<option[^>]*value="claude"[^>]*selected[^>]*data-saved-unavailable[^>]*>claude · saved, unavailable<\/option>/,
+    'the saved harness remains visible and is marked when policy disables it');
+  assert.match(row, /<option[^>]*value="removed-model"[^>]*selected[^>]*data-saved-unavailable[^>]*>removed-model · saved, unavailable<\/option>/,
+    'the saved model remains visible and is marked when the catalog removes it');
+  assert.match(row, /<option[^>]*value="codex"[^>]*>codex<\/option>/,
+    'the harness dropdown still offers the allowed harness');
+  assert.doesNotMatch(row, /<option[^>]*value="claude"[^>]*>claude<\/option>/,
+    'a disabled harness is not offered as a new choice');
+});
+
+test('Allocation marks a saved succession choice unavailable when its quota closes the lane', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.control.globalAllowed = { codex: ['a', 'b'], claude: ['b'] };
+  s.control.weeklyUse = { codex: 90, claude: 20 };
+  s.policy.orchestratorLadder = [
+    { kind: 'codex', model: 'a', effort: 'high' },
+    { kind: 'claude', model: 'a', effort: 'high' },
+  ];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  const rows = [...html.matchAll(/<div class="succession-row"[^>]*>([\s\S]*?)<div class="succession-actions">/g)].map(([, row]) => row);
+  assert.match(rows[0], /<option value="codex" selected data-saved-unavailable>codex · saved, unavailable<\/option>/,
+    'the saved harness remains selected and is marked when its quota blocks successors');
+  assert.match(rows[0], /<option value="a" selected data-saved-unavailable>a · saved, unavailable<\/option>/,
+    'the saved model remains selected and is marked when its quota blocks successors');
+  assert.match(rows[0], /<option value="claude"[^>]*>claude<\/option>/,
+    'the other harness remains an ordinary choice');
+  assert.match(rows[1], /<option value="b"[^>]*>b<\/option>/,
+    'the model select offers only models that remain allowed by policy');
+  assert.match(rows[1], /<option value="a" selected data-saved-unavailable>a · saved, unavailable<\/option>/,
+    'a saved model removed from the policy choices stays visible and marked');
+});
+
+test('Allocation marks a saved succession choice unavailable when its daily trickle allowance is spent', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.control.globalAllowed = { codex: ['a', 'b'], claude: ['b'] };
+  s.control.weeklyUse = { codex: 20, claude: 20 };
+  s.lanes = { codex: { state: 'trickle', allowancePercent: 10, usedTodayPercent: 10 } };
+  s.policy.orchestratorLadder = [{ kind: 'codex', model: 'a', effort: 'high' }];
+  app.setState(s);
+  app.setDraft(s.policy);
+
+  const row = /<div class="succession-row"[^>]*>[\s\S]*?<\/div>/.exec(app.allocationView(s))?.[0] || '';
+
+  assert.match(row, /<option value="codex" selected data-saved-unavailable>codex · saved, unavailable<\/option>/,
+    'the harness is marked when its only lane has spent its daily allowance');
+  assert.match(row, /<option value="a" selected data-saved-unavailable>a · saved, unavailable<\/option>/,
+    'the model stays visible and is marked when the daily allowance is spent');
+});
+
+test('Allocation marks a saved free succession choice unavailable during its cooldown', async () => {
+  const app = await views();
+  app.setModels({ opencode: { ...catalog, defaultModel: 'free', allowedModels: ['free'] } });
+  const s = fixture();
+  s.policy.allowedKinds.push('opencode');
+  s.control.globalAllowed = { opencode: ['free'] };
+  s.lanes = { unmetered: { exhausted: [{ model: 'free', retryAt: Date.now() + 60_000 }], unavailable: [] } };
+  s.policy.orchestratorLadder = [{ kind: 'opencode', model: 'free', effort: 'high' }];
+  app.setState(s);
+  app.setDraft(s.policy);
+
+  const row = /<div class="succession-row"[^>]*>[\s\S]*?<\/div>/.exec(app.allocationView(s))?.[0] || '';
+
+  assert.match(row, /<option value="opencode" selected data-saved-unavailable>opencode · saved, unavailable<\/option>/,
+    'the saved free harness is marked while its lane is cooling down');
+  assert.match(row, /<option value="free" selected data-saved-unavailable>free · saved, unavailable<\/option>/,
+    'the saved free model stays visible and is marked during its cooldown');
+});
+
+test('the succession arrows swap adjacent saved choices in the policy draft', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.orchestratorLadder = [
+    { kind: 'codex', model: 'a', effort: 'high' },
+    { kind: 'claude', model: 'b', effort: 'high' },
+    { kind: 'codex', model: 'b', effort: 'high' },
+  ];
+  app.setState(s);
+  app.setDraft(JSON.parse(JSON.stringify(s.policy)));
+  app.context.location.pathname = '/allocation';
+  let patches = 0;
+  app.context.patchHtml = (target, html) => { patches++; target.innerHTML = html; };
+  const rowKeys = [...app.allocationView(s).matchAll(/<div class="succession-row" data-key="([^"]+)"/g)].map(([, key]) => key);
+  const click = app.context.handlers.get('click').find((handler) => handler.toString().includes('dataset.ladderUp'));
+  assert.ok(click, `the real Allocation click handler is registered (${app.context.handlers.get('click').length} listeners)`);
+  const originalDocument = app.context.document;
+  app.context.document = new Proxy(originalDocument, { get: (target, key) => key === 'activeElement'
+    ? { matches: () => false, closest: () => null, classList: { contains: () => false } }
+    : key === 'querySelector' ? () => null : target[key] });
+  const controlPlane = {};
+  const action = async (dataset) => click({ target: { id: '', dataset, closest: (selector) => selector.includes('#control-plane') ? controlPlane : null, matches: () => false } });
+  await action({ ladderUp: '0', ladderKey: rowKeys[2] });
+  await action({ ladderDown: '2', ladderKey: rowKeys[0] });
+  const order = () => app.getDraft().orchestratorLadder.map(({ kind, model }) => `${kind}/${model}`);
+  assert.deepEqual(order(), ['codex/b', 'codex/a', 'claude/b'], 'up and down swap only their adjacent neighbours');
+  const beforeTick = patches;
+  app.render();
+  assert.equal(patches, beforeTick, 'a non-forced state render leaves the dirty ladder rows in place');
+
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ policy: sent, control: s.control, notes: [] }) };
+  };
+  const save = { id: 'save-policy', dataset: {}, disabled: false, closest: (selector) => selector.includes('#control-plane') ? controlPlane : null, matches: () => false, previousElementSibling: { textContent: '', setAttribute() {} }, setAttribute() {} };
+  await click({ target: save });
+  assert.deepEqual(sent.orchestratorLadder.map(({ kind, model }) => `${kind}/${model}`), order(), 'Apply policy writes the displayed order');
+
+  app.setDraft(null);
+  const reloaded = app.allocationView(s);
+  const reloadOrder = [...reloaded.matchAll(/<div class="succession-row"[^>]*>([\s\S]*?)<div class="succession-actions">/g)].map(([, row]) => {
+    const selected = (key) => new RegExp(`<select[^>]*data-ladder-${key}="\\d+"[^>]*>([\\s\\S]*?)<\\/select>`).exec(row)?.[1].match(/<option value="([^"]+)" selected/)?.[1];
+    return `${selected('kind')}/${selected('model')}`;
+  });
+  assert.deepEqual(reloadOrder, order(), 'a fresh VM render reads the saved order');
+});
+
+test('a moved succession row keeps its model selection and focus through the keyed render', async (t) => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.orchestratorLadder = [
+    { kind: 'codex', model: 'a', effort: 'high' },
+    { kind: 'claude', model: 'b', effort: 'high' },
+  ];
+  app.setState(s);
+  app.setDraft(JSON.parse(JSON.stringify(s.policy)));
+  const previousDocument = globalThis.document;
+  t.after(() => {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  });
+  globalThis.document = createDocument();
+  const rowsHtml = (html) => {
+    const wrapper = '<div class="succession-list">';
+    const start = html.indexOf(wrapper) + wrapper.length;
+    const end = html.indexOf('</div></div>', start);
+    assert.ok(start >= wrapper.length && end >= start, 'the Allocation VM render contains the succession rows');
+    return html.slice(start, end + '</div>'.length);
+  };
+  const root = document.html(`<div>${rowsHtml(app.allocationView(s))}</div>`);
+  const model = find(root, (node) => node.getAttribute('data-ladder-model') === '0');
+  assert.ok(model, 'the first saved row renders a model select');
+  model.value = 'a';
+  model.focus();
+  const firstRung = app.getDraft().orchestratorLadder[0];
+  app.setDraft({ ...app.getDraft(), orchestratorLadder: [app.getDraft().orchestratorLadder[1], firstRung] });
+
+  patchHtml(root, `<div>${rowsHtml(app.allocationView(s))}</div>`);
+
+  const movedModel = find(root, (node) => node.getAttribute('data-ladder-model') === '1');
+  assert.ok(movedModel === model, 'the row node follows its saved choice');
+  assert.equal(document.activeElement, model, 'focus follows the moved row');
+  assert.equal(model.value, 'a', 'the selected model stays with its saved choice');
 });
 
 test('Settings wraps model names only at separators and keeps the usage mode choice readable', async () => {
