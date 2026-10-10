@@ -10,7 +10,7 @@ import { factoryCommand } from '../src/factory-host.js';
 import { writeFleet, writePrivate, factoryFile } from '../src/factory-store.js';
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-clean-smoke-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-clean-smoke-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const work = path.join(root, 'work'); fs.mkdirSync(work);
   const env = { HOME: root, HERDR_BOSS_DIR: path.join(root, 'data'), HERDR_FACTORIES_DIR: path.join(root, 'factories') };
