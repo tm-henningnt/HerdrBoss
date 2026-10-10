@@ -33,6 +33,9 @@ Set `worktreeRoot` and `projectRoot` in `config.json`, or in **Settings → Adva
 | `herdr-boss secret remove NAME` | Ask for the name again, then remove the sealed values. Run it in an Owner terminal. |
 | `herdr-boss secret check [NAME]` | Check each value and print `ok` or `failed`. Run it in an Owner terminal. |
 | `herdr-boss redact` | Read command output from stdin, redact it, and write it to stdout. |
+| `herdr-boss redact add CLASS` | Read one private literal from stdin. Store it without output. |
+| `herdr-boss redact list` | Print only the number of stored literals in each class. |
+| `herdr-boss redact --check [FILE...]` | Scan tracked files. Print finding locations, classes, and counts. |
 | `herdr-boss account probe` | Read login structure and configuration field names at an Owner terminal. Print no values. Write no files. |
 
 ### Account probe
@@ -55,20 +58,37 @@ Exit 0 means the report finished. It does not mean every check passed. Exit 1 me
 
 ### Redact command output
 
-Pipe command output that could hold an identifier through `herdr-boss redact`. For example, use `some-command | herdr-boss redact`. The command reads stdin and writes only the redacted text to stdout. It does not print the private host list or create a data file.
+Pipe command output that could hold an identifier through `herdr-boss redact`. For example, use `some-command | herdr-boss redact`. The command reads stdin and writes only the redacted text to stdout. This form writes no config or data file.
 
 The filter applies these rules in order:
 
 1. Replace whole GUIDs with `<uuid>`.
-2. Replace hex strings of 24 or more characters with `<hex>`.
-3. Replace configured tenant hosts and matching Qlik Cloud host names with `<host>`.
-4. Replace bearer values, JWTs, common token prefixes, and private-key blocks with `<token>` or `<key>`.
-5. Keep secret field names and replace their values with `<secret>`.
-6. Keep app, space, and user ID field names and replace their values with `<id>`.
+2. Replace private literals with `<host>`, `<app-id>`, `<ext-id>`, or `<space-id>`.
+3. Replace hex strings of 24 or more characters with `<hex>`.
+4. Replace configured tenant hosts and matching Qlik Cloud host names with `<host>`. Keep the rest of each URL for the next rules.
+5. Replace bearer values, JWTs, common token prefixes, and private-key blocks with `<token>` or `<key>`.
+6. Keep secret field names and replace their values with `<secret>`.
+7. Keep app, space, and user ID field names and replace their values with `<id>`.
+8. Replace Qlik object IDs with `<qlik-id>`. The shape has 24 letters and digits. It must contain a letter and a digit. An adjacent letter, digit, underscore, or hyphen prevents a match.
+9. Replace extension IDs with `<ext-id>`. The shape has three groups with 5, 8, and 17 letters and digits. A hyphen separates each group. Each group must contain a letter and a digit. An adjacent letter, digit, or hyphen prevents a match.
+
+The shape rules accept uppercase and lowercase letters. They preserve words that contain only letters. Short git commit IDs stay unchanged. A hex string of at least 24 characters uses the earlier `<hex>` rule. ID and secret fields keep a complete tag from an earlier rule, including inside quotes.
 
 To set tenant hosts, add a `redact.tenantHosts` array of host names to `~/.config/herdr-boss/config.json`. The command reads this file each time it runs. Do not put tenant hosts in a command, a report, a fixture, or a repository file. If the list is missing, the filter still replaces host names that match the Qlik Cloud pattern.
 
-The command preserves clean lines and their line endings. It joins a line with the next indented line only when the join reveals one sensitive value split by terminal wrapping. It keeps at most 65,536 characters for an input line and stops with exit code 1 if a line is longer. It exits 0 when it finishes redacting the input. It exits 2 when you give it an argument.
+To add a private literal, pipe it to `herdr-boss redact add CLASS`. Select `host`, `app-id`, `ext-id`, or `space-id` for `CLASS`. Supply the value from a private file or a command that reads it safely. Do not put the value in a command argument. The command refuses terminal input because a terminal can echo it. It accepts one final LF or CRLF. It refuses whitespace, control characters, invalid UTF-8, and values longer than 4096 characters. It reads at most 4098 bytes.
+
+The command stores arrays under `redact.literals` in the same private config. Each array uses its class name. The config file has mode `0600`. The command preserves other config fields. An existing literal is stored only once per class. Run `herdr-boss redact list` to print the counts. This list does not include the separate `redact.tenantHosts` array. Neither command prints a stored value.
+
+Private literals match exactly, including case. A letter, digit, underscore, period, or hyphen next to a literal prevents a match. URL separators can surround a literal. If the same literal occurs in more than one class, the first class wins in this order: `host`, `app-id`, `ext-id`, `space-id`.
+
+Run `herdr-boss redact --check FILE...` from the repository to scan the current contents of tracked files. Paths are relative to the current directory. Omit the paths to scan all tracked files. The command ignores untracked files in this form. An explicit untracked path causes a failure. A missing file, a symbolic link, or a file outside the repository also causes a failure.
+
+The check prints each finding as `file:line class: count`. It then prints the total for each class. It redacts file names before it prints them. It prints no matching text. A wrapped value uses the line where the value starts. The check shares the filter rules and the private config with the stdin command. It prints no findings if a file cannot be scanned safely.
+
+The stdin command and the check preserve clean lines and their line endings. They join a line with the next indented line only when the join reveals one sensitive value split by terminal wrapping. They keep at most 65,536 characters for an input line.
+
+The stdin command exits 0 when it finishes and 1 when it cannot redact the input safely. The add and list commands exit 0 on success. The add command exits 1 when it cannot store the literal safely. The check exits 0 when clean, 1 when it finds a match, and 2 when it cannot scan safely. An invalid command exits 2.
 
 ### Secret commands
 
