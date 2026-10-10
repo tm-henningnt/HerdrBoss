@@ -42,12 +42,23 @@ test('Mailbox folders appear inside the shared menu on phone Mailbox pages', () 
 });
 
 test('the phone menu button is the Herdr Boss logo, has the Menu label, and exposes its open state', () => {
-  assert.match(html, /<button[^>]*id="nav-menu"[^>]*aria-label="Menu"[^>]*aria-expanded="false"[^>]*aria-controls="primary-nav"[^>]*>[\s\S]*?viewBox="0 0 24 24"/);
+  assert.match(html, /<a class="brand" href="\/"[^>]*data-nav-trigger[^>]*aria-expanded="false"[^>]*aria-controls="primary-nav"[\s\S]*?viewBox="0 0 24 24"/);
+  assert.doesNotMatch(html, /id="nav-menu"/);
   assert.match(app, /function appMenuButton\([\s\S]*?aria-label="Menu"[\s\S]*?aria-expanded="\$\{[^}]+\}"[\s\S]*?aria-controls="primary-nav"[\s\S]*?\$\{APP_LOGO_MARK\}/);
   assert.match(app, /const APP_LOGO_MARK = '<svg class="app-logo-mark"/);
-  assert.match(css, /#nav-menu\[aria-expanded="true"\]/);
   assert.match(css, /\.app-menu\[aria-expanded="true"\]/);
   assert.match(css, /\.app-icon-button\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/);
+});
+
+test('the phone logo is the only visible menu trigger in classic and app page headers', () => {
+  assert.match(html, /class="brand"[^>]*data-nav-trigger/);
+  assert.doesNotMatch(html, /<button[^>]*data-nav-trigger/);
+  assert.match(app, /function syncBrandMenuLabel\(\)[\s\S]*?setAttribute\('aria-label', 'Menu'\)/);
+  assert.match(app, /if \(trigger === \$brand\) \{[\s\S]*?if \(!isPhone\(\)[\s\S]*?e\.preventDefault\(\)/);
+  assert.match(css, /body:not\(\.app-view\) \.top \.brand/);
+  assert.match(css, /body\.app-view \.top > :not\(#primary-nav\)/);
+  assert.match(app, /function appMenuButton\([\s\S]*?data-nav-trigger aria-label="Menu"/);
+  assert.match(css, /:root button\.app-menu\s*\{[^}]*color:\s*var\(--text\)/);
 });
 
 test('the top bar has a Chat icon, an Updates icon, and a Needs you icon with the right links and names', () => {
@@ -108,8 +119,10 @@ test('every page route has at least one link', () => {
 test('the help text and the user guide describe one menu with Fleet and Docs on every page', () => {
   assert.match(guide, /one menu on every page/i);
   assert.match(guide, /Fleet and Docs/);
+  assert.match(guide, /The logo does not go to Overview/);
   assert.match(app, /one menu on every page/i);
   assert.match(app, /Fleet and Docs/);
+  assert.match(app, /The logo does not go to Overview/);
   assert.match(docsHelp, /same menu/i);
   assert.match(docsHelp, /Fleet and Docs/);
 });

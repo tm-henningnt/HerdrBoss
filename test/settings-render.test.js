@@ -11,6 +11,7 @@ import { POLICY_DEFAULTS } from '../src/control.js';
 import { serviceSettingsView, validateReleasesRepos, validateServiceSettings } from '../src/config.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
 // A stub that answers every property read and every call, so the page start-up code runs without a browser.
 function stub() {
@@ -566,6 +567,55 @@ test('the Boss rules row keeps its input inside the card at a phone width', asyn
     assert.ok(row.includes(`>${label}<button`), `${label} renders a setting row`);
     assert.match(row, /\bgoal-setting\b/, `${label} carries the class that shrinks the input`);
   }
+});
+
+test('Allocation phone controls show long numbers and give goal text inputs a full row', () => {
+  assert.match(css, /\.setting-line input\[type="number"\]\s*\{[^}]*width:\s*10ch/);
+  assert.match(css, /\.setting-line\.goal-setting\s*\{[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.setting-line\.goal-setting input\s*\{[^}]*width:\s*100%/);
+});
+
+test('the Allocation bar includes saved shares from projects without a live lead', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.projects.alpha.share = 42;
+  s.policy.projects.beta.share = 42;
+  s.policy.projects.closed = { share: 16, mode: 'auto', excludedKinds: [], excludedModels: [] };
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  assert.match(html, /data-stale-segment="closed"[^>]*style="width:16%/);
+});
+
+test('each project lead succession select keeps its accessible label', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.orchestratorLadder = [{ kind: 'codex', model: 'a', effort: 'high' }];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.allocationView(s);
+  const kindSelect = /<select[^>]*data-ladder-kind="0"[^>]*>/g.exec(html)?.[0] || '';
+  assert.match(kindSelect, /aria-label="Choice 1 harness"/);
+});
+
+test('Settings wraps model names only at separators and keeps the usage mode choice readable', async () => {
+  const app = await views();
+  app.setModels({
+    opencode: { ...catalog, allowedModels: ['very-long-provider-name/model-name-with-parts'] },
+  });
+  const s = fixture();
+  s.policy.allowedKinds = ['opencode'];
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.settingsView(s);
+  const modelLabel = /data-harness-model="opencode"[^>]*> <span>(.*?)<\/span>/.exec(html)?.[1] || '';
+  assert.equal(modelLabel.replaceAll('<wbr>', ''), 'very-long-provider-name/model-name-with-parts');
+  assert.equal([...modelLabel.matchAll(/<wbr>/g)].length, (modelLabel.match(/[/-]/g) || []).length);
+  assert.match(css, /\.harness-model label > span:first-of-type\s*\{[^}]*overflow-wrap:\s*normal/);
+  assert.match(css, /select\[data-provider\]\s*\{[^}]*min-width:\s*190px/);
+  assert.match(css, /\.advanced-settings \.settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 });
 
 // The old page gave repeated settings a per-row key.
