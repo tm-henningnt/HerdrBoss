@@ -85,6 +85,7 @@ test('partial and legacy lock policies load and save with nested defaults', (t) 
     slots: 2, shortLimitMinutes: 6,
     watchdogMultiplier: 3, watchdogCpuPercent: 1,
     guard: { enabled: false, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 },
+    network: { slots: 2 },
   });
   const policy = { ...structuredClone(POLICY_DEFAULTS), locks: { guard: { enabled: false } } };
   assert.deepEqual(savePolicy(policy, loadModels(), { file }), []);
