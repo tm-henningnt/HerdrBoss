@@ -34,7 +34,11 @@ On **Resource allocation**, set the ordered choices for automatic project lead h
 
 Run `herdr-boss publish SLUG FILE --sync` to update the published task states. For a GitHub project, the sync sets a task to `done` only when its issue is closed as completed. An open issue stays `doing` or `todo`. If GitHub cannot be read, the sync keeps the card as it is and prints the reason. Set `partlyDone: true` on a task when part of its work remains. The sync keeps that task out of `done`. See the [status schema](project-status.md).
 
-The Projects page starts with cards for open projects. The allocation bar stays above either view. Each card shows the register state, area, client tag, share, and status dot. Select a card to see its published status, tasks, workers, locks, browser, policy, register fields, issue source, triage settings, and project actions.
+The allocation bar shows every policy project above either Projects view. Parked and transferring projects keep their reserved shares. A hatched segment marks a parked, paused, or transferring project. A transfer label names its direction and factory. A zero-share project stays in the legend and the cards. Each segment uses the applied share. Default shares keep their full precision, so rounding does not leave a gap.
+
+The legend sits below the bar. The bar, cards, and legend use the same worker count. **Workers 2 / 19** means 2 live workers out of 19 total worker rows. A live worker has an uncollected session that is working or waiting. Review and collected workers are not live. The total includes the recorded runs and live worker panes shown on Agents. The server keeps the newest 50 finished rows. This count does not show worker slot capacity.
+
+The cards wrap to fit the page. Each card shows the register state, area, client tag, share, and status dot. Cool colors identify projects. State labels and hatch patterns identify a parked or transferring project without color alone. Warm colors indicate warnings. Select a card to see its published status, tasks, workers, locks, browser, policy, register fields, issue source, triage settings, and project actions.
 
 Select **Register** to search and manage open, parked, archived, and policy-only projects. Select **Add** for a project that is in policy but not in the register. A project with its kit installed but without a workspace or project lead shows the missing step. Use its start button to finish setup.
 

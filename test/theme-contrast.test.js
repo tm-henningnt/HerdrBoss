@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const css = await readFile(new URL("../public/theme.css", import.meta.url), "utf8");
+const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const style = await readFile(new URL("../public/style.css", import.meta.url), "utf8");
 
 function declarations(block) {
@@ -113,12 +114,35 @@ test("share bar labels keep readable contrast over every project segment color",
   assert.equal(label.color, "var(--text)");
   assert.equal(label.background, "color-mix(in srgb, var(--panel) 85%, transparent)");
   for (const [name, theme] of Object.entries(themes)) {
-    for (const segment of ["accent", "info", "ok", "warn", "muted"]) {
+    for (const segment of ["accent", "info", "st-doing", "st-ready", "st-review"]) {
       const surface = blend(theme.panel, theme[segment], 0.85);
       const ratio = contrast(theme.text, surface);
       assert.ok(ratio >= 4.5, `${name} --text on allocation ${segment} label has ${ratio.toFixed(2)}:1 contrast`);
     }
   }
+});
+
+test("project allocation uses only cool project colors and keeps labels and swatches readable", () => {
+  const palette = app.match(/const SHARE_COLORS = \[([^;]+)\];/)[1];
+  const tokens = [...palette.matchAll(/var\(--([\w-]+)\)/g)].map(([, token]) => token);
+  assert.deepEqual(tokens, ["accent", "info", "st-doing", "st-ready", "st-review"]);
+  for (const [name, theme] of Object.entries(themes)) {
+    for (const token of tokens) {
+      for (const background of ["panel", "panel-2"]) {
+        const ratio = contrast(theme[token], theme[background]);
+        assert.ok(ratio >= 3, `${name} allocation ${token} swatch on ${background} has ${ratio.toFixed(2)}:1 contrast`);
+      }
+      const labelSurface = blend(theme.panel, theme[token], 0.85);
+      assert.ok(contrast(theme.text, labelSurface) >= 4.5, `${name} allocation ${token} label meets AA`);
+    }
+  }
+});
+
+test("parked and transferring allocations have patterns and idle projects keep their cool color", () => {
+  assert.ok(/\.allocation-segment\.parked[^}]*repeating-linear-gradient/.test(style), "parked segments have a hatch");
+  assert.ok(/\.allocation-segment\.transferring[^}]*repeating-linear-gradient/.test(style), "transferring segments have a hatch");
+  assert.equal(styleDeclarations(".allocation-segment.idle")["background-image"], "none");
+  assert.equal(styleDeclarations(".project-selector.has-allocation.idle::before")["background-image"], "none");
 });
 
 test("preferred and explicit dark palettes stay identical", () => {

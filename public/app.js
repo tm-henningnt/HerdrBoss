@@ -10,7 +10,7 @@ import { installCopy, copyFieldHtml, messageCopyHtml, confirmCopy } from './copy
 import { docsPageName, docsPageTitle, docsViewHtml } from './docs-view.js';
 import { showImportFallback } from './docs-fallback.js';
 import { installTableHints } from './table-hint.js';
-import { orchestratorFocus, workerListHtml } from './worker-rows.js';
+import { orchestratorFocus, workerListHtml, workerRows } from './worker-rows.js';
 import { noWorkerBadgeView, phaseAgeText, publishedAgeBadgeView, projectSyncLineView, summaryAgeText, unplannedCardView } from './project-live-view.js';
 import { SETTING_HELP, settingPopupHtml, settingsGuideHtml } from './setting-help.js';
 import { groupMailRows, inboxSections, listTime, mailRowHtml } from './mail-rows.js';
@@ -766,15 +766,40 @@ function policyOnlyStatus(s, slug) {
   if ((s.projectRegisterSlugs || []).includes(slug)) parts.push('Registered in project register');
   return parts.join(' · ');
 }
-const SHARE_COLORS = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
-// The project order of projectSlugs sets the bar segments, the project cards, and the card accents.
+const SHARE_COLORS = ['var(--accent)', 'var(--info)', 'var(--st-doing)', 'var(--st-ready)', 'var(--st-review)'];
+// One policy project order sets the bar segments, the project cards, and the card accents.
 function allocationColor(s, slug) {
-  const i = Object.keys(s.control?.projects || {}).indexOf(slug);
+  const i = allocationProjectSlugs(s).indexOf(slug);
   return i < 0 ? null : SHARE_COLORS[i % SHARE_COLORS.length];
 }
 // Effective values come from the applied control state; the set share comes from the policy draft.
 function compactPercent(x) { return x === 0 || x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10); }
-function allocationActivity(p) { return p.effectiveMode === 'paused' ? 'paused' : p.idle ? 'idle' : 'active'; }
+function allocationActivity(p) { return p.allocationState || (p.effectiveMode === 'paused' ? 'paused' : p.idle ? 'idle' : 'active'); }
+function allocationProjectSlugs(s) {
+  return [...new Set([...Object.keys(s.control?.projects || {}), ...Object.keys(s.policy?.projects || {})])];
+}
+function allocationProject(s, slug) {
+  const live = s.control?.projects?.[slug] || {};
+  const record = (s.projectRegister || []).find((item) => item.slug === slug);
+  const transfer = (s.projectTransfers || []).find((item) => item.slug === slug);
+  const allocationState = transfer ? 'transferring' : ['parked', 'archived', 'parking'].includes(record?.state) ? 'parked' : allocationActivity(live);
+  const stateLabel = transfer
+    ? transfer.factory ? `${transfer.side === 'target' ? 'transferring from' : 'transferring to'} ${transfer.factory}` : 'transfer locked'
+    : record?.state === 'archived' ? 'archived' : allocationState;
+  return { ...live, slug, label: record?.title || live.label || slug,
+    share: s.policy?.projects?.[slug]?.share ?? live.share ?? 0, allocationState, stateLabel };
+}
+function allocationWorkers(s, slug) {
+  const panes = new Map((s.herdr?.panes || []).map((pane) => [pane.id, pane]));
+  const rows = workerRows(s).filter((row) => {
+    const pane = panes.get(row.pane);
+    return row.project === slug && !pane?.orch && !['boss', 'orch previous', 'boss previous'].includes(pane?.label);
+  });
+  const finished = ['review', 'collected', 'merged', 'finished', 'abandoned', 'failed'];
+  const live = rows.filter((row) => ['working', 'waiting'].includes(row.group)
+    && !finished.includes(row.state) && !row.finishedAt && !row.result).length;
+  return { live, total: rows.length, label: `Workers ${live} / ${rows.length}` };
+}
 function effectiveAllocation(p) {
   const slots = p.slots || 0;
   const max = state?.policy?.maxWorkers || 0;
@@ -783,14 +808,20 @@ function effectiveAllocation(p) {
 function segmentText(p, share) {
   const eff = effectiveAllocation(p);
   const activity = allocationActivity(p);
+  if (p.workerCounts) {
+    const workers = `${p.workerCounts.live} live workers of ${p.workerCounts.total} total workers`;
+    return { title: `${p.label}: set share ${share}% · ${workers} · ${p.stateLabel}`,
+      value: `${p.label}: set share ${share} percent, ${workers}, ${p.stateLabel}` };
+  }
   return {
-    title: `${p.label}: set share ${share}% · effective ${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : ` · ${activity}`}`,
-    value: `${p.label}: set share ${share} percent, ${eff.slots} effective slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : `, ${activity}`}`,
+    title: `${p.label}: set share ${share}% · effective ${eff.percent}% · ${eff.slots} slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : ` · ${p.stateLabel || activity}`}`,
+    value: `${p.label}: set share ${share} percent, ${eff.slots} effective slot${eff.slots === 1 ? '' : 's'}${activity === 'active' ? '' : `, ${p.stateLabel || activity}`}`,
   };
 }
 function allocationSegment(s, p, share) {
   const text = segmentText(p, share);
-  return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${allocationColor(s, p.slug)}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
+  const count = p.workerCounts ? `<span class="allocation-workers"> · ${esc(p.workerCounts.label)}</span>` : `<span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span>`;
+  return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${allocationColor(s, p.slug)}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${compactPercent(share)}%</span>${count}</span></div>`;
 }
 function staleAllocationSegment(slug, share) {
   const title = `${slug}: saved share ${share}% · no live project lead`;
@@ -798,11 +829,11 @@ function staleAllocationSegment(slug, share) {
 }
 // The read-only summary shows the applied shares. The Allocation page shows the editable draft.
 function allocationSummary(s, { link = true } = {}) {
-  const live = s.control?.projects || {};
-  const projects = projectSlugs(s).map((slug) => live[slug]).filter(Boolean);
+  const projects = allocationProjectSlugs(s).map((slug) => ({ ...allocationProject(s, slug), workerCounts: allocationWorkers(s, slug) }));
   if (!projects.length) return '';
-  const segments = projects.map((p) => allocationSegment(s, p, Number(compactPercent(p.share || 0)))).join('');
-  return `<div class="allocation-summary"><div class="allocation-bar" role="group" aria-label="Applied project allocation, 0 to 100 percent, in project card order">${segments}</div>${link ? '<a href="/allocation">Adjust allocation →</a>' : ''}</div>`;
+  const segments = projects.map((p) => allocationSegment(s, p, p.share)).join('');
+  const legend = projects.map((p) => `<li data-allocation-legend="${esc(p.slug)}"><i class="allocation-swatch ${p.allocationState}" style="background-color:${allocationColor(s, p.slug)}" aria-hidden="true"></i><span><b>${esc(p.label)}</b> · ${compactPercent(p.share)}% · ${esc(p.workerCounts.label)} · ${esc(p.stateLabel)}</span></li>`).join('');
+  return `<div class="allocation-summary"><div class="allocation-bar" role="group" aria-label="Applied project allocation, 0 to 100 percent, in project card order">${segments}</div><div class="allocation-key"><p>Workers: live / total. Review and collected workers are not live.</p><ul class="allocation-legend" aria-label="Project shares and workers">${legend}</ul></div>${link ? '<a href="/allocation">Adjust allocation →</a>' : ''}</div>`;
 }
 function moveBoundary(index, position) {
   const projects = allocationProjects();
@@ -2161,7 +2192,7 @@ function projectSelector(s, selected) {
     const decisions = (p?.tasks || []).filter(waitsForOwner).length;
     return `<a class="panel proj project-selector ${slug === selected ? 'selected' : ''} ${color ? `has-allocation ${allocationActivity(l)}` : ''}" href="/projects/${esc(slug)}" ${slug === selected ? 'aria-current="page"' : ''} ${color ? `style="--allocation-color:${color}"` : ''}>
       <div class="proj-head"><b>${esc(name)}</b><span class="tag" title="${esc(p?.status || p?.phase || 'No status published')}">${esc(mode)}</span></div>
-      <div class="project-selector-meta"><span>${l ? `${l.running} / ${l.slots} workers` : 'No live allocation'}</span></div>
+      <div class="project-selector-meta"><span>${esc(allocationWorkers(s, slug).label)}</span></div>
       ${p?.summary ? `<p class="proj-summary" title="${esc(p.summary)}">${esc(p.summary)}</p>` : ''}
       ${p ? segBar(taskCounts(p)) : ''}
       ${decisions ? `<span class="project-decision-count">Needs your decision ${decisions}</span>` : ''}
@@ -5798,10 +5829,10 @@ function projectsView(s, slug) {
   const register = projectRegisterData;
   const canWrite = Boolean(register && !register.readOnly);
   const records = register?.projects || s.projectRegister || [];
-  const header = '<header class="page-intro"><div><h1>Projects</h1><p>Review open project cards or manage the full project register.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>';
-  const available = new Set([...projectSlugs(s), ...(s.projects || []).map((item) => item.slug)]);
+  const header = '<header class="page-intro"><div><h1>Projects</h1><p>Review policy project cards or manage the full project register.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>';
+  const available = new Set([...allocationProjectSlugs(s), ...projectSlugs(s), ...(s.projects || []).map((item) => item.slug)]);
   if (slug && available.has(slug)) projectPageSelected = slug;
-  const selected = projectPageSelected && available.has(projectPageSelected) ? projectPageSelected : defaultProject(s);
+  const selected = projectPageSelected && available.has(projectPageSelected) ? projectPageSelected : defaultProject(s) || allocationProjectSlugs(s)[0];
   const tabs = `<nav class="project-page-tabs" aria-label="Projects view"><button type="button" data-projects-mode="cards" aria-pressed="${projectPageMode === 'cards'}">Project cards</button><button type="button" data-projects-mode="register" aria-pressed="${projectPageMode === 'register'}">Register</button></nav>`;
   const message = projectRegisterError || (projectRegisterLoading ? 'Loading the project register…' : '');
   const allocation = allocationSummary(s);
@@ -5814,22 +5845,25 @@ function projectsView(s, slug) {
   const live = s.control?.projects || {};
   const published = new Map((s.projects || []).map((item) => [item.slug, item]));
   const registerBySlug = new Map(records.map((record) => [record.slug, record]));
-  const cards = projectSlugs(s).map((projectSlug) => {
+  const cardSlugs = [...new Set([...allocationProjectSlugs(s), ...projectSlugs(s)])];
+  const cards = cardSlugs.map((projectSlug) => {
     const p = published.get(projectSlug), l = live[projectSlug], r = registerBySlug.get(projectSlug) || {};
+    const allocation = allocationProject(s, projectSlug);
+    const workers = allocationWorkers(s, projectSlug);
     const name = r.title || p?.project || l?.label || projectSlug;
-    const status = r.state || 'open';
-    const share = r.share ?? l?.share ?? s.policy?.projects?.[projectSlug]?.share ?? 0;
+    const status = allocation.allocationState === 'transferring' ? 'transferring' : r.state || 'open';
+    const share = compactPercent(allocation.share);
     const color = allocationColor(s, projectSlug);
-    return `<button type="button" class="panel proj project-selector project-card-button${projectSlug === selected ? ' selected' : ''}${color ? ` has-allocation ${allocationActivity(l || {})}` : ''}" data-project-card="${esc(projectSlug)}" aria-pressed="${projectSlug === selected}"${color ? ` style="--allocation-color:${color}"` : ''}>
-      <span class="project-card-top"><span class="project-status-dot state-${esc(status)}" aria-hidden="true"></span><span class="project-card-title">${esc(name)}</span><span class="tag">${esc(status)}</span></span>
+    return `<button type="button" class="panel proj project-selector project-card-button${projectSlug === selected ? ' selected' : ''}${color ? ` has-allocation ${allocation.allocationState}` : ''}" data-project-card="${esc(projectSlug)}" aria-pressed="${projectSlug === selected}"${color ? ` style="--allocation-color:${color}"` : ''}>
+      <span class="project-card-top"><span class="project-status-dot state-${esc(status)}" aria-hidden="true"></span><span class="project-card-title">${esc(name)}</span><span class="tag">${esc(status === 'transferring' ? allocation.stateLabel : status)}</span></span>
       <span class="project-card-meta"><span>${esc(r.group || 'No group')}</span>${r.clientTag ? `<span class="register-client-tag">${esc(r.clientTag)}</span>` : ''}<span>${share}% share</span></span>
       ${p?.summary ? `<span class="proj-summary">${esc(p.summary)}</span>` : ''}${p ? segBar(taskCounts(p)) : ''}
-      <span class="project-card-foot">${p ? `updated ${ago(p.updated)}` : 'Awaiting project status'} · ${l ? `${l.running}/${l.slots} workers` : 'No live allocation'}</span>
+      <span class="project-card-foot">${p ? `updated ${ago(p.updated)}` : 'Awaiting project status'} · ${esc(workers.label)}</span>
     </button>`;
   }).join('');
   const detailRecord = registerBySlug.get(selected);
   const detail = selected ? `${project(s, selected)}${projectRegisterDetail(s, detailRecord, selected, canWrite)}` : '<div class="panel empty">No open projects. Use Register to review parked and archived projects.</div>';
-  return `${header}${notice}${allocation}${tabs}<section class="project-card-scroller" aria-label="Open projects">${cards || '<p class="register-empty">No open project cards.</p>'}</section><div class="project-detail" id="project-detail">${detail}</div>`;
+  return `${header}${notice}${allocation}${tabs}<section class="project-card-scroller" aria-label="Policy projects">${cards || '<p class="register-empty">No policy project cards.</p>'}</section><div class="project-detail" id="project-detail">${detail}</div>`;
 }
 
 document.addEventListener('click', (event) => {
@@ -7246,12 +7280,12 @@ const HELP = {
     <h3>Handovers</h3><p>When no handover waits for review, <b>Project continuity</b> is one line under <b>Needs attention</b>. Otherwise it lists the prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover. A record that stays preparing 10 minutes after preparation gets one Boss notice. The page also lists a record that stays preparing. Inspect it with <code>herdr-boss handoff repair ID --dry-run</code> first. Run <code>herdr-boss handoff repair ID</code> when its successor pane runs the target agent and is idle or done. A dry run names what it would do and changes nothing. Automatic handover never picks a successor of a weaker or unranked model tier, and an unranked source project lead gets no automatic successor. When no equal or stronger choice is usable, Herdr Boss makes no successor and posts one Mailbox item in the Boss thread that names the reason. A kind whose automatic record expired or was cancelled before it became ready, never became ready, or stayed in preparing is skipped for the number of hours in <b>Successor cooldown hours</b> in Settings. The stored reason of the choice names each skipped kind.</p>
     <p>An automatic handover picks the successor from your succession ladder with the weekly usage of each lane. It refuses a Codex successor above 85 percent weekly use, refuses a Claude successor only at 100 percent weekly use, and prefers the eligible lane with the lowest weekly use. A lane without a weekly reading counts as unused. The successor choice on the card starts from that result. Your own choice in the form stays the target, and the plan shows the weekly use of the target lane.</p>
     <p>The bootstrap prompt of a prepared successor reads only three sources: the memory file, the published project status, and the open items in it. It does not read the bulletin, the repository, or any history during the bootstrap. The prompt also holds three generated sections. <b>Boss rules</b> holds the standing rules that you set in Settings. <b>Pane map</b> holds the Boss pane and the project lead pane of each project. <b>Open items</b> holds the open Mailbox items of the project, the published tasks that wait on a Mailbox item, and the Owner decisions of the last 48 hours in the memory file. Each section has its own character limit, so a long text cannot fill the prompt. The three sources above stay the sources of truth.</p>
-    <h3>Projects</h3><p>The bar above the cards shows the applied share of each project, in card order. Its colors match the top edge of each card. A label such as <b>30% · 2</b> shows the share and the effective slots; the tooltip shows all values. Change the shares on the Allocation page.</p><p>A card per project with its published status and task mix. The table shows the project lead, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
+    <h3>Projects</h3><p>The bar shows every applied policy share. Parked and transferring projects keep their segments. The legend below the bar names each project, share, state, and worker count. <b>Workers 2 / 19</b> means 2 live workers out of 19 total worker rows. A live worker has an uncollected session that is working or waiting. Review and collected workers are not live. The total uses the worker rows on Agents. The bar and the cards use this same count. Change the shares on Allocation.</p><p>A card per project with its published status and task mix. The table shows the project lead, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
     <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss logo menu, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. A missing usage reader or login shows the reading as unknown with its reason; it is not a failure and raises no warning. Each provider row in Settings names the source of the last reading and its age. A factory reads each usage limit with the pinned CodexBar CLI first, the same code path as the Mac. It falls back to the own readers when CodexBar is missing, exits with an error, returns an error row, or times out. The own Codex reading comes from <code>codex app-server</code> and the Codex login of the factory. The reading is unknown when Codex is not installed, has no login, or has an API key login with no usage limit. A timeout, a failed read, a changed protocol, or an app server that exited is a probe failure, and the last good reading stays as stale. OpenCode Go reads its local cost history from CodexBar. The account windows need an OpenCode API key, so until the key exists the reason is <i>account windows need an API key</i>. The row also shows the reset time that you set by hand in <b>OpenCode Go reset time</b> and a local estimate labeled <i>used in this factory (local estimate)</i>. The estimate shows tokens and cost from <code>opencode stats</code> for the days in <b>OpenCode Go estimate days</b>. It is never a percent and never a usage limit. The Fleet page shows it in the card of the factory. The Claude reading comes from the status line helper of the factory and exists only while a Claude session runs there. Turn the helper off with <code>factories.claudeUsageHelper</code> in Settings. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
-    <p>The Projects page restores the project cards. The allocation bar stays above either view. The cards show open projects and their register state, area, client tag, share, and status dot. Select a card to show its status, tasks, workers, locks, browser, policy, register fields, issue source, triage, and actions below.</p>
+    <p>The allocation bar shows every policy project above either view. Parked and transferring projects keep their reserved shares. A hatched segment marks a parked, paused, or transferring project. A transfer label names its direction and factory. A zero-share project stays in the legend and the cards.</p><p>The legend sits below the bar. The bar, cards, and legend use the same worker count. <b>Workers 2 / 19</b> means 2 live workers out of 19 total worker rows on Agents. A live worker has an uncollected session that is working or waiting. Review and collected workers are not live. The total includes the worker rows shown on Agents, which keeps the newest 50 finished rows.</p><p>The cards wrap to fit the page. Each card shows the register state, area, client tag, share, and status dot. Select a card to show its status, tasks, workers, locks, browser, policy, register fields, issue source, triage, and actions below.</p>
     <p>Select <b>Register</b> to search and manage all projects. Search by title, area, client tag, or next action. Filter by area or state, and sort by last activity, priority, or title. Parked and archived projects stay in closed folds. Pin up to three open projects. Select rows to open, park, or archive several projects. A policy-only project has <b>Add</b>. A project that has its kit but no workspace or project lead shows its missing step. Use its start button to finish setup.</p>
     <p>The service imports the project register at start and after project status or policy changes. The Register view reads the current setup state. A read-only preview keeps the saved register. It does not import projects or read the live setup state.</p>
     <p><b>Open</b> starts the project lead from the current project files and restores the workspace. <b>Park</b> closes the project's Herdr workspace after the safety checks. It keeps the repository, project status, Mailbox, and other state. Park is different from pause: a paused project keeps its panes. The read-only preview disables register actions.</p>

@@ -42,6 +42,7 @@ import { createFleetShares } from './fleet-shares.js';
 import { createFleetRole } from './fleet-role.js';
 import { createFleetSettings } from './fleet-settings.js';
 import { createProjectTransfer } from './project-transfer.js';
+import { readProjectTransferLock } from './project-transfer-locks.js';
 import { buildFleetSummary, fleetSpend } from './fleet-summary.js';
 import { buildFleetRollup } from './fleet-rollup.js';
 import { readFleetLogins } from './fleet-login.js';
@@ -413,9 +414,22 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const dashboardState = (data) => {
     const register = readRegister(DATA_DIR).projects;
     const policy = loadPolicy();
+    const slugs = new Set([...Object.keys(policy.projects || {}), ...Object.keys(data.control?.projects || {}), ...register.map((record) => record.slug)]);
+    const projectTransfers = [...slugs].flatMap((slug) => {
+      try {
+        const lock = readProjectTransferLock(slug, { dataDir: DATA_DIR });
+        if (!lock) return [];
+        const factory = /^[a-z0-9][a-z0-9-]{0,63}$/.test(lock.peerFactoryId) ? lock.peerFactoryId : null;
+        return [{ slug, side: lock.side, factory }];
+      } catch {
+        // Keep an unreadable lock visible. Never expose the lock record or its error text.
+        return [{ slug, side: null, factory: null }];
+      }
+    });
     return {
       ...data,
       version: serviceVersion,
+      projectTransfers,
       ...(Array.isArray(engine.dashboardManagedBrowsers) ? { managedBrowsers: engine.dashboardManagedBrowsers } : {}),
       projectRegisterSlugs: register.map(({ slug }) => slug),
       projectRegister: register.map((record) => ({

@@ -61,7 +61,9 @@ test('the Overview shows the Owner decisions before the alerts and has one alloc
   assert.ok(page.indexOf('decisionSummary(s)') >= 0 && page.indexOf('decisionSummary(s)') < page.indexOf('overview-action-grid'), 'decisions come before Needs attention');
   assert.ok(page.indexOf('guidanceFold(s)') < page.indexOf('decisionSummary(s)'), 'the guidance stays first');
   const { allocationSummary } = load(['allocationSummary'], {
-    projectSlugs: () => ['a'], allocationSegment: () => '<i></i>', compactPercent: (x) => x,
+    allocationProjectSlugs: () => ['a'], allocationProject: () => ({ slug: 'a', share: 50, label: 'A', stateLabel: 'active' }),
+    allocationWorkers: () => ({ live: 0, total: 0, label: 'Workers 0 / 0' }),
+    allocationColor: () => 'var(--accent)', allocationSegment: () => '<i></i>', compactPercent: (x) => x,
   });
   const s = { control: { projects: { a: { slug: 'a', share: 50 } } } };
   assert.match(allocationSummary(s), /href="\/allocation"/);

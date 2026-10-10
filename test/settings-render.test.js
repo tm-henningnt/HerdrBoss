@@ -157,6 +157,122 @@ test('Remove from policy confirms that project open restores the entry and delet
   assert.deepEqual(calls.map(([url, options]) => [url, options.method]), [['/api/policy/projects/alpha', 'DELETE']]);
 });
 
+function mixedAllocationFixture() {
+  const s = fixture();
+  s.policy.projects = Object.fromEntries([
+    ['alpha', 35], ['idle', 25], ['parked', 20], ['transfer', 10], ['closed', 10], ['zero', 0],
+  ].map(([slug, share]) => [slug, { share, mode: 'auto', excludedKinds: [], excludedModels: [] }]));
+  s.control.projects = Object.fromEntries(['alpha', 'idle', 'parked', 'transfer', 'zero'].map((slug) => [slug, {
+    slug, label: slug, workspace: slug, share: s.policy.projects[slug].share,
+    running: 2, slots: 19, idle: slug === 'idle', effectiveMode: 'auto',
+  }]));
+  s.projectRegister = [
+    { slug: 'alpha', title: 'Alpha', state: 'open', share: 99 },
+    { slug: 'idle', title: 'Idle', state: 'open' },
+    { slug: 'parked', title: 'Parked', state: 'parked' },
+    { slug: 'transfer', title: 'Transfer', state: 'parked' },
+    { slug: 'closed', title: 'Closed', state: 'parked' },
+    { slug: 'zero', title: 'Zero', state: 'archived' },
+  ];
+  s.projectTransfers = [{ slug: 'transfer', side: 'source', factory: 'factory-b' }];
+  return s;
+}
+
+test('Projects allocation includes every policy share across open, idle, parked, transferring and zero-share projects', async () => {
+  const app = await views();
+  const s = mixedAllocationFixture();
+  app.setState(s);
+  for (const mode of ['cards', 'register']) {
+    app.setProjectPageMode(mode);
+    const html = app.projectsView(s, null);
+    const bar = html.match(/<div class="allocation-bar"[^>]*>([\s\S]*?)<\/div><\/div>/)?.[1]
+      || html.slice(html.indexOf('class="allocation-bar"'), html.indexOf('href="/allocation"'));
+    const segments = [...bar.matchAll(/data-segment="([^"]+)"[^>]*aria-valuenow="([\d.]+)"[^>]*style="width:([\d.]+)%/g)];
+    assert.deepEqual(segments.map(([, slug]) => slug), ['alpha', 'idle', 'parked', 'transfer', 'zero', 'closed']);
+    assert.equal(segments.reduce((sum, [, , width]) => sum + Number(width), 0), 100);
+    assert.deepEqual(segments.map(([, , share, width]) => [Number(share), Number(width)]), [[35, 35], [25, 25], [20, 20], [10, 10], [0, 0], [10, 10]]);
+    assert.match(html, /transferring to factory-b/);
+    assert.match(html, /allocation-segment parked/);
+    if (mode === 'cards') {
+      for (const slug of Object.keys(s.policy.projects)) assert.match(html, new RegExp(`data-project-card="${slug}"`));
+      const alphaCard = html.match(/<button[^>]*data-project-card="alpha"[\s\S]*?<\/button>/)[0];
+      assert.match(alphaCard, /35% share/);
+      assert.doesNotMatch(alphaCard, /99% share/);
+    }
+  }
+});
+
+test('Projects uses live over total worker rows in the bar, cards and legend, without collected or review workers as live', async () => {
+  const app = await views();
+  const s = mixedAllocationFixture();
+  s.workerView = { rows: Array.from({ length: 19 }, (_, index) => ({
+    key: `alpha/worker-${index}`, project: 'alpha', name: `worker-${index}`, pane: `alpha:p${index}`,
+    state: index === 0 ? 'working' : index === 1 ? 'idle' : index % 2 ? 'review' : 'merged',
+    group: index < 2 ? (index === 0 ? 'working' : 'waiting') : 'finished',
+    finishedAt: index < 2 ? null : '2026-10-10T12:00:00.000Z',
+  })) };
+  s.herdr.panes = [
+    { id: 'alpha:p0', workspace: 'alpha', agent: 'codex', status: 'working' },
+    { id: 'alpha:p2', workspace: 'alpha', agent: 'codex', status: 'working' },
+    { id: 'alpha:orch', workspace: 'alpha', agent: 'codex', orch: true, status: 'working' },
+    { id: 'alpha:boss', workspace: 'alpha', agent: 'codex', label: 'boss', status: 'working' },
+  ];
+  app.setState(s);
+  const html = app.projectsView(s, null);
+  const segment = html.match(/<div class="allocation-segment[^>]*data-segment="alpha"[\s\S]*?<\/div>/)[0];
+  const card = html.match(/<button[^>]*data-project-card="alpha"[\s\S]*?<\/button>/)[0];
+  const legend = html.match(/<li[^>]*data-allocation-legend="alpha"[\s\S]*?<\/li>/)?.[0] || '';
+  for (const [surface, content] of [['bar', segment], ['card', card], ['legend', legend]]) {
+    assert.match(content, /Workers 2 \/ 19/, `${surface} labels live over total workers`);
+  }
+  assert.match(segment, /aria-valuetext="[^"]*2 live workers of 19 total workers/);
+  assert.match(html, /Workers: live \/ total/);
+  assert.doesNotMatch(segment, /allocation-slots/);
+  assert.match(html, /data-allocation-legend="zero"[\s\S]*?Workers 0 \/ 0/);
+
+  s.workerView.rows[1].state = 'review';
+  s.workerView.rows[1].group = 'working'; // A collection can precede a pane state update.
+  s.workerView.rows[1].finishedAt = '2026-10-10T12:00:00.000Z';
+  assert.match(app.projectsView(s, null), /Workers 1 \/ 19/);
+});
+
+test('Projects puts the allocation legend below the full-width bar and lets it wrap on a phone', async () => {
+  const app = await views();
+  const s = mixedAllocationFixture();
+  app.setState(s);
+  const html = app.projectsView(s, null);
+  assert.ok(html.indexOf('class="allocation-key"') > html.indexOf('class="allocation-bar"'));
+  assert.match(css, /\.allocation-summary\s*\{[^}]*display:\s*grid/);
+  assert.match(css, /\.allocation-summary \.allocation-bar\s*\{[^}]*grid-column:\s*1 \/ -1/);
+  assert.match(css, /\.allocation-legend\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /@media \(max-width: 620px\)\s*\{[^}]*\.allocation-summary\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
+test('Projects wraps all policy cards without a clipped final card or an off-screen phone margin', async () => {
+  const app = await views();
+  const s = mixedAllocationFixture();
+  app.setState(s);
+  const html = app.projectsView(s, null);
+  assert.equal([...html.matchAll(/data-project-card="/g)].length, 6);
+  const row = css.match(/\.project-card-scroller\s*\{([^}]+)\}/)[1];
+  const card = css.match(/:root:root \.project-card-button\s*\{([^}]+)\}/)[1];
+  assert.match(row, /flex-wrap:\s*wrap/);
+  assert.match(card, /flex:\s*1 1 250px/);
+  assert.match(card, /max-width:\s*100%/);
+  for (const [, rule] of css.matchAll(/\.project-card-scroller\s*\{([^}]+)\}/g)) assert.doesNotMatch(rule, /margin-right:\s*-/);
+});
+
+test('Projects preserves fractional default shares so the allocation has no rounding gap', async () => {
+  const app = await views();
+  const s = fixture();
+  s.policy.projects = {};
+  s.control.projects = Object.fromEntries(['alpha', 'beta', 'gamma'].map((slug) => [slug, { slug, label: slug, share: 100 / 3 }]));
+  app.setState(s);
+  const html = app.projectsView(s, null);
+  const widths = [...html.matchAll(/data-segment="[^"]+"[^>]*style="width:([\d.]+)%/g)].map(([, width]) => Number(width));
+  assert.ok(Math.abs(widths.reduce((sum, width) => sum + width, 0) - 100) < 1e-9, 'the default shares fill 100 percent');
+});
+
 test('Projects restores the allocation bar, selectable open cards, project details, and a separate register view', async () => {
   const app = await views();
   const s = fixture();
