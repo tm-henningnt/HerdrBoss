@@ -254,6 +254,25 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
+  // Register import and onboarding checks read synchronous snapshots. The engine runner returns CLI replies.
+  const readRegisterHerdr = async () => {
+    const commands = ['workspace', 'pane', 'agent'];
+    const replies = await Promise.all(commands.map(async (command) => {
+      try {
+        const output = await engine.herdrRunner('herdr', [command, 'list']);
+        const data = typeof output === 'string' ? JSON.parse(output) : output;
+        return data?.error ? null : data?.result ?? data;
+      } catch { return null; }
+    }));
+    return ([command, action, flag, workspace]) => {
+      const reply = replies[commands.indexOf(command)];
+      if (command === 'pane' && action === 'list' && flag === '--workspace') {
+        const panes = Array.isArray(reply) ? reply : reply?.panes || [];
+        return { panes: panes.filter((pane) => (pane.workspace_id ?? pane.workspaceId ?? pane.workspace) === workspace) };
+      }
+      return reply;
+    };
+  };
   const serviceVersion = readVersion();
   const fleetGuidance = createFleetGuidance({ dir: DATA_DIR, settings: fleetSettings.read, now: fleet.now,
     deliver: async (text) => {
@@ -298,10 +317,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     }),
     openCount: () => readRegister(DATA_DIR).projects.filter((record) => ['open', 'parking'].includes(record.state)).length,
     cap: engine.cfg?.register?.cap ?? cfg.register?.cap ?? 3,
-    getOnboarding: (slug) => {
+    getOnboarding: async (slug) => {
+      if (readOnlyPreview || typeof engine.herdrRunner !== 'function') return null;
       try {
         const check = checkProject(slug, { dataDir: DATA_DIR, home: os.homedir(), requireWorkspace: true,
-          herdr: (args, options) => engine.herdrRunner('herdr', args, options) });
+          herdr: await readRegisterHerdr() });
         const good = (name) => check.items.some((item) => item.name === name && item.ok);
         return { kitInstalled: good('kit'), workspace: good('workspace'), orchestrator: good('orchestrator') };
       } catch { return null; }
@@ -363,12 +383,25 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   let tickPromise;
   let debounce;
   let policyDebounce;
-  const importRegister = () => importProjectRegister({
-    dataDir: DATA_DIR,
-    herdr: (args, options) => engine.herdrRunner('herdr', args, options),
-    log: (line) => engine.log('register', line),
-    warn: (line) => engine.log('warning', line),
-  });
+  let registerImport = Promise.resolve();
+  const importRegister = () => {
+    if (readOnlyPreview || typeof engine.herdrRunner !== 'function') return Promise.resolve();
+    registerImport = registerImport.catch(() => {}).then(async () => {
+      if (closed) return;
+      const herdr = await readRegisterHerdr();
+      if (closed) return;
+      return importProjectRegister({
+        dataDir: DATA_DIR,
+        herdr,
+        log: (line) => engine.log('register', line),
+        warn: (line) => engine.log('warning', line),
+      });
+    });
+    return registerImport;
+  };
+  const refreshRegister = async () => {
+    try { await importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
+  };
 
   // The Chat page ignores a record with mailAnswer set. The service knows the parent record, and the page may not.
   const annotateMessage = (data) => {
@@ -478,9 +511,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   // Push project edits to clients without waiting for the next tick.
   const projectsWatcher = fs.watch(PROJECTS_DIR, () => {
     clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      if (!engine.state) return;
-      try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
+    debounce = setTimeout(async () => {
+      if (closed || !engine.state) return;
+      await refreshRegister();
+      if (closed) return;
       engine.state.projects = decorateProjects(listProjects());
       broadcast('state', engine.state);
     }, 300);
@@ -491,9 +525,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   const policyWatcher = fs.watch(DATA_DIR, (_event, filename) => {
     if (String(filename || '') !== 'policy.json') return;
     clearTimeout(policyDebounce);
-    policyDebounce = setTimeout(() => {
+    policyDebounce = setTimeout(async () => {
       if (closed) return;
-      try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
+      await refreshRegister();
+      if (closed) return;
       void engine.tick();
     }, 300);
   });
@@ -512,7 +547,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     const refusal = policyShareGuard(loadPolicy(), draft, { confirmed: confirmed === true, allowSum: allowSum === true });
     if (refusal) return { status: refusal.status, body: { ok: false, error: refusal.error, changed: refusal.changed, sum: refusal.sum } };
     savePolicy(draft, loadModels(), options);
-    try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
+    await refreshRegister();
     const state = await engine.tick();
     return { status: 200, body: { ok: true, policy: loadPolicy(), control: state?.control, notes } };
   };
@@ -1523,8 +1558,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     finally { tickPromise = null; }
     if (!closed) timer = setTimeout(loop, cfg.tickSeconds * 1000);
   };
-  try { importRegister(); } catch (error) { engine.log('error', `project register import failed: ${error.message}`); }
-  loop();
+  void refreshRegister().then(loop);
   fleetPoller.start();
   const close = async () => {
     await fleetPoller.stop();
@@ -1533,6 +1567,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
     if (tickPromise) await tickPromise.catch(() => {});
+    await registerImport.catch(() => {});
     stopMessageWatch();
     stopReleaseWatch();
   };
