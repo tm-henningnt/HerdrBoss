@@ -4,7 +4,7 @@ Choose the chapter for your task.
 
 Use Chat for ordinary messages. Use the Mailbox to answer, approve, or decide. A reply keeps the same conversation thread.
 
-The dashboard uses one menu on every page. It includes every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open it. The logo does not go to Overview. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too. Select **Overview** in the menu to open it. The Mailbox menu also shows its folders.
+The dashboard uses one menu on every page. It includes every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open it. The logo does not go to Overview. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too. Select an entry in the menu to open its page. The menu closes after the page starts to open. Each entry is a normal link, so a long press also offers **Open**. Select **Overview** in the menu to open it. The Mailbox menu also shows its folders.
 
 The dashboard uses cool blue, teal, violet, cyan, and green colors for its controls and charts. Amber marks warning status. The accent color marks the critical path.
 

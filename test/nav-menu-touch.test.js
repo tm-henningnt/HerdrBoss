@@ -7,6 +7,10 @@ import { MENU_ROUTES } from '../public/routes.js';
 // A small DOM with the event order of a Chrome tap on a phone: pointerdown, touchstart, pointerup, touchend,
 // the compatibility mousedown (which moves the focus), mouseup, and click. A tap on iOS Safari does not move
 // the focus. Both modes run. The model does not cover layout, z-index, or the real iOS engine.
+// requestAnimationFrame callbacks wait in a queue. A tap flushes the queue after the click, as the next frame does.
+const frameQueue = [];
+globalThis.requestAnimationFrame = (fn) => frameQueue.push(fn);
+const flushFrames = () => { for (const fn of frameQueue.splice(0)) fn(); };
 class El {
   constructor(tag, attrs = {}, parent = null) {
     this.tag = tag; this.attrs = { ...attrs }; this.parent = parent; this.children = []; this.listeners = {};
@@ -58,15 +62,21 @@ function page({ appView }) {
     return event;
   };
   const menu = installNavMenu({ doc, nav, brand, isPhone: () => true, isAppView: () => appView, openHelp: () => { doc.helpOpen = true; } });
-  const tap = (target, { focusMoves = true } = {}) => {
+  // focus: 'moves' = Chrome (the tapped element takes the focus), 'none' = no focus change,
+  // 'blurs' = iOS Safari (a link takes no focus on tap, so the focused element blurs and the focus goes to the body).
+  // A closed menu is display none on a phone, so a tap on an entry whose menu closed before the click sends no click.
+  const tap = (target, { focusMoves = true, focus = focusMoves ? 'moves' : 'none' } = {}) => {
+    const inMenu = nav.contains(target);
     for (const type of ['pointerdown', 'touchstart', 'pointerup', 'touchend']) emit(target, type);
     emit(target, 'mousedown');
-    if (focusMoves) {
+    if (focus === 'moves') {
       const focusable = target.closest('a, button');
       if (focusable) doc.moveFocus(focusable); else if (doc.focused) doc.moveFocus(null);
-    }
+    } else if (focus === 'blurs' && doc.focused) doc.moveFocus(null);
     emit(target, 'mouseup');
+    if (inMenu && !nav.classList.contains('open')) return;
     const click = emit(target, 'click');
+    flushFrames();
     const link = target.closest('a');
     if (link?.attrs.href && !click.prevented) doc.path = link.attrs.href;
   };
@@ -75,14 +85,15 @@ function page({ appView }) {
 const open = (p, trigger) => { p.tap(trigger); assert.equal(p.nav.classList.contains('open'), true, 'a tap on the trigger opens the menu'); };
 
 for (const appView of [false, true]) {
-  for (const focusMoves of [true, false]) {
-    const mode = `${appView ? 'app view' : 'page'}, ${focusMoves ? 'focus moves on tap' : 'no focus move on tap'}`;
+  for (const focus of ['moves', 'none', 'blurs']) {
+    const focusMoves = focus === 'moves';
+    const mode = `${appView ? 'app view' : 'page'}, focus ${focus}`;
     test(`a tap opens the menu and each entry opens its route and closes the menu (${mode})`, () => {
       for (const route of MENU_ROUTES) {
         const p = page({ appView });
         open(p, appView ? p.appButton : p.brand);
         const link = p.links.find((a) => a.route === route);
-        p.tap(link, { focusMoves });
+        p.tap(link, { focus });
         assert.equal(p.doc.path, route.path, `${route.label} opens ${route.path}`);
         assert.equal(p.nav.classList.contains('open'), false, `${route.label} closes the menu`);
         open(p, appView ? p.appButton : p.brand);
@@ -91,24 +102,52 @@ for (const appView of [false, true]) {
     test(`a tap on the trigger closes an open menu (${mode})`, () => {
       const p = page({ appView });
       const trigger = appView ? p.appButton : p.brand;
-      p.tap(trigger, { focusMoves });
+      p.tap(trigger, { focus });
       assert.equal(p.nav.classList.contains('open'), true);
-      p.tap(trigger, { focusMoves });
+      p.tap(trigger, { focus });
       assert.equal(p.nav.classList.contains('open'), false, 'the second tap closes the menu');
       assert.equal(trigger.getAttribute('aria-expanded'), 'false');
     });
     test(`a tap outside the menu closes it, and Help opens the panel (${mode})`, () => {
       const p = page({ appView });
-      p.tap(appView ? p.appButton : p.brand, { focusMoves });
-      p.tap(p.plain, { focusMoves });
+      p.tap(appView ? p.appButton : p.brand, { focus });
+      p.tap(p.plain, { focus });
       assert.equal(p.nav.classList.contains('open'), false, 'a tap on a plain area closes the menu');
-      p.tap(appView ? p.appButton : p.brand, { focusMoves });
-      p.tap(p.help, { focusMoves });
+      p.tap(appView ? p.appButton : p.brand, { focus });
+      p.tap(p.help, { focus });
       assert.equal(p.doc.helpOpen, true);
       assert.equal(p.nav.classList.contains('open'), false);
     });
   }
 }
+
+test('a pointerup that reaches the document first keeps the menu open, and the anchor default action runs', () => {
+  const p = page({ appView: false });
+  open(p, p.brand);
+  const link = p.links[p.links.length - 1];
+  for (const type of ['pointerdown', 'touchstart', 'pointerup', 'touchend']) {
+    const event = { type, target: link, relatedTarget: null };
+    for (let e = link; e; e = e.parent) for (const fn of e.listeners[type] || []) fn(event);
+    assert.equal(p.nav.classList.contains('open'), true, `${type} on an entry leaves the menu open`);
+  }
+  p.doc.moveFocus(null);
+  assert.equal(p.nav.classList.contains('open'), true, 'a blur to the body leaves the menu open');
+  p.tap(link, { focus: 'none' });
+  assert.equal(p.doc.path, link.attrs.href);
+});
+
+test('a click on an entry closes the menu after the default action, in the next frame', () => {
+  {
+    const p = page({ appView: false });
+    open(p, p.brand);
+    const click = { type: 'click', target: p.links[0], relatedTarget: null, preventDefault() { this.prevented = true; } };
+    for (let e = p.links[0]; e; e = e.parent) for (const fn of e.listeners.click || []) fn(click);
+    assert.equal(click.prevented, undefined, 'the handler keeps the default action');
+    assert.equal(p.nav.classList.contains('open'), true, 'the menu is still open while the click dispatches');
+    flushFrames();
+    assert.equal(p.nav.classList.contains('open'), false);
+  }
+});
 
 test('on iOS a tap on a plain area sends no click, and the release still closes the menu', () => {
   const p = page({ appView: false });

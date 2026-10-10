@@ -7528,7 +7528,7 @@ function fillHelp() {
     body = text;
   }
   document.getElementById('help-title').textContent = title;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The logo does not go to Overview. Select Overview in the menu to open it. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The logo does not go to Overview. Select an entry in the menu to open its page. The menu closes after the page starts to open. Select Overview in the menu to open it. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
 }
 
 function setHelp(open) {

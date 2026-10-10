@@ -1,6 +1,8 @@
 // The open and close rules of the shared menu. app.js passes the document, the menu element, and two callbacks.
 // A tap on a phone sends pointer events, touch events, a compatibility mousedown that moves the focus, and then click.
-// The menu closes on click, Escape, an outside release, or when the focus leaves the menu for a place that is not a trigger.
+// A tap on iOS Safari gives a link no focus, so the focused element blurs to the body before the click.
+// The menu closes on Escape, on a pointer release outside it, on a click outside it, and after the click on an entry.
+// An event inside the menu never closes it before the click: the anchor default action must run first.
 export function installNavMenu({ doc, nav, brand, isPhone, isAppView, openHelp }) {
   let lastTrigger = null;
   let pointerDown = false;
@@ -34,12 +36,15 @@ export function installNavMenu({ doc, nav, brand, isPhone, isAppView, openHelp }
     lastTrigger = null;
     return true;
   }
-  nav.addEventListener('click', (e) => { if (e.target.closest('a')) setOpen(false); });
+  // The anchor default action starts the navigation after this handler. The menu closes in the next frame.
+  nav.addEventListener('click', (e) => {
+    if (e.target.closest('a')) requestAnimationFrame(() => setOpen(false));
+  });
+  // Only a keyboard move of the focus to another element outside the menu closes it.
+  // A blur to the body (relatedTarget null) is what iOS sends before the click of a tap, so it keeps the menu open.
   nav.addEventListener('focusout', (e) => {
-    if (pointerDown) return;
-    if (e.relatedTarget && nav.contains(e.relatedTarget)) return;
-    // The mousedown of a tap on a trigger moves the focus before the click. The click toggles the menu.
-    if (inTrigger(e.relatedTarget)) return;
+    if (pointerDown || !e.relatedTarget) return;
+    if (nav.contains(e.relatedTarget) || inTrigger(e.relatedTarget)) return;
     close();
   });
   doc.addEventListener('click', (e) => {
