@@ -957,3 +957,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
 
 - Reviewed branches: `gui3` 032236d and `gui4` (GUI-FIX1 round 2): the Allocation lead goal and Boss rules are growing textareas; the Settings card row spans the full width at 1600 px and above; the usage source text has its own row; the agent app selects fill the row with an ellipsis and a visible arrow. Evidence: 1,196 focused tests passed; isolated preview at a 393 px viewport and at 1920 and 2560 px; a second rendered check found the fixed 79 px textarea and the clipped select, and round 2 fixed both.
 - Released: `main` fd9b68b (adds a dvh fallback for the textarea max-height after the first r48 suite failed `test/phone-layout.test.js`). Full suite exit 0, reuse, service restarted, `/api/state` 200, pushed. Open: TR1/TY1 pack fix round (`tr1fix`), then the second judge pass; SC1 scaffold waits for the TY1 layout accept; PL1 after TR1; NL1 waits for the Owner; live Mailbox update has unit evidence only.
+
+## Release checkpoint r49 (RG1)
+
+- Reviewed branch: `rg1` 5191a29. RG1 (Boss, urgent): `release publish` accepts an approved request that predates the demo app gate when its recorded asset list holds exactly one `.qvf` with its `.sha256`, the fresh download matches the recorded name, size and SHA-256, and the scan and archive inspection pass. New Boss-only `release cancel REPO TAG --force --reason TEXT` for an approved but unpublished request; the audit line is written first. Refusal messages name the fix that works for the request state. Kit file changed: `release-checklist.md`; kit revision 7e7086f3ef3f has a `kit/CHANGES.md` entry.
+- Review: a Haiku diff review found no blocker; its Minor fixes are in. Accepted: the Boss caller check reads the pane from the environment, as for every Boss-only command; hardening it is a separate change.
+- Evidence: `test/release.test.js` 93 of 93; the first r49 suite failed two kit tests and the Kit-Impact trailer test, fixed by the trailer on the commit and the `kit/CHANGES.md` entry.
+- State: integrated only. Suite, ff-only, kit install, restart, push and the Boss message are pending.

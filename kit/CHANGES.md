@@ -314,3 +314,7 @@ Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode
 ## 62a766092f88
 Impact: useful
 Summary: Restore the Owner decision and worker report wording in the orchestrator skill.
+
+## 7e7086f3ef3f
+Impact: useful
+Summary: The release checklist names the pre-gate approval rule and the Boss-only release cancel --force for an approved request that predates the demo app gate.
