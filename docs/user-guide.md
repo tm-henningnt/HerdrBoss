@@ -8,6 +8,8 @@ The dashboard uses one menu on every page. It includes every section, including 
 
 The dashboard uses cool blue, teal, violet, cyan, and green colors for its controls and charts. Amber marks warning status. The accent color marks the critical path.
 
+Repeated alerts share one row with a count and first and last time; informational notices expire after 24 hours and can be dismissed in this browser until they fire again, while warnings and critical alerts have no Dismiss button.
+
 Mailbox counts and lists refresh every second. Open Mailbox conversations, Owner Chat lists and conversations, and Agents lists and open pairs refresh every second. A CLI message appears without a page reload. The top-bar badges, Needs-you heading, and list use one Mailbox count source. The page refreshes its reads when you return online or show it again. A sent message first shows **Sending…**, then **Sent. Waiting for delivery.** It shows **delivered** with a time, or **failed** with the reason. Open the conversation in **Sent** and select **Retry** after a failure. Retry uses the same client ID, so it does not create a duplicate. Select **Clear** to remove the failed message from this browser.
 
 - [I want to see what is happening](guide/see.md)
