@@ -3851,7 +3851,7 @@ function mailboxView(s) {
     mailbox.conversationRecords = [];
     mailbox.composing = false;
   }
-  const items = mailbox[MAIL_FOLDER_KEYS[folder]] || [];
+  const items = mailDeduplicateClientRecords(mailbox[MAIL_FOLDER_KEYS[folder]] || []);
   const counts = { 'needs-you': mailboxActionCount(s), inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
   const headerCount = folder === 'needs-you' ? mailboxActionCount(s) : items.length;
   const label = MAIL_FOLDER_LABEL[folder];
@@ -3957,7 +3957,7 @@ function mailReplyFormShown(records, find) {
 function mailConversationView(s) {
   const selected = mailbox.currentConversation;
   const replyContext = `mail-reply:${selected.thread}:${selected.id}`;
-  const records = mailbox.conversationRecords;
+  const records = mailDeduplicateClientRecords(mailbox.conversationRecords);
   // On a phone the actions of the open item sit in a bar at the bottom edge. On a desktop they stay in the message.
   const barItem = appPhone() ? mailBarItem(records, mailFind) : null;
   const titleRecord = [...records].reverse().find((record) => record.to === 'owner') || records.at(-1);
@@ -3966,11 +3966,43 @@ function mailConversationView(s) {
   const lastAgent = [...records].reverse().find((record) => ['boss', 'orch'].includes(record.from) && record.to === 'owner');
   const replyTo = lastAgent && !lastAgent.closedAt ? lastAgent.id : '';
   const titleTag = threadTitleTag();
-  return `<section class="mail-reading"><div class="app-bar mail-panel-head">${appMenuButton(s, 'mailbox')}<button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button>${avatarSlot(selected.thread, { title: avatarTitle(selected.thread), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}></div><div class="mail-conversation-scroll" data-key="mail-thread:${esc(selected.thread)}:${esc(selected.id)}">${messages}</div>${barItem ? mailBar(barItem) : mailReplyFormShown(records, mailFind) ? `<form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}" data-mail-attachment-context="${esc(replyContext)}"><label for="mail-reply-text">Reply</label>${attachmentStrip(replyContext)}<textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" placeholder="Reply…">${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span>${attachmentPickerHtml(replyContext, appIcon, esc, { disabled: mailbox.busy })}<button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form>` : ''}</section>`;
+  return `<section class="mail-reading"><div class="app-bar mail-panel-head">${appMenuButton(s, 'mailbox')}<button type="button" class="app-icon-button mail-back" data-mail-back aria-label="Back to ${esc(MAIL_FOLDER_LABEL[mailbox.folder])}">${appIcon('back')}</button>${avatarSlot(selected.thread, { title: avatarTitle(selected.thread), size: 28 })}<${titleTag}>${esc(title)}</${titleTag}></div><div class="mail-conversation-scroll" data-key="${esc(mailConversationKey(selected))}">${messages}</div>${barItem ? mailBar(barItem) : mailReplyFormShown(records, mailFind) ? `<form class="mail-reply" data-mail-reply data-mail-thread="${esc(selected.thread)}" data-mail-reply-to="${esc(replyTo)}" data-mail-attachment-context="${esc(replyContext)}"><label for="mail-reply-text">Reply</label>${attachmentStrip(replyContext)}<textarea id="mail-reply-text" data-mail-reply-draft maxlength="2000" rows="3" placeholder="Reply…">${esc(mailbox.replyDraft)}</textarea><div><span class="sub">${replyTo ? 'Replies to the last message.' : 'Starts a new message in this thread.'}</span>${attachmentPickerHtml(replyContext, appIcon, esc, { disabled: mailbox.busy })}<button type="submit"${mailbox.busy ? ' disabled' : ''}>Send</button></div><p class="mail-status" role="status">${esc(mailbox.status.reply || '')}</p></form>` : ''}</section>`;
+}
+
+function mailConversationKey(selected, records = null) {
+  const available = records || [
+    ...mailbox.conversationRecords, ...mailbox.sent, ...mailbox.done,
+    ...mailbox.inbox, ...mailbox.needsYou, ...mailbox.updates,
+  ];
+  const record = available.find((item) => item.thread === selected.thread && item.id === selected.id)
+    || available.find((item) => item.thread === selected.thread && item.conversationId === selected.id);
+  return record?.clientId
+    ? `mail-thread:client:${selected.thread}:${record.clientId}`
+    : `mail-thread:id:${selected.thread}:${selected.id}`;
+}
+
+function mailDeduplicateClientRecords(records) {
+  // The API poll can overlap an optimistic send with its stored record. Keep one row and prefer the stored copy.
+  const result = [];
+  const indexes = new Map();
+  for (const record of records || []) {
+    const key = record.clientId
+      ? `client:${record.thread}:${record.clientId}`
+      : `id:${record.thread}:${record.id}`;
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, result.length);
+      result.push(record);
+    } else if (result[existingIndex].local && !record.local) {
+      result[existingIndex] = record;
+    }
+  }
+  return result;
 }
 
 function mailConversationMessage(s, record, barItem) {
   const owner = record.from === 'owner';
+  const messageKey = record.clientId ? `client:${record.thread}:${record.clientId}` : `id:${record.thread}:${record.id}`;
   const item = mailFind(record.id);
   const meta = `${mailItemLabel(s, record)} · ${clock(record.at)}`;
   const delivery = owner ? mailDeliveryState(record) : record.action ? `Action: ${record.action}` : '';
@@ -3978,7 +4010,7 @@ function mailConversationMessage(s, record, barItem) {
   const controls = item && item.closedAt ? mailDoneLine(item) : item && item === barItem ? '' : item && item.kind === 'review' ? reviewOpenLinkHtml(item, esc) : item && ['answer', 'approve', 'decide'].includes(item.action) ? mailActions(item) : '';
   const suggestion = item ? mailSuggestionHtml(item, { esc, busy: mailbox.busy }) : '';
   const retry = record.local && record.status === 'failed' ? `<p class="mail-message-retry" role="alert">${esc(record.error || 'The message failed.')} <button type="button" data-mail-retry="${esc(record.id)}"${mailbox.busy ? ' disabled' : ''}>Retry</button> <button type="button" data-mail-failed-clear="${esc(record.id)}"${mailbox.busy ? ' disabled' : ''}>Clear</button></p>` : '';
-  return `<li><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong>${record.text ? messageCopyHtml(record.id, esc) : ''}</header>${messageBody(record)}${status}${retry}${suggestion}${controls}</article></li>`;
+  return `<li data-key="mail-message:${esc(messageKey)}"><article class="mail-message${owner ? ' from-owner' : ''}"><header class="mail-message-head"><strong>${esc(meta)}</strong>${record.text ? messageCopyHtml(record.id, esc) : ''}</header>${messageBody(record)}${status}${retry}${suggestion}${controls}</article></li>`;
 }
 
 async function loadMailboxConversation(thread, conversation, { auto = false } = {}) {
@@ -8238,7 +8270,7 @@ document.addEventListener('scroll', markOwnerActive, { capture: true, passive: t
 // The scroll containers to keep for each route. A position is restored only when its key is the same after the render.
 function keptScrollKeys(route, mailbox, chat) {
   if (route === 'mailbox') {
-    const view = mailbox.composing ? 'compose' : mailbox.currentConversation?.id || '';
+    const view = mailbox.composing ? 'compose' : mailbox.currentConversation ? mailConversationKey(mailbox.currentConversation) : '';
     return { window: `${mailbox.folder}|${view}`, '.mail-list-scroll': mailbox.folder, '.mail-conversation-scroll': view };
   }
   if (route === 'chat') return { window: chat.thread || '', '.chat-list-scroll': 'list' };
