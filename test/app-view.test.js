@@ -25,7 +25,9 @@ test('the phone app view hides the page header and fills the visual viewport', (
   const at = css.indexOf('/* Phone app view.');
   assert.ok(at >= 0, 'style.css has a Phone app view section');
   const phone = css.slice(at);
-  assert.match(phone, /body\.app-view \.top \{ display: none; \}/);
+  assert.match(phone, /body\.app-view \.top \{[^}]*display: block;[^}]*height: 0;/, 'the header shell stays for the shared menu');
+  assert.match(phone, /body\.app-view \.top > :not\(#primary-nav\) \{ display: none !important; \}/, 'the menu is the only visible header child');
+  assert.match(phone, /body\.app-view #primary-nav \{[^}]*display: none;/, 'the shared menu starts closed');
   assert.match(phone, /body\.app-view main \{[^}]*height: var\(--app-h, 100dvh\);/);
   assert.match(phone, /env\(safe-area-inset-top\)/);
   assert.match(phone, /env\(safe-area-inset-bottom\)/);

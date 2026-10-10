@@ -6,7 +6,7 @@ WARNING: The sign-in token gives full control of your agents. Never type it into
 
 ## Reach the dashboard from your phone
 
-You want to open the dashboard when you are away from your computer. *Tailscale* is a free network tool. It joins your phone and your computer in one private network. Traffic between them is encrypted.
+*Tailscale* is a free network tool. It joins your phone and your computer in one private network. Traffic between them is encrypted.
 
 What you do:
 
@@ -29,8 +29,6 @@ If you do not see it:
 - If the browser says the host name is not allowed, add the name in Settings, under Advanced, in the Service settings, as an allowed host.
 
 ## Add the dashboard to the home screen
-
-You want one tap to open the dashboard, with no browser address bar.
 
 What you do:
 
