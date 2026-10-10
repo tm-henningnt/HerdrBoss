@@ -42,6 +42,7 @@ if (forcedTheme === 'light' || forcedTheme === 'dark') document.documentElement.
 const $dot = document.getElementById('dot');
 const $updated = document.getElementById('updated');
 const $nav = document.getElementById('primary-nav');
+const $brand = document.querySelector('.brand');
 const $roamgate = document.getElementById('roamgate-link');
 const $mailFolderMenu = document.getElementById('mail-folder-menu');
 let fleetData = null, fleetSettings = null, fleetShares = null, fleetLoading = false, fleetMessage = '';
@@ -156,6 +157,10 @@ let lastNavTrigger = null;
 function setNavMenu(open) {
   $nav.classList.toggle('open', open);
   for (const trigger of document.querySelectorAll('[data-nav-trigger]')) trigger.setAttribute('aria-expanded', String(open));
+}
+function syncBrandMenuLabel() {
+  if (isPhone() && !document.body.classList.contains('app-view')) $brand.setAttribute('aria-label', 'Menu');
+  else $brand.removeAttribute('aria-label');
 }
 
 const PROJECT_REGISTER_PREFS_KEY = 'herdr-boss-project-register-view';
@@ -759,6 +764,10 @@ function allocationSegment(s, p, share) {
   const text = segmentText(p, share);
   return `<div class="allocation-segment ${allocationActivity(p)}" data-segment="${esc(p.slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(p.label)} set share" aria-valuetext="${esc(text.value)}" style="width:${share}%;background-color:${allocationColor(s, p.slug)}" title="${esc(text.title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span><span class="allocation-slots"> · ${effectiveAllocation(p).slots}</span></span></div>`;
 }
+function staleAllocationSegment(slug, share) {
+  const title = `${slug}: saved share ${share}% · no live project lead`;
+  return `<div class="allocation-segment stale" data-stale-segment="${esc(slug)}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share}" aria-label="${esc(slug)} saved share" aria-valuetext="${esc(title)}" style="width:${share}%;background-color:var(--muted)" title="${esc(title)}"><span class="allocation-label" aria-hidden="true"><span class="allocation-share">${share}%</span></span></div>`;
+}
 // The read-only summary shows the applied shares. The Allocation page shows the editable draft.
 function allocationSummary(s, { link = true } = {}) {
   const live = s.control?.projects || {};
@@ -815,7 +824,8 @@ function controlBlock(s) {
   const projects = Object.values(s.control.projects);
   const workspaces = s.control.workspaces || [];
   let cumulative = 0;
-  const shareSegments = projects.map((p) => allocationSegment(s, p, d.projects[p.slug]?.share || 0)).join('');
+  const shareSegments = projects.map((p) => allocationSegment(s, p, d.projects[p.slug]?.share || 0)).join('')
+    + Object.entries(staleShares()).map(([slug, share]) => staleAllocationSegment(slug, share)).join('');
   const shareHandles = projects.slice(0, -1).map((p, i) => {
     const minimum = cumulative;
     cumulative += d.projects[p.slug]?.share || 0;
@@ -1071,6 +1081,9 @@ function effortSettings(kind, model) {
 function modelOn(kind, model, d = policyDraft) {
   return !(d?.excludedModels || []).includes(model) && !(d?.disabledModels?.[kind] || []).includes(model);
 }
+function modelNameHtml(model) {
+  return esc(model).replace(/([/-])/g, '$1<wbr>');
+}
 // The same precedence as providerFor on the server: harness route, legacy model route, then harness and prefix rules.
 // The provider of a legacy modelProviders route that this harness cannot use and that no harness route overrides.
 // The server treats such a route as unmetered at load time and refuses it at save time.
@@ -1118,7 +1131,7 @@ function harnessSection(kind, cfg, d, unavailableModels = [], trialModels = []) 
     const noteId = `route-note-${kind}-${model}`.replace(/[^A-Za-z0-9_-]/g, '-');
     const choices = providers.map((provider) => PROVIDERS[provider]).concat('Unmetered').join(' or ');
     // An ignored legacy route has a placeholder that cannot be chosen again, so any choice stores a compatible harness route.
-    return `<li class="harness-model"><label><input type="checkbox" data-harness-model="${esc(kind)}" data-model="${esc(model)}" ${modelOn(kind, model, d) ? 'checked' : ''}> <span>${esc(model)}</span>${local ? ' <span class="tag">local</span>' : ''}${trialTag}${unavailableTag}</label>
+    return `<li class="harness-model"><label><input type="checkbox" data-harness-model="${esc(kind)}" data-model="${esc(model)}" ${modelOn(kind, model, d) ? 'checked' : ''}> <span>${modelNameHtml(model)}</span>${local ? ' <span class="tag">local</span>' : ''}${trialTag}${unavailableTag}</label>
       <select data-harness-route="${esc(kind)}" data-model="${esc(model)}" aria-label="Provider for ${esc(model)} in ${esc(kind)}" ${ignored ? `aria-describedby="${noteId}"` : ''}>${ignored ? '<option value="" disabled selected data-ignored-route>Ignored</option>' : ''}<option value="unmetered" ${route === null && !ignored ? 'selected' : ''}>Unmetered</option>${providers.map((provider) => `<option value="${provider}" ${route === provider ? 'selected' : ''}>${esc(PROVIDERS[provider])}</option>`).join('')}</select>
       ${local ? `<button type="button" class="quiet" data-remove-model="${esc(kind)}" data-model="${esc(model)}" aria-label="Remove ${esc(model)} from ${esc(kind)}">Remove</button>` : '<span aria-hidden="true"></span>'}
       ${reenableHelp}
@@ -7266,7 +7279,7 @@ function fillHelp() {
     body = text;
   }
   document.getElementById('help-title').textContent = title;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The logo does not go to Overview. Select Overview in the menu to open it. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
 }
 
 function setHelp(open) {
@@ -7299,6 +7312,10 @@ $nav.addEventListener('focusout', (e) => {
 document.addEventListener('click', (e) => {
   const trigger = e.target.closest?.('[data-nav-trigger]');
   if (trigger) {
+    if (trigger === $brand) {
+      if (!isPhone() || document.body.classList.contains('app-view')) return;
+      e.preventDefault();
+    }
     lastNavTrigger = trigger;
     const open = !$nav.classList.contains('open');
     setNavMenu(open);
@@ -8263,6 +8280,7 @@ function render(force = false) {
   const html = page;
   // The Mailbox, Chat, and Reviews are app views on a phone. The shared menu remains above their app bars.
   document.body.classList.toggle('app-view', APP_VIEW_ROUTES.includes(route));
+  syncBrandMenuLabel();
   const chatPhoneOpen = route === 'chat' && appPhone();
   document.body.classList.toggle('chat-phone-open', chatPhoneOpen);
   if (!chatPhoneOpen) document.body.classList.remove('chat-keyboard-open');
@@ -8366,6 +8384,17 @@ function updateShares() {
       handle.setAttribute('aria-valuetext', `${p.label} ${share} percent`);
     }
     cumulative += share;
+  }
+  for (const [slug, share] of Object.entries(staleShares())) {
+    const segment = [...bar.querySelectorAll('[data-stale-segment]')].find((x) => x.dataset.staleSegment === slug);
+    if (!segment) continue;
+    const title = `${slug}: saved share ${share}% · no live project lead`;
+    segment.style.width = `${share}%`;
+    segment.title = title;
+    segment.setAttribute('aria-valuenow', String(share));
+    segment.setAttribute('aria-valuetext', title);
+    const label = segment.querySelector('.allocation-share');
+    if (label) label.textContent = `${share}%`;
   }
   for (const [slug, p] of Object.entries(policyDraft.projects)) {
     const row = [...document.querySelectorAll('[data-project-row]')].find((x) => x.dataset.projectRow === slug);
