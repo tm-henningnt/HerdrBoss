@@ -102,7 +102,7 @@ test('Allocation shows closed policy projects with editable settings and a regis
   const row = rowStart < 0 || removeAt < 0 ? '' : html.slice(rowStart, removeAt + 80);
   const includes = (label, pattern) => assert.ok(pattern.test(row), `The closed policy row is missing ${label}.`);
   includes('the closed state', /Closed workspace/);
-  includes('the orchestrator state', /No orchestrator/);
+  includes('the project lead state', /No project lead/);
   includes('the register state', /Registered in project register/);
   includes('the share input', /data-policy-share="closed"/);
   includes('the mode selector', /data-mode="closed"/);

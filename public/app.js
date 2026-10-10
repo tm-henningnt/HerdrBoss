@@ -729,7 +729,7 @@ function allocationSaveCheck() {
 function allocationProjects() { return Object.values(state?.control?.projects || {}); }
 function policyOnlyStatus(s, slug) {
   const workspace = (s.control?.workspaces || []).find((item) => item.slug === slug);
-  const parts = [workspace ? 'Open workspace' : 'Closed workspace', 'No orchestrator'];
+  const parts = [workspace ? 'Open workspace' : 'Closed workspace', 'No project lead'];
   if ((s.projectRegisterSlugs || []).includes(slug)) parts.push('Registered in project register');
   return parts.join(' · ');
 }
@@ -6963,7 +6963,7 @@ const HELP = {
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The line <b>Total</b> next to the bar shows the sum of the shares. When the sum is below 100, select <b>Distribute the remaining N</b> to add the remainder to the largest share. Herdr Boss never adds it by itself. A sum above 100 blocks <b>Apply policy</b>.</p>
-    <p>A project in the policy with no live orchestrator stays editable. Its row shows whether its workspace is open or closed and whether the project is registered. You can change its share, mode, and exclusions. <b>Remove from policy</b> asks for confirmation, sets the share to zero, and redistributes it among the other policy projects. <b>Apply policy</b> then uses the same share confirmations as every other project.</p>
+    <p>A project in the policy with no live project lead stays editable. Its row shows whether its workspace is open or closed and whether the project is registered. You can change its share, mode, and exclusions. <b>Remove from policy</b> asks for confirmation, sets the share to zero, and redistributes it among the other policy projects. <b>Apply policy</b> then uses the same share confirmations as every other project.</p>
     <p>A project without a saved share shows the marker <b>default, not saved</b>. The default is a part of the room that the saved shares leave. Herdr Boss writes it only when you change that share or confirm the dialog. <b>Apply policy</b> asks you to confirm when it changes three or more shares, changes more than one boundary, or changes the total by more than 5 points. The dialog lists the old and new share of every project. A total other than 100 needs a second confirmation.</p>
     <p>When the policy changes on the server while you have unsaved edits, the page shows <b>The policy changed on the server. Reload the shares?</b> Select <b>Reload the shares</b> to discard your edits and load the saved shares.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>

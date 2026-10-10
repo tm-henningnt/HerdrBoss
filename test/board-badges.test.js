@@ -132,13 +132,13 @@ test('a phone opens the Stuck tab only when it has cards', () => {
   assert.equal(activeColumn(FLOW, {}, { ...counts, doing: 1, stuck: 1 }, false), 'doing');
 });
 
-test('the style holds the Stuck color, the badges and the six-lane layout, and keeps one phone block', () => {
+test('the style holds the Stuck color, the badges and the full-width lane layout, and keeps one phone block', () => {
   assert.match(css, /--st-stuck: #[0-9a-f]{6}/i);
   assert.match(css, /\.st-stuck \{ --st: var\(--st-stuck\); \}/);
   assert.match(css, /\.auto-badge \{/);
   assert.match(css, /\.card-diverge \{/);
   assert.match(css, /\.card-stuck \{/);
-  assert.match(css, /\.board-cols\.has-stuck \{[^}]*repeat\(6,/);
+  assert.match(css, /\.board-cols\.has-stuck \{[^}]*auto-fit,/);
   assert.match(css, /\.kb-counts\.has-stuck \{[^}]*repeat\(6,/);
   // The phone tab bar gets the sixth tab inside the existing board block. The 44 px rule of the tab stays.
   const phone = /@media \(max-width: 760px\), \(pointer: coarse\) and \(max-height: 500px\) \{([\s\S]*?)\n\}/.exec(css.slice(css.indexOf('.dep-btn, .dep-close { min-height: 44px; }') - 200));

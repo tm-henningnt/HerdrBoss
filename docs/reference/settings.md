@@ -497,7 +497,7 @@ Each project has two share values:
 
 The line **Total** next to the bar shows the sum of the set shares, for example `Total 99 of 100`. When the sum is below 100, the button **Distribute the remaining N** adds the remainder to the largest share. Herdr Boss adds it only when you select the button. A sum above 100 shows a warning and blocks **Apply policy**.
 
-A project in the policy with no live orchestrator stays editable. Its row shows whether its workspace is open or closed and whether the project is registered in the project register. You can change its share, activity mode, and kind or model exclusions. Select **Remove from policy** and confirm to set its share to zero and redistribute it across the other policy projects. Then select **Apply policy**. The PC1 share confirmations apply to the whole change, including policy-only projects.
+A project in the policy with no live project lead stays editable. Its row shows whether its workspace is open or closed and whether the project is registered in the project register. You can change its share, activity mode, and kind or model exclusions. Select **Remove from policy** and confirm to set its share to zero and redistribute it across the other policy projects. Then select **Apply policy**. The PC1 share confirmations apply to the whole change, including policy-only projects.
 
 The form always shows the shares that the policy holds, also when their sum is not 100. A project that has no share in the policy shows the marker `default, not saved`. Its default is a part of the room that the saved shares leave. Herdr Boss writes the default only when you change that share or confirm the dialog of **Apply policy**.
 

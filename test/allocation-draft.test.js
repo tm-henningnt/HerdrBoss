@@ -195,8 +195,8 @@ test('a policy-only project keeps its share in the total and can be edited befor
   const over = checkSave({ slugs: ['a', 'b'], loaded, shares: { a: 60, b: 30 }, defaults: [], touched: ['a'], boundaries: 1, fixed });
   assert.equal(over.action, 'refuse', 'the stale share counts: 60 + 30 + 20 is above 100');
   assert.match(over.message, /110/);
-  const html = staleRowHtml('old', { share: 20, mode: 'active', excludedKinds: ['codex'], excludedModels: ['a'] }, 'Closed workspace · No orchestrator · Registered in project register', ['codex'], ['a']);
-  assert.ok(/Closed workspace · No orchestrator · Registered in project register/.test(html), 'The policy-only row is missing its project state.');
+  const html = staleRowHtml('old', { share: 20, mode: 'active', excludedKinds: ['codex'], excludedModels: ['a'] }, 'Closed workspace · No project lead · Registered in project register', ['codex'], ['a']);
+  assert.ok(/Closed workspace · No project lead · Registered in project register/.test(html), 'The policy-only row is missing its project state.');
   assert.match(html, /20/);
   assert.match(html, /data-policy-share="old"/);
   assert.match(html, /data-mode="old"/);

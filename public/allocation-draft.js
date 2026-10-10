@@ -143,8 +143,8 @@ export function allocationFooterHtml(total, stale) {
   return `<div class="allocation-total" data-allocation-total>${totalHtml(total)}</div>${reload}`;
 }
 
-// A row for a policy project with no live orchestrator. The Owner can still edit its policy.
-export function staleRowHtml(slug, entry = {}, status = 'Closed workspace · No orchestrator', kinds = [], models = []) {
+// A row for a policy project with no live project lead. The Owner can still edit its policy.
+export function staleRowHtml(slug, entry = {}, status = 'Closed workspace · No project lead', kinds = [], models = []) {
   const project = { mode: 'auto', excludedKinds: [], excludedModels: [], ...entry };
   const kindRows = kinds.map((kind) => `<label><input type="checkbox" data-exclude-kind="${escapeHtml(slug)}:${escapeHtml(kind)}" ${project.excludedKinds.includes(kind) ? 'checked' : ''}> ${escapeHtml(kind)}</label>`).join('');
   const modelRows = models.map((model) => `<label><input type="checkbox" data-exclude-model="${escapeHtml(slug)}:${escapeHtml(model)}" ${project.excludedModels.includes(model) ? 'checked' : ''}> ${escapeHtml(model)}</label>`).join('');
