@@ -88,11 +88,15 @@ export async function withBrowserRestart(project, work, options = {}) {
   });
   const deadline = time(options.now) + BROWSER_RESTART_WAIT_MS;
   const wait = options.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let unknownClients = false;
   try {
     for (;;) {
       const left = deadline - time(options.now);
       if (left <= 0) {
-        const error = new Error(`Browser restart refused after 30 seconds: a command is still in flight on ${project}, or a CDP client is connected or cannot be checked. Retry when commands finish and CDP clients disconnect.`);
+        const message = unknownClients
+          ? `Browser restart refused after 30 seconds: CDP clients could not be checked with the process facts service or local lsof. Retry the check, or override this unknown check with herdr-boss browser restart ${project} ${options.headless === false ? '--visible' : '--headless'} --allow-unknown-clients.`
+          : `Browser restart refused after 30 seconds: a command is still in flight on ${project}, or a CDP client is connected. Retry when commands finish and CDP clients disconnect.`;
+        const error = new Error(message);
         error.exitCode = 3;
         throw error;
       }
@@ -104,7 +108,8 @@ export async function withBrowserRestart(project, work, options = {}) {
             Promise.resolve().then(options.externalClients).catch(() => null),
             new Promise((resolve) => { timer = setTimeout(() => resolve(null), left); }),
           ]);
-          busy = count !== 0;
+          unknownClients = count == null;
+          busy = unknownClients ? options.allowUnknownClients !== true : count !== 0;
         } finally { clearTimeout(timer); }
       }
       if (!busy && time(options.now) < deadline) break;

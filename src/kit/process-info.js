@@ -1,17 +1,10 @@
 import { spawnSync } from 'node:child_process';
+import { getProcessInfo } from '../process-facts.js';
 
 // Return the process start time that `ps` prints, or null when the system cannot read it.
-export function processStartIdentity(pid) {
-  try {
-    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-      encoding: 'utf8', timeout: 2000,
-      env: { PATH: process.env.PATH ?? '', LC_ALL: 'C' },
-    });
-    if (result.status !== 0) return null;
-    return result.stdout.trim().replace(/\s+/g, ' ') || null;
-  } catch {
-    return null;
-  }
+export function processStartIdentity(pid, { readFacts = getProcessInfo } = {}) {
+  const result = readFacts(pid);
+  return result.known && result.alive ? result.start : null;
 }
 
 // Return { alive, start } and an optional diagnostic state. ESRCH means gone. EPERM means alive.

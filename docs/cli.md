@@ -1772,6 +1772,8 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 | `worker scope add NAME PATH... --reason TEXT` | Approve and record extra paths for a running worker after a `WORKER QUESTION`. |
 
+Collection reads process facts from the live loopback service first. It uses local `ps` and `lsof` only when the service cannot be reached. An unknown process check prints a notice and does not block collection.
+
 Collection checks the recorded worker pane shell and its descendants. It ignores the caller's process tree, including tools that use the worktree as their current directory. If a record has no shell PID, collection uses the old current-directory rule for a worktree. For a no-worktree run with no shell PID, it does not block on processes that use the project root. A refusal lists each blocking PID, its ancestor command name, and the reason. For a worker descendant, it gives the worker stop-own command.
 
 Use `worker collect NAME --defects N` to record an integer defect count from 0 to 99. The count is optional. Without this option, the ledger and usage record have no `defects` field. Existing `defectsFound` lists stay supported. The model scorecard shows the total and the number of runs with a count beside the first-time and rework results. A dash means no count was recorded.
@@ -1969,7 +1971,9 @@ The paths must be repository-relative and inside the worker worktree. The comman
 
 Collection records the run before it prunes. Collect removes a worktree only when its branch is already merged and it passes the safe checks. A branch that is not merged stays in its worktree. Merge it, then run `herdr-boss worktree prune --apply`. Turn off `worktrees.pruneAtCollect` in Settings to keep worktrees after collection.
 
-`worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It blocks all removals when it cannot scan processes. It does not remove worktrees with other dirty project paths, unmerged branches, primary checkouts, live panes, or uninspectable state.
+`worktree prune` reads process facts from the live loopback service first. It uses local `ps` and `lsof` only when the service cannot be reached. An unknown process check keeps that worktree. The command continues with the other worktrees.
+
+`worktree prune` checks the current working directory of processes in every existing worktree it could remove. It also reports parent-PID-1 processes that still use a missing or prunable worktree path. It never removes a worktree while a matching process runs. It keeps a worktree when it cannot scan its processes. It skips build cleanup for that worktree. It does not remove worktrees with other dirty project paths, unmerged branches, primary checkouts, live panes, or uninspectable state.
 
 Use `worktree prune --clean-build` to list rebuildable output in worktrees that the prune keeps. The list gives the path and size of each file and the total size. It includes files under `dist`, `.vite`, and `test-results`, plus screenshots older than one day under `.worker/tmp`. It never deletes tracked files or `node_modules`. It skips a worktree with a live pane or a running process. Add `--apply` to delete the listed files. The command then prints the total size deleted. It does not clean the primary checkout.
 
@@ -2187,6 +2191,27 @@ A file whose name contains `handoff` is a handoff note. A handoff note carries n
 
 An unknown tool-call count stays `null`. The ledger accepts `null` as unknown. This check reads the ledger. Do not replace `null` with `0`. Do not edit the ledger entry.
 
+## Process facts in a sandbox
+
+The OpenCode start lock, worker collection, worktree pruning, and browser client check use the live service for process facts.
+The service verifies the caller pane before it reads a process.
+Use a pane labeled `boss` or `orch` with its correct `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`.
+The request uses loopback on `HERDR_BOSS_PORT`, or port 4477 by default.
+Local `ps` and `lsof` are the fallback when the service cannot be reached.
+A service refusal does not permit a local fallback.
+The probes for each query share a two-second deadline.
+A timeout after connection does not permit a local fallback.
+The answer contains process IDs and command names only, plus the facts required for the check.
+It contains no command arguments or environment values.
+See [Process facts API](specs/process-facts.md).
+
+The OpenCode start lock stays held when the owner identity is unknown.
+The age of the lock file does not release an unknown owner.
+Retry after the service can verify that owner.
+Worker collection continues after an unknown check.
+Worktree pruning keeps the worktree after an unknown check and continues with the others.
+Browser restart prints the exact `--allow-unknown-clients` command for an unknown CDP client check.
+
 ## Browsers
 
 `herdr-boss browser` is a thin helper for visual checks of a project page. It is not a Playwright or agent-browser replacement. Do not add general page automation or scripting to it.
@@ -2204,7 +2229,7 @@ A failed health check does not count while a browser command runs. It also does 
 
 For one week after the first health notice, the service writes one `browser-health` row to `events.jsonl` for each new health notice. The row holds the probe reason, the failure count, the process state, the process ID, and command activity. It also holds the count of other CDP clients. The process state is `running`, `missing`, or `unknown`. The row contains no page URL, title, or process command line. The service keeps the start of this period across service restarts.
 
-Restart blocks new browser commands while it waits and relaunches. Tab reads, page input, navigation, and screenshots use the activity tracker. A queued screenshot also counts as a command in flight. These records cover Herdr Boss browser commands. Restart also waits for other CDP clients to disconnect. It refuses when the client count is unknown. A connected client can be idle, so this check can refuse an idle client. This protects commands from drivers that do not use the tracker.
+Restart blocks new browser commands while it waits and relaunches. Tab reads, page input, navigation, and screenshots use the activity tracker. A queued screenshot also counts as a command in flight. These records cover Herdr Boss browser commands. Restart also waits for other CDP clients to disconnect. It refuses when the client count is unknown. The refusal names the failed CDP client check. Add `--allow-unknown-clients` to `browser restart` to override an unknown check. This option does not bypass a known connected client or a command in flight. A connected client can be idle, so this check can refuse an idle client. This protects commands from drivers that do not use the tracker.
 
 The private session file keeps the last known tab addresses. A tab read, a successful page command, or a health probe that lists tabs updates these addresses. Restart uses the current tab list when it is available. Otherwise, it uses the saved addresses. It keeps each duplicate address as a separate tab. A saved address can be older than the current page if another CDP client changed that page after the last probe. Only web pages and blank tabs are saved. Restore drops query strings and fragments when it saves an address and when it reopens a tab. A page that needs them reopens at its path. Restore skips login and callback pages. It checks each path segment by its token prefix, without its file extension. Login, logon, sign-in, sign-on, OAuth, authorization, callback, SSO, SAML, OIDC, OpenID, connect, consent, and token prefixes prevent restore. It drops path parameters from every segment. It decodes the path up to three times for this check. It skips a path if decoding fails or leaves another encoded layer. It also skips sign-in hosts whose first label is `login`, `accounts`, `sso`, `auth`, `id`, `idp`, `signin`, or `adfs`. It also skips an address with a user name or password. Read the tab list again after a restart. The tab IDs change. The output reports `restoredTabs` and `restoredPage`. A failed tab restore gives a message with no page address. An old browser with no saved tab list cannot restore pages when its tab list is unavailable.
 
@@ -2226,7 +2251,7 @@ Herdr Boss decides browser ownership by the Herdr workspace. Any pane in a proje
 |---|---|
 | `browser request SLUG [--headless\|--visible] [--reserve] [--full]` | Launch the project browser in headless mode. Visible mode needs `browser.allowVisible` on. From a Herdr pane, request the browser of your workspace's project, or use the Boss. `--reserve` assigns the port and profile only. |
 | `browser list` | All project browsers, ports, profiles, and state. |
-| `browser restart SLUG --headless\|--visible [--no-restore]` | Close and relaunch in the chosen mode. Visible mode needs `browser.allowVisible` on. Use it for a browser in the state `not responding`; the notice to the project lead names the command. Saved web pages and blank tabs reopen unless `--no-restore`. Restore drops query strings and fragments. It skips login and callback pages. Each tab has its own window. The command waits up to 30 seconds for a browser command to finish. It refuses with exit code 3 if a command still runs. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
+| `browser restart SLUG --headless\|--visible [--no-restore] [--allow-unknown-clients]` | Close and relaunch in the chosen mode. Visible mode needs `browser.allowVisible` on. Use it for a browser in the state `not responding`; the notice to the project lead names the command. Saved web pages and blank tabs reopen unless `--no-restore`. Restore drops query strings and fragments. It skips login and callback pages. Each tab has its own window. The command waits up to 30 seconds for a browser command to finish. It refuses with exit code 3 if a command still runs. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser close SLUG` | Close the browser. The profile and the port lease stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser release SLUG` | Remove the port lease of the project. Refuses while the project Chrome runs. The record and the profile stay. From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |
 | `browser size SLUG WIDTH HEIGHT` | Window size for the next launch (320–3840 × 240–2160). From a Herdr pane, only a pane in that project's workspace or the Boss can run this command. |

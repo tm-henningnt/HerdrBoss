@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { withMutationLock } from './locks.js';
 import { processStartIdentity } from './process-info.js';
+import { getProcessInfo } from '../process-facts.js';
 
 const RELEASE_WAIT_MS = 60_000;
-const FALLBACK_OWNER_MAX_AGE_MS = 300_000;
 
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 
@@ -24,13 +24,19 @@ function readOwner(file) {
 function validStart(start) { return typeof start === 'string' && start.length <= 256 && Number.isFinite(Date.parse(start)); }
 function normalizeStart(start) { return validStart(start) ? start.trim().replace(/\s+/g, ' ') : null; }
 
-function ownerAlive(owner, readProcessStart, wallNow) {
+function ownerAlive(owner, readProcessStart, readProcessFacts) {
+  if (readProcessFacts) {
+    const facts = readProcessFacts(owner.pid);
+    if (!facts.known) return true;
+    if (!facts.alive) return false;
+    const currentStart = normalizeStart(facts.start);
+    return !currentStart || !owner.pidStart || currentStart === normalizeStart(owner.pidStart);
+  }
   try { process.kill(owner.pid, 0); }
   catch (error) { if (error.code === 'ESRCH') return false; if (error.code !== 'EPERM') throw error; }
   const currentStart = normalizeStart(readProcessStart(owner.pid));
-  // An unreadable start time is not proof of death. Keep the PID and token claim
-  // until its file age exceeds the fallback limit.
-  if (!currentStart || !owner.pidStart) return Math.max(0, wallNow() - owner.mtimeMs) <= FALLBACK_OWNER_MAX_AGE_MS;
+  // An unreadable identity is not proof of death, regardless of the lock file age.
+  if (!currentStart || !owner.pidStart) return true;
   return currentStart === normalizeStart(owner.pidStart);
 }
 
@@ -39,6 +45,7 @@ function ownerAlive(owner, readProcessStart, wallNow) {
 export function withOpenCodeStartLock(dataDir, operation, {
   wait = pause, output = console.log, timeoutMs = 300_000, now = () => performance.now(),
   readProcessStart = processStartIdentity, mutationLock = withMutationLock, wallNow = Date.now,
+  readProcessFacts = readProcessStart === processStartIdentity ? getProcessInfo : null,
 } = {}) {
   const deadline = now() + timeoutMs;
   const timedOut = () => new Error(`OpenCode start lock is still busy after ${timeoutMs / 1000} s. No TUI was launched; retry after the other start finishes.`);
@@ -53,7 +60,7 @@ export function withOpenCodeStartLock(dataDir, operation, {
       acquired = mutationLock(directory, () => {
         if (timeoutMs > 0 && now() >= deadline) throw timedOut();
         const owner = readOwner(file);
-        if (owner && ownerAlive(owner, readProcessStart, wallNow)) return false;
+        if (owner && ownerAlive(owner, readProcessStart, readProcessFacts)) return false;
         const pidStart = normalizeStart(readProcessStart(process.pid));
         if (timeoutMs > 0 && now() >= deadline) throw timedOut();
         const temporary = path.join(directory, `${token}.tmp`);

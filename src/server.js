@@ -65,6 +65,8 @@ import { attachState } from './factory-store.js';
 import { createDocsSite, IMAGE_TYPES as DOC_IMAGE_TYPES } from './docs-site.js';
 import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
 import { postTodo, actOnTodo, cancelTodo, replyToTodo, migrateTodo } from './owner-todo.js';
+import { createProcessFactsApi } from './process-facts-api.js';
+import { enterProcessFactsService } from './process-facts.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -233,8 +235,9 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), readVersion = readServiceVersion, fleet = {}, docsSite = defaultDocsSite, hostGuide = {}, todoHerdr = createHerdrRunner() } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), readVersion = readServiceVersion, fleet = {}, docsSite = defaultDocsSite, hostGuide = {}, todoHerdr = createHerdrRunner(), processFacts = {} } = {}) {
   initializeLifecyclePort();
+  const processFactsApi = createProcessFactsApi({ herdr: createHerdrRunner(), ...processFacts, readOnly: readOnlyPreview });
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
   const machineHoursCache = new Map();
@@ -609,6 +612,10 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
           return res.end();
         }
         return send(res, 401, { error: 'Access token required.' });
+      }
+      if (p.startsWith('/api/process-facts/')) {
+        const result = processFactsApi.handle(req, url);
+        return send(res, result.status, result.body);
       }
       // Check the raw route too: URL normalization must not hide traversal behind the app shell.
       if (p === '/attachments' || req.url.startsWith('/attachments/') || p.startsWith('/attachments/')) {
@@ -1597,11 +1604,14 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     }
   });
 
+  const releaseProcessFactsService = enterProcessFactsService();
+  server.once('error', () => { if (!server.listening) releaseProcessFactsService(); });
   server.listen(cfg.port, bindHost, () => {
     serverLog(`herdr-boss: http://${bindHost}:${cfg.port} (push ${engine.push ? 'on' : 'off'})`);
   });
 
   server.on('close', () => {
+    releaseProcessFactsService();
     closed = true;
     void fleetPoller.stop();
     clearTimeout(timer);

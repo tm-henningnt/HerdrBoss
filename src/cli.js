@@ -1085,9 +1085,13 @@ async function main() {
         const released = await releaseBrowser(args[1]);
         printBrowser(`Released project browser port ${released.port} of ${released.project}.`);
       }
-      else if (args[0] === 'restart' && [3, 4].includes(args.length) && ['--headless', '--visible'].includes(args[2]) && (args.length === 3 || args[3] === '--no-restore')) {
+      else if (args[0] === 'restart' && args.length >= 3 && args.length <= 5 && ['--headless', '--visible'].includes(args[2])
+        && args.slice(3).every((flag) => ['--no-restore', '--allow-unknown-clients'].includes(flag))
+        && new Set(args.slice(3)).size === args.slice(3).length) {
         await verifyBrowserCaller(args[1]);
-        printBrowserJson(await restartBrowser(args[1], args[2] === '--headless', { restorePage: !args.includes('--no-restore') }));
+        printBrowserJson(await restartBrowser(args[1], args[2] === '--headless', {
+          restorePage: !args.includes('--no-restore'), allowUnknownClients: args.includes('--allow-unknown-clients'),
+        }));
       }
       else if (args[0] === 'tabs' && args.length === 2) {
         const tabs = await listBrowserTabs(args[1]);

@@ -98,8 +98,19 @@ test('an unknown external client count refuses the restart', async () => {
   let restarted = false;
   await assert.rejects(activity.withBrowserRestart('unknown-clients', async () => { restarted = true; }, {
     now: () => now, wait: async (ms) => { now += ms; }, externalClients: async () => null,
-  }), (error) => error.exitCode === 3);
+  }), (error) => error.exitCode === 3 && /CDP clients could not be checked/.test(error.message)
+    && /herdr-boss browser restart unknown-clients --headless --allow-unknown-clients/.test(error.message));
   assert.equal(restarted, false);
+});
+
+test('the unknown-client override allows unknown facts but still refuses connected clients', async () => {
+  assert.equal(await activity.withBrowserRestart('override-unknown', async () => 'restarted', {
+    externalClients: async () => null, allowUnknownClients: true,
+  }), 'restarted');
+  let now = 1000;
+  await assert.rejects(activity.withBrowserRestart('override-connected', async () => assert.fail('must not restart'), {
+    now: () => now, wait: async (ms) => { now += ms; }, externalClients: async () => 1, allowUnknownClients: true,
+  }), /CDP client/);
 });
 
 test('a command in a separate CLI process is visible until that process finishes', async () => {

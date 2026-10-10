@@ -24,6 +24,7 @@ import { PLANNER_LABEL, activeSessionForPane, endSession, startSession } from '.
 import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from './opencode-start.js';
 import { clearCodexLaneBlock, CODEX_HOOK_BLOCK_REASON, CODEX_HOOK_REVIEW_INSTRUCTION, hasCodexHookReviewDialog, waitForCodexHookReview, writeCodexLaneBlock } from '../codex-lane.js';
 import { processStartIdentity } from './process-info.js';
+import { getCwdProcesses } from '../process-facts.js';
 import { activeLaunchRecords, clearModelFailure, detectLaunchBlock, launchBlockedError, markModelUnavailable, modelFailureMark, newPaneLines, untilText } from './model-unavailable.js';
 import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
 import { archiveWorkerReports } from './worker-archive.js';
@@ -236,7 +237,8 @@ function processAncestorName(process, byPid) {
 function legacyCollectProcesses(processes, root, callerPids) {
   const inTree = processes.filter((item) => isInWorktree(item, root));
   const byPid = new Map(processes.map((item) => [Number(item.pid), item]));
-  const daemon = (item) => /(?:^|\/)Codex\.app\/Contents\/Resources\/app-server-daemon(?:\s|$)/.test(String(item.executable ?? item.args ?? ''));
+  const daemon = (item) => /^app-server(?:-daemon)?$/.test(String(item.command ?? ''))
+    || /(?:^|\/)Codex\.app\/Contents\/Resources\/app-server-daemon(?:\s|$)/.test(String(item.executable ?? item.args ?? ''));
   const sharedRuntime = (item) => {
     const visited = new Set();
     let current = item;
@@ -311,15 +313,12 @@ export function listCwdProcesses() {
   return parseCwdProcesses(output);
 }
 
-function worktreeCwdProcesses(worktree) {
-  const processes = listCwdProcesses();
-  for (const item of processes) {
-    if (!/^app-server/.test(item.command ?? '')) continue;
-    try {
-      item.executable = execFileSync('lsof', ['-a', '-p', String(item.pid), '-d', 'txt', '-Fn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch {}
-  }
-  return processes;
+export function worktreeCwdProcesses(worktree, { readFacts = getCwdProcesses } = {}) {
+  const result = readFacts(path.resolve(worktree));
+  if (!result.known) return result;
+  return { known: true, processes: result.processes.map(({ inCwd, ...item }) => ({ ...item,
+    cwd: inCwd ? path.resolve(worktree) : null,
+  })) };
 }
 
 function workerPaneShellPid(paneId, herdr) {
@@ -2763,7 +2762,10 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (path.resolve(reportJson.worktree) !== path.resolve(run.worktree)) throw new Error(`Report worktree ${reportJson.worktree} does not match run worktree ${run.worktree}.`);
     const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
     if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
-    const processList = listWorktreeProcesses(run.worktree);
+    const processFacts = listWorktreeProcesses(run.worktree);
+    // Keep the injected array seam for existing callers. Unknown facts do not block report collection.
+    const processList = Array.isArray(processFacts) ? processFacts : processFacts.known ? processFacts.processes : [];
+    if (!Array.isArray(processFacts) && !processFacts.known) output(`Collection process check unknown: ${processFacts.reason} Continued collection.`);
     const root = path.resolve(run.worktree);
     const noWorktree = run.noWorktree === true || root === path.resolve(config.root);
     const workerShellPid = Number(run.shellPid);
