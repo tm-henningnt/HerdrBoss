@@ -217,6 +217,25 @@ async function cancel(dir, run, paneId = 'wA:p1', label = 'orch', extra = []) {
   return { code, lines };
 }
 
+function makePreGateApproval(dir, run, mutate = () => {}) {
+  const approval = requestQlik(dir, run);
+  answer(dir, approval.id, 'Approved.');
+  const record = item(dir, approval.id);
+  delete record.release.demoApp;
+  mutate(record.release, run);
+  openMessageStore({ dir }).update(approval.id, { release: record.release });
+  return approval.id;
+}
+
+function legacyQlikFiles(demoApp = Buffer.from('demo app bytes')) {
+  const hash = sha(demoApp);
+  return {
+    'extension.zip': zipWithEntry('extension/extension.js'),
+    'demo.qvf': demoApp,
+    'demo.qvf.sha256': `${hash}  demo.qvf\n`,
+  };
+}
+
 test('request posts one Mailbox item the Owner can answer, with all card fields', () => {
   const dir = newDir();
   const run = fakeGh();
@@ -440,16 +459,294 @@ test('another orchestrator cannot cancel a release request', async () => {
   assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
 });
 
-test('an Owner approval blocks cancellation and names the publish path', async () => {
+test('an Owner approval blocks plain cancellation and names the Boss force command', async () => {
   const dir = newDir();
   const run = fakeGh();
   const first = request(dir, run);
   answer(dir, first.id, 'Approved.');
   const result = await cancel(dir, run);
   assert.equal(result.code, 1);
-  assert.match(result.lines.join('\n'), /release publish.*Owner denial/i);
+  assert.match(result.lines.join('\n'), /only the Boss.*herdr-boss release cancel .*--force --reason TEXT/i);
   assert.equal(item(dir, first.id).closeNote, undefined);
   assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('a Boss can force-cancel an approved unpublished request with exactly one audit line', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  const reason = 'Replace the approved draft';
+
+  const result = await cancel(dir, run, 'wB:p1', 'boss', ['--force', '--reason', reason]);
+
+  assert.equal(result.code, 0);
+  assert.equal(item(dir, first.id).closeNote, 'superseded');
+  const audit = fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(audit.length, 1);
+  assert.deepEqual({ approvalId: audit[0].approvalId, who: audit[0].who, repo: audit[0].repo, tag: audit[0].tag, action: audit[0].action, reason: audit[0].reason }, {
+    approvalId: first.id, who: 'wB:p1', repo: REPO, tag: TAG, action: 'cancel', reason,
+  });
+  const next = request(dir, run);
+  assert.equal(next.alreadyOpen, false);
+});
+
+test('force cancellation refuses a request that the Owner has not approved', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+
+  const result = await cancel(dir, run, 'wB:p1', 'boss', ['--force', '--reason', 'Replace the pending request']);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /requires an approved release request/i);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('force cancellation refuses an approved add-asset request', async () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: false });
+  const file = path.join(dir, 'demo.zip');
+  fs.writeFileSync(file, 'demo bundle');
+  const first = requestAssets(dir, run, [file]);
+  answer(dir, first.id, 'Approved.');
+
+  const result = await cancel(dir, run, 'wB:p1', 'boss', ['--force', '--reason', 'Replace the pending request']);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /only to an approved publication request/i);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('force cancellation requires a 1 to 300 character reason', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+
+  const result = await cancel(dir, run, 'wB:p1', 'boss', ['--force']);
+  const tooLong = await cancel(dir, run, 'wB:p1', 'boss', ['--force', '--reason', 'x'.repeat(301)]);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /--force needs --reason TEXT \(1 to 300 characters\)/);
+  assert.equal(tooLong.code, 1);
+  assert.match(tooLong.lines.join('\n'), /--reason must contain 1 to 300 characters/);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('only the verified Boss pane can force-cancel an approved request', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+
+  const result = await cancel(dir, run, 'wA:p1', 'orch', ['--force', '--reason', 'Replace the approved draft']);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /Only the pane labeled boss/);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('force cancellation refuses a published release', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  run.state.draft = false;
+
+  const result = await cancel(dir, run, 'wB:p1', 'boss', ['--force', '--reason', 'Replace the approved draft']);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /already published/i);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('force cancellation refuses when the draft state is unknown', async () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  const unknownDraftRun = (args) => {
+    const result = run(args);
+    if (args[0] === 'release' && args[1] === 'view' && result.status === 0) {
+      const data = JSON.parse(result.stdout);
+      delete data.isDraft;
+      return { ...result, stdout: JSON.stringify(data) };
+    }
+    return result;
+  };
+
+  const result = await cancel(dir, unknownDraftRun, 'wB:p1', 'boss', ['--force', '--reason', 'Replace the pending request']);
+
+  assert.equal(result.code, 1);
+  assert.match(result.lines.join('\n'), /draft state is unknown/i);
+  assert.equal(item(dir, first.id).closeNote, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'releases', 'audit.jsonl')), false);
+});
+
+test('a pre-gate approval with one recorded QVF and its checksum companion publishes', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run);
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.published, true, result.reason);
+  assert.equal(run.state.draft, false);
+  const audit = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.equal(audit.approvalAcceptedUnder, 'pre-gate rule');
+  assert.deepEqual(audit.demoApp, { name: 'demo.qvf', sha256: sha('demo app bytes') });
+});
+
+test('a pre-gate approval with two recorded QVFs refuses with the Boss force-cancel fix', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run, (releaseData, fake) => {
+    fake.state.files['second.qvf'] = 'second demo app';
+    fake.state.files['second.qvf.sha256'] = `${sha('second demo app')}  second.qvf\n`;
+    releaseData.assets.push(
+      { name: 'second.qvf', size: Buffer.byteLength('second demo app'), sha256: sha('second demo app') },
+      { name: 'second.qvf.sha256', size: Buffer.byteLength(fake.state.files['second.qvf.sha256']), sha256: sha(fake.state.files['second.qvf.sha256']) },
+    );
+  });
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /exactly one.*\.qvf/i);
+  assert.match(result.reason, new RegExp(`ask the Boss.*herdr-boss release cancel ${REPO} ${TAG} --force --reason TEXT`, 'i'));
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a pre-gate approval without a recorded QVF checksum companion refuses with a fix', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run, (releaseData, fake) => {
+    delete fake.state.files['demo.qvf.sha256'];
+    releaseData.assets = releaseData.assets.filter((asset) => asset.name !== 'demo.qvf.sha256');
+  });
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /demo\.qvf\.sha256/i);
+  assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a pre-gate approval refuses when a fresh QVF download does not match the recorded hash', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run);
+  run.state.files['demo.qvf'] = 'changed demo app bytes';
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /changed|match|hash/i);
+  assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a pre-gate approval refuses when its recorded QVF hash differs from the fresh download', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run, (releaseData) => {
+    releaseData.assets.find((asset) => asset.name === 'demo.qvf').sha256 = sha('different approved demo app');
+  });
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /fresh draft asset names, sizes, and SHA-256 hashes do not match/i);
+  assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a pre-gate approval refuses an invalid recorded QVF size or hash', () => {
+  for (const [field, value] of [['size', -1], ['sha256', 'invalid-hash']]) {
+    const dir = newDir();
+    const run = fakeGh({ files: legacyQlikFiles() });
+    const id = makePreGateApproval(dir, run, (releaseData) => {
+      releaseData.assets.find((asset) => asset.name === 'demo.qvf')[field] = value;
+    });
+
+    const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+    assert.equal(result.code, 'demo-app-failed');
+    assert.match(result.reason, /valid size and SHA-256 hash/i);
+    assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+    assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+  }
+});
+
+test('a failed non-QVF download in the pre-gate inspection path is rethrown', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run);
+  const failedDownload = (args) => {
+    if (args[0] === 'release' && args[1] === 'download' && args[args.indexOf('--pattern') + 1] === 'extension.zip') {
+      return { status: 1, error: null, stdout: '', stderr: 'temporary network failure' };
+    }
+    return run(args);
+  };
+
+  assert.throws(
+    () => release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run: failedDownload, dir, knownHosts, config: qlikExtensionConfig }),
+    /gh release download extension\.zip failed: temporary network failure/,
+  );
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a non-Qlik approval without a demoApp field publishes without the Qlik gate', () => {
+  const dir = newDir();
+  const run = fakeGh();
+  const first = request(dir, run);
+  answer(dir, first.id, 'Approved.');
+  const record = item(dir, first.id);
+  delete record.release.demoApp;
+  openMessageStore({ dir }).update(first.id, { release: record.release });
+
+  const result = publish(dir, run, first.id);
+
+  assert.equal(result.published, true, result.reason);
+  assert.equal(run.state.draft, false);
+  const audit = JSON.parse(fs.readFileSync(path.join(dir, 'releases', 'audit.jsonl'), 'utf8').trim());
+  assert.equal(audit.approvalAcceptedUnder, undefined);
+  assert.equal(audit.demoApp, undefined);
+});
+
+test('a pre-gate approval refuses when an extension archive contains a QVF', () => {
+  const dir = newDir();
+  const run = fakeGh({ files: legacyQlikFiles() });
+  const id = makePreGateApproval(dir, run);
+  run.state.files['extension.zip'] = zipWithEntry('extension/demo.qvf');
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /extension.*\.qvf|\.qvf.*extension/i);
+  assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
+});
+
+test('a pre-gate approval refuses when a fresh asset fails the scan', () => {
+  const dir = newDir();
+  const largeDemoApp = Buffer.alloc(20 * 1024 * 1024 + 1, 65);
+  const run = fakeGh({ files: legacyQlikFiles(largeDemoApp) });
+  const id = makePreGateApproval(dir, run);
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, config: qlikExtensionConfig });
+
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /scan|large/i);
+  assert.match(result.reason, /ask the Boss.*--force --reason TEXT/i);
+  assert.ok(!run.calls.some((args) => args[1] === 'edit'));
 });
 
 test('cancel without an open request exits non-zero with a plain message', async () => {

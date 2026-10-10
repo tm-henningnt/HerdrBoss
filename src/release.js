@@ -11,6 +11,7 @@ import { openMessageStore } from './message-store.js';
 import { scanText } from './secret-scan.js';
 import { scanTokenText } from '../scripts/docs-gate.js';
 import { redactSecrets } from './redact.js';
+import { forceReason } from './force-audit.js';
 import { listBrowserSessions } from './browser-pool.js';
 import { getResultRecord } from './review-store.js';
 
@@ -102,7 +103,7 @@ function readRelease(run, repo, tag) {
   try { data = JSON.parse(result.stdout); } catch { throw new Error('gh release view returned text that is not JSON.'); }
   if (!data || typeof data !== 'object') throw new Error('gh release view returned no release.');
   return {
-    name: data.name ?? null, tag: data.tagName ?? tag, draft: data.isDraft !== false, body: data.body ?? '',
+    name: data.name ?? null, tag: data.tagName ?? tag, draft: data.isDraft !== false, draftKnown: typeof data.isDraft === 'boolean', body: data.body ?? '',
     commit: data.targetCommitish ?? null, url: data.url ?? null,
     assets: (data.assets ?? []).map((asset) => ({ name: asset.name, size: asset.size ?? 0, digest: String(asset.digest ?? '').replace(/^sha256:/, '') || null })),
   };
@@ -426,6 +427,28 @@ function sameReleaseAssets(stored, current) {
   return JSON.stringify(shape(stored)) === JSON.stringify(shape(current));
 }
 
+function preGateDemoApp(assets) {
+  if (!Array.isArray(assets)) throw new Error('The pre-gate approval has no recorded asset list.');
+  const qvfs = assets.filter((asset) => typeof asset?.name === 'string' && /\.qvf$/i.test(asset.name));
+  if (qvfs.length !== 1) throw new Error('The pre-gate approval must record exactly one separate .qvf asset.');
+  const asset = qvfs[0];
+  if (!assets.some((entry) => entry?.name === `${asset.name}.sha256`)) {
+    throw new Error(`The pre-gate approval must record the ${asset.name}.sha256 companion asset.`);
+  }
+  if (!Number.isSafeInteger(asset.size) || asset.size < 0 || !/^[a-f0-9]{64}$/i.test(asset.sha256 ?? '')) {
+    throw new Error(`The pre-gate approval does not record a valid size and SHA-256 hash for ${asset.name}.`);
+  }
+  return { name: asset.name, size: asset.size, sha256: asset.sha256 };
+}
+
+function demoAppFix(repo, tag) {
+  return `Ask the Boss to run herdr-boss release cancel ${repo} ${tag} --force --reason TEXT.`;
+}
+
+function demoAppRefusal(reason, repo, tag) {
+  return refuse('demo-app-failed', { reason: `Demo app gate failed: ${redactSecrets(reason)} ${demoAppFix(repo, tag)}` });
+}
+
 // The Owner answers an approve item with a message that has replyTo set. The newest answer counts.
 function ownerAnswer(all, approval) {
   const answers = all.filter((record) => record.from === 'owner' && record.kind === 'message' && record.replyTo === approval.id);
@@ -649,12 +672,14 @@ export function requestAddAsset({ repo, tag, files = [], reason = '', appendNote
   return { id: record.id, repo, tag, alreadyOpen: false, scanOk: findings.length === 0 };
 }
 
-function writeAudit({ dir, approvalId, who, repo, tag, now, action = 'publish', reason = undefined, files = undefined }) {
+function writeAudit({ dir, approvalId, who, repo, tag, now, action = 'publish', reason = undefined, files = undefined, approvalAcceptedUnder = undefined, demoApp = undefined }) {
   const file = path.join(dir, AUDIT_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const entry = { at: new Date(now).toISOString(), approvalId, who, repo, tag, action };
   if (reason !== undefined) entry.reason = reason;
   if (files !== undefined) entry.files = files;
+  if (approvalAcceptedUnder !== undefined) entry.approvalAcceptedUnder = approvalAcceptedUnder;
+  if (demoApp !== undefined) entry.demoApp = demoApp;
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
 }
@@ -670,10 +695,16 @@ function closeItem(id, note, { dir, now }) {
 
 // Settle a request when its requester needs to replace it. The caller is checked again here so the
 // command cannot cancel another orchestrator's request.
-export function cancelRelease({ repo, tag, reason = '', dir = DATA_DIR, now = Date.now(), who = null, role = null }) {
-  if (!repo || !tag) throw new Error('Usage: release cancel REPO TAG [--reason TEXT]');
+export function cancelRelease({ repo, tag, reason = '', force = false, run = null, dir = DATA_DIR, now = Date.now(), who = null, role = null }) {
+  if (!repo || !tag) throw new Error('Usage: release cancel REPO TAG [--reason TEXT] [--force --reason TEXT]');
   if (!['boss', 'orch'].includes(role) || !who) {
     return { ok: false, reason: 'Only the requesting orchestrator pane or the Boss can cancel this release request.' };
+  }
+  let safeForceReason = null;
+  if (force) {
+    try { safeForceReason = forceReason(true, reason); }
+    catch (error) { return { ok: false, reason: error.message }; }
+    if (role !== 'boss') return { ok: false, reason: 'Only the verified Boss pane can force-cancel an approved release request.' };
   }
   const all = records(dir);
   const approval = all.find((record) => isRelease(record) && !settled(record) && sameTarget(record, repo, tag));
@@ -681,16 +712,31 @@ export function cancelRelease({ repo, tag, reason = '', dir = DATA_DIR, now = Da
   if (role !== 'boss' && approval.requesterPane !== who) {
     return { ok: false, reason: 'Only the requesting orchestrator pane or the Boss can cancel this release request.' };
   }
-  if (ownerAnswer(all, approval)?.verdict === 'accept') {
+  const answer = ownerAnswer(all, approval);
+  if (force && answer?.verdict !== 'accept') {
+    return { ok: false, reason: 'Force cancellation requires an approved release request.' };
+  }
+  if (force && !isPublishRequest(approval)) {
+    return { ok: false, reason: 'Force cancellation applies only to an approved publication request.' };
+  }
+  if (answer?.verdict === 'accept' && !force) {
     const next = isAddAsset(approval)
       ? `Run release apply-asset ${repo} ${tag} --approval ${approval.id} or wait for an Owner denial to settle this request.`
-      : 'Run release publish or wait for an Owner denial to settle this request.';
+      : `Only the Boss can run herdr-boss release cancel ${repo} ${tag} --force --reason TEXT.`;
     return { ok: false, reason: `The Owner has answered Approve. ${next}` };
   }
+  if (force) {
+    if (typeof run !== 'function') return { ok: false, reason: 'The release state cannot be checked. The request stays open.' };
+    let release;
+    try { release = readRelease(run, repo, tag); }
+    catch { return { ok: false, reason: 'The release state cannot be checked. The request stays open.' }; }
+    if (!release.draftKnown || !release.draft) return { ok: false, reason: 'The request cannot be cancelled because the release is already published or its draft state is unknown.' };
+  }
   const boundedReason = redactSecrets(String(reason).trim()).slice(0, MAX_CANCEL_REASON);
+  const auditReason = force ? safeForceReason : boundedReason;
+  writeAudit({ dir, approvalId: approval.id, who, repo, tag, now, action: 'cancel', reason: auditReason });
   openMessageStore({ dir }).update(approval.id, { supersededReason: boundedReason }, { now });
   closeItem(approval.id, 'superseded', { dir, now });
-  writeAudit({ dir, approvalId: approval.id, who, repo, tag, now, action: 'cancel', reason: boundedReason });
   return { ok: true, approvalId: approval.id, repo, tag };
 }
 
@@ -835,31 +881,49 @@ export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now
   if (!release.draft) return refuse('not-draft');
   const hosts = knownHosts ?? knownHostsFromSessions();
   const entry = repoConfig(repo, effectiveConfig);
+  const preGate = entry?.kind === 'qlik-extension' && !Object.hasOwn(approval.release, 'demoApp');
+  let recordedDemoApp = null;
+  if (preGate) {
+    try { recordedDemoApp = preGateDemoApp(approval.release.assets); }
+    catch (error) { return demoAppRefusal(error.message, repo, tag); }
+  }
   let assets;
   let demoApp;
-  try { assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension', requireDemoApp: entry?.requireDemoApp ?? true }); }
+  try { assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension', requireDemoApp: preGate || (entry?.requireDemoApp ?? true) }); }
   catch (error) {
+    if (preGate && !/Qlik extension|demo app|\.qvf|scan/i.test(error.message)) throw error;
+    if (preGate) return demoAppRefusal(redactSecrets(error.message), repo, tag);
     if (entry?.kind === 'qlik-extension' && /Qlik extension|demo app|\.qvf/i.test(error.message)) {
-      return refuse('demo-app-failed', { reason: `Demo app gate failed: ${redactSecrets(error.message)}` });
+      return demoAppRefusal(error.message, repo, tag);
     }
     throw error;
   }
   try { demoApp = demoAppAsset(entry, assets); }
   catch (error) {
-    if (entry?.kind === 'qlik-extension') return refuse('demo-app-failed', { reason: `Demo app gate failed: ${redactSecrets(error.message)}` });
+    if (entry?.kind === 'qlik-extension') return demoAppRefusal(error.message, repo, tag);
     return refuse('scan-failed');
   }
-  if (entry?.kind === 'qlik-extension' && (entry.requireDemoApp ?? true) && !approval.release.demoApp) {
-    return refuse('demo-app-failed', { reason: 'Demo app gate failed: the approval does not name a separate .qvf asset.' });
+  const card = approval.release.assets ?? [];
+  if (preGate && !sameReleaseAssets(card, assets)) {
+    return demoAppRefusal('the fresh draft asset names, sizes, and SHA-256 hashes do not match the recorded approval.', repo, tag);
   }
-  if (JSON.stringify(approval.release.demoApp ?? null) !== JSON.stringify(demoApp)) {
-    if (entry?.kind === 'qlik-extension') return refuse('demo-app-failed', { reason: 'Demo app gate failed: the separate .qvf asset changed after approval.' });
+  if (entry?.kind === 'qlik-extension' && (entry.requireDemoApp ?? true) && !preGate && !approval.release.demoApp) {
+    return demoAppRefusal('the approval does not name a separate .qvf asset.', repo, tag);
+  }
+  const expectedDemoApp = preGate ? recordedDemoApp : approval.release.demoApp ?? null;
+  if (JSON.stringify(expectedDemoApp) !== JSON.stringify(demoApp)) {
+    if (entry?.kind === 'qlik-extension') return demoAppRefusal('the separate .qvf asset changed after approval.', repo, tag);
     return refuse('checksum-mismatch');
   }
-  const card = approval.release.assets ?? [];
   const same = card.length === assets.length && card.every((entry) => assets.some((asset) => asset.name === entry.name && asset.sha256 === entry.sha256 && asset.size === entry.size));
-  if (!same) return refuse('checksum-mismatch');
-  if (scanFindings(scanRelease(release.body, { knownHosts: hosts, file: 'notes' }), assets).length) return refuse('scan-failed');
+  if (!same) {
+    if (preGate) return demoAppRefusal('the fresh draft asset names, sizes, and SHA-256 hashes do not match the recorded approval.', repo, tag);
+    return refuse('checksum-mismatch');
+  }
+  if (scanFindings(scanRelease(release.body, { knownHosts: hosts, file: 'notes' }), assets).length) {
+    if (preGate) return demoAppRefusal('the fresh changelog or an asset fails the release scan.', repo, tag);
+    return refuse('scan-failed');
+  }
 
   const edit = run(['release', 'edit', tag, '--repo', repo, '--draft=false', approval.release.latest === false ? '--latest=false' : '--latest']);
   if (edit.error || edit.status !== 0) throw new Error(`gh release edit failed: ${failureDetail(edit)}`);
@@ -868,7 +932,7 @@ export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now
   if (after.draft) throw new Error('The release is still a draft after gh release edit.');
   if (names !== card.map((entry) => entry.name).sort().join('\n')) throw new Error('The published release has other assets than the card.');
 
-  writeAudit({ dir, approvalId, who, repo, tag, now });
+  writeAudit({ dir, approvalId, who, repo, tag, now, ...(preGate ? { approvalAcceptedUnder: 'pre-gate rule', demoApp: { name: recordedDemoApp.name, sha256: recordedDemoApp.sha256 } } : {}) });
   closeItem(approvalId, 'published', { dir, now });
   return { ok: true, code: null, reason: null, published: true };
 }
@@ -919,7 +983,7 @@ export function watchReleaseAnswers(store, options = {}) {
   });
 }
 
-const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE] | release apply-asset REPO TAG --approval ID | release cancel REPO TAG [--reason TEXT] | release publish REPO TAG --approval ID | release status [REPO]';
+const USAGE = 'Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest] | release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE] | release apply-asset REPO TAG --approval ID | release cancel REPO TAG [--reason TEXT] [--force --reason TEXT] | release publish REPO TAG --approval ID | release status [REPO]';
 
 function parseArgs(args, valueFlags, boolFlags = []) {
   const flags = {};
@@ -950,12 +1014,15 @@ export async function releaseCommand(args, { env = process.env, dataDir = DATA_D
       return 0;
     }
     if (action === 'cancel') {
-      const { flags, positional } = parseArgs(rest, ['--reason']);
+      const { flags, positional } = parseArgs(rest, ['--reason'], ['--force']);
       if (positional.length !== 2) throw new Error(USAGE);
       const [{ verifyMessageCaller }, { createHerdrRunner }] = await Promise.all([import('./messages.js'), import('./kit/workers.js')]);
       const caller = verifyMessageCaller(env, herdr ?? createHerdrRunner(), 'release cancel');
+      if (flags['--force'] && caller.role !== 'boss') throw new Error('Only the pane labeled boss can run herdr-boss release cancel --force.');
+      if (flags['--force']) forceReason(true, flags['--reason']);
+      if (flags['--force'] && !run) { const { ghRunner } = await import('./gh-labels.js'); run = ghRunner({ env }); }
       const [repo, tag] = positional;
-      const result = cancelRelease({ repo, tag, reason: flags['--reason'] ?? '', dir: dataDir, now: Date.now(), who: caller.paneId, role: caller.role });
+      const result = cancelRelease({ repo, tag, reason: flags['--reason'] ?? '', force: flags['--force'] === true, run, dir: dataDir, now: Date.now(), who: caller.paneId, role: caller.role });
       if (result.ok) { out(`Cancelled release request ${result.approvalId} for ${repo} ${tag}.`); return 0; }
       err(`Refused: ${result.reason}`);
       return 1;

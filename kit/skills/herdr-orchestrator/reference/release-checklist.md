@@ -12,6 +12,7 @@ Every release of a Qlik extension product ships the atlas / demo app as a separa
 6. The helper scans the exported file. It prints counts only. It never prints app IDs, object IDs, matched content, or paths.
 7. Run `herdr-boss release request` for the draft. Check that the approval card lists the separate demo app by name, size, and SHA-256.
 8. Check that no extension ZIP contains a `.qvf` file. The release request refuses a Qlik extension draft that breaks this rule.
+The pre-gate rule accepts an approval only when the recorded list has one separate `.qvf` and its `.qvf.sha256` companion, the fresh asset hashes, scan, and archive checks pass, and no extension archive contains a `.qvf`; only the Boss can cancel a failed approved request with `herdr-boss release cancel REPO TAG --force --reason TEXT`.
 
 The helper takes the `qlik-cli` executable as an input and defaults to `qlik`. Tests inject a fake runner. They use no tenant connection.
 
