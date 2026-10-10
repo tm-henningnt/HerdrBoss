@@ -33,6 +33,7 @@ import { effortSettingsForModel } from './config.js';
 import { appendForcedAction, forceReason } from '../force-audit.js';
 import { clearDiskDiagnosisBulletin, scanDiskUsage, writeDiskDiagnosis } from '../disk-diagnosis.js';
 import { recordProjectActivity } from '../project-register.js';
+import { watchTrustPrompt } from '../trust-prompts.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -920,6 +921,42 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
+let interruptedStart = null;
+const startInterruptHandlers = Object.fromEntries(['SIGINT', 'SIGTERM'].map((signal) => [signal, () => {
+  const start = interruptedStart;
+  if (!start) return;
+  const reason = `Worker ${start.record.name} start interrupted by ${signal}.`;
+  try {
+    const run = readJson(start.file);
+    if (run.name !== start.record.name || run.worktree !== start.record.worktree) throw new Error('The run record belongs to another start.');
+    // A signal handled after the start finished must not mark a live worker as failed.
+    if (run.state === 'running') process.exit(signal === 'SIGINT' ? 130 : 143);
+    writeJsonAtomic(start.file, {
+      ...run, state: 'failed', reason, startFailed: true, outcome: 'failed',
+      finishedAt: run.finishedAt || new Date(start.clock()).toISOString(),
+    });
+    start.output(reason);
+  } catch { start.output(`${reason} The run record could not be updated.`); }
+  process.exit(signal === 'SIGINT' ? 130 : 143);
+}]));
+
+function watchStartInterruptions(file, record, clock, output) {
+  if (!interruptedStart) {
+    for (const [signal, handler] of Object.entries(startInterruptHandlers)) process.on(signal, handler);
+  }
+  const start = { file, record, clock, output };
+  interruptedStart = start;
+  return () => {
+    // Synchronous Herdr calls can defer a signal callback. Keep the latest start until the next event-loop turn.
+    // One shared handler per signal avoids listener leaks when starts retry or a caller starts several workers.
+    setImmediate(() => {
+      if (interruptedStart !== start) return;
+      interruptedStart = null;
+      for (const [signal, handler] of Object.entries(startInterruptHandlers)) process.off(signal, handler);
+    });
+  };
+}
+
 function hasLeaseStore(dataDir) {
   try { fs.statSync(path.join(dataDir, 'leases.json')); return true; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
@@ -1767,7 +1804,14 @@ function startWorkerOnce(name, options, {
   const recordFile = path.join(config.runsPath, `${name}.json`);
   const excludePath = git(config.root, ['rev-parse', '--git-path', 'info/exclude']).trim();
   const excludeFile = path.isAbsolute(excludePath) ? excludePath : path.resolve(config.root, excludePath);
-  if (fs.existsSync(recordFile)) throw new Error(`Run record already exists: ${recordFile}.`);
+  if (fs.existsSync(recordFile)) {
+    const previous = readJson(recordFile);
+    // A clean failed start keeps its evidence until the next start. Its archived copy stays available after reuse.
+    const reusable = previous.name === name && previous.worktree === worktree && previous.startFailed
+      && previous.finishedAt && previous.paneStopped && previous.cleanupComplete
+      && (options.noWorktree || (!fs.existsSync(worktree) && !branchExists(config.root, branch)));
+    if (!reusable) throw new Error(`Run record already exists: ${recordFile}.`);
+  }
   if (!options.noWorktree && fs.existsSync(worktree)) throw new Error(`Worktree path already exists: ${worktree}.`);
   if (!options.noWorktree && branchExists(config.root, branch)) throw new Error(`Branch already exists: ${branch}.`);
   const leasePools = [...(options.lease ?? [])];
@@ -1927,7 +1971,25 @@ function startWorkerOnce(name, options, {
   let plannerRegistered = false;
   let startAttempts = 0;
   let dependencyClone = { attempted: false, cloned: false };
+  const record = {
+    name, kind: options.kind, model, modelSource,
+    ...(modelFallback ? { modelFallback } : {}),
+    ...(modelRoute ? { modelRoute } : {}),
+    ...(opusForce ? { force: true } : {}),
+    provider, effort, ...(effortSource ? { effortSource } : {}),
+    issue: options.issue == null ? null : Number(options.issue),
+    ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
+    ...(titleFromTask(task) ? { title: titleFromTask(task) } : {}),
+    briefCopy: briefCopy(brief, now), worktree, branch, base, baseCommit,
+    shellPid: null, pane: null, workerDir: plan.workerDir, allowedPaths,
+    readOnly: !!options.readOnly, state: 'starting',
+    ...(leases.length ? { leases } : {}),
+    startedAt: new Date(now).toISOString(),
+  };
+  let stopInterruptWatch = null;
   try {
+    writeJsonAtomic(recordFile, record);
+    stopInterruptWatch = watchStartInterruptions(recordFile, record, clock, output);
     if (!options.noWorktree) {
       fs.mkdirSync(path.dirname(worktree), { recursive: true });
       git(config.root, ['worktree', 'add', '-b', branch, worktree, base]);
@@ -1982,6 +2044,8 @@ function startWorkerOnce(name, options, {
     }
     placement = chooseWorkerPane(workspaceId, worktree, options.kind, herdr, plan.tmpDir, paneCap, [...leases, ...leaseExtraEnv.map((entry) => ({ env: entry.env, item: entry.value }))]);
     paneId = placement.paneId;
+    record.pane = paneId;
+    writeJsonAtomic(recordFile, record);
     for (const lease of leases) lifecyclePort().setLeasePane(lease.pool, lease.item, paneId, { dataDir: leaseContext.dataDir });
     // Answer nothing at a launch block. Mark the model, close the TUI, and stop this model.
     const markAndStop = (block) => {
@@ -1996,7 +2060,7 @@ function startWorkerOnce(name, options, {
       error.blockedModel = model;
       throw error;
     };
-    // The TUI refused a launch flag. This is a CLI version problem, not a model problem. Stop without a record.
+    // The TUI refused a launch flag. This is a CLI version problem. Do not mark the model unavailable.
     const openCodeFlagError = (flag) => {
       const error = new Error(`OpenCode refused the launch flag ${flag}: the pane shows "Unrecognized flag: ${flag} in command opencode". The installed OpenCode TUI does not accept this flag. Worker start stopped, and Herdr Boss marks no model.`);
       error.code = 'opencode_unsupported_flag';
@@ -2026,7 +2090,7 @@ function startWorkerOnce(name, options, {
         if (at >= 0) lines = lines.slice(0, at);
       }
       const joined = lines.join('\n');
-      // A refused flag is a CLI problem, not a model problem. Fail without a record.
+      // A refused flag is a CLI problem. Do not mark the model unavailable.
       const refusedFlag = unsupportedOpenCodeFlag(joined);
       if (refusedFlag) throw openCodeFlagError(refusedFlag);
       const block = detectLaunchBlock(joined);
@@ -2045,58 +2109,68 @@ function startWorkerOnce(name, options, {
       startAttempts = attempt;
       waitForShell();
       const shellPid = workerPaneShellPid(paneId, herdr);
+      record.shellPid = shellPid;
+      if (options.kind === 'opencode') record.startAttempts = attempt;
+      writeJsonAtomic(recordFile, record);
       if (options.kind === 'opencode') launchBaseline = readPaneSnapshot();
       const codexLaunchBaseline = options.kind === 'codex' ? readPaneSnapshot() : null;
       const paneAgentArgs = [...workerAgentArgs(options.kind, launchArgs, { paneId, tabId: placement.tabId, workspaceId, env, tmpDir: plan.tmpDir, worktree }), ...browserArgs];
+      const watchCodexTrust = (recovering = false) => {
+        const since = clock();
+        const timeout = () => new Error(`Codex worker ${name} trust watch timed out after 45 s. The brief was not sent.`);
+        const result = watchTrustPrompt({
+          kind: 'codex', folder: worktree, read: () => readPaneSnapshot() ?? '',
+          isReady: (text) => {
+            if (!recovering && hasCodexHookReviewDialog(text)) return true;
+            if (agentReadyVisible('codex', text)) return true;
+            try { return agentReadyVisible('codex', readWorkerText(name)); } catch { return false; }
+          },
+          onMatch: () => {
+            const response = herdr(['agent', 'get', name]);
+            const agent = response?.agent ?? response;
+            if (getName(agent) !== name || (agent.pane_id ?? agent.pane) !== paneId || (agent.agent ?? agent.kind) !== 'codex') {
+              throw new Error(`Codex worker ${name} trust prompt refused: the registered worker pane could not be verified. No input was sent.`);
+            }
+            if (clock() - since >= READY_WAIT_MS) throw timeout();
+            herdr(['agent', 'send-keys', name, 'enter']);
+          },
+          onMismatch: () => { throw new Error(`Codex worker ${name} trust prompt refused: the exact worktree and selected trust option are required. No input was sent.`); },
+          now: clock, since, wait, timeoutMs: READY_WAIT_MS, pollMs: READY_POLL_MS,
+        });
+        if (!result.ready) throw timeout();
+        return result;
+      };
+      let trustWatched = false;
+      const recoverCodexTrust = (error) => {
+        if (options.kind !== 'codex' || !agentStarted
+          || !(error.code === 'agent_not_ready' || /\bagent_not_ready\b/.test(`${error.message} ${error.stderr ?? ''}`))) return false;
+        const response = herdr(['agent', 'get', name]);
+        const agent = response?.agent ?? response;
+        if (getName(agent) !== name || (agent.pane_id ?? agent.pane) !== paneId || (agent.agent ?? agent.kind) !== 'codex') return false;
+        return watchCodexTrust(true).detected;
+      };
       try {
         herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
       } catch (startError) {
         // Herdr can report agent_not_ready while leaving a blocked agent in the pane.
         try { agentStarted ||= listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
         checkLaunchBlock();
-        if (options.kind !== 'opencode' && !agentStarted && isAgentPaneBusy(startError)) {
+        if (recoverCodexTrust(startError)) trustWatched = true;
+        else if (options.kind !== 'opencode' && !agentStarted && isAgentPaneBusy(startError)) {
           waitForShell();
           try {
             herdr(['agent', 'start', name, '--kind', options.kind, '--pane', paneId, '--timeout', String(plan.agentStartTimeoutMs), '--', ...paneAgentArgs]);
           } catch (retryError) {
             try { agentStarted ||= listFrom(herdr(['agent', 'list']), 'agents').some((agent) => getName(agent) === name); } catch {}
-            throw retryError;
+            trustWatched = recoverCodexTrust(retryError);
+            if (!trustWatched) throw retryError;
           }
         } else throw startError;
       }
       agentStarted = true;
       checkLaunchBlock();
-      const record = {
-        name,
-        kind: options.kind,
-        model,
-        modelSource,
-        ...(modelFallback ? { modelFallback } : {}),
-        ...(modelRoute ? { modelRoute } : {}),
-        ...(options.kind === 'opencode' ? { startAttempts: attempt } : {}),
-        ...(opusForce ? { force: true } : {}),
-        provider,
-        effort,
-        ...(effortSource ? { effortSource } : {}),
-        issue: options.issue == null ? null : Number(options.issue),
-        ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
-        ...(titleFromTask(task) ? { title: titleFromTask(task) } : {}),
-        briefCopy: briefCopy(brief, now),
-        worktree,
-        branch,
-        base,
-        baseCommit,
-        shellPid,
-        pane: paneId,
-        workerDir: plan.workerDir,
-        allowedPaths,
-        readOnly: !!options.readOnly,
-        ...(options.kind === 'codex' ? { state: 'running' } : {}),
-        ...(leases.length ? { leases } : {}),
-        startedAt: new Date(now).toISOString(),
-      };
-      writeJsonAtomic(recordFile, record);
       if (options.kind === 'codex') {
+        if (!trustWatched) watchCodexTrust();
         const hookReviewNeeded = waitForCodexHookReview({
           readSnapshot: () => readPaneSnapshot() ?? '',
           matchesDialog: (snapshot) => {
@@ -2153,6 +2227,8 @@ function startWorkerOnce(name, options, {
       if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
       if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
       if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
+      record.state = 'running';
+      writeJsonAtomic(recordFile, record);
       return { ...record, recordFile, dryRun: false };
     };
     if (options.kind === 'opencode') {
@@ -2161,7 +2237,17 @@ function startWorkerOnce(name, options, {
     }
     return startAndDeliver();
   } catch (error) {
-    const failedReason = error.message;
+    const failedReason = maskText(error.signal ? `Worker start interrupted by ${error.signal}: ${error.message}` : error.message);
+    // Save the failure before cleanup. A refused pane close or archive must not lose the start reason.
+    try {
+      if (fs.existsSync(recordFile)) {
+        const saved = readJson(recordFile);
+        if (saved.name !== name || saved.worktree !== worktree) throw new Error('The failed run record belongs to another start.');
+        Object.assign(record, { state: 'failed', reason: failedReason, finishedAt: new Date(clock()).toISOString(), outcome: 'failed', startFailed: true });
+        if (options.kind === 'opencode') record.startAttempts = startAttempts;
+        writeJsonAtomic(recordFile, record);
+      }
+    } catch (recordError) { error.message += ` Failed-start record update failed: ${recordError.message}`; }
     let safeCleanup = !agentStarted;
     let paneStopped = !placement && !agentStarted;
     if (placement && (options.kind === 'opencode' || agentStarted)) {
@@ -2197,16 +2283,11 @@ function startWorkerOnce(name, options, {
         if (runFile) {
           if (!fs.lstatSync(runFile).isFile()) throw new Error('The failed run record is not a regular file.');
           const run = readJson(runFile);
-          if (run.name !== name || run.worktree !== worktree) throw new Error('The failed run record belongs to another start.');
-          writeJsonAtomic(runFile, {
-            ...run, finishedAt: new Date().toISOString(), outcome: 'failed', startFailed: true,
-            ...(options.kind === 'opencode' ? { startAttempts } : {}),
-          });
+          if (run.name !== name || run.worktree !== worktree || run.state !== 'failed') throw new Error('The failed run record belongs to another start or has no failed state.');
         }
         const archive = archiveWorkerReports(worktree, name, mainCheckout(config.root), {
           output, now, runFile, workerDir: plan.workerDir,
         });
-        if (runFile) fs.unlinkSync(runFile);
         if (archive) error.message += ` Failed-start evidence archived to ${archive}.`;
       } catch (cleanupError) {
         safeCleanup = false;
@@ -2224,7 +2305,7 @@ function startWorkerOnce(name, options, {
         } else {
           git(config.root, ['worktree', 'remove', worktree]);
           git(config.root, ['branch', '-D', branch]);
-          error.message += ` Clean failed-start worktree and branch removed; worker name ${name} is reusable.`;
+          error.message += ` Clean failed-start worktree and branch removed; failed run record kept; worker name ${name} is reusable.`;
         }
       } catch (cleanupError) {
         error.message += ` Failed-start worktree or branch cleanup failed: ${cleanupError.message}`;
@@ -2232,9 +2313,16 @@ function startWorkerOnce(name, options, {
     }
     if (paneStopped) releaseStartLeases(leases, name, config, leaseContext);
     else error.message += ` Agent ${name} may still be running in pane ${paneId}; inspect it before retrying.`;
+    try {
+      if (record.state === 'failed') {
+        record.paneStopped = paneStopped;
+        record.cleanupComplete = safeCleanup;
+        writeJsonAtomic(recordFile, record);
+      }
+    } catch (recordError) { error.message += ` Failed-start cleanup record update failed: ${recordError.message}`; }
     error.message = `${error.message}\nSTART FAILED: ${failedReason.split('\n')[0]}`;
     throw error;
-  }
+  } finally { stopInterruptWatch?.(); }
 }
 
 const MAX_SCOPE_SYMLINK_HOPS = 40;
@@ -2355,7 +2443,12 @@ function suggestedTask(options, projectStatus) {
 function readRun(config, name) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   const file = path.join(config.runsPath, `${name}.json`);
-  const run = readJson(file);
+  let run;
+  try { run = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw new Error(`Could not read JSON ${file}: ${error.message}`);
+    throw new Error(`No run record for worker ${name}. Worktree: ${config.worktreePath(name)}. Run herdr-boss worktree prune to list worktrees. Run herdr-boss worktree prune --apply to remove worktrees that pass the safe checks. See herdr-boss help.`);
+  }
   if (run.name !== name) throw new Error(`Run record name does not match ${name}.`);
   return { file, run };
 }

@@ -1169,6 +1169,8 @@ test('worker start sets HERDR_ENV=1 in Codex worker panes and the dry-run plan, 
     if (args[0] === 'pane' && args[1] === 'read') return { text: '% ' };
     if (args[0] === 'pane' && args[1] === 'list') return { panes: [{ pane_id: 'ws:p1', workspace_id: 'ws', tab_id: 'ws:t1', width: 160, height: 45 }] };
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: ALL_READY_SCREENS };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: [{ tab_id: 'ws:t1', workspace_id: 'ws', label: 'Workers' }] };
     if (args[0] === 'pane' && args[1] === 'split') {
       creates.push(args);
@@ -1224,6 +1226,8 @@ test('worker start waits for a stable shell in a new tab and rechecks before a t
       return { pane: { pane_id: 'ws:p2', workspace_id: 'ws', foreground_cwd: config.worktreePath('demo') } };
     }
     if (args[0] === 'agent' && args[1] === 'list') return { agents: [] };
+    if (args[0] === 'agent' && args[1] === 'get') return { agent: { agent_status: 'idle' } };
+    if (args[0] === 'agent' && args[1] === 'read') return { text: CODEX_READY_SCREEN };
     if (args[0] === 'tab' && args[1] === 'list') return { tabs: tabCreated ? [{ tab_id: 'ws:t2', workspace_id: 'ws', label: 'Workers' }] : [] };
     if (args[0] === 'tab' && args[1] === 'create') {
       assert.ok(args.includes('DISABLE_UPDATE_PROMPT=true'));
@@ -1922,7 +1926,9 @@ test('OpenCode final failure archives its run and permits clean reuse of the wor
   }), /OpenCode worker opencode-keep-evidence failed after 3 launch attempts/);
   assert.equal(f.starts, 3);
   assert.equal(fs.existsSync(f.f.config.worktreePath('opencode-keep-evidence')), false);
-  assert.equal(fs.existsSync(path.join(f.f.config.runsPath, 'opencode-keep-evidence.json')), false);
+  const failedRun = JSON.parse(fs.readFileSync(path.join(f.f.config.runsPath, 'opencode-keep-evidence.json'), 'utf8'));
+  assert.equal(failedRun.state, 'failed');
+  assert.ok(failedRun.reason);
   assert.equal(git(f.f.root, 'branch', '--list', 'opencode-keep-evidence'), '');
   const archive = path.join(f.f.root, '.orchestration', 'reports', 'opencode-keep-evidence');
   const archivedRun = JSON.parse(fs.readFileSync(path.join(archive, 'run.json'), 'utf8'));
@@ -1956,7 +1962,7 @@ test('OpenCode final failure keeps dirty or committed worktrees and archives the
     assert.equal(fs.existsSync(f.f.config.worktreePath(name)), true);
     assert.equal(fs.readFileSync(path.join(f.f.config.worktreePath(name), 'worker-change.txt'), 'utf8'), 'keep this work\n');
     assert.match(git(f.f.root, 'branch', '--list', name), new RegExp(name));
-    assert.equal(fs.existsSync(path.join(f.f.config.runsPath, `${name}.json`)), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.f.config.runsPath, `${name}.json`), 'utf8')).state, 'failed');
     assert.ok(fs.existsSync(path.join(f.f.root, '.orchestration', 'reports', name, 'run.json')));
   }
 });

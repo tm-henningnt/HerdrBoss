@@ -2,7 +2,7 @@
 // Each matcher takes the pane text and the folder that the flow created. It returns { match: true } only when the
 // whole dialog is on screen and every part is the known text: the folder line is one whole line that equals the folder (after realpath, exact
 // string), the sentence is the known sentence, the accept option is the selected one, and nothing else follows.
-// A dialog with any other text, path, or option does not match. Herdr Boss only detects the dialog. It never presses a key.
+// A dialog with any other text, path, or option does not match. Callers decide what to do with a match.
 //
 // Known prompts, with the tool version where the text was found:
 // - claude: Claude Code 2.1.285. Dialog "Accessing workspace:", the folder, "Quick safety check: Is this a project you
@@ -82,7 +82,8 @@ function codexTrust(lines, folder) {
   if (folderLines !== 1 || !body.includes(CODEX_SENTENCES[0])) return NO;
   for (const sentence of CODEX_SENTENCES) body = body.replace(sentence, ' ');
   if (body.trim()) return NO;
-  return lines.slice(yes + 1).every((line) => /^(?:[›>❯]\s*)?(?:2\.\s*)?Open restricted$|^Press enter to continue$|^Esc to (?:cancel|go back|exit)$/.test(line)) ? MATCH : NO;
+  if (!/^(?:2\.\s*)?Open restricted$/.test(lines[yes + 1] ?? '')) return NO;
+  return lines.slice(yes + 2).every((line) => /^Press enter to continue$|^Esc to (?:cancel|go back|exit)$/.test(line)) ? MATCH : NO;
 }
 
 const MATCHERS = { claude: claudeTrust, codex: codexTrust };
@@ -92,4 +93,28 @@ export function matchTrustPrompt(harness, text, folder) {
   const matcher = MATCHERS[harness];
   if (!matcher || !folder) return NO;
   return matcher(screenLines(text), realFolder(folder));
+}
+
+// Watch one pane for a strict folder dialog. Call onMatch at most once. Detection-only callers supply no input action.
+// Count waited time as well as wall time so the deadline also holds when a test clock does not advance.
+export function watchTrustPrompt({ kind, folder, read, isReady, working = () => false, onMatch = () => {}, onMismatch = () => {},
+  detected = false, now = Date.now, since = now(), wait, timeoutMs = 180_000, pollMs = 2000 }) {
+  let waited = 0;
+  for (;;) {
+    const elapsed = Math.max(now() - since, waited);
+    if (elapsed >= timeoutMs) return { ready: false, detected, timedOut: true };
+    const text = read();
+    if (Math.max(now() - since, waited) >= timeoutMs) return { ready: false, detected, timedOut: true };
+    if (!hasTrustCue(text)) {
+      if (isReady(text) || working()) return { ready: true, detected, timedOut: false };
+    } else if (!matchTrustPrompt(kind, text, folder).match) {
+      onMismatch();
+    } else if (!detected) {
+      detected = true;
+      onMatch();
+    }
+    const delay = Math.max(1, Math.min(pollMs, timeoutMs - Math.max(now() - since, waited)));
+    wait(delay);
+    waited += delay;
+  }
 }
