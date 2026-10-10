@@ -1,6 +1,6 @@
 const REQUIRED_HEADINGS = Object.freeze(['What', 'Why', 'Cost', 'Recommendation', 'Choices']);
 
-function sections(text) {
+export function proposalSections(text) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
   const found = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -11,8 +11,24 @@ function sections(text) {
   return { lines, found };
 }
 
+export function requiredProposalSections(text, titles) {
+  const { lines, found } = proposalSections(text);
+  const errors = [];
+  const values = {};
+  for (const title of titles) {
+    const matches = found.filter((section) => section.title === title);
+    if (!matches.length) errors.push(`Missing heading: ${title}`);
+    else if (matches.length > 1) errors.push(`Duplicate heading: ${title}`);
+    if (matches.length === 1) {
+      values[title] = lines.slice(matches[0].start + 1, matches[0].end).join('\n').trim();
+      if (!values[title]) errors.push(`Missing content: ${title}`);
+    }
+  }
+  return { values, errors };
+}
+
 export function validateProposalFile(text) {
-  const { lines, found } = sections(text);
+  const { lines, found } = proposalSections(text);
   const errors = [];
   for (const title of REQUIRED_HEADINGS) {
     const count = found.filter((section) => section.title === title).length;

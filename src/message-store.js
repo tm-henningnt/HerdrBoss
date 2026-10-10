@@ -72,7 +72,11 @@ function readStoredRecords(dir) {
 const isOpenReviewItem = (record) => record?.kind === 'review' && !record.closedAt;
 // Keep an open review item until review retention closes it. Closed review items use the normal 30-day limit.
 // Agent message text has its own policy retention. Keep it here until the hourly sweep applies that policy.
-const fresh = (records, now) => records.filter((record) => isOpenReviewItem(record) || record.kind === 'agent' || !(Date.parse(record.at) < now - RETENTION_MS));
+const fresh = (records, now) => records.filter((record) => {
+  if (record.kind === 'todo') return !['done', 'cancelled'].includes(record.state) || !(Date.parse(record.closedAt || record.at) < now - RETENTION_MS);
+  if (record.kind === 'todo-notice' && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < 2))) return true;
+  return isOpenReviewItem(record) || record.kind === 'agent' || !(Date.parse(record.at) < now - RETENTION_MS);
+});
 
 function rewrite(dir, records) {
   const before = readStoredRecords(dir);
@@ -278,7 +282,7 @@ function openSqliteMessageStore(dir, key, listeners, guard) {
     chats() {
       const chats = new Map();
       for (const record of all()) {
-        if (record.kind === 'agent') continue;
+        if (['agent', 'todo', 'todo-notice'].includes(record.kind)) continue;
         if (!chats.has(record.thread)) chats.set(record.thread, { thread: record.thread, last: record, count: 0, unreadForOwner: 0 });
         const chat = chats.get(record.thread);
         chat.last = record;
@@ -403,7 +407,7 @@ export function openMessageStore(options = {}) {
     chats() {
       const chats = new Map();
       for (const record of all()) {
-        if (record.kind === 'agent') continue;
+        if (['agent', 'todo', 'todo-notice'].includes(record.kind)) continue;
         if (!chats.has(record.thread)) chats.set(record.thread, { thread: record.thread, last: record, count: 0, unreadForOwner: 0 });
         const chat = chats.get(record.thread);
         chat.last = record;

@@ -64,6 +64,7 @@ import * as reviewStore from './review-store.js';
 import { attachState } from './factory-store.js';
 import { createDocsSite, IMAGE_TYPES as DOC_IMAGE_TYPES } from './docs-site.js';
 import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
+import { postTodo, actOnTodo, cancelTodo, replyToTodo, migrateTodo } from './owner-todo.js';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
@@ -232,7 +233,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), readVersion = readServiceVersion, fleet = {}, docsSite = defaultDocsSite, hostGuide = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), readVersion = readServiceVersion, fleet = {}, docsSite = defaultDocsSite, hostGuide = {}, todoHerdr = createHerdrRunner() } = {}) {
   initializeLifecyclePort();
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
@@ -1330,6 +1331,37 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         try { return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false, headless: body.headless ?? null })); }
         catch (e) { return send(res, 409, { error: e.message }); }
       }
+      if (p === '/api/todo/post' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !['text', 'caller', 'priority', 'blocks'].includes(key))) return send(res, 400, { error: 'Send text, caller, and optional priority and blocks. The caller decides the project.' });
+        try {
+          const item = postTodo(body.text, { priority: body.priority, blocks: body.blocks }, { env: body.caller || {}, herdr: todoHerdr, control: engine.state?.control, store: messageStore });
+          return send(res, 200, { ok: true, item, mailbox: refreshMailbox(readMessages(), true) });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
+      }
+      if (p === '/api/todo/migrate' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'caller')) return send(res, 400, { error: 'Send only the verified caller for migration.' });
+        try {
+          const result = migrateTodo({}, { env: body.caller || {}, herdr: todoHerdr, control: engine.state?.control, store: messageStore });
+          return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
+      }
+      if (p === '/api/todo/cancel' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !['key', 'note', 'caller'].includes(key))) return send(res, 400, { error: 'Send an item key, caller, and optional note.' });
+        try {
+          const result = cancelTodo(body.key, body.note, { env: body.caller || {}, herdr: todoHerdr, control: engine.state?.control, store: messageStore });
+          return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
+      }
+      if (p === '/api/todo/action' && req.method === 'POST') {
+        const body = await jsonBody(req);
+        try {
+          const result = actOnTodo(body, { store: messageStore });
+          return send(res, 200, { ...result, mailbox: refreshMailbox(readMessages(), true) });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
+      }
       if (p === '/api/messages' && req.method === 'GET') {
         const thread = url.searchParams.get('thread');
         if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
@@ -1351,10 +1383,15 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         }
         const result = validateOwnerSend(body, { knownThreads, records, now: Date.now() });
         if (result.error) return send(res, result.status, { error: result.error });
-        const message = appendMessage(result.fields);
+        let message;
+        const parent = records.find((item) => item.id === result.fields.replyTo && item.kind === 'todo');
+        if (parent) {
+          try { message = replyToTodo(result.fields, { store: messageStore }).message; }
+          catch (error) { return send(res, error.status || 400, { error: error.message }); }
+        } else message = appendMessage(result.fields);
         // Only a mail item closes. An Owner message that names a plain chat reply leaves that reply as it is.
         if (message.replyTo && isMailRecord(readMessages().find((item) => item.id === message.replyTo))) closeMailboxItem(message.replyTo);
-        engine.log('message', `Queued Owner ${message.kind} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind, replyTo: message.replyTo });
+        engine.log('message', `${parent ? 'Saved Owner To do answer' : `Queued Owner ${message.kind}`} ${message.id} for ${message.thread}`, { id: message.id, thread: message.thread, kind: message.kind, replyTo: message.replyTo });
         const mailbox = refreshMailbox(readMessages(), true);
         return send(res, 200, { ok: true, message, mailbox });
       }
@@ -1406,7 +1443,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         const records = readMessages();
         const folder = url.searchParams.get('folder');
         const thread = url.searchParams.get('thread');
-        if (folder != null && !['needs-you', 'inbox', 'updates', 'sent', 'done'].includes(folder)) return send(res, 400, { error: 'Choose a mailbox folder: needs-you, inbox, updates, sent, or done.' });
+        if (folder != null && !['todo', 'needs-you', 'inbox', 'updates', 'sent', 'done'].includes(folder)) return send(res, 400, { error: 'Choose a mailbox folder: todo, needs-you, inbox, updates, sent, or done.' });
         if (thread != null) {
           if (!validThread(thread)) return send(res, 400, { error: 'Choose a thread: boss or a project slug.' });
           const conversationId = url.searchParams.get('conversation');

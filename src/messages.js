@@ -9,6 +9,7 @@ import { promptText, plannerPromptText, reviewAnswerPromptText } from './review-
 import { getSession } from './planner-sessions.js';
 import { uploadReportPictures } from './attachment-markdown.js';
 import { validateAttachmentIds, readAttachment, uploadLocalPictures, deleteAttachment } from './attachments.js';
+import { todoView } from './owner-todo-model.js';
 
 export { RETENTION_MS, messagesFile };
 
@@ -88,7 +89,7 @@ export function validateOwnerSend(body, { knownThreads, records = [], now = Date
   if (replyTo !== null) {
     if (typeof replyTo !== 'string') return { status: 400, error: 'replyTo must be a mailbox item ID.' };
     if (kind !== 'message') return { status: 400, error: 'Only a message can answer a mailbox item.' };
-    const item = records.find((record) => record.id === replyTo && record.thread === thread && isMailboxItem(record));
+    const item = records.find((record) => record.id === replyTo && record.thread === thread && (isMailboxItem(record) || (record.kind === 'todo' && record.to === 'owner')));
     if (!item) return { status: 404, error: `No mailbox item ${replyTo} is in the ${thread} thread.` };
     if (item.closedAt) return { status: 409, error: 'This mailbox item is closed. Send a new message instead.' };
   }
@@ -132,6 +133,7 @@ export function mailboxTitle(item) {
 // The prompt for the agent. An answer to a mailbox item names the item and quotes the question, so the agent does not need the Mailbox.
 // Every line of the quote starts with "> ", so a line in the question cannot look like a new prompt.
 export function ownerPromptText(record, question = null) {
+  if (record.kind === 'todo-notice') return `[owner] ${record.text}`;
   // The text of a review result is the finished prompt: one header line, the denied items, and the fetch command.
   if (record.kind === 'review-result') return record.text;
   if (record.kind === 'review-answer') return `[owner] ${record.text}`;
@@ -156,6 +158,8 @@ const isDone = (record) => !!record.closedAt || record.closedBy === 'boss' || (!
 
 const MESSAGE_CHANNEL_RULES = [
   { kind: 'agent', action: '*', channel: 'agent' },
+  { kind: 'todo', action: '*', channel: 'mail' },
+  { kind: 'todo-notice', action: '*', channel: 'mail' },
   { kind: '*', action: 'needs-you', mailboxItem: true, channel: 'both' },
   { kind: '*', action: 'reply-to', channel: 'parent' },
   { kind: 'report', action: '*', channel: 'mail' },
@@ -191,13 +195,13 @@ export const messagesById = (records) => new Map(records.map((record) => [record
 export function isMailAnswer(record, byId) {
   if (!record || record.from !== 'owner' || !record.replyTo) return false;
   const parent = byId.get(record.replyTo);
-  return !!parent && parent.thread === record.thread && isMailRecord(parent, byId);
+  return !!parent && parent.thread === record.thread && (isMailRecord(parent, byId) || parent.kind === 'todo');
 }
 
 // The records that the Chat shows. A Mailbox answer stays in the Mailbox.
 export function chatRecords(records) {
   const byId = messagesById(records);
-  return records.filter((record) => record.kind !== 'agent' && !isMailAnswer(record, byId));
+  return records.filter((record) => !['agent', 'todo', 'todo-notice'].includes(record.kind) && !isMailAnswer(record, byId));
 }
 
 // One summary for each thread from the chat records: the last record, the count, and the unread records to the Owner.
@@ -273,9 +277,9 @@ export function mailboxCounts(records) {
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
   const updates = items.filter((item) => !needsOwnerAction(item) && !isDone(item)).length;
-  const chatUnread = records.filter((record) => record.kind !== 'agent' && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail').length;
+  const chatUnread = records.filter((record) => !['agent', 'todo'].includes(record.kind) && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail').length;
   const mailUnread = items.filter((item) => messageChannel(item, byId) === 'mail' && !item.readAt).length;
-  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
+  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length, todoOpen: todoView(records).todo.length };
 }
 
 // An open Needs-you item gets the suggestion to close it when the Owner wrote on its thread after the item, and did not answer this item.
@@ -393,7 +397,7 @@ export function mailboxFolders(records) {
     .map((record) => ({ ...record, conversationId: conversations.get(record.id) ?? record.id }));
   const relayed = sent.filter((record) => record.status === 'relayed');
   const inbox = [...view.needsYou, ...view.updates].sort((left, right) => messageOrder(right, left));
-  return { ...view, inbox, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
+  return { ...view, ...todoView(records), inbox, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {
@@ -597,6 +601,8 @@ export function relayOwnerMessages(ids, { by, dir = DATA_DIR, now = Date.now() }
 // A result message of a planner pack goes to the pane of the active planner session. When the session has ended or is unknown, the
 // message goes to the orch pane. While the session is active and its pane is absent, the message waits.
 function targetPane(thread, panes, projects, record = null, dir = DATA_DIR) {
+  if (record?.kind === 'todo-notice') return panes.find((pane) => pane.id === record.target?.pane
+    && pane.workspace === record.target.workspace && pane.label === record.target.role && pane.agent) || null;
   if (record?.planner?.session) {
     const session = getSession({ dir, id: record.planner.session });
     if (session && !session.endedAt) return panes.find((pane) => pane.id === session.pane && pane.agent) || null;
@@ -620,8 +626,9 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
   const used = new Set(busy);
   const all = readMessages({ dir });
   const questions = new Map(all.filter(isMailboxItem).map((record) => [record.id, record]));
+  const maxAttempts = (record) => record.kind === 'todo-notice' ? 2 : MAX_DELIVERY_ATTEMPTS;
   const pending = all.filter((record) => record.from === 'owner'
-    && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < MAX_DELIVERY_ATTEMPTS)));
+    && (record.status === 'queued' || (record.status === 'failed' && (record.attempts || 0) < maxAttempts(record))));
   for (const record of pending) {
     const pane = targetPane(record.thread, panes, projects, record, dir);
     if (!pane || used.has(pane.id) || !['idle', 'done', 'working'].includes(pane.status)) continue;
@@ -639,9 +646,10 @@ export async function deliverQueued({ panes = [], projects = {}, prompt, log = (
       updateMessage(record.id, { status: 'sent', sentAt: new Date(now).toISOString(), error: null, attempts }, { dir, now });
       log('message', `Delivered Owner ${record.kind} ${record.id} to ${record.thread}`, meta);
     } catch (error) {
-      const reason = record.attachments?.length ? 'Herdr could not deliver the message with its pictures.' : shortError(error, record, questions.get(record.replyTo));
+      const reason = record.kind === 'todo-notice' ? 'Herdr could not deliver the To do action notice.'
+        : record.attachments?.length ? 'Herdr could not deliver the message with its pictures.' : shortError(error, record, questions.get(record.replyTo));
       updateMessage(record.id, { status: 'failed', error: reason, attempts }, { dir, now });
-      const retry = attempts < MAX_DELIVERY_ATTEMPTS ? 'will retry' : 'no more retries';
+      const retry = attempts < maxAttempts(record) ? 'will retry' : 'no more retries';
       log('message', `Owner ${record.kind} ${record.id} to ${record.thread} failed (attempt ${attempts}, ${retry}): ${reason}`, { ...meta, failed: true });
     }
   }

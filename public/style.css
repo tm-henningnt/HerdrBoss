@@ -1,4 +1,28 @@
 * { box-sizing: border-box; }
+/* Owner actions use the Mailbox rail and cool theme tokens. */
+.todo-list { list-style: none; margin: 0; padding: 0; }
+.todo-row { min-width: 0; padding: 16px; border-bottom: 1px solid var(--line); }
+.todo-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; color: var(--muted); font-size: 12px; }
+.todo-meta time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.todo-type { color: var(--accent); font-weight: 600; }
+.todo-title { overflow-wrap: anywhere; margin: 8px 0; font-size: 16px; color: var(--text); text-transform: none; letter-spacing: normal; }
+.todo-blocks, .todo-poster, .todo-saved { margin: 6px 0; overflow-wrap: anywhere; }
+.todo-poster, .todo-saved { color: var(--muted); font-size: 12px; }
+.todo-details { margin: 12px 0; }
+.todo-details summary, .todo-history > summary { cursor: pointer; padding: 8px 0; }
+.todo-details h3 { margin: 16px 0 6px; font-size: 14px; color: var(--text); text-transform: none; letter-spacing: normal; }
+.todo-copy { max-width: 72ch; overflow-wrap: anywhere; }
+.todo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.todo-actions button { min-height: 44px; }
+.todo-action-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 12px; }
+.todo-action-form input, .todo-action-form textarea { min-width: 0; width: 100%; }
+.todo-status { color: var(--muted); overflow-wrap: anywhere; }
+.todo-history > summary { padding: 16px; color: var(--muted); }
+@media (max-width: 760px) {
+  .todo-row { padding: 16px max(12px, env(safe-area-inset-right)) 16px max(12px, env(safe-area-inset-left)); }
+  .todo-action-form { grid-template-columns: minmax(0, 1fr); }
+  .todo-actions button { flex: 1 1 auto; min-height: 44px; }
+}
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--text); font: var(--type-body); -webkit-font-smoothing: antialiased; }
 a { color: inherit; }

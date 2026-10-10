@@ -284,6 +284,7 @@ const USAGE = `herdr-boss <command>
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
+  todo post FILE [--priority urgent|high|normal|low] [--blocks TEXT]  Post an Owner action for the verified caller's project.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
   tell TARGET TEXT [--file FILE] [--kind nudge|reminder|reply] [--reply-to ID]
                         Store an agent message, then send it to a pane, agent, or project's orchestrator.
@@ -387,6 +388,22 @@ async function messageCommand(cmd, args) {
     const { flags, positional } = messageFlags(args, ['--reply-to', '--action', '--image'], usage, ['--image']);
     if ((flags['--image'] || []).length > 3) throw new Error('say accepts at most 3 pictures.');
     if (positional.length !== 1) throw new Error(`${usage}. Quote the text as one argument.`);
+    const todo = flags['--reply-to'] && readMessages().find((record) => record.id === flags['--reply-to'] && record.kind === 'todo');
+    if (todo) {
+      if (process.env.HERDR_ENV === '1') throw new Error('Only the Owner can answer a To do item. Use an Owner terminal outside an agent pane.');
+      if (flags['--action'] || flags['--image']?.length) throw new Error('A To do reply takes answer text only.');
+      let response;
+      try {
+        response = await fetch(`http://127.0.0.1:${loadConfig().port}/api/messages`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ thread: todo.thread, kind: 'message', replyTo: todo.id, text: positional[0] }), signal: AbortSignal.timeout(20000),
+        });
+      } catch { throw new Error('The Herdr Boss service could not be reached. Start it, then retry say.'); }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'The To do answer was not saved.');
+      console.log(`Message ${result.message.id} saved as an answer to ${todo.id}.`);
+      return;
+    }
     const record = sayMessage(positional[0], { replyTo: flags['--reply-to'] ?? null, action: flags['--action'] ?? null, images: flags['--image'] || [] }, { herdr: createHerdrRunner() });
     const destination = record.replyTo ? `sent as an answer to ${record.replyTo}` : placeText(record);
     console.log(`Message ${record.id} ${destination}.`);
@@ -409,6 +426,50 @@ async function messageCommand(cmd, args) {
   if (positional.length !== 1) throw new Error(usage);
   const record = postReport(positional[0], { to: flags['--to'] ?? null, title: flags['--title'] ?? null, action: flags['--action'] ?? null }, { herdr: createHerdrRunner() });
   console.log(`Report ${record.id} ${placeText(record)}.`);
+}
+
+async function todoCommand(args) {
+  const caller = Object.fromEntries(['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID'].map((key) => [key, process.env[key]]));
+  if (args[0] === 'migrate') {
+    if (args.length !== 1) throw new Error('Usage: todo migrate');
+    const result = await todoRequest('migrate', { caller });
+    console.log(`Imported ${result.imported} Mailbox item${result.imported === 1 ? '' : 's'} into To do.`);
+    return;
+  }
+  if (args[0] === 'cancel') {
+    const usage = 'Usage: todo cancel KEY [--note TEXT]';
+    const { flags, positional } = messageFlags(args.slice(1), ['--note'], usage);
+    if (positional.length !== 1) throw new Error(usage);
+    const result = await todoRequest('cancel', { key: positional[0], note: flags['--note'] || '', caller });
+    console.log(`To do item ${result.item.id} cancelled.`);
+    return;
+  }
+  const usage = 'Usage: todo post FILE [--priority urgent|high|normal|low] [--blocks TEXT], todo cancel KEY [--note TEXT], or todo migrate';
+  if (args[0] !== 'post') throw new Error(usage);
+  const { flags, positional } = messageFlags(args.slice(1), ['--priority', '--blocks'], usage);
+  if (positional.length !== 1) throw new Error(usage);
+  const { parseTodoFile } = await import('./owner-todo.js');
+  const { REPORT_MAX_BYTES } = await import('./messages.js');
+  const stat = fs.lstatSync(positional[0]);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > REPORT_MAX_BYTES) throw new Error('The To do file must be a regular file of at most 64 KB.');
+  const text = fs.readFileSync(positional[0], 'utf8');
+  const priority = flags['--priority'];
+  const blocks = flags['--blocks'];
+  parseTodoFile(text, { priority, blocks });
+  const result = await todoRequest('post', { text, priority, blocks, caller });
+  console.log(`To do item ${result.item.id} posted for ${result.item.project}. Key: ${result.item.key}`);
+}
+
+async function todoRequest(action, body) {
+  let response;
+  try {
+    response = await fetch(`http://127.0.0.1:${loadConfig().port}/api/todo/${action}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000),
+    });
+  } catch { throw new Error(`The Herdr Boss service could not be reached. Start it, then retry todo ${action}.`); }
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'The To do action failed.');
+  return result;
 }
 
 function quotaOptionValue(args, index, option) {
@@ -734,6 +795,7 @@ async function main() {
     await messageCommand(cmd, args);
     return;
   }
+  if (cmd === 'todo') { await todoCommand(args); return; }
   if (['worker', 'wait', 'lock', 'push', 'suite', 'worktree', 'ledger', 'check', 'gh', 'models', 'kit', 'proposal'].includes(cmd)) {
     const { runKitCommand } = await import('./kit/cli.js');
     const result = runKitCommand(cmd, args);

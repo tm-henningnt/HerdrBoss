@@ -35,6 +35,7 @@ import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, move
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, diskFreeCard, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
+import { todoListHtml } from './owner-todo-view.js';
 import { listRowHtml, statusChipHtml } from './components.js';
 import { dismissInformationalAlert, filterDismissedInfoAlerts } from './alert-dismissal.js';
 
@@ -3670,11 +3671,70 @@ document.addEventListener('click', (e) => {
 
 const MAIL_ACTION_LABEL = { answer: 'Answer', approve: 'Approve', decide: 'Decide', read: 'Read' };
 const MAIL_FOLDER_KEY = 'herdr-boss-mailbox-folder';
-const MAIL_FOLDERS = ['needs-you', 'inbox', 'updates', 'done', 'sent'];
-const MAIL_FOLDER_LABEL = { 'needs-you': 'Needs you', inbox: 'Inbox', updates: 'Reports and updates', done: 'Done', sent: 'Sent' };
-const MAIL_FOLDER_ICON = { 'needs-you': 'alert', inbox: 'inbox', updates: 'report', done: 'check', sent: 'send' };
-const MAIL_FOLDER_KEYS = { 'needs-you': 'needsYou', inbox: 'inbox', updates: 'updates', done: 'done', sent: 'sent' };
-const mailbox = { needsYou: [], inbox: [], updates: [], sent: [], done: [], failed: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationRequest: null, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '', openedDeepLink: null };
+const MAIL_FOLDERS = ['todo', 'needs-you', 'inbox', 'updates', 'done', 'sent'];
+const MAIL_FOLDER_LABEL = { todo: 'To do', 'needs-you': 'Needs you', inbox: 'Inbox', updates: 'Reports and updates', done: 'Done', sent: 'Sent' };
+const MAIL_FOLDER_ICON = { todo: 'check', 'needs-you': 'alert', inbox: 'inbox', updates: 'report', done: 'check', sent: 'send' };
+const MAIL_FOLDER_KEYS = { todo: 'todo', 'needs-you': 'needsYou', inbox: 'inbox', updates: 'updates', done: 'done', sent: 'sent' };
+const mailbox = { todo: [], todoHistory: [], needsYou: [], inbox: [], updates: [], sent: [], done: [], failed: [], updatesUnread: 0, folder: null, loaded: false, loading: false, error: '', notice: '', counts: '', busy: false, status: {}, currentConversation: null, conversationRecords: [], conversationLoading: false, conversationRequest: null, conversationError: '', composing: false, composeDraft: '', composeThread: 'boss', replyDraft: '', openedDeepLink: null };
+const todoDrafts = {};
+const todoStatus = {};
+function todoFind(id) {
+  return [...mailbox.todo, ...mailbox.todoHistory].find((item) => item.id === id);
+}
+
+function todoChoose(id, action) {
+  if (mailbox.busy || !todoFind(id)) return;
+  if (['done', 'reopen'].includes(action)) { todoSubmit(id, action); return; }
+  todoDrafts[id] = { action, reason: '', until: '', answer: '' };
+  delete todoStatus[id];
+  render();
+  document.getElementById(`${action === 'snooze' ? 'todo-until' : action === 'answer' && todoFind(id).type !== 'decide' ? 'todo-answer' : 'todo-reason'}-${id}`)?.focus({ preventScroll: true });
+}
+
+async function todoSubmit(id, directAction = null, decision = null) {
+  const item = todoFind(id);
+  if (mailbox.busy || !item) return;
+  const draft = todoDrafts[id] || {};
+  const action = directAction || draft.action;
+  const answer = action === 'answer' && !decision ? draft.answer || draft.reason || '' : '';
+  let until;
+  if (action === 'snooze') {
+    const time = Date.parse(draft.until);
+    if (!Number.isFinite(time) || time <= Date.now()) { todoStatus[id] = 'Choose a future time.'; render(); return; }
+    until = new Date(time).toISOString();
+  }
+  mailbox.busy = true; todoStatus[id] = 'Saving…'; render();
+  try {
+    const result = await postJson('/api/todo/action', { id, action, reason: answer ? '' : draft.reason || '', ...(answer ? { answer } : {}), ...(until ? { until } : {}), ...(decision ? { decision } : {}), updatedAt: item.updatedAt });
+    if (state) state.mailbox = result.mailbox;
+    clearFormDirtyRegion($app.querySelector(`[data-todo-form="${CSS.escape(id)}"]`));
+    delete todoDrafts[id]; delete todoStatus[id];
+    mailbox.notice = 'Owner action saved.';
+  } catch (error) { todoStatus[id] = error.message; }
+  finally { mailbox.busy = false; }
+  await loadMailbox();
+}
+
+document.addEventListener('input', (event) => {
+  const id = event.target.dataset?.todoReason || event.target.dataset?.todoUntil || event.target.dataset?.todoAnswer;
+  if (!id || !todoDrafts[id]) return;
+  todoDrafts[id][event.target.dataset.todoReason ? 'reason' : event.target.dataset.todoAnswer ? 'answer' : 'until'] = event.target.value;
+});
+document.addEventListener('click', (event) => {
+  const button = event.target.closest?.('[data-todo-action]');
+  if (button) { todoChoose(button.dataset.todoId, button.dataset.todoAction); return; }
+  const cancel = event.target.closest?.('[data-todo-cancel]');
+  if (cancel && !mailbox.busy) {
+    clearFormDirtyRegion(cancel.closest('form'));
+    delete todoDrafts[cancel.dataset.todoCancel]; delete todoStatus[cancel.dataset.todoCancel]; render();
+  }
+});
+document.addEventListener('submit', (event) => {
+  const id = event.target.dataset?.todoForm;
+  if (!id) return;
+  event.preventDefault();
+  todoSubmit(id, null, event.submitter?.dataset.todoDecision || null);
+});
 const mailReading = new Set();
 const mailSelected = new Set();
 const mailDrafts = {};
@@ -3968,7 +4028,7 @@ function syncMailboxFolderMenu(route, s) {
   $mailFolderMenu.hidden = route !== 'mailbox' || !appPhone();
   if ($mailFolderMenu.hidden) return;
   const folder = mailboxFolderFromLocation();
-  const counts = { 'needs-you': mailboxActionCount(s), inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
+  const counts = { todo: s?.mailbox?.todoOpen ?? (mailbox.todo?.length ?? 0), 'needs-you': mailboxActionCount(s), inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
   const html = `<div class="nav-mail-folders"><span class="nav-mail-folder-heading">Mailbox folders</span>${mailFolderLinks(folder, counts, 'nav-mail-folder-link')}</div>`;
   if ($mailFolderMenu.innerHTML !== html) $mailFolderMenu.innerHTML = html;
 }
@@ -3989,8 +4049,8 @@ function mailboxView(s) {
     mailbox.composing = false;
   }
   const items = mailDeduplicateClientRecords(mailbox[MAIL_FOLDER_KEYS[folder]] || []);
-  const counts = { 'needs-you': mailboxActionCount(s), inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
-  const headerCount = folder === 'needs-you' ? mailboxActionCount(s) : items.length;
+  const counts = { todo: s?.mailbox?.todoOpen ?? (mailbox.todo?.length ?? 0), 'needs-you': mailboxActionCount(s), inbox: mailbox.inbox.length, updates: mailbox.updatesUnread || 0, done: 0, sent: 0 };
+  const headerCount = folder === 'needs-you' ? mailboxActionCount(s) : folder === 'todo' ? (s?.mailbox?.todoOpen ?? items.length) : items.length;
   const label = MAIL_FOLDER_LABEL[folder];
   const dismissableItems = mailbox.needsYou.filter((item) => item.triage?.type !== 'project-open');
   const allSelected = dismissableItems.length > 0 && dismissableItems.every((item) => mailSelected.has(item.id));
@@ -4001,6 +4061,7 @@ function mailboxView(s) {
   const bulk = folder === 'needs-you' && dismissableItems.length && !selecting ? `<div class="mail-bulk"><label><input type="checkbox" data-mail-select-all ${allSelected ? 'checked' : ''} aria-label="Select all dismissible Needs-you items"> Select all</label>${dismissSelected}</div>` : '';
   let list;
   if (!mailbox.loaded) list = '<div class="mail-empty"><p>Loading…</p></div>';
+  else if (folder === 'todo') list = todoListHtml(items, mailbox.todoHistory, { drafts: todoDrafts, status: todoStatus, busy: mailbox.busy }, { esc, markdownBlock, projects: s.control?.projects });
   else if (!items.length) list = mailEmpty(folder);
   else if (folder === 'inbox') list = inboxSections(items).map((section) => `<section class="mail-section" data-key="section:${section.key}" aria-label="${esc(section.label)}"><h2 class="mail-section-head">${esc(section.label)}</h2><ol class="mail-list">${mailRowsHtml(s, section.rows, folder)}</ol></section>`).join('');
   else list = `<ol class="mail-list">${mailRowsHtml(s, groupMailRows(items), folder)}</ol>`;
@@ -4023,7 +4084,7 @@ async function loadMailbox(auto = false) {
     const folder = mailboxFolderFromLocation();
     const url = `/api/mailbox?folder=${encodeURIComponent(folder)}`;
     const result = await readApiUrl(url);
-    Object.assign(mailbox, { needsYou: result.needsYou, inbox: result.inbox || [], updates: result.updates || [], sent: mailboxMergeFailures(result.sent || []), done: result.done || [], updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
+    Object.assign(mailbox, { todo: result.todo || [], todoHistory: result.todoHistory || [], needsYou: result.needsYou, inbox: result.inbox || [], updates: result.updates || [], sent: mailboxMergeFailures(result.sent || []), done: result.done || [], updatesUnread: result.updatesUnread, loaded: true, error: '', counts: JSON.stringify(result.mailbox) });
     const requested = new URLSearchParams(location.search).get('folder');
     const resolved = resolveMailboxFolder(requested, storedMailboxFolder(), mailbox.needsYou.length);
     mailbox.folder = resolved;
@@ -4561,10 +4622,11 @@ function updateMailboxBadge(s) {
   updateTopIcons(s);
 }
 
-// The three top-bar icons: chat unread, mail unread, and open action items. An icon with nothing to show is faded and has no badge.
-const TOP_ICON_NAMES = { chat: 'Chat', mail: 'Updates', 'needs-action': 'Needs you' };
-const TOP_ICON_COUNT_LABEL = { chat: (n) => `Chat, ${n} unread`, mail: (n) => `Updates, ${n} unread`, 'needs-action': (n) => `Needs you, ${n} items` };
+// The four top-bar icons count To do items, chat unread, mail unread, and Needs-you items. An empty icon is faded and has no badge.
+const TOP_ICON_NAMES = { todo: 'To do', chat: 'Chat', mail: 'Updates', 'needs-action': 'Needs you' };
+const TOP_ICON_COUNT_LABEL = { todo: (n) => `To do, ${n} open`, chat: (n) => `Chat, ${n} unread`, mail: (n) => `Updates, ${n} unread`, 'needs-action': (n) => `Needs you, ${n} items` };
 const topIconCounts = (s) => ({
+  todo: s?.mailbox?.todoOpen ?? (mailbox.todo?.length ?? 0),
   chat: s?.mailbox?.chatUnread ?? 0,
   mail: s?.mailbox?.mailUnread ?? 0,
   'needs-action': mailboxActionCount(s),
@@ -4573,14 +4635,14 @@ const topIconCounts = (s) => ({
 // The icon of the open page. The Mailbox folders Needs you and Updates each have an icon.
 function topIconCurrent(route, folder) {
   if (route === 'chat') return 'chat';
-  if (route === 'mailbox') return folder === 'needs-you' ? 'needs-action' : folder === 'updates' ? 'mail' : null;
+  if (route === 'mailbox') return folder === 'todo' ? 'todo' : folder === 'needs-you' ? 'needs-action' : folder === 'updates' ? 'mail' : null;
   return null;
 }
 
-const TOP_ICON_LINKS = { chat: '/chat', mail: '/mailbox?folder=updates', 'needs-action': '/mailbox?folder=needs-you' };
-const TOP_ICON_SVG = { chat: 'chat', mail: 'mail', 'needs-action': 'alert' };
+const TOP_ICON_LINKS = { todo: '/mailbox?folder=todo', chat: '/chat', mail: '/mailbox?folder=updates', 'needs-action': '/mailbox?folder=needs-you' };
+const TOP_ICON_SVG = { todo: 'check', chat: 'chat', mail: 'mail', 'needs-action': 'alert' };
 
-// The same three icons in the slim bar of an app view. The page header with the icons does not show on a phone there.
+// The same four icons in the slim bar of an app view. The page header with the icons does not show on a phone there.
 function appBarIcons(s, route, folder = new URLSearchParams(location.search).get('folder')) {
   const counts = topIconCounts(s);
   const current = topIconCurrent(route, folder);
@@ -7281,7 +7343,7 @@ const HELP = {
     <p>An automatic handover picks the successor from your succession ladder with the weekly usage of each lane. It refuses a Codex successor above 85 percent weekly use, refuses a Claude successor only at 100 percent weekly use, and prefers the eligible lane with the lowest weekly use. A lane without a weekly reading counts as unused. The successor choice on the card starts from that result. Your own choice in the form stays the target, and the plan shows the weekly use of the target lane.</p>
     <p>The bootstrap prompt of a prepared successor reads only three sources: the memory file, the published project status, and the open items in it. It does not read the bulletin, the repository, or any history during the bootstrap. The prompt also holds three generated sections. <b>Boss rules</b> holds the standing rules that you set in Settings. <b>Pane map</b> holds the Boss pane and the project lead pane of each project. <b>Open items</b> holds the open Mailbox items of the project, the published tasks that wait on a Mailbox item, and the Owner decisions of the last 48 hours in the memory file. Each section has its own character limit, so a long text cannot fill the prompt. The three sources above stay the sources of truth.</p>
     <h3>Projects</h3><p>The bar shows every applied policy share. Parked and transferring projects keep their segments. The legend below the bar names each project, share, state, and worker count. <b>Workers 2 / 19</b> means 2 live workers out of 19 total worker rows. A live worker has an uncollected session that is working or waiting. Review and collected workers are not live. The total uses the worker rows on Agents. The bar and the cards use this same count. Change the shares on Allocation.</p><p>A card per project with its published status and task mix. The table shows the project lead, workers in use against the share, and the policy mode. On a phone the table shows one short block for each project. Select a project for its details.</p>
-    <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss logo menu, the four icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
+    <h3>Top bar on a phone</h3><p>The top bar is one row: the Herdr Boss logo menu, the five icons, and <b>Help</b>. Below 375 px the icons move to a second row. A warning line under the bar shows that the page lost its connection to the service.</p>
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. A missing usage reader or login shows the reading as unknown with its reason; it is not a failure and raises no warning. Each provider row in Settings names the source of the last reading and its age. A factory reads each usage limit with the pinned CodexBar CLI first, the same code path as the Mac. It falls back to the own readers when CodexBar is missing, exits with an error, returns an error row, or times out. The own Codex reading comes from <code>codex app-server</code> and the Codex login of the factory. The reading is unknown when Codex is not installed, has no login, or has an API key login with no usage limit. A timeout, a failed read, a changed protocol, or an app server that exited is a probe failure, and the last good reading stays as stale. OpenCode Go reads its local cost history from CodexBar. The account windows need an OpenCode API key, so until the key exists the reason is <i>account windows need an API key</i>. The row also shows the reset time that you set by hand in <b>OpenCode Go reset time</b> and a local estimate labeled <i>used in this factory (local estimate)</i>. The estimate shows tokens and cost from <code>opencode stats</code> for the days in <b>OpenCode Go estimate days</b>. It is never a percent and never a usage limit. The Fleet page shows it in the card of the factory. The Claude reading comes from the status line helper of the factory and exists only while a Claude session runs there. Turn the helper off with <code>factories.claudeUsageHelper</code> in Settings. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
@@ -7325,6 +7387,7 @@ const HELP = {
     <h3>Stale status</h3><p><b>Status stale: AGE</b> shows next to the updated time when the published status is older than the stale-status limit and a worker worked after the publish or new commits landed. A paused project is never stale. A status older than 30 minutes also adds a reminder to the shared info digest for that project's project lead. The digest normally goes when the project lead is idle or done. If an item has been due for more than 3 hours, the digest can go while the project lead works. The pane gets a digest at most once in 2 hours. Publish the current plan and progress to clear the mark.</p>
     <p>The data comes from the project's status file. When a section is missing, the project lead has not published those fields.</p>`],
   mailbox: ['Mailbox', `
+    <h3>To do</h3><p>Select the To do icon or folder for open Owner actions from every project and the Boss. The badge counts open items. Items sort by priority, then by age. Each row shows what waits and who asked. Open <b>Why and steps</b> for the full ask.</p><p>Select <b>Done</b> or <b>Mark read</b> to finish an item. <b>Answer</b> opens Accept and Deny for a decision. Type an answer and select <b>Save Answer</b> to give an answer text. <b>Blocked</b> and <b>Not now</b> require a reason. Not now cancels the item. <b>Snooze</b> hides it until a future time. These forms work on a phone too. Open <b>Blocked, snoozed and closed</b> to inspect saved actions or reopen an unresolved item. The service tells the poster pane the title, action, and reason or answer. A Snooze notice includes the time. It includes no full ask or secret. A missing pane leaves the notice pending. A failed prompt gets one retry on a later tick. A repeated request sends no second notice.</p><p>The Boss and an orchestrator post with <code>herdr-boss todo post FILE [--priority P] [--blocks TEXT]</code>. The file needs Title, Why, Steps, Expected result, How to answer, What it blocks, and Type sections. Types are decide, do, check, grant, and read. Use placeholder hosts. A grant names what to grant and holds no value. The service uses the verified caller project. An open duplicate updates the item. Each project can post at most 10 items or updates per minute.</p><p>The poster project can cancel an open item with <code>herdr-boss todo cancel KEY --note TEXT</code>. The Owner sees the cancelled state and note. From an Owner terminal outside an agent pane, use <code>herdr-boss say --reply-to ITEMID TEXT</code> to save an answer and tell the poster. The Boss uses <code>herdr-boss todo migrate</code> to import waiting Mailbox asks. The command prints the count. A repeat import adds no duplicate. Each old ask closes with a reference to its To do item. The Boss posts asks from memory files later.</p>
     <p>Use the folders to read messages from the Boss and project leads. The page groups each conversation by its project or the Boss and by its reply chain.</p>
     <p>A project triage item has <b>Accept</b> and <b>Deny</b>. Accept opens the parked project and starts its project lead. Deny closes the proposal and waits 24 hours before triage can propose that project again.</p>
     <h3>Folders</h3><p><b>Needs you</b> is the default folder when an open item needs an answer, approval, or decision. <b>Inbox</b> holds the open Needs-you items and the unread information items: Needs you first, then reports and updates. <b>Reports and updates</b> holds unread information items with action <code>read</code> or no action. Opening an information item marks it read and moves it to Done. <b>Done</b> holds read information items, closed or dismissed items, and relayed messages. <b>Sent</b>, below the divider, holds your messages with the queued, delivered, failed, or relayed state and the reply time.</p>
@@ -7339,7 +7402,7 @@ const HELP = {
     <h3>Copy</h3><p>Each code block has a copy icon in a strip above the code, at the right. Select it to copy the source of the block, without the fence. A tab stays a tab. The icon shows <b>Copied</b> for 1.5 seconds. Each message has a <b>Copy</b> action next to its time. It copies the message text as Markdown source. A folder path, a connection address, and a file or diff in a review pack have a copy icon right after them. A copied diff keeps its <code>+</code> and <code>-</code> markers. If the browser refuses the clipboard, the page selects the text and copies it with the older method.</p>
     <h3>Actions</h3><p><b>Answer</b>: type an answer and select <b>Send</b>. <b>Approve</b>: select <b>Approve</b> or <b>Reject</b>. A note is optional. <b>Decide</b>: select a choice, or type an answer and select <b>Send</b>. Choice buttons appear when the message has a Markdown list under a <b>Choices</b> heading. A review pack item has <b>Open review</b> in place of the answer form. The submit of the review closes the item. Each answer uses the same delivery limit and safety checks as a new message. An answered item moves to <b>Done</b>.</p>
     <h3>Compose</h3><p>Select <b>New message</b> to write to the Boss or a project with an <code>orch</code> pane. Write text or attach a picture. The page asks you to confirm before it sends. The new conversation opens in <b>Sent</b>.</p>
-    <h3>Phone</h3><p>The Mailbox fills the screen. Select the Herdr Boss logo at the top left to open the same menu as every page. The menu has every section, including Fleet and Docs, plus the Mailbox folders. The slim bar keeps the Chat, Updates, and Needs you icons. Select <b>New</b> at the bottom right to write a message. The Needs you count matches the top-bar badge and the list.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. A decision has its choice buttons, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, <b>Attach a picture</b>, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
+    <h3>Phone</h3><p>The Mailbox fills the screen. Select the Herdr Boss logo at the top left to open the same menu as every page. The menu has every section, including Fleet and Docs, plus the Mailbox folders. The slim bar keeps the To do, Chat, Updates, and Needs you icons. Select <b>New</b> at the bottom right to write a message. The Needs you count matches the top-bar badge and the list.</p><p>In a conversation, the actions of the open item sit in a bar at the bottom edge. An approval has <b>Approve</b>, <b>Reject</b>, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. A decision has its choice buttons, a note button, <b>Attach a picture</b>, and <b>Dismiss</b>. The choice buttons wrap onto more rows, so each choice stays in view. An answer has <b>Dismiss</b>, the answer field, <b>Attach a picture</b>, and <b>Send</b>. Each bar has a last row with <b>Close as answered elsewhere</b>. The note button opens a text field. When the keyboard opens, the bar stays above it.</p><p>In Needs you, select a check box to start a selection. The selection bar replaces <b>New</b> at the bottom edge. It shows the count, a button to clear the selection, <b>All</b>, and <b>Dismiss</b> with the count.</p>
     <p>The folder pane shows the fixed limits: Herdr Boss keeps messages for 30 days and accepts at most 10 Owner messages a minute. A read-only preview shows messages and refuses a read or a send.</p>`],
   reviews: ['Reviews', `
     <p>A project sends you a review pack when it needs your decision on evidence: screenshots, text, tables, or a live check. Each item of the pack asks one question. You answer the items, write a note for the whole pack, and submit one result. The result goes to the project lead.</p>
@@ -7377,7 +7440,7 @@ const HELP = {
     <p>One row shows one pair of agents with their roles, names, and projects, the number of messages, and the time of the last message. The newest activity comes first. Select a row to read the conversation. The newest message is at the bottom. A badge shows <b>failed</b> or <b>recorded</b>, and the kind of the message, for example <b>task</b> or <b>reply</b>. Select <b>Load older</b> to read earlier messages. Use the search box and the project filter to find a pair. The page refreshes with the other pages.</p>
     <p>Herdr Boss keeps the message text for 14 days and the metadata for 180 days. On a phone, select a pair to open it, and select Back to return to the list.</p>
     <h3>Keyboard</h3><p>The chat list is a list of buttons. The arrow keys, <b>Home</b>, and <b>End</b> move through the rows. Enter opens a chat. The focus then goes to the message field. <b>Escape</b> goes back to the list, and the focus goes to the row of the chat that was open. The message list is a live region, so a screen reader reads each new message once. Each bubble has a name with the sender, the time, the text, and the state.</p>
-    <h3>Phone</h3><p>The Chat fills the screen. Select the Herdr Boss logo at the top left to open the same menu as every page. The menu has every section, including Fleet and Docs. The slim bar keeps the Chat, Updates, and Needs you icons. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The attach and send buttons are at least 44 px.</p>
+    <h3>Phone</h3><p>The Chat fills the screen. Select the Herdr Boss logo at the top left to open the same menu as every page. The menu has every section, including Fleet and Docs. The slim bar keeps the To do, Chat, Updates, and Needs you icons. Select a chat to open it full screen. The slim bar has the Back arrow. When the keyboard opens, the composer stays above it. The attach and send buttons are at least 44 px.</p>
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
