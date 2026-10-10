@@ -964,3 +964,11 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Review: a Haiku diff review found no blocker; its Minor fixes are in. Accepted: the Boss caller check reads the pane from the environment, as for every Boss-only command; hardening it is a separate change.
 - Evidence: `test/release.test.js` 93 of 93; the first r49 suite failed two kit tests and the Kit-Impact trailer test, fixed by the trailer on the commit and the `kit/CHANGES.md` entry.
 - State: integrated only. Suite, ff-only, kit install, restart, push and the Boss message are pending.
+
+## Release checkpoint r50 (NL1)
+
+- Reviewed branch: `nl1` aefcce7. NL1 (Owner accepted, card m-mv1lnzhi-99e340bf): lock class `network` with its own FIFO queue and cap (setting `locks.network.slots`, default 2, range 1 to 8). A project lists exact commands in `networkCommands` in `.herdr-boss.json`; `herdr-boss suite -- <command>` matches after whitespace normalization. A network run does not take the `full-suite` slot and the load guard does not hold it. The Locks panel and `/api/state` show the class, holders, queue and cap. A manual `lock acquire network` is now machine-scoped.
+- Review: a Haiku diff review found two Major (a project name in the public docs; no warning that the class has no load guard) and four Minor findings; all fixed. Focused tests 529 of 529 (13 lock test files plus the changed files).
+- Risk accepted: a project that marks a CPU-heavy command as network-bound runs up to the cap without the load guard. The docs and the setting help warn about it.
+- First declared command: the project that needs it declares it in its own config; the Boss relays.
+- State: integrated only. Suite, ff-only, restart and push are pending.
