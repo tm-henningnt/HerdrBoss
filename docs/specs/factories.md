@@ -274,6 +274,11 @@ The command closes only workspaces whose labels start with `smoke-`. It removes 
 ### Updates and recovery
 
 - Tier 1 (service): `git fetch`, `merge --ff-only` on the `code` volume, restart the supervised service. Panes survive.
+- Before the service merge, save local changes in tracked documentation inside the factory. Put timestamped patches with mode 0600 in `~/work/boss-notes/update-patches/`. Save staged edits and working-file edits separately. A staged patch ends in `-index.patch`.
+- Save the notes and patches before the work-volume backup, so a data-migration rollback keeps them. Restore tracked files only after the backup and the fresh idle check.
+- Append added note lines from `docs/orchestration/memory.md` to `~/work/boss-notes/memory.md` instead of a patch. Keep existing factory notes. Print each saved path. Restore the saved files in the index and the working tree from `HEAD` before the merge. A repeat saves only new changes. A clean checkout creates no notes or patches. Keep untracked files.
+- Accept `.md`, `.markdown`, `.rst`, `.adoc`, and `.txt` files, and root files `README`, `LICENSE`, and `COPYING`, as documentation. Refuse other tracked local changes before saving or restoring any local file. Name each refused file and print the exact patch command to run in the factory. A script in `docs/` is still refused.
+- Keep the generated kit exception. Save changed kit documentation before restoration. Restore the generated `.claude/settings.json` without a patch. Run `kit install` after the merge. Keep the short `before -> after` commit output.
 - Tier 2 (image): quiesce (orchestrators publish and commit `memory.md`, workers stop, backup runs), replace the container on the same volumes, start fresh orchestrators.
 - Window rules: refuse while a worker works, a suite or push holds the lock, or a handover is prepared.
 - A backup before each update. After the restart `/api/state` returns 200 within 30 seconds and one clean tick passes, or the update rolls back. A rollback after a migration restores the backup and needs `--accept-data-loss`.

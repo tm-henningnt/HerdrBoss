@@ -91,6 +91,16 @@ function updateFixture() {
   let transportFault = () => false;
   let helperReply = null;
   const dirty = new Set();
+  let statusOutput = null;
+  const diffs = new Map();
+  const gitDiffFile = path.join(f.root, 'git-diffs.json');
+  fs.writeFileSync(path.join(supervisorBin, 'git'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const diffs = JSON.parse(fs.readFileSync(process.env.FACTORY_TEST_DIFFS, 'utf8'));
+const phase = args.includes('--cached') ? 'index' : 'working';
+process.stdout.write(args.slice(args.indexOf('--') + 1).map(file => diffs[file]?.[phase] || '').join(''));
+`, { mode: 0o755 });
   const git = {};
   let snapshotCount = 0, mutateSnapshotNumber = 0, snapshotMutation = null, failNextSnapshots = 0, failSnapshotAfterMerge = 0;
   const ok = (value = '') => ({ code: 0, stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
@@ -107,6 +117,16 @@ function updateFixture() {
     if (args[0] === 'exec' && args.includes('claude-helper')) { if (helperReply instanceof Error) throw helperReply; return helperReply || ok('installed\n'); }
     if (args[0] === 'exec' && args.includes('herdr') && args.includes('get')) return ok({ result: { pane: { pane_id: 'pane:1', workspace_id: 'workspace:1', label: 'orch', cwd: '/home/factory/work/project' } } });
     if (args[0] === 'exec' && args.includes('node')) {
+      const script = args[args.indexOf('-e', args.indexOf('node')) + 1];
+      if (String(script).includes('/home/factory/work/boss-notes')) {
+        fs.writeFileSync(gitDiffFile, JSON.stringify(Object.fromEntries(diffs)));
+        const nodeArgs = args.slice(args.indexOf('node') + 1).map(word => word.replaceAll('/home/factory/work', volumePaths.work));
+        const result = spawnSync(process.execPath, nodeArgs, { encoding: 'utf8', env: {
+          ...f.env, PATH: `${supervisorBin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+          FACTORY_TEST_DIFFS: gitDiffFile,
+        } });
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      }
       if (String(args.at(-1)).includes('/api/state')) return ok({ commit: 'ccccccc', commitDate: '2026-10-10', kitRevision: 'abcdef012345', startedAt: new Date(tickAt).toISOString() });
       if (String(args.at(-1)).includes('schema_version')) {
         if (!container) return missing();
@@ -151,8 +171,13 @@ function updateFixture() {
       if (args.includes('remote') && args.includes('add')) { remoteUrl = args.at(-1); return ok(); }
       if (args.includes('fetch')) return failFetch ? { code: 128, stdout: '', stderr: 'fatal: unable to access https://user:secret@example.invalid/' } : ok();
       if (args.includes('merge-base')) return ok();
-      if (args.includes('status')) return ok([...dirty].map((file) => ` M ${file}\n`).join(''));
-      if (args.includes('checkout')) { for (const file of args.slice(args.indexOf('--') + 1)) dirty.delete(file); return ok(); }
+      if (args.includes('status')) return ok(statusOutput ?? [...dirty].map((file) => ` M ${file}${args.includes('-z') ? '\0' : '\n'}`).join(''));
+      if (args.includes('checkout')) {
+        if (statusOutput?.startsWith('A  ')) return { code: 1, stdout: '', stderr: 'path does not exist in HEAD' };
+        for (const file of args.slice(args.indexOf('--') + 1)) dirty.delete(file);
+        return ok();
+      }
+      if (args.includes('restore')) { for (const file of args.slice(args.indexOf('--') + 1)) dirty.delete(file); return ok(); }
       if (args.includes('merge') && dirty.size) return { code: 128, stdout: '', stderr: `error: Your local changes would be overwritten by merge: ${[...dirty].join(' ')}` };
       if (args.includes('merge') && failMerge) return { code: 128, stdout: '', stderr: 'fatal' };
       if (args.includes('merge')) { currentCommit = newCommit; if (migrateOnUpdate) schema = 2; if (failSnapshotAfterMerge > 0) failNextSnapshots = failSnapshotAfterMerge; return ok(); }
@@ -205,7 +230,7 @@ function updateFixture() {
   f.io.updateTimeoutMs = 500;
   f.io.originUrl = expectedOrigin;
   return { ...f, docker, expectedOrigin, s6Log: supervisorLog, set helperReply(value) { helperReply = value; }, get remoteUrl() { return remoteUrl; }, set remoteUrl(value) { remoteUrl = value; }, set failFetch(value) { failFetch = value; }, set failMerge(value) { failMerge = value; }, set failGitReset(value) { failGitReset = value; },
-    set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, volumePaths, dirty, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
+    set failServiceStart(value) { failServiceStart = value; }, set failPause(value) { failPause = value; }, set failBackupRun(value) { failBackupRun = value; }, set failHelperRemove(value) { failHelperRemove = value; }, set failHealth(value) { failHealth = value; }, set transportFault(value) { transportFault = value; }, set statusOutput(value) { statusOutput = value; }, volumePaths, dirty, diffs, git, originalId, oldCommit, newCommit, get state() { return f.state; }, set state(value) { f.state = value; }, set container(value) { container = value; }, get container() { return container; }, get serviceUp() { return serviceUp; }, set imagePresent(value) { imagePresent = value; }, set failUpdated(value) { failUpdated = value; }, set migrateOnUpdate(value) { migrateOnUpdate = value; }, set failNewImageCreate(value) { failNewImageCreate = value; }, set failNewImageStart(value) { failNewImageStart = value; }, set failSchemaReadAfterStart(value) { failSchemaReadAfterStart = value; }, set mutateSnapshotNumber(value) { mutateSnapshotNumber = value; }, set snapshotMutation(value) { snapshotMutation = value; }, set failSnapshotAfterMerge(value) { failSnapshotAfterMerge = value; }, cleanup: () => f.cleanup() };
 }
 
 test('factory status reports the running image ID, its tag image ID, and the Boss pane state', async () => {
@@ -352,6 +377,9 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.match(f.output.join(''), /updated factory demo service/i);
     assert.match(f.output.join(''), /Commit: aaaaaaa -> bbbbbbb\./);
     assert.doesNotMatch(f.output.join(''), /Boss pane is gone/i);
+    assert.doesNotMatch(f.output.join(''), /Saved local/);
+    assert.equal(fs.existsSync(path.join(f.volumePaths.work, 'boss-notes')), false);
+    assert.equal(f.calls.some(({ args }) => args.includes('restore')), false);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json')), false);
   } finally { f.cleanup(); }
 });
@@ -375,30 +403,199 @@ test('service update restores a locally changed generated kit file and regenerat
     f.dirty.add('docs/orchestration/herdr-boss.md');
     assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
     const names = f.calls.map(({ args }) => args).filter((args) => args[0] === 'exec');
-    const checkout = names.findIndex((args) => args.includes('checkout'));
+    const restore = names.findIndex((args) => args.includes('restore'));
     const merge = names.findIndex((args) => args.includes('merge') && args.includes('--ff-only'));
     const install = names.findIndex((args) => args.includes('kit') && args.includes('install'));
-    assert.ok(checkout >= 0 && checkout < merge && merge < install, `order ${checkout} ${merge} ${install}`);
-    assert.deepEqual(names[checkout].slice(names[checkout].indexOf('--') + 1), ['docs/orchestration/herdr-boss.md']);
+    assert.ok(restore >= 0 && restore < merge && merge < install, `order ${restore} ${merge} ${install}`);
+    assert.deepEqual(names[restore].slice(names[restore].indexOf('--') + 1), ['docs/orchestration/herdr-boss.md']);
+    assert.ok(names[restore].includes('--staged') && names[restore].includes('--worktree'));
   } finally { f.cleanup(); }
 });
 
-test('service update still stops on a local change in another file and names the file', async () => {
+test('service update refuses a dirty source file before saving or restoring any local files', async () => {
   const f = updateFixture();
   try {
     f.dirty.add('docs/orchestration/herdr-boss.md');
+    f.dirty.add('docs/orchestration/memory.md');
     f.dirty.add('src/local-edit.js');
-    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge step.*src\/local-edit\.js/s);
-    assert.equal(f.calls.some(({ args }) => args.includes('checkout') && args.includes('src/local-edit.js')), false);
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), error => {
+      assert.match(error.message, /not documentation.*src\/local-edit\.js/s);
+      assert.match(error.message, re("git -C /home/factory/herdr-boss diff --binary HEAD -- 'src/local-edit.js' > ~/work/boss-notes/update-patches/"));
+      return true;
+    });
+    assert.equal(f.calls.some(({ args }) => args.includes('checkout') || args.includes('restore') || args.includes('merge') || args.includes('reset')), false);
+    assert.equal(fs.existsSync(path.join(f.volumePaths.work, 'boss-notes')), false);
+    assert.equal(f.dirty.size, 3);
+    assert.equal(f.serviceUp, true);
   } finally { f.cleanup(); }
 });
 
-test('service update still stops on a local change in docs/orchestration/memory.md and names the file', async () => {
+test('service update appends local memory notes outside the checkout before merging', async () => {
   const f = updateFixture();
   try {
     f.dirty.add('docs/orchestration/memory.md');
-    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /git merge step.*docs\/orchestration\/memory\.md/s);
-    assert.equal(f.calls.some(({ args }) => args.includes('checkout')), false);
+    f.diffs.set('docs/orchestration/memory.md', { working: 'diff --git a/docs/orchestration/memory.md b/docs/orchestration/memory.md\n--- a/docs/orchestration/memory.md\n+++ b/docs/orchestration/memory.md\n@@ -1,0 +2,2 @@\n+First rerun note.\n+Second rerun note.\n' });
+    const notes = path.join(f.volumePaths.work, 'boss-notes', 'memory.md');
+    fs.mkdirSync(path.dirname(notes));
+    fs.writeFileSync(notes, '# Factory notes\n');
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.equal(fs.readFileSync(notes, 'utf8'), '# Factory notes\nFirst rerun note.\nSecond rerun note.\n');
+    assert.equal(f.dirty.size, 0);
+    assert.equal(fs.existsSync(path.join(path.dirname(notes), 'update-patches')), false);
+    assert.match(f.output.join(''), /boss-notes\/memory\.md/);
+    assert.match(f.output.join(''), /Commit: aaaaaaa -> bbbbbbb/);
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update saves another dirty document as a private timestamped patch before merging', async () => {
+  const f = updateFixture();
+  try {
+    const patch = 'diff --git a/docs/local-notes.md b/docs/local-notes.md\n--- a/docs/local-notes.md\n+++ b/docs/local-notes.md\n@@ -1 +1 @@\n-Original note.\n+Local note.\n';
+    f.dirty.add('docs/local-notes.md');
+    f.diffs.set('docs/local-notes.md', { working: patch });
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const dir = path.join(f.volumePaths.work, 'boss-notes', 'update-patches');
+    const files = fs.readdirSync(dir);
+    assert.equal(files.length, 1);
+    assert.match(files[0], /^\d{4}-\d{2}-\d{2}T.*\.patch$/);
+    assert.equal(fs.readFileSync(path.join(dir, files[0]), 'utf8'), patch);
+    assert.equal(fs.statSync(path.join(dir, files[0])).mode & 0o777, 0o600);
+    assert.match(f.output.join(''), re(`/boss-notes/update-patches/${files[0]}`));
+    assert.equal(f.dirty.size, 0);
+    assert.equal(fs.existsSync(path.join(f.volumePaths.work, 'boss-notes', 'memory.md')), false);
+  } finally { f.cleanup(); }
+});
+
+test('service update preserves separate staged and working documentation edits', async () => {
+  const f = updateFixture();
+  try {
+    const index = 'diff --git a/docs/notes.md b/docs/notes.md\n--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Original.\n+Staged.\n';
+    const working = 'diff --git a/docs/notes.md b/docs/notes.md\n--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Staged.\n+Working.\n';
+    f.dirty.add('docs/notes.md');
+    f.diffs.set('docs/notes.md', { index, working });
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const dir = path.join(f.volumePaths.work, 'boss-notes', 'update-patches');
+    const files = fs.readdirSync(dir);
+    assert.equal(files.length, 2);
+    assert.equal(fs.readFileSync(path.join(dir, files.find(file => file.endsWith('-index.patch'))), 'utf8'), index);
+    assert.equal(fs.readFileSync(path.join(dir, files.find(file => !file.endsWith('-index.patch'))), 'utf8'), working);
+    assert.equal(f.dirty.size, 0);
+  } finally { f.cleanup(); }
+});
+
+test('service update refuses a source file renamed to a documentation path', async () => {
+  const f = updateFixture();
+  try {
+    f.statusOutput = 'R  docs/local-edit.md\0src/local-edit.js\0';
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /not documentation.*src\/local-edit\.js/s);
+    assert.equal(f.calls.some(({ args }) => args.includes('checkout') || args.includes('restore') || args.includes('merge')), false);
+    assert.equal(fs.existsSync(path.join(f.volumePaths.work, 'boss-notes')), false);
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update accepts a documentation copy whose source file is unchanged', async () => {
+  const f = updateFixture();
+  try {
+    const patch = 'diff --git a/docs/copied.md b/docs/copied.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/copied.md\n@@ -0,0 +1 @@\n+Copied example.\n';
+    f.statusOutput = 'C  docs/copied.md\0src/example.js\0';
+    f.dirty.add('docs/copied.md');
+    f.diffs.set('docs/copied.md', { index: patch });
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const restored = f.calls.find(({ args }) => args.includes('restore')).args;
+    assert.deepEqual(restored.slice(restored.indexOf('--') + 1), ['docs/copied.md']);
+    const dir = path.join(f.volumePaths.work, 'boss-notes', 'update-patches');
+    assert.equal(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'), patch);
+  } finally { f.cleanup(); }
+});
+
+test('service update saves and removes a staged new document before merging', async () => {
+  const f = updateFixture();
+  try {
+    const patch = 'diff --git a/docs/new-note.md b/docs/new-note.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/new-note.md\n@@ -0,0 +1 @@\n+New local note.\n';
+    f.statusOutput = 'A  docs/new-note.md\0';
+    f.dirty.add('docs/new-note.md');
+    f.diffs.set('docs/new-note.md', { index: patch });
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    const dir = path.join(f.volumePaths.work, 'boss-notes', 'update-patches');
+    const files = fs.readdirSync(dir);
+    assert.equal(files.length, 1);
+    assert.equal(fs.readFileSync(path.join(dir, files[0]), 'utf8'), patch);
+    assert.equal(f.dirty.size, 0);
+  } finally { f.cleanup(); }
+});
+
+test('service update preserves new notes on repeat runs without duplicating old notes or patches', async () => {
+  const f = updateFixture();
+  try {
+    const dir = path.join(f.volumePaths.work, 'boss-notes', 'update-patches');
+    for (const note of ['First rerun.', 'Second rerun.']) {
+      f.dirty.add('docs/orchestration/memory.md');
+      f.dirty.add('docs/notes.md');
+      f.diffs.set('docs/orchestration/memory.md', { working: `--- a/docs/orchestration/memory.md\n+++ b/docs/orchestration/memory.md\n@@ -1,0 +2 @@\n+${note}\n` });
+      f.diffs.set('docs/notes.md', { working: `--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Previous.\n+${note}\n` });
+      assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    }
+    const files = fs.readdirSync(dir);
+    assert.equal(files.length, 2);
+    assert.equal(new Set(files).size, 2);
+    assert.deepEqual(files.map(file => fs.readFileSync(path.join(dir, file), 'utf8')).sort(), [
+      '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Previous.\n+First rerun.\n',
+      '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Previous.\n+Second rerun.\n',
+    ]);
+    const notes = path.join(f.volumePaths.work, 'boss-notes', 'memory.md');
+    assert.equal(fs.readFileSync(notes, 'utf8'), 'First rerun.\nSecond rerun.\n');
+    f.output.length = 0;
+    assert.equal(await factoryCommand(['update', 'demo', '--tier', 'service'], f.io), 0);
+    assert.deepEqual(fs.readdirSync(dir), files);
+    assert.equal(fs.readFileSync(notes, 'utf8'), 'First rerun.\nSecond rerun.\n');
+    assert.doesNotMatch(f.output.join(''), /Saved local/);
+    assert.match(f.output.join(''), /Commit: bbbbbbb -> bbbbbbb/);
+  } finally { f.cleanup(); }
+});
+
+test('service update keeps all local files and resumes when a documentation patch cannot be saved', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/notes.md');
+    f.diffs.set('docs/notes.md', { working: '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Previous.\n+Unsaved note.\n' });
+    const notesDir = path.join(f.volumePaths.work, 'boss-notes');
+    fs.mkdirSync(notesDir);
+    fs.writeFileSync(path.join(notesDir, 'update-patches'), 'Invented obstruction.');
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /save local documentation step.*local files were kept.*factory was resumed/s);
+    assert.deepEqual([...f.dirty], ['docs/notes.md']);
+    assert.equal(f.calls.some(({ args }) => args.includes('checkout') || args.includes('restore') || args.includes('merge') || args.includes('reset')), false);
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update keeps saved notes and patches through a data-migration rollback', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/orchestration/memory.md');
+    f.dirty.add('docs/notes.md');
+    f.diffs.set('docs/orchestration/memory.md', { working: '--- a/docs/orchestration/memory.md\n+++ b/docs/orchestration/memory.md\n@@ -1,0 +2 @@\n+Keep this local note.\n' });
+    const patch = '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-Previous.\n+Keep this document edit.\n';
+    f.diffs.set('docs/notes.md', { working: patch });
+    f.failUpdated = true;
+    f.migrateOnUpdate = true;
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service', '--accept-data-loss'], f.io), /factory service was rolled back/i);
+    const notesDir = path.join(f.volumePaths.work, 'boss-notes');
+    assert.equal(fs.readFileSync(path.join(notesDir, 'memory.md'), 'utf8'), 'Keep this local note.\n');
+    const dir = path.join(notesDir, 'update-patches');
+    assert.equal(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'), patch);
+    assert.equal(f.serviceUp, true);
+  } finally { f.cleanup(); }
+});
+
+test('service update refuses a dirty script stored in the docs folder', async () => {
+  const f = updateFixture();
+  try {
+    f.dirty.add('docs/example.js');
+    await assert.rejects(factoryCommand(['update', 'demo', '--tier', 'service'], f.io), /not documentation.*docs\/example\.js/s);
+    assert.equal(f.calls.some(({ args }) => args.includes('restore') || args.includes('merge')), false);
+    assert.equal(f.serviceUp, true);
   } finally { f.cleanup(); }
 });
 
