@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { aggregateAlerts } from './alert-groups.js';
 import { initializeLifecyclePort } from './kit/lifecycle.js';
 import { agentPromptTimeoutMs } from './agent-prompt.js';
 import { DATA_DIR, LIVE_DATA_DIR, dashboardUrl, serviceSettingsView } from './config.js';
@@ -1639,7 +1640,9 @@ export class Engine extends EventEmitter {
       }
       const quotaProbeAlert = claudeQuotaFailureAlert(this.memory.claudeQuotaProbeFailure, now);
       if (quotaProbeAlert) evaluation.alerts.push(quotaProbeAlert);
-      snap.alerts = evaluation.alerts;
+      const alertGroups = aggregateAlerts(evaluation.alerts, this.memory.alertGroups || {}, now);
+      this.memory.alertGroups = alertGroups.state;
+      snap.alerts = alertGroups.alerts;
       snap.advice = evaluation.advice;
       const quotaAlerts = evaluation.alerts.filter((alert) => alert.key.startsWith('quota:') && alert.severity !== 'info');
       const criticalProviders = new Set(quotaAlerts.filter((alert) => alert.severity === 'critical').map((alert) => alert.key.split(':')[1]));

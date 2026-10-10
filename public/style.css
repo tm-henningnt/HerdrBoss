@@ -28,6 +28,8 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .rule { display: grid; grid-template-columns: 76px 1fr; gap: 12px; align-items: start; padding: 10px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
 .rule.critical { background: color-mix(in srgb, var(--crit) 7%, var(--panel)); }
 .rule.warn { background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
+.alert-meta { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.alert-dismiss { min-height: 36px; margin-top: 7px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
 .sev { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; padding-top: 2px; color: var(--muted); }
 .rule.critical .sev { color: var(--crit); } .rule.warn .sev { color: var(--warn); } .rule.ok .sev { color: var(--ok); } .rule.advice .sev { color: var(--accent); }
 

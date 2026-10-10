@@ -35,6 +35,7 @@ import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries,
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
 import { listRowHtml, statusChipHtml } from './components.js';
+import { dismissInformationalAlert, filterDismissedInfoAlerts } from './alert-dismissal.js';
 
 const $app = document.getElementById('app');
 // A visual check can force a theme with ?theme=light or ?theme=dark. Without it, the page follows the system.
@@ -1855,14 +1856,33 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
 
 // ---------- Overview ----------
 
+function alertMeta(a) {
+  if (!Number.isSafeInteger(a.count) || !a.firstAt || !a.lastAt) return '';
+  const format = (value) => {
+    const time = Date.parse(value);
+    return Number.isFinite(time) ? new Date(time).toLocaleString() : value;
+  };
+  const count = `${a.count} ${a.count === 1 ? 'occurrence' : 'occurrences'}`;
+  return `<small class="alert-meta">${count} · First ${esc(format(a.firstAt))} · Last ${esc(format(a.lastAt))}</small>`;
+}
+
 function rulesRows(s) {
   const rows = [];
-  for (const a of s.alerts || []) if (a.severity !== 'info') rows.push(`<div class="rule ${a.severity}"><span class="sev">${a.severity}</span><div>${code(a.text)}</div></div>`);
+  for (const a of s.alerts || []) if (a.severity !== 'info') rows.push(`<div class="rule ${a.severity}"><span class="sev">${a.severity}</span><div>${code(a.text)}${alertMeta(a)}</div></div>`);
   for (const a of s.advice || []) rows.push(`<div class="rule advice"><span class="sev">advice</span><div>${code(a)}</div></div>`);
-  for (const a of s.alerts || []) if (a.severity === 'info') rows.push(`<div class="rule"><span class="sev">notice</span><div>${code(a.text)} <span class="tag">${esc(a.scope)}</span></div></div>`);
+  const notices = filterDismissedInfoAlerts(s.alerts || []);
+  for (const a of notices) if (a.severity === 'info') rows.push(`<div class="rule"><span class="sev">notice</span><div>${code(a.text)} <span class="tag">${esc(a.scope)}</span>${alertMeta(a)}<button type="button" class="alert-dismiss" data-alert-dismiss="${esc(a.key)}">Dismiss</button></div></div>`);
   if (!rows.length) rows.push(`<div class="rule ok"><span class="sev">ok</span><div>No restrictions. All usage limits and machine resources are within limits.</div></div>`);
   return rows;
 }
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest?.('[data-alert-dismiss]');
+  if (!button) return;
+  dismissInformationalAlert({ key: button.dataset.alertDismiss, severity: 'info' });
+  lastRender = '';
+  render();
+});
 
 // The lanes that can take work now, in the order of the bulletin Use now line (useNowLanes() in src/control.js):
 // free models, then the lanes below pace with the most room first, then ignored lanes, trickle lanes, and open lanes.
@@ -2207,7 +2227,7 @@ function machineSummary(s) {
 function attentionBlock(s) {
   const alerts = (s.alerts || []).filter((a) => ['warn', 'critical'].includes(a.severity) && !a.key?.startsWith('handoff:'));
   if (s.errors?.length) alerts.unshift({ key: 'collection', severity: 'warn', title: 'Some status data is unavailable', text: s.errors.join(' · ') });
-  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p></div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/#overview-guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project leads can continue within the current policy.</div>'}</section>`;
+  return `<section class="attention-section"><div class="section-head"><h2>Needs attention</h2><span>${alerts.length ? `${alerts.length} alerts` : 'Clear'}</span></div>${alerts.length ? `<div class="attention-list">${alerts.map((a) => `<article class="attention-item ${esc(a.severity)}"><span class="severity-dot" aria-hidden="true"></span><div><b>${esc(a.title || a.severity)}</b><p>${esc(a.text)}</p>${alertMeta(a)}</div><a href="${a.key?.startsWith('quota:') ? '/allocation' : '/#overview-guidance'}">${a.key?.startsWith('quota:') ? 'Adjust policy' : 'Details'}</a></article>`).join('')}</div>` : '<div class="calm-state">No resource alerts need action. Project leads can continue within the current policy.</div>'}</section>`;
 }
 
 function fleetBlock(s) {
@@ -7233,6 +7253,7 @@ const HELP = {
     <p>The state of all projects and shared resources at one glance.</p>
     <p>Run <code>herdr-boss setup</code> for the first-hour steps. Run <code>herdr-boss setup --resume</code> after a step waits for you. If another run changes your progress, resume setup. After a crash, resume setup to continue your saved progress.</p>
     <h3>Current guidance</h3><p>The collapsed section under the header holds the rules that project leads read in the bulletin. Its header shows one summary line: the watch, the Use now lanes, the lanes ahead of pace or exhausted, and the rule counts. Select the header to show the lane states and the rules. The browser remembers the open or closed state.</p><p>When usage limit history or a reset credit is available, the Codex lane compares current use with its planned curve. The lane says <b>Use now</b>, <b>on pace</b>, or <b>hold</b>, and shows how many points use is ahead of or behind the plan. The plan changes guidance only.</p><p>At 80 percent weekly use with more than 12 hours to the weekly reset, the Claude lane says <b>hold new Claude work</b> and leaves the Use now list. It shows the time at which the recent burn reaches 100 percent. Without a positive burn or with fewer than two readings, it shows no time. The hold changes guidance only. A worker start follows the lane state.</p>
+    <p>Repeated alerts share one row with a count and first and last time; informational notices expire after 24 hours and can be dismissed in this browser until they fire again, while warnings and critical alerts have no Dismiss button.</p>
     <h3>Needs your decision</h3><p>The line under the guidance shows the number of open tasks that wait for you, with a link to each project. It shows only when a task waits for you.</p>
     <h3>Needs attention</h3><p>Warnings and critical alerts: usage limits, memory, machine load, and orphaned worktree processes. <b>Details</b> opens the current guidance at its rules. <b>Adjust policy</b> opens the Allocation page.</p>
     <h3>Handovers</h3><p>When no handover waits for review, <b>Project continuity</b> is one line under <b>Needs attention</b>. Otherwise it lists the prepared successors that wait for review. Each shows the goal that the successor gets, as one collapsed line. A record shows only while its source pane and successor pane exist. A recommendation without a record is not listed here. Open the project to plan, inspect, or activate a handover. A record that stays preparing 10 minutes after preparation gets one Boss notice. The page also lists a record that stays preparing. Inspect it with <code>herdr-boss handoff repair ID --dry-run</code> first. Run <code>herdr-boss handoff repair ID</code> when its successor pane runs the target agent and is idle or done. A dry run names what it would do and changes nothing. Automatic handover never picks a successor of a weaker or unranked model tier, and an unranked source project lead gets no automatic successor. When no equal or stronger choice is usable, Herdr Boss makes no successor and posts one Mailbox item in the Boss thread that names the reason. A kind whose automatic record expired or was cancelled before it became ready, never became ready, or stayed in preparing is skipped for the number of hours in <b>Successor cooldown hours</b> in Settings. The stored reason of the choice names each skipped kind.</p>
