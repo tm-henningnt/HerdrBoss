@@ -626,11 +626,23 @@ export async function collectCwdProcesses() {
 }
 
 // Count connected CDP clients from the process table. The browser process and this service process are not agents.
-export async function collectBrowserClients(port, { readFacts = getPortClients, servicePid = process.pid, browserPid = null } = {}) {
+export async function collectBrowserClients(port, { readFacts = getPortClients, runner = null, servicePid = process.pid, browserPid = null } = {}) {
   if (!Number.isSafeInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) return null;
-  const facts = readFacts(Number(port));
-  if (!facts.known) return null;
-  const pids = new Set(facts.clients.map((item) => Number(item.pid)));
+  let pids;
+  if (runner) {
+    // An explicit runner preserves the local-reader seam. Default callers use process facts first.
+    let output;
+    try { output = await runner('lsof', ['-nP', `-iTCP:${Number(port)}`, '-sTCP:ESTABLISHED', '-Fp'], { timeout: 3000 }); }
+    catch (error) {
+      if (error.code === 1 && !String(error.stdout || '').trim() && !String(error.stderr || '').trim()) return 0;
+      throw error;
+    }
+    pids = new Set([...String(output).matchAll(/^p(\d+)$/gm)].map((match) => Number(match[1])));
+  } else {
+    const facts = readFacts(Number(port));
+    if (!facts.known) return null;
+    pids = new Set(facts.clients.map((item) => Number(item.pid)));
+  }
   pids.delete(Number(servicePid));
   if (Number.isSafeInteger(Number(browserPid))) pids.delete(Number(browserPid));
   return pids.size;

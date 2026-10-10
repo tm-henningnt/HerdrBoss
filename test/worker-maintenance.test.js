@@ -12,6 +12,20 @@ test('the client collector treats lsof with no matches as zero clients and keeps
   assert.equal(await collectBrowserClients(9224, { runner: async () => { throw Object.assign(new Error('no matches'), { code: 1, stdout: '', stderr: '' }); } }), 0);
   await assert.rejects(collectBrowserClients(9224, { runner: async () => { throw Object.assign(new Error('denied'), { code: 1, stdout: '', stderr: 'denied' }); } }), /denied/);
 });
+
+test('an injected CDP runner bypasses process facts and keeps the local reader contract', async () => {
+  const calls = [];
+  const count = await collectBrowserClients(9224, {
+    servicePid: 101, browserPid: 202,
+    readFacts: () => assert.fail('The injected runner must bypass the service reader'),
+    runner: async (command, args, options) => {
+      calls.push({ command, args, options });
+      return 'p101\np202\np303\np303\n';
+    },
+  });
+  assert.equal(count, 1);
+  assert.deepEqual(calls, [{ command: 'lsof', args: ['-nP', '-iTCP:9224', '-sTCP:ESTABLISHED', '-Fp'], options: { timeout: 3000 } }]);
+});
 import { agentBrowserTabIds, forgetAgentBrowserTab, recordAgentBrowserTab } from '../src/browser-activity.js';
 import {
   inspectReviewWorkerCloses,
