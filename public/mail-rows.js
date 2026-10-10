@@ -35,14 +35,14 @@ export function inboxSections(inbox) {
 const plain = (line) => line.replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '').replace(/[*_~`]+/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
 
 export function mailSubject(item) {
-  if (item.kind === 'report') return item.title || 'Report';
+  if (item.kind === 'report' || item.kind === 'digest') return item.title || 'Report';
   return String(item.text || '').split('\n').find((line) => line.trim())?.trim() || 'Reply';
 }
 
 // The text after the subject line. A report drops a first heading that repeats its title.
 export function mailPreview(item) {
   const lines = String(item.text || '').split('\n').map(plain).filter(Boolean);
-  if (item.kind === 'report') {
+  if (item.kind === 'report' || item.kind === 'digest') {
     if (lines[0] === item.title) lines.shift();
   } else lines.shift();
   return lines.join(' ').replace(/\s+/g, ' ').slice(0, 200);

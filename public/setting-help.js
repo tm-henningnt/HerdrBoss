@@ -52,6 +52,13 @@ export const SETTING_GROUPS = [
     restart: 'No restart. Select Apply policy.',
   },
   {
+    id: 'owner-todo', title: 'To do digest', advanced: false,
+    controls: 'The daily digest time, its time zone, and its desktop notification.',
+    affects: 'One Mailbox digest of open To do items. Each Monday includes the five oldest open items.',
+    safe: 'The default is off. A new digest replaces the previous digest. The service posts at most once per date in the chosen time zone.',
+    restart: 'No restart. Select Apply policy.',
+  },
+  {
     id: 'watch', title: 'Watch', advanced: false,
     controls: 'The routines that the Boss pane gets while a watch runs, the worker caps of a watch, and quiet hours.',
     affects: 'Workers and notices. A cap limits how many workers run while the Owner is away. A routine sends a prompt to the Boss pane.',
@@ -370,6 +377,21 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'service',
   }),
 
+  S('owner-todo', 'ownerTodo.digestTime', 'Daily digest time', {
+    what: 'The time for a short list of open To do items in the Mailbox. Leave it empty to turn the digest off. The first tick at or after this time posts the digest. Monday includes the five oldest open items by age.',
+    default: 'Off', unit: 'Time', range: '00:00 to 23:59 in HH:MM format, or empty',
+    raise: 'A later time posts the digest later in the day.', lower: 'An earlier time posts the digest earlier in the day.', apply: 'policy',
+  }),
+  S('owner-todo', 'ownerTodo.timeZone', 'Digest time zone', {
+    what: 'The time zone for the daily digest date and time. Use local for the service time zone. Use a time zone name such as Europe/Oslo for a fixed zone. The service follows daylight saving changes.',
+    default: 'local', unit: 'Time zone', range: 'local or a valid time zone name',
+    raise: 'A zone ahead of UTC reaches the chosen time earlier.', lower: 'A zone behind UTC reaches the chosen time later.', apply: 'policy',
+  }),
+  S('owner-todo', 'ownerTodo.notify', 'Desktop digest notification', {
+    what: 'Send a desktop notice when the service saves a daily digest. The notice gives the open count. Quiet hours hold it until they end. The Mailbox digest does not wait for the notice.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on sends a desktop notice with each new digest.', lower: 'Turning it off keeps delivery in the Mailbox.', apply: 'policy',
+  }),
   S('attachments', 'attachments.retentionDays', 'Picture retention days', {
     what: 'How long Herdr Boss keeps a linked picture. An hourly sweep removes expired pictures. An upload left unlinked for one hour is deleted. Deleting or dismissing a message deletes its pictures.',
     default: '30', unit: 'Days', range: '1 to 365',

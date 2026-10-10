@@ -26,7 +26,7 @@ Read each reference before its step:
 - Follow [the work approval policy](reference/approval-policy.md).
 - The orchestrator owns the work sequence.
 - Keep one active frontier unless the contract permits a batch.
-- Read issue dependencies and work only the first unblocked approved item.
+- Read dependencies. Work the first unblocked approved item.
 - Delegate one bounded task at a time. Do not hand the entire roadmap to one worker.
 - Give each worker a role, exact paths, evidence, and stop point.
 - Do not delegate roadmap or product direction.
@@ -61,6 +61,9 @@ Read each reference before its step:
 
 ## Roles and escalation
 
+- Post each Owner ask with `herdr-boss todo post FILE`. Pane text is not delivery.
+- Name the To do item key while waiting for the Owner.
+
 - The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
 - Decide implementation, product, design, naming, thresholds, tests, project scope, and review findings under project rules and recorded Owner decisions. Keep these decisions within the project.
 - Escalate only when project documents and available evidence cannot settle the next action.
@@ -71,16 +74,16 @@ Read each reference before its step:
 - Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
 - Do not message another project's orchestrator. The Boss relays messages between projects.
 - The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
-- Run your pushes and deployments under project rules; neither needs approval. Publish releases only with `herdr-boss release publish` after Owner approval in the Mailbox. Run `herdr-boss release cancel` to settle an obsolete open request before you request again.
+- Push and deploy under project rules. Publish releases with `herdr-boss release publish` after Owner approval in the Mailbox. Cancel an obsolete request with `herdr-boss release cancel` before requesting again.
 - Follow the [release checklist](reference/release-checklist.md) before requesting a Qlik extension release.
-- Before each push, read the full diff for tokens, secrets, local paths with private content, and client or tenant names from other projects.
+- Before each push, check the full diff for secrets, private local content, and other projects' client or tenant names.
 - Push one change set at a time.
 - Run long gates with the foreground procedure in [Git and worktree hygiene](reference/git-and-worktrees.md). The machine-wide full-suite lock serves waiters in order. Never take the full-suite lock with a bare lock acquire for a suite. Push with `herdr-boss push`; it takes the lock when a pre-push hook exists. The lane guard holds a queued short-lane job while 5-minute load exceeds 231% of the cores. Set it in Settings, Locks (`locks.guard`).
 - Lease a shared resource with `herdr-boss lease acquire POOL` or `worker start --lease POOL`. Never pick a port from a pool by hand. The serve-lease rules are in [the machine and quota rules](reference/machine-and-quota.md).
 
 ### Human gates and parking
 
-- For a human action, name the issue, artifact and version, exact human action, expected result, and response format.
+- Name the issue, artifact version, human action, expected result, and response format.
 - Continue independent work while a genuine human gate is pending.
 - Record the parked frontier and exact resume point.
 - Keep every unmet acceptance item red.
@@ -111,7 +114,7 @@ Read each reference before its step:
 - Read `git diff --check` before changing files.
 - Preserve dirty or untracked files until their owner is clear.
 - Read the project instructions, product specification, roadmap, architecture decisions, and issue contract.
-- Use the configured issue tracker as the source of truth for order, blockers, status, and evidence.
+- Use the issue tracker for task order, blockers, status, and evidence.
 - Read open issues and their native dependency links.
 - Identify the first open issue whose blockers are complete.
 - Do not infer the frontier from memory or a dashboard.

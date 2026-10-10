@@ -40,6 +40,7 @@ import { initializeAgentResponseIndex, readAgentMetadata, recordAgentMessage, re
 import { sweep as sweepReviewPacks, packHeads } from './review-store.js';
 import { sweepAttachments } from './attachments.js';
 import { openMessageStore } from './message-store.js';
+import { postTodoDigest } from './owner-todo.js';
 import { readKitNotice, pendingKitAlert, isKitAlert, kitNoticeTargets, unsentKitChanges, formatKitNotice, KIT_ADOPT_STEPS } from './kit-notice.js';
 import { applyTaskState, readWorkerFacts, gitIsMerged, gitCounts } from './task-state.js';
 import { BoardFactsCache } from './board-facts.js';
@@ -583,11 +584,12 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, projectRegisterTriageRunner = null, projectRegisterAutoParkRunner = null, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, notificationRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, projectRegisterTriageRunner = null, projectRegisterAutoParkRunner = null, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
     super();
     initializeLifecyclePort();
     this.cfg = cfg;
     this.clock = clock;
+    this.notificationRunner = notificationRunner;
     const guardReasons = [];
     if (process.env.NODE_TEST_CONTEXT) guardReasons.push('NODE_TEST_CONTEXT is set');
     if (DATA_DIR !== LIVE_DATA_DIR) guardReasons.push(`data directory ${DATA_DIR} is not the configured live data directory ${LIVE_DATA_DIR}`);
@@ -1484,6 +1486,7 @@ export class Engine extends EventEmitter {
       try { snap.standbyPanes = listHandoffs().filter((h) => ['preparing', 'prepared', 'needs-inspection'].includes(h.status)).map((h) => h.newPane); }
       catch { snap.standbyPanes = []; }
       const evaluation = evaluate(snap, this.cfg, this.memory.paneSince, now, policy, (this.memory.alertState ||= {}));
+      evaluation.alerts.push(...this.ownerTodoDigestAlerts(policy, now));
       if (this.act) evaluation.alerts.push(...this.quotaPlanService.expiryNotices({ now }));
       evaluation.alerts.push(...this.contextHandoverAlerts(control, herdr, now, policy, snap.projects));
       evaluation.alerts.push(...workerTransitions.notices);
@@ -3469,6 +3472,19 @@ export class Engine extends EventEmitter {
     }
   }
 
+  ownerTodoDigestAlerts(policy, now) {
+    if (!this.act) return [];
+    try {
+      const digest = postTodoDigest(policy.ownerTodo, { store: this.messageStore, clock: () => now });
+      if (!digest || !policy.ownerTodo?.notify) return [];
+      return [{ key: `todo-digest:${digest.digestDate}`, severity: 'info', desktop: true, scope: 'user', prompt: false,
+        title: 'To do digest', text: `${digest.text.split('\n')[0]} Open the Mailbox To do view.` }];
+    } catch {
+      this.log('error', 'The To do digest could not be saved. Check its time and time zone in Settings.');
+      return [];
+    }
+  }
+
   async deliver(alerts, herdr, now, night = null, held = new Set()) {
     const policyMachine = loadPolicy().machine;
     const cooldown = policyMachine.alertCooldownSeconds * 1000;
@@ -3491,7 +3507,7 @@ export class Engine extends EventEmitter {
     // Deliver notifications once when quiet hours end. The service keeps the queue in memory.json across restarts.
     if (!quiet && this.memory.quietNotifications.length) {
       for (const notice of this.memory.quietNotifications) {
-        run('herdr', ['notification', 'show', `Herdr Boss: ${notice.title}`, '--body', notice.text, '--sound', notice.severity === 'critical' ? 'request' : 'none']).catch(() => {});
+        this.notificationRunner('herdr', ['notification', 'show', `Herdr Boss: ${notice.title}`, '--body', notice.text, '--sound', notice.severity === 'critical' ? 'request' : 'none']).catch(() => {});
         this.log('notify', notice.title, { severity: notice.severity });
       }
       this.memory.quietNotifications = [];
@@ -3502,13 +3518,13 @@ export class Engine extends EventEmitter {
       const previous = this.memory.notified[a.key];
       const contextRepeatDue = a.key.startsWith('context:') && Number.isFinite(previous)
         && now - previous >= CONTEXT_WARNING_INTERVAL_MS;
-      if (SEV[a.severity] < 1 || a.noDesktop || (previous && !contextRepeatDue)) continue;
+      if ((SEV[a.severity] < 1 && !a.desktop) || a.noDesktop || (previous && !contextRepeatDue)) continue;
       this.memory.notified[a.key] = now;
       if (quiet) {
         this.memory.quietNotifications.push({ key: a.key, title: a.title, text: a.text, severity: a.severity });
         this.log('quiet-hours', 'quiet hours held desktop notification', { key: a.key, title: a.title, alertText: a.text, severity: a.severity });
       } else {
-        run('herdr', ['notification', 'show', `Herdr Boss: ${a.title}`, '--body', a.text, '--sound', a.severity === 'critical' ? 'request' : 'none']).catch(() => {});
+        this.notificationRunner('herdr', ['notification', 'show', `Herdr Boss: ${a.title}`, '--body', a.text, '--sound', a.severity === 'critical' ? 'request' : 'none']).catch(() => {});
         this.log('notify', a.title, { severity: a.severity });
       }
     }

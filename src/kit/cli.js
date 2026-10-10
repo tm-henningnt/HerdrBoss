@@ -389,7 +389,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     const root = argv[1] ? null : (injectedConfig?.root ?? findGitRoot());
     const file = argv[1] ? path.resolve(argv[1]) : path.join(root, 'AGENTS.md');
     if (!fs.existsSync(file)) fail(`No such file: ${file}`, 1);
-    const result = checkAgentsFile(file, { rulesFile, relative: argv[1] ?? 'AGENTS.md' });
+    const result = checkAgentsFile(file, { rulesFile, relative: argv[1] ?? 'AGENTS.md', herdr,
+      dir: env.HERDR_BOSS_DIR || DATA_DIR, now: now ? now() : Date.now() });
     for (const line of result.lines) output(line);
     output(`check agents: ${result.errors ? 'FAIL' : 'PASS'} (${result.summary})`);
     return { ...result, exitCode: result.errors ? 1 : 0 };

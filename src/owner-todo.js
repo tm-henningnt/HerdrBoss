@@ -5,7 +5,7 @@ import { requiredProposalSections, proposalSections } from './kit/proposal.js';
 import { redactSecrets } from './redact.js';
 import { scanText } from './secret-scan.js';
 import { redactBrowserSecrets, maskBrowserText } from './browser-url-mask.js';
-import { TODO_TYPES, TODO_PRIORITIES, todoState } from './owner-todo-model.js';
+import { TODO_TYPES, TODO_PRIORITIES, todoState, todoView } from './owner-todo-model.js';
 
 export { TODO_TYPES, TODO_PRIORITIES, todoState, todoView } from './owner-todo-model.js';
 export const TODO_POST_LIMIT = 10;
@@ -42,6 +42,38 @@ function publicText(text) {
 function safeLegacyText(value) {
   const text = maskBrowserText(redactSecrets(String(value || '')));
   return scanText('todo.txt', text).length ? '[Private content removed.]' : text;
+}
+
+// A stored date makes a restart or a schedule edit safe. Replace only this digest.
+export function postTodoDigest(settings = {}, { dir = DATA_DIR, store = openMessageStore({ dir }), clock = Date.now } = {}) {
+  if (!settings.digestTime) return null;
+  const now = clock();
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    ...(settings.timeZone && settings.timeZone !== 'local' ? { timeZone: settings.timeZone } : {}),
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now).map(({ type, value }) => [type, value]));
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  const monday = new Date(`${date}T00:00:00Z`).getUTCDay() === 1;
+  if (`${parts.hour}:${parts.minute}` < settings.digestTime) return null;
+  return store.mutate((records) => {
+    const previous = records.find((item) => item.kind === 'digest' && item.digestSource === 'owner-todo');
+    const dates = [...new Set([...(previous?.digestDates || []), previous?.digestDate].filter(Boolean))];
+    if (dates.includes(date)) return { records, result: null };
+    const { todo: open } = todoView(records, now);
+    const line = (item) => `- ${safeLegacyText(item.project)}: ${safeLegacyText(item.title).replace(/\s+/g, ' ')}`;
+    const text = [`${open.length} open To do item${open.length === 1 ? '' : 's'}.`, ...open.slice(0, 5).map(line),
+      ...(open.length > 5 ? [`${open.length - 5} more items are in To do.`] : []),
+      ...(monday ? ['', '## Weekly: oldest open items', ...[...open].sort((a, b) =>
+        Date.parse(a.createdAt || a.at) - Date.parse(b.createdAt || b.at) || a.id.localeCompare(b.id)).slice(0, 5).map(line)] : [])].join('\n');
+    const record = { id: previous?.id || newId(now), kind: 'digest', digestSource: 'owner-todo', digestDate: date,
+      digestDates: [...dates, date].slice(-32),
+      thread: 'boss', from: 'boss', to: 'owner', title: 'To do digest', text, action: 'read',
+      at: new Date(now).toISOString(), weeklyDate: monday ? date : null,
+      status: 'new', readAt: null, closedAt: null, closedBy: null, dismissed: false };
+    const kept = records.filter((item) => !(item.kind === 'digest' && item.digestSource === 'owner-todo'));
+    kept.push(record);
+    return { records: kept, result: record };
+  }, { now });
 }
 
 export function parseTodoFile(text, { priority, blocks } = {}) {

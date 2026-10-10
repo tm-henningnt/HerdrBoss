@@ -9,9 +9,11 @@ import { formatLocalTime, planDeviationText, projectedReach, recentBurn } from '
 import { appendPolicyChange, callerKind, diffPolicy } from './policy-log.js';
 import { assertDataFile, readDataFile, writeDataFile } from './data-file-safety.js';
 import { readCodexLaneBlock } from './codex-lane.js';
+import { validateTodoDigestSettings } from './owner-todo-model.js';
 
 const FILE = path.join(DATA_DIR, 'policy.json');
 export const POLICY_DEFAULTS = {
+  ownerTodo: { digestTime: null, timeZone: 'local', notify: false },
   attachments: { retentionDays: 30 },
   agentMessages: { retentionDays: 14, metaRetentionDays: 180, promptTimeoutSeconds: 25 },
   opus: { allowWithoutForce: false, maxConcurrent: 2 },
@@ -159,6 +161,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
         Math.ceil((policy.autoHandoverContextTokens + 1) / contextStep) * contextStep);
     }
   }
+  policy.ownerTodo = { ...POLICY_DEFAULTS.ownerTodo, ...(isObject(stored.ownerTodo) ? stored.ownerTodo : {}) };
   policy.ignoredRoutes = legacyRouteConflicts(policy, models ?? loadModels());
   try {
     const factoryShares = readFactoryShares(path.dirname(file));
@@ -209,6 +212,7 @@ function subset(value, set, field, errors) {
 export function validatePolicy(value, models) {
   const errors = [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['policy must be an object.'];
+  if (value.ownerTodo !== undefined) errors.push(...validateTodoDigestSettings(value.ownerTodo));
   if (!Number.isInteger(value.maxWorkers) || value.maxWorkers < 1 || value.maxWorkers > 64) errors.push('maxWorkers must be an integer from 1 to 64.');
   if (typeof value.borrowIdle !== 'boolean') errors.push('borrowIdle must be boolean.');
   if (typeof value.paceRouting !== 'boolean') errors.push('paceRouting must be boolean.');

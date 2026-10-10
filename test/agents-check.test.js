@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { agentsBlock, blockHash, checkAgentsFile, checkAgentsText, checkKitText, projectKit, settingsWithHook } from '../src/kit/agents-check.js';
 import { runKitCommand } from '../src/kit/cli.js';
 import { loadModels } from '../src/kit/config.js';
+import { openMessageStore } from '../src/message-store.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEMPLATE = path.join(ROOT, 'kit', 'templates', 'agents-stub.md');
@@ -287,6 +288,45 @@ function scan(repo) {
   const rulesFile = path.join(repo, 'no-rules.json');
   return checkAgentsFile(path.join(repo, 'AGENTS.md'), { rulesFile, relative: 'AGENTS.md' });
 }
+
+test('check agents warns for an Owner wait with no project item and never returns pane text', (t) => {
+  const repo = orchestrationRepo({ '.herdr-boss.json': JSON.stringify({ slug: 'alpha' }) });
+  const dir = path.join(repo, 'data');
+  fs.mkdirSync(dir);
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ control: { projects: { alpha: { workspace: 'wA' } } } }));
+  const store = openMessageStore({ dir });
+  const now = Date.now();
+  let screen = 'Waiting for the Owner. PRIVATE_PANE_TEXT';
+  const calls = [];
+  const herdr = (args) => {
+    calls.push(args);
+    if (args[1] === 'list') return { panes: [{ pane_id: 'wA:p1', workspace_id: 'wA', label: 'orch', agent: 'codex' },
+      { pane_id: 'wB:p1', workspace_id: 'wB', label: 'orch', agent: 'codex' }, { pane_id: 'wA:p2', workspace_id: 'wA', label: 'worker', agent: 'codex' }] };
+    assert.equal(args[2], 'wA:p1');
+    return { text: screen };
+  };
+  const checkLive = () => {
+    const output = [];
+    const result = runKitCommand('check', ['agents'], { config: { root: repo }, rulesFile: path.join(repo, 'missing-rules.json'),
+      env: { HERDR_BOSS_DIR: dir }, herdr, now: () => now, output: (line) => output.push(line) });
+    assert.doesNotMatch(JSON.stringify({ result, output }), /PRIVATE_PANE_TEXT/);
+    return result;
+  };
+  const missing = checkLive();
+  assert.equal(missing.errors, 0);
+  assert.equal(missing.warnings, 1);
+  assert.match(missing.lines[0], /1 waiting pane.*0 open To do items/);
+  assert.ok(calls.some((args) => args[0] === 'pane' && args[1] === 'read'));
+  store.append({ kind: 'todo', project: 'beta', to: 'owner', state: 'open' }, { now });
+  assert.equal(checkLive().warnings, 1, 'a different project item does not cover this wait');
+  const item = store.append({ kind: 'todo', project: 'alpha', to: 'owner', state: 'open' }, { now });
+  assert.equal(checkLive().warnings, 0);
+  store.update(item.id, { state: 'done' }, { now });
+  assert.equal(checkLive().warnings, 1, 'a closed item does not cover this wait');
+  screen = 'The implementation is ready. PRIVATE_PANE_TEXT';
+  assert.equal(checkLive().warnings, 0);
+});
 
 test('check agents scans the orchestration files in the Git top level', () => {
   const kinds = [

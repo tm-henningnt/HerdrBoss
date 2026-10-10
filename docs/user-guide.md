@@ -27,6 +27,12 @@ The poster project can cancel its own open item with `herdr-boss todo cancel KEY
 
 The Boss runs `herdr-boss todo migrate` to import open Mailbox asks that wait for the Owner. The command prints the imported count. It closes each old ask with a reference to its To do item. A repeat run adds no duplicate. The Boss posts asks from memory files later. See the [CLI reference](cli.md#owner-to-do-list) for the file format and limits.
 
+Set a daily digest in **Settings**, **To do digest**. Leave **Daily digest time** empty to keep it off. Enter a 24-hour time to turn it on. Set **Digest time zone** to `local` for the service time zone, or to a name such as `Europe/Oslo`. The browser can use a different zone. Select **Apply policy**.
+
+The digest appears in Mailbox reports and updates. It gives the open count and up to five project names and titles. A new date replaces the previous digest. A restart or repeated tick adds no second digest for that date. Each Monday includes the five oldest open items. Turn on **Desktop digest notification** for an optional desktop notice. Quiet hours hold the notice. They do not delay the Mailbox item.
+
+Each ask to the Owner must have a To do item. Pane text does not deliver an ask. A project lead that waits for the Owner names the item key. `herdr-boss check agents` warns when that project's pane says it waits and no open item exists. The warning gives counts. It shows no pane text.
+
 ## See the running version
 
 Settings shows the running commit and date, kit revision, and service start time. The service reads these values when it starts. The Fleet page shows each factory's commit, kit revision, and uptime. A factory that does not report a field shows `unknown`. Run `herdr-boss factory status NAME` to compare the running service commit with the checkout `HEAD`. A successful `herdr-boss factory update NAME --tier service|image` prints the short commit before and after the update.
