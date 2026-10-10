@@ -575,6 +575,12 @@ test('Allocation long policy text uses growing three-row textareas without chang
   }
   assert.match(css, /\.setting-line\.goal-setting textarea\s*\{[^}]*min-height:/);
   assert.match(css, /\.setting-line\.goal-setting textarea\s*\{[^}]*width:\s*100%/);
+  const goalTextareaCss = /\.setting-line\.goal-setting textarea\s*\{([^}]*)\}/.exec(css)?.[1] || '';
+  assert.match(goalTextareaCss, /field-sizing:\s*content/);
+  assert.match(goalTextareaCss, /min-height:\s*calc\(\s*3\s*\*\s*1\.4em\s*\+\s*12px\s*\)/);
+  assert.match(goalTextareaCss, /max-height:\s*50vh/);
+  assert.match(goalTextareaCss, /overflow-y:\s*auto/);
+  assert.match(source, /for \(const field of \$app\.querySelectorAll\('textarea\[data-grow-textarea\]'\)\) fitTextarea\(field\);/, 'each Allocation render fits saved textarea content');
   const change = app.context.handlers.get('input').find((handler) => handler.toString().includes('el.dataset.policyText'));
   const textarea = { dataset: { growTextarea: '', policyText: 'bossRules' }, value: 'Updated standing rules.', style: {}, scrollHeight: 70, closest: () => ({}) };
   change({ target: textarea });
@@ -634,7 +640,12 @@ test('Settings wraps model names only at separators and keeps the usage mode cho
   assert.match(css, /\.harness-model label > span:first-of-type\s*\{[^}]*overflow-wrap:\s*normal/);
   assert.match(css, /select\[data-provider\]\s*\{[^}]*min-width:\s*190px/);
   assert.match(css, /\.harness \.setting-line\.preferred-model-setting\s*\{[^}]*flex-direction:\s*column/);
-  assert.match(css, /\.harness \.setting-line\.preferred-model-setting > select\s*\{[^}]*width:\s*100%/);
+  const harnessSelectCss = /\.harness \.setting-line select\s*\{([^}]*)\}/.exec(css)?.[1] || '';
+  assert.match(harnessSelectCss, /width:\s*100%/);
+  assert.match(harnessSelectCss, /max-width:\s*100%/);
+  assert.match(harnessSelectCss, /min-width:\s*0/);
+  assert.match(harnessSelectCss, /box-sizing:\s*border-box/);
+  assert.match(harnessSelectCss, /text-overflow:\s*ellipsis/);
   assert.match(css, /\.model-version\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(css, /\.advanced-settings \.settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 });

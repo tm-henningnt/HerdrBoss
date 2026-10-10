@@ -135,7 +135,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('harnesses', 'harness.preferredModel', 'Preferred model', {
-    what: 'The model that worker start and handover use when no model is given.',
+    what: 'The model that worker start and handover use when no model is given. On a narrow field, a long name ends with an ellipsis. The choice arrow stays visible.',
     default: 'The agent app default', unit: 'Model name', range: 'Any model that the agent app allows',
     raise: 'Not applicable. Choose another model to change the choice.',
     lower: 'An empty choice uses the agent app default.',
@@ -599,7 +599,7 @@ export const SETTING_HELP = Object.fromEntries([
     apply: 'policy',
   }),
   S('capacity', 'defaultOrchestratorGoal', 'Default project lead goal', {
-    what: 'The goal text for a new project lead that has no goal. A handover copies the goal of the old project lead to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the project lead waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters.',
+    what: 'The goal text for a new project lead that has no goal. A handover copies the goal of the old project lead to the successor: the published status goal, else the last /goal command of its session. Claude gets plain text by default. Turn on Automatic Claude goal command to send /goal after activation. The default text ends with a rule: a running worker, a gate, a push, or a lock wait is progress. The rule stops the goal check from looping while the project lead waits for a report. The Set goal dialog and `herdr-boss goal set` accept at most 2000 characters. The field grows as you type. It scrolls after it reaches half of the screen height.',
     default: 'A standing goal text', unit: 'Text', range: 'One line of at most 4000 characters, or empty for no default',
     raise: 'A longer text gives more direction and uses more context.',
     lower: 'An empty text gives a new project lead no default goal.',
@@ -607,7 +607,7 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   S('capacity', 'bossRules', 'Boss rules', {
-    what: 'The standing rules that Herdr Boss gives to every successor in the handover bootstrap prompt. The text is the Boss rules section of that prompt. Each prepared successor reads the section, so the Boss does not send the rules again. The other two generated sections are the pane map and the open items. The open items section keeps only the memory lines of the last 48 hours whose text names the Owner or the Boss. Every value in the sections is rendered on one line, so a value cannot forge a section heading. An empty text leaves the section out.',
+    what: 'The standing rules that Herdr Boss gives to every successor in the handover bootstrap prompt. The text is the Boss rules section of that prompt. Each prepared successor reads the section, so the Boss does not send the rules again. The other two generated sections are the pane map and the open items. The open items section keeps only the memory lines of the last 48 hours whose text names the Owner or the Boss. Every value in the sections is rendered on one line, so a value cannot forge a section heading. An empty text leaves the section out. The field grows as you type. It scrolls after it reaches half of the screen height.',
     default: 'The standing rules of the fleet', unit: 'Text', range: 'One line of at most 1200 characters, or empty for no rules',
     raise: 'A longer text gives the successor more rules and uses more of the prompt.',
     lower: 'A shorter text leaves out the rules that you remove, and a text over 1200 characters is refused.',
