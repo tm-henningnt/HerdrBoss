@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { readFactoryShares, FACTORY_SHARE_ERROR } from './fleet-pacing.js';
 import { effortSettingsForModel, loadModels } from './kit/config.js';
@@ -371,6 +372,38 @@ export function writePolicy(value, { caller = 'unknown', dir = null, file = null
   try { before = JSON.parse(text); } catch {}
   writeDataFile(target, `${JSON.stringify(stored, null, 2)}\n`, logDir);
   appendPolicyChange(logDir, { caller: callerKind(caller), changes: diffPolicy(before, stored), strict: strictLog });
+}
+
+// Save the current policy before a direct page removal. The random suffix prevents replacing an earlier backup.
+export function backupPolicyFile(file, dir, now = Date.now()) {
+  assertDataFile(file, dir);
+  const content = readDataFile(file, dir);
+  const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
+  const backup = path.join(dir, `policy.json.${stamp}-${randomBytes(4).toString('hex')}.bak`);
+  writeDataFile(backup, content, dir);
+  return backup;
+}
+
+// Remove one policy entry and distribute all remaining shares to 100 by their prior proportions.
+export function removePolicyProjectDraft(source, slug) {
+  const next = structuredClone(source || {});
+  next.projects = { ...(isObject(next.projects) ? next.projects : {}) };
+  if (!Object.hasOwn(next.projects, slug)) return next;
+  delete next.projects[slug];
+  const rows = Object.entries(next.projects).filter(([, entry]) => isObject(entry));
+  if (!rows.length) return next;
+  const weights = rows.map(([name, entry]) => [name, Number.isInteger(entry.share) && entry.share > 0 ? entry.share : 0]);
+  const weightTotal = weights.reduce((sum, [, weight]) => sum + weight, 0);
+  const baseWeights = weightTotal ? weights : weights.map(([name]) => [name, 1]);
+  const totalWeight = baseWeights.reduce((sum, [, weight]) => sum + weight, 0);
+  const shares = baseWeights.map(([name, weight]) => {
+    const exact = 100 * weight / totalWeight;
+    return { name, share: Math.floor(exact), remainder: exact - Math.floor(exact) };
+  });
+  let points = 100 - shares.reduce((sum, row) => sum + row.share, 0);
+  for (const row of [...shares].sort((a, b) => b.remainder - a.remainder || a.name.localeCompare(b.name)).slice(0, points)) row.share++;
+  for (const row of shares) next.projects[row.name].share = row.share;
+  return next;
 }
 
 // The share guard of a policy write from the page or the CLI. Compare the project shares of the new policy with the saved one.

@@ -14,7 +14,7 @@ import { runProjectStep, readFlowState } from './project-new.js';
 import { checkProject, formatCheck } from './project-new-check.js';
 import { verifyProjectCaller } from './project-caller.js';
 import { appendForcedAction, forceReason } from './force-audit.js';
-import { SLUG, appendAudit, localFactory, readRegister, withRegisterLock, writeRegister } from './project-register.js';
+import { SLUG, appendAudit, collectLiveProjectStates, localFactory, normalizeProjectName, readRegister, withRegisterLock, writeRegister } from './project-register.js';
 
 const OPEN_STEPS = ['folder', 'kit', 'policy', 'register', 'workspace', 'harness'];
 const PARK_CHECKS = ['workers', 'prompt', 'git', 'locks', 'status', 'memory', 'owner'];
@@ -221,16 +221,20 @@ function openProject(parsed, options) {
     if (transfer) throw new Error(`Project ${slug} has an open transfer. Finish or cancel the transfer before opening it.`);
     const transferRefusal = projectTransferRefusal(slug, { dataDir });
     if (transferRefusal) throw new Error(transferRefusal);
+    const first = checkProjectForOpen(slug, options, parsed.start);
+    const liveProject = collectLiveProjectStates(options.herdr).projects.get(normalizeProjectName(slug));
+    const hasLiveOrchestrator = liveProject?.hasOrchestrator === true;
     const registerSettings = options.registerSettings ?? {};
     const cap = registerSettings.cap ?? options.cap ?? 3;
     const capCountsPinned = registerSettings.capCountsPinned ?? false;
     const projects = readRegister(dataDir).projects;
     const open = projects.filter((item) => ['open', 'parking'].includes(item.state)
       && (capCountsPinned || !item.pinned)).length;
-    if (!parsed.force && open >= cap) {
+    if (!parsed.force && open >= cap && !hasLiveOrchestrator) {
       const current = projects.filter((item) => item.state === 'open').map((item) => item.slug);
       throw new Error(`The open project cap is ${cap}. Open projects: ${current.join(', ')}. Park one project or use --force --reason TEXT for an authorized override.`);
     }
+    if (open >= cap && hasLiveOrchestrator) log(`The open project cap is ${cap}, with ${open} projects open. ${slug} already has a live orchestrator, so the cap does not apply.`);
     if (parsed.force && open >= cap && !parsed.dryRun) appendForcedAction({
       dataDir,
       time: new Date(options.now()).toISOString(),
@@ -241,7 +245,6 @@ function openProject(parsed, options) {
       reason: parsed.reason,
     });
 
-    const first = checkProjectForOpen(slug, options, parsed.start);
     logCheck(first, log);
     if (parsed.dryRun) {
       log(`Dry run: project ${slug} stays parked. No lock, step, register change, or audit line was written.`);

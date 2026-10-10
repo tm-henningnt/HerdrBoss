@@ -159,6 +159,10 @@ test('a failed open step leaves the project parked and records the failed check'
 
 test('the open cap refuses by default and --force overrides only the cap', async (t) => {
   const f = fixture(t, { lifecycle: { cap: 1 } });
+  const herdr = f.herdr;
+  f.herdr = (args) => args[0] === 'workspace' && args[1] === 'list' ? { workspaces: [] }
+    : args[0] === 'pane' && args[1] === 'list' ? { panes: [] }
+      : args[0] === 'agent' && args[1] === 'list' ? { agents: [] } : herdr(args);
   const other = record('another-project', { state: 'open' });
   writeRegister({ version: 1, projects: [f.project, other] }, f.dataDir);
   assert.equal(await run(f, ['open', 'acme-web']), 1);
@@ -195,6 +199,21 @@ test('the cap reads register settings and can exclude pinned open projects', asy
   ] }, defaults.dataDir);
   assert.equal(await run(defaults, ['open', 'acme-web']), 0, 'the default cap is 3 and pinned projects do not use a cap slot');
   assert.equal(defaults.result().projects.find((item) => item.slug === 'acme-web').state, 'open');
+});
+
+test('the open cap does not refuse a project with a live orchestrator', async (t) => {
+  const f = fixture(t, { lifecycle: { cap: 1 } });
+  writeRegister({ version: 1, projects: [
+    f.project,
+    record('open-project-a', { state: 'open' }),
+    record('open-project-b', { state: 'open' }),
+  ] }, f.dataDir);
+
+  const code = await run(f, ['open', 'acme-web']);
+
+  assert.equal(code, 0, f.messages.join('\n'));
+  assert.equal(f.result().projects.find((item) => item.slug === 'acme-web').state, 'open');
+  assert.match(f.messages.join('\n'), /cap does not apply/);
 });
 
 test('lifecycle commands refuse an orch pane from another project', async (t) => {

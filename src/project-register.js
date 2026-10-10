@@ -329,6 +329,56 @@ function readPolicyProjects(dataDir) {
   return Object.keys(parsed.projects).filter((key) => SLUG.test(key));
 }
 
+// Compare workspace names with project slugs while ignoring case and punctuation.
+export function normalizeProjectName(value) {
+  return typeof value === 'string' ? value.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+}
+
+function rows(result, key) {
+  return Array.isArray(result?.[key]) ? result[key] : Array.isArray(result) ? result : null;
+}
+
+const workspaceId = (workspace) => workspace?.workspace_id ?? workspace?.workspaceId ?? workspace?.id ?? null;
+const paneId = (pane) => pane?.pane_id ?? pane?.paneId ?? pane?.id ?? null;
+const paneWorkspaceId = (pane) => pane?.workspace_id ?? pane?.workspaceId ?? pane?.workspace ?? null;
+const agentPaneId = (agent) => agent?.pane_id ?? agent?.paneId ?? agent?.pane ?? null;
+
+// Return live project states from one Herdr snapshot. A workspace is open only when it has a live orch pane and agent.
+export function collectLiveProjectStates(herdr) {
+  try {
+    const workspaces = rows(herdr(['workspace', 'list']), 'workspaces');
+    const panes = rows(herdr(['pane', 'list']), 'panes');
+    const agents = rows(herdr(['agent', 'list']), 'agents');
+    if (!workspaces || !panes || !agents) throw new Error('Herdr returned an incomplete project list.');
+    const agentPanes = new Set(agents.map(agentPaneId).filter(Boolean));
+    const projects = new Map();
+    for (const workspace of workspaces.filter(isObject)) {
+      const names = [...new Set([workspace.label, workspace.name].filter(isText))];
+      if (!names.length) continue;
+      const id = workspaceId(workspace);
+      const hasOrchestrator = panes.some((pane) => pane?.label === 'orch'
+        && paneWorkspaceId(pane) === id
+        && (agentPanes.has(paneId(pane)) || (isText(pane.agent) && pane.agent.length > 0)));
+      for (const name of names) {
+        const key = normalizeProjectName(name);
+        if (key) projects.set(key, { name, id, state: hasOrchestrator ? 'open' : 'parked', hasOrchestrator });
+      }
+    }
+    return { projects, known: true, warning: null };
+  } catch {
+    return {
+      projects: new Map(),
+      known: false,
+      warning: 'Warning: Herdr did not list its workspaces and project leads. Existing register states stay unchanged.',
+    };
+  }
+}
+
+function slugFromWorkspaceName(value) {
+  const slug = String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return SLUG.test(slug) ? slug : '';
+}
+
 function listStatusFiles(dir) {
   try {
     return fs.readdirSync(dir, { withFileTypes: true })
@@ -378,19 +428,8 @@ export function collectImportCandidates({ dataDir = DATA_DIR, herdr } = {}) {
     .map((name) => ({ name, status: readStatusFile(statusDir, name) }))
     .filter((entry) => entry.status !== null);
 
-  let warning = null;
-  let labels = new Set();
-  try {
-    const result = herdr(['workspace', 'list']);
-    const workspaces = isObject(result) && Array.isArray(result.workspaces) ? result.workspaces : null;
-    if (workspaces) {
-      labels = new Set(workspaces.filter(isObject).map((workspace) => workspace.label).filter(isText));
-    } else {
-      warning = 'Warning: Herdr did not list the workspaces. Every new record gets the state parked.';
-    }
-  } catch {
-    warning = 'Warning: Herdr did not list the workspaces. Every new record gets the state parked.';
-  }
+  const live = collectLiveProjectStates(herdr);
+  const warning = live.warning;
 
   for (const { name, status } of statuses) {
     // The file name holds the slug. A slug field in the file does not change it.
@@ -401,11 +440,20 @@ export function collectImportCandidates({ dataDir = DATA_DIR, herdr } = {}) {
     if (validIso(status.updated) && status.updated !== '') candidate.lastActivityAt = status.updated;
   }
 
-  for (const candidate of candidates.values()) {
-    candidate.state = labels.has(candidate.slug) ? 'open' : 'parked';
+  for (const [key, workspace] of live.projects) {
+    if (!workspace.hasOrchestrator || key === normalizeProjectName('boss')) continue;
+    const matched = [...candidates.values()].find((candidate) => normalizeProjectName(candidate.slug) === key);
+    if (!matched) {
+      const slug = slugFromWorkspaceName(workspace.name);
+      if (slug) ensure(slug);
+    }
   }
 
-  return { candidates: [...candidates.values()], warning, invalidRepoSlugs };
+  for (const candidate of candidates.values()) {
+    candidate.state = live.projects.get(normalizeProjectName(candidate.slug))?.state === 'open' ? 'open' : 'parked';
+  }
+
+  return { candidates: [...candidates.values()], warning, invalidRepoSlugs, presenceKnown: live.known };
 }
 
 function safeText(value, max, fallback) {
@@ -444,6 +492,51 @@ export function buildCandidateRecord(candidate, dataDir = DATA_DIR) {
   };
   checkRecord(record);
   return record;
+}
+
+// Import project sources and refresh only fields derived from current Herdr and published status data.
+export function importProjectRegister({ dataDir = DATA_DIR, herdr, dryRun = false, log = () => {}, warn = (text) => console.error(text) } = {}) {
+  const importRecords = () => {
+    const register = readRegister(dataDir);
+    const existing = new Map(register.projects.map((entry) => [entry.slug, entry]));
+    const { candidates, warning, invalidRepoSlugs, presenceKnown } = collectImportCandidates({ dataDir, herdr });
+    if (invalidRepoSlugs > 0) warn(`Warning: skipped ${invalidRepoSlugs} project-repos.json row${invalidRepoSlugs === 1 ? '' : 's'} with an invalid slug.`);
+    if (warning) warn(warning);
+    const added = [];
+    const updated = [];
+    for (const candidate of candidates) {
+      const record = existing.get(candidate.slug);
+      if (!record) {
+        const next = buildCandidateRecord(candidate, dataDir);
+        register.projects.push(next);
+        added.push(next);
+        continue;
+      }
+      const next = { ...record };
+      if (presenceKnown) {
+        const derivedState = candidate.state;
+        if (derivedState === 'open' || !['archived', 'parking'].includes(record.state)) next.state = derivedState;
+      }
+      if (candidate.lastActivityAt && candidate.lastActivityAt !== record.lastActivityAt) next.lastActivityAt = candidate.lastActivityAt;
+      if (JSON.stringify(next) !== JSON.stringify(record)) {
+        checkRecord(next);
+        const index = register.projects.findIndex((entry) => entry.slug === record.slug);
+        register.projects[index] = next;
+        updated.push({ before: record, record: next });
+      }
+    }
+    if (!dryRun && (added.length || updated.length)) {
+      writeRegister(register, dataDir);
+      for (const record of added) appendAudit(record.slug, 'register-add', dataDir);
+      for (const { record } of updated) appendAudit(record.slug, 'register-import', dataDir);
+    }
+    for (const record of added) log(`new ${record.slug} (${record.state})`);
+    for (const { record } of updated) log(`updated ${record.slug} (${record.state})`);
+    log(`${added.length} new records.`);
+    if (updated.length) log(`${updated.length} records updated.`);
+    return { added: added.length, updated: updated.length, warning, invalidRepoSlugs };
+  };
+  return dryRun ? importRecords() : withRegisterLock(dataDir, importRecords);
 }
 
 // Parses the options of one register subcommand. Positional arguments come back in `positional`.

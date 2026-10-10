@@ -385,7 +385,9 @@ test('the state API sends the watch state, read from the old night.json file, wi
   assert.equal(response.status, 200);
   const state = await response.json();
   assert.deepEqual(state.projectRegisterSlugs, ['closed-preview']);
-  assert.equal(state.projectRegister, undefined);
+  assert.deepEqual(state.projectRegister, [{
+    slug: 'closed-preview', title: 'Closed preview', group: '', state: 'parked', pinned: false, priority: 'normal', share: 0,
+  }]);
   assert.deepEqual(Object.keys(state.night).sort(), ['active', 'adhoc', 'by', 'quietHours', 'reportAt', 'reportDaily', 'routines', 'since', 'until', 'untilCancelled']);
   assert.equal(state.night.active, true);
   assert.equal(state.night.since, since);
@@ -1030,6 +1032,27 @@ test('the policy API saves per-harness model assignments and rejects unsafe mode
   assert.equal((await (await fetch(`${base}/api/policy`)).json()).pacingGoals.codex.primary.end.resetAt, resetAt, 'a rejected end keeps the saved goal');
   const catalog = await (await fetch(`${base}/api/models`)).json();
   assert.ok(!catalog.pi.allowedModels.includes('opencode-go/glm-5.2'), 'the model catalog endpoint stays the kit catalog');
+
+  const removalPolicy = {
+    ...(await (await fetch(`${base}/api/policy`)).json()),
+    projects: {
+      alpha: { share: 30, mode: 'auto', excludedKinds: [], excludedModels: [] },
+      beta: { share: 20, mode: 'auto', excludedKinds: [], excludedModels: [] },
+      removed: { share: 50, mode: 'paused', excludedKinds: [], excludedModels: [] },
+    },
+  };
+  const seeded = await put({ ...removalPolicy, confirmed: true });
+  assert.equal(seeded.status, 200);
+  const beforeRemoval = fs.readFileSync(path.join(dataDir, 'policy.json'));
+  const removed = await fetch(`${base}/api/policy/projects/removed`, { method: 'DELETE' });
+  assert.equal(removed.status, 200);
+  const removedBody = await removed.json();
+  assert.equal(removedBody.backupCreated, true);
+  assert.equal(Object.hasOwn(removedBody.policy.projects, 'removed'), false);
+  assert.equal(removedBody.policy.projects.alpha.share + removedBody.policy.projects.beta.share, 100);
+  const backupName = fs.readdirSync(dataDir).find((name) => /^policy\.json\..+\.bak$/.test(name));
+  assert.ok(backupName, 'the route writes a policy backup before removal');
+  assert.deepEqual(fs.readFileSync(path.join(dataDir, backupName)), beforeRemoval);
 });
 
 test('the model catalog endpoint lists free opencode/ models only for the opencode harness', { timeout: 20000 }, async (t) => {

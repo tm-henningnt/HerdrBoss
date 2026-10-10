@@ -17,8 +17,7 @@ import {
   normalizeRepoPath,
   withRegisterLock,
   localFactory,
-  collectImportCandidates,
-  buildCandidateRecord,
+  importProjectRegister,
   githubRepoFromRemote,
   parseFlags,
   remoteProblem,
@@ -259,29 +258,8 @@ function importCommand(rest, { dataDir, herdr, log }) {
   const usage = SUB_USAGE.import;
   const { flags, positional } = parseFlags(rest, { booleans: ['--dry-run'], usage });
   if (positional.length > 0) throw new Error(`Give no other argument. ${usage}`);
-  const importRecords = () => {
-    const register = readRegister(dataDir);
-    const existing = new Set(register.projects.map((entry) => entry.slug));
-    const { candidates, warning, invalidRepoSlugs } = collectImportCandidates({ dataDir, herdr });
-    if (invalidRepoSlugs > 0) {
-      console.error(`Warning: skipped ${invalidRepoSlugs} project-repos.json row${invalidRepoSlugs === 1 ? '' : 's'} with an invalid slug.`);
-    }
-    if (warning) console.error(warning);
-    const records = [];
-    for (const candidate of candidates) {
-      if (existing.has(candidate.slug)) continue;
-      records.push(buildCandidateRecord(candidate, dataDir));
-    }
-    if (records.length > 0 && !flags['--dry-run']) {
-      register.projects.push(...records);
-      writeRegister(register, dataDir);
-      for (const record of records) appendAudit(record.slug, 'register-add', dataDir);
-    }
-    for (const record of records) log(`new ${record.slug} (${record.state})`);
-    log(`${records.length} new records.`);
-    return 0;
-  };
-  return flags['--dry-run'] ? importRecords() : withRegisterLock(dataDir, importRecords);
+  importProjectRegister({ dataDir, herdr, dryRun: flags['--dry-run'], log });
+  return 0;
 }
 
 const COMMANDS = {

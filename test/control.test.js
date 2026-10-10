@@ -24,6 +24,36 @@ fixtureModels.kinds.pi.allowedModels.push(...fixturePiModels);
 // The orchestrator panes carry a tier 1 model, so no ranked successor is weaker. The tier rule has its
 // own tests in handoff-auto-cooldown.test.js.
 const WEAKEST_SOURCE = 'opencode/space-bunny-free';
+
+test('removing a policy project redistributes the remaining shares to 100', () => {
+  const source = { projects: {
+    alpha: { share: 30, mode: 'auto' },
+    beta: { share: 20, mode: 'paused' },
+    removed: { share: 50, mode: 'active' },
+  } };
+
+  const next = controlModule.removePolicyProjectDraft(source, 'removed');
+
+  assert.equal(Object.hasOwn(next.projects, 'removed'), false);
+  assert.equal(next.projects.alpha.share + next.projects.beta.share, 100);
+  assert.deepEqual([next.projects.alpha.share, next.projects.beta.share], [60, 40]);
+  assert.equal(next.projects.beta.mode, 'paused');
+  assert.deepEqual(source.projects.removed, { share: 50, mode: 'active' }, 'the source policy stays unchanged');
+});
+
+test('policy backup keeps the saved policy bytes before a write', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-policy-backup-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'policy.json');
+  const original = '{"projects":{"alpha":{"share":100}}}\n';
+  fs.writeFileSync(file, original, { mode: 0o600 });
+
+  const backup = controlModule.backupPolicyFile(file, dir);
+
+  assert.equal(fs.readFileSync(backup, 'utf8'), original);
+  assert.equal(fs.statSync(backup).mode & 0o777, 0o600);
+});
+
 const snapshot = () => ({
   projects: [{ slug: 'a', workspace: 'w1' }, { slug: 'b', workspace: 'w2' }],
   herdr: {

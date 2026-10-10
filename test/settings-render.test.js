@@ -47,19 +47,20 @@ async function views(code = source) {
   for (const match of code.matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {
     const module = await import(`../public/${match[2]}`);
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) {
-      context[name] = name === 'createClientStore'
-        ? (options) => module[name]({
+      const [imported, local] = name.split(/\s+as\s+/);
+      context[local || imported] = imported === 'createClientStore'
+        ? (options) => module[imported]({
           ...options,
           fetchImpl: context.fetch,
           EventSourceImpl: context.EventSource,
           setIntervalImpl: context.setInterval,
           clearIntervalImpl: context.clearInterval,
         })
-        : module[name];
+        : module[imported];
     }
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, projectsView, project, removePolicyProject, setShowParkedAllocation, setProjectPageMode: (v) => { projectPageMode = v; }, getProjectPageSelected: () => projectPageSelected, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setProjectRegister: (v) => { projectRegisterData = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -77,7 +78,7 @@ function fixture() {
     serviceSettings: serviceSettingsView({}),
     harness: { findings: [] },
     watchRoutines: [{ id: 'hourly', title: 'Hourly check', model: '', prompt: 'x', every: 60, source: 'kit' }, { id: 'second', title: 'Second check', model: '', prompt: 'y', every: 30, source: 'kit' }],
-    herdr: { panes: [] },
+    herdr: { panes: [], workspaces: [] },
     quotaThresholds: { warnPercent: 90, criticalPercent: 98 },
   };
 }
@@ -110,6 +111,102 @@ test('Allocation shows closed policy projects with editable settings and a regis
   includes('the kind exclusion', /data-exclude-kind="closed:codex" checked/);
   includes('the model exclusion', /data-exclude-model="closed:a" checked/);
   includes('the remove action', /data-remove-policy-project="closed"[^>]*>Remove from policy/);
+});
+
+test('Allocation hides zero-share parked projects by default and exposes them with Show parked', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.projects['parked-zero'] = { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
+  s.policy.projects['archived-zero'] = { share: 0, mode: 'auto', excludedKinds: [], excludedModels: [] };
+  s.projectRegister = [
+    { slug: 'parked-zero', title: 'Parked Zero', state: 'parked' },
+    { slug: 'archived-zero', title: 'Archived Zero', state: 'archived' },
+  ];
+  app.setState(s);
+  app.setShowParkedAllocation(false);
+
+  const hidden = app.allocationView(s);
+  assert.match(hidden, /Show parked/);
+  assert.doesNotMatch(hidden, /data-stale-row="parked-zero"|data-stale-row="archived-zero"/);
+
+  app.setShowParkedAllocation(true);
+  const shown = app.allocationView(s);
+  assert.match(shown, /data-stale-row="parked-zero"/);
+  assert.match(shown, /data-stale-row="archived-zero"/);
+});
+
+test('Remove from policy confirms that project open restores the entry and deletes it immediately', async () => {
+  const app = await views();
+  const s = fixture();
+  const prompts = [];
+  const calls = [];
+  app.context.window = { confirm: (text) => { prompts.push(text); return true; } };
+  app.context.fetch = async (...args) => {
+    calls.push(args);
+    return { ok: true, json: async () => ({ ok: true, policy: { projects: { alpha: { share: 60 }, beta: { share: 40 } } } }) };
+  };
+  app.setState(s);
+  app.setDraft(s.policy);
+
+  await app.removePolicyProject('alpha');
+
+  assert.match(prompts[0], /project open alpha/i);
+  assert.deepEqual(calls.map(([url, options]) => [url, options.method]), [['/api/policy/projects/alpha', 'DELETE']]);
+});
+
+test('Projects restores the allocation bar, selectable open cards, project details, and a separate register view', async () => {
+  const app = await views();
+  const s = fixture();
+  const alpha = {
+    slug: 'alpha', title: 'Alpha Project', group: 'Platform', clientTag: 'Example Client', state: 'open', share: 50,
+    pinned: false, priority: 'high', nextAction: 'Review work', lastActivityAt: '2026-10-09T12:00:00.000Z',
+    issueSource: { repo: 'sample/alpha', label: 'ready-for-agent' }, autoOpen: 'off',
+  };
+  s.projectRegister = [alpha, { slug: 'parked', title: 'Parked Project', state: 'parked', share: 0 }];
+  s.policy.projects.alpha = { share: 50, mode: 'active', excludedKinds: [], excludedModels: [] };
+  s.locks = [
+    { name: 'full-suite', scope: 'machine', state: 'live', project: 'alpha', ownerPane: 'sample:orch', kind: 'test', queue: [] },
+    { name: 'network', scope: 'machine', state: 'live', project: 'beta', ownerPane: 'sample:other', kind: 'test', queue: [] },
+  ];
+  s.projects = [{ slug: 'alpha', project: 'Alpha Project', status: 'active', summary: 'Current sample status', updated: '2026-10-09T12:00:00.000Z', tasks: [{ id: 'PJ1-1', title: 'Sample status task', status: 'doing' }] }];
+  app.setState(s);
+  app.setProjectRegister({ projects: s.projectRegister, readOnly: false, openCount: 1, cap: 3 });
+
+  const cards = app.projectsView(s, null);
+  assert.match(cards, /class="allocation-summary"/);
+  assert.ok(cards.indexOf('class="allocation-summary"') < cards.indexOf('aria-label="Projects view"'));
+  assert.match(cards, /<button[^>]*data-project-card="alpha"/);
+  assert.match(cards, /state-open/);
+  assert.match(cards, /Platform/);
+  assert.match(cards, /Example Client/);
+  assert.match(cards, /50% share/);
+  assert.match(cards, /Current sample status/);
+  assert.match(cards, /Register and issue triage/);
+  assert.match(cards, /Policy/);
+  assert.match(cards, /<dt>Mode<\/dt><dd>active<\/dd>/);
+  assert.match(cards, /Locks/);
+  assert.match(cards, /full-suite/);
+  assert.match(cards, /Sample status task/);
+  assert.doesNotMatch(cards, /data-project-card="parked"/);
+  assert.doesNotMatch(cards, /data-segment="parked"/);
+  assert.match(cards, /sample\/alpha/);
+  assert.match(cards, /data-projects-mode="register"/);
+
+  app.context.location.pathname = '/projects';
+  const documentStub = app.context.document;
+  app.context.document = new Proxy(documentStub, { get: (target, key) => key === 'activeElement' ? { matches: () => false, closest: () => null } : target[key] });
+  const card = { dataset: { projectCard: 'beta' } };
+  const cardClick = app.context.handlers.get('click').find((handler) => handler.toString().includes('[data-project-card]'));
+  cardClick({ target: { closest: (selector) => selector === '[data-projects-mode]' ? null : card } });
+  assert.equal(app.getProjectPageSelected(), 'beta');
+
+  app.setProjectPageMode('register');
+  const register = app.projectsView(s, null);
+  assert.match(register, /class="allocation-summary"/);
+  assert.ok(register.indexOf('class="allocation-summary"') < register.indexOf('aria-label="Project register"'));
+  assert.match(register, /aria-label="Project register"/);
+  assert.match(register, /Parked Project/);
 });
 
 test('large bookmark collections are collapsed, counted, and filterable per project', async () => {

@@ -81,8 +81,10 @@ function registerRow(record, selected, canWrite) {
   const href = `/projects/${encodeURIComponent(slug)}`;
   const title = String(record.title || slug);
   const state = String(record.state || 'parked');
-  const action = state === 'open' ? 'park' : state === 'parked' ? 'open' : state === 'archived' ? 'unarchive' : null;
-  const actionLabel = action === 'park' ? 'Park' : action === 'open' ? 'Open' : action === 'unarchive' ? 'Unarchive' : 'Parking…';
+  const action = state === 'policy-only' ? 'add' : state === 'open' ? 'park' : state === 'parked' ? 'open' : state === 'archived' ? 'unarchive' : null;
+  const halfOnboarded = record.onboarding?.kitInstalled && (!record.onboarding?.workspace || !record.onboarding?.orchestrator);
+  const missing = [!record.onboarding?.workspace && 'workspace', !record.onboarding?.orchestrator && 'project lead'].filter(Boolean);
+  const actionLabel = action === 'add' ? 'Add' : action === 'park' ? 'Park' : action === 'open' ? (halfOnboarded ? 'Start orchestrator' : 'Open') : action === 'unarchive' ? 'Unarchive' : 'Parking…';
   const actionDisabled = !canWrite || !action;
   const clientTag = record.clientTag ? `<span class="register-client-tag">${escapeHtml(record.clientTag)}</span>` : '';
   const pin = state === 'open'
@@ -90,12 +92,12 @@ function registerRow(record, selected, canWrite) {
     : '';
   const activity = escapeHtml(activityLabel(record));
   return `<article class="register-row" data-register-row="${escapeHtml(slug)}" data-register-state="${escapeHtml(state)}">
-    <label class="register-select"><input type="checkbox" data-register-select="${escapeHtml(slug)}" aria-label="Select ${escapeHtml(title)}"${selected.has(slug) ? ' checked' : ''}></label>
+    ${state === 'policy-only' ? '<span class="register-select register-policy-mark" aria-hidden="true">+</span>' : `<label class="register-select"><input type="checkbox" data-register-select="${escapeHtml(slug)}" aria-label="Select ${escapeHtml(title)}"${selected.has(slug) ? ' checked' : ''}></label>`}
     <div class="register-project-name"><a href="${escapeHtml(href)}">${escapeHtml(title)}</a><span class="register-slug">${escapeHtml(slug)}</span></div>
     <div class="register-group"><span class="register-area">${escapeHtml(record.group || 'No area')}</span>${clientTag}</div>
     <span class="register-factory">${escapeHtml(record.factory || 'Local factory')}</span>
     <span class="register-priority priority-${escapeHtml(record.priority || 'normal')}">${escapeHtml(record.priority || 'normal')}</span>
-    <span class="register-next-action">${escapeHtml(record.nextAction || 'No next action')}</span>
+    <span class="register-next-action">${state === 'policy-only' ? 'Policy only' : halfOnboarded ? `Missing ${escapeHtml(missing.join(' and '))}` : escapeHtml(record.nextAction || 'No next action')}</span>
     <time class="register-activity"${record.lastActivityAt ? ` datetime="${escapeHtml(record.lastActivityAt)}"` : ''}>${activity}</time>
     <div class="register-row-actions">${pin}<button type="button" class="quiet"${action ? ` data-register-action="${action}" data-register-slug="${escapeHtml(slug)}"` : ''}${actionDisabled ? ' disabled' : ''}>${actionLabel}</button></div>
   </article>`;
@@ -107,7 +109,7 @@ function registerRows(records, selected, canWrite) {
 }
 
 export function renderProjectRegister(projects, {
-  filters = {}, selected = [], folds = {}, canWrite = false, feedback = '',
+  filters = {}, selected = [], folds = {}, canWrite = false, feedback = '', openCount = null, cap = null,
 } = {}) {
   const records = Array.isArray(projects) ? projects.filter((record) => record && typeof record === 'object') : [];
   const filtered = filterProjectRegister(records, filters);
@@ -117,6 +119,7 @@ export function renderProjectRegister(projects, {
   const open = filtered.filter((record) => record.state === 'open' || record.state === 'parking');
   const parked = filtered.filter((record) => record.state === 'parked');
   const archived = filtered.filter((record) => record.state === 'archived');
+  const policyOnly = filtered.filter((record) => record.state === 'policy-only');
   const allOpen = records.filter((record) => record.state === 'open');
   const pinned = filterProjectRegister(allOpen.filter((record) => record.pinned), { sort: 'activity' }).slice(0, 3);
   const groupValue = String(filters.group ?? 'all');
@@ -134,12 +137,14 @@ export function renderProjectRegister(projects, {
       <details class="register-filter-sheet"><summary>Filter</summary><div class="register-filter-options">${filterControls}<button type="button" data-register-filter-done>Done</button></div></details>
     </div>
     ${pinned.length ? `<section class="register-focus" aria-label="Pinned projects"><div class="register-section-title"><h2>Pinned projects</h2><span>${pinned.length} of 3</span></div><div class="register-focus-cards">${pinned.map((record) => `<a class="register-focus-card" href="/projects/${encodeURIComponent(record.slug)}"><strong>${escapeHtml(record.title || record.slug)}</strong><span>${escapeHtml(record.group || 'No area')}${record.clientTag ? ` · ${escapeHtml(record.clientTag)}` : ''}</span><small>${escapeHtml(record.nextAction || 'No next action')}</small><time class="register-focus-activity"${record.lastActivityAt ? ` datetime="${escapeHtml(record.lastActivityAt)}"` : ''}>${escapeHtml(activityLabel(record))}</time></a>`).join('')}</div></section>` : ''}
+    ${Number.isInteger(openCount) && Number.isInteger(cap) && openCount > cap ? `<p class="register-cap-note" role="status">${openCount} projects are open. The cap is ${cap} for new opens.</p>` : ''}
     <div class="register-bulk${selectedCount ? ' is-selected' : ''}" aria-label="Selected project actions">
       <span>${selectedCount ? `${selectedCount} selected` : 'Select projects for bulk actions'}</span>
       ${[['open', 'Open'], ['park', 'Park'], ['archive', 'Archive']].map(([action, label]) => `<button type="button" data-register-bulk="${action}"${canWrite && selectedCount ? '' : ' disabled'}>${label}</button>`).join('')}
     </div>
     <section class="register-state-section" aria-labelledby="register-open-title"><div class="register-section-title"><h2 id="register-open-title">Open projects</h2><span>${countState(records, 'open') + countState(records, 'parking')}</span></div><div class="register-list">${registerRows(open, selectedSet, canWrite)}</div></section>
     <details class="register-fold" data-register-fold="parked"${openFold('parked') ? ' open' : ''}><summary>Parked (${countState(records, 'parked')}) <span>Projects keep their status and work while parked.</span></summary><div class="register-list">${registerRows(parked, selectedSet, canWrite)}</div></details>
+    ${policyOnly.length ? `<section class="register-state-section" aria-labelledby="register-policy-title"><div class="register-section-title"><h2 id="register-policy-title">Policy only</h2><span>${policyOnly.length}</span></div><div class="register-list">${registerRows(policyOnly, selectedSet, canWrite)}</div></section>` : ''}
     ${countState(records, 'archived') ? `<details class="register-fold" data-register-fold="archived"${openFold('archived') ? ' open' : ''}><summary>Archived (${countState(records, 'archived')})</summary><div class="register-list">${registerRows(archived, selectedSet, canWrite)}</div></details>` : ''}
     ${records.length ? '' : '<p class="register-empty">No projects are registered yet. Import existing projects or add one with the project register command.</p>'}
     <p class="register-feedback" role="status" aria-live="polite">${escapeHtml(feedback)}</p>

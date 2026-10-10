@@ -152,6 +152,30 @@ test('per-project auto-open still uses project lifecycle with --start', async (t
   assert.equal(readMessages({ dir: dataDir }).filter((record) => record.triage?.type === 'project-open').length, 0);
 });
 
+test('the open cap keeps Owner approval proposals available and gates only auto-open', async (t) => {
+  const openProjects = ['open-one', 'open-two', 'open-three'].map((slug) => project(slug, { state: 'open' }));
+  const f = fixture(t, [...openProjects, project('approval')]);
+  const proposalWatcher = createProjectRegisterTriage({
+    dataDir: f.dataDir,
+    now: () => NOW,
+    runGh: async () => ({ status: 0, stdout: '[{"number":1,"title":"Sample","createdAt":"2026-10-01T00:00:00Z"}]', stderr: '' }),
+  });
+  const proposal = await proposalWatcher.poll({ settings, cap: 3, factory: 'factory-zero' });
+  assert.equal(proposal.created, 1);
+
+  const second = fixture(t, [...openProjects, project('automatic', { autoOpen: 'on' })]);
+  let lifecycleCalls = 0;
+  const autoWatcher = createProjectRegisterTriage({
+    dataDir: second.dataDir,
+    now: () => NOW,
+    runGh: async () => ({ status: 0, stdout: '[{"number":1,"title":"Sample","createdAt":"2026-10-01T00:00:00Z"}]', stderr: '' }),
+    runLifecycle: async () => { lifecycleCalls += 1; return 0; },
+  });
+  const automatic = await autoWatcher.poll({ settings, cap: 3, factory: 'factory-zero' });
+  assert.equal(automatic.skipped, 'cap');
+  assert.equal(lifecycleCalls, 0);
+});
+
 test('GitHub sign-in failure creates one Mailbox item and waits for its answer before retrying', async (t) => {
   const { dataDir } = fixture(t);
   let ghCalls = 0;

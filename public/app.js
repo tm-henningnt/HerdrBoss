@@ -28,6 +28,7 @@ import { effectiveAsk } from './review-ask.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
 import { reconcileProjectSelection, renderProjectRegister } from './project-register-view.js';
+import { filterProjectVisibility } from './project-visibility.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
 import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, redistributePolicyShare, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, diskFreeCard, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
@@ -174,6 +175,7 @@ function syncBrandMenuLabel() {
 }
 
 const PROJECT_REGISTER_PREFS_KEY = 'herdr-boss-project-register-view';
+const PROJECT_PAGE_VIEW_KEY = 'herdr-boss-project-page-view';
 function loadProjectRegisterPrefs() {
   try {
     const saved = JSON.parse(localStorage.getItem(PROJECT_REGISTER_PREFS_KEY) || '{}');
@@ -201,6 +203,9 @@ let projectRegisterLoadedAt = 0;
 let projectRegisterFeedback = '';
 const projectRegisterSelected = new Set();
 const projectRegisterPrefs = loadProjectRegisterPrefs();
+let projectPageSelected = null;
+let projectPageMode = (() => { try { return localStorage.getItem(PROJECT_PAGE_VIEW_KEY) === 'register' ? 'register' : 'cards'; } catch { return 'cards'; } })();
+let showParkedAllocation = (() => { try { return localStorage.getItem('herdr-boss-show-parked') === 'true'; } catch { return false; } })();
 let clientStore = null;
 let lastRender = '';
 // The project page patches its DOM in place when the previous render was the project page too.
@@ -689,7 +694,7 @@ function ensureDraft(s) {
   policyDraft = clone(s.policy);
   policyDraft.projects ||= {};
   policyStale = false;
-  const projects = Object.values(s.control.projects);
+  const projects = allocationProjects();
   const built = buildDraftShares(projects.map((p) => p.slug), policyDraft.projects);
   allocationMeta = { signature: policySignature(s), defaults: built.defaults, touched: new Set(), boundaries: new Set(), loaded: clone(s.policy.projects || {}) };
   if (!projects.length) return;
@@ -705,7 +710,10 @@ function defaultShareSlugs() {
 // A project that the policy holds and the project list does not. Its share stays as saved and counts in the total.
 function staleShares() {
   const live = state?.control?.projects || {};
-  return Object.fromEntries(Object.entries(policyDraft?.projects || {}).filter(([slug]) => !live[slug]).map(([slug, entry]) => [slug, entry.share]));
+  const register = new Map((state?.projectRegister || []).map((record) => [record.slug, record]));
+  const rows = Object.entries(policyDraft?.projects || {}).filter(([slug]) => !live[slug])
+    .map(([slug, entry]) => ({ slug, state: register.get(slug)?.state, share: entry.share }));
+  return Object.fromEntries(filterProjectVisibility(rows, { showParked: showParkedAllocation }).map(({ slug, share }) => [slug, share]));
 }
 function policyShareSlugs() {
   return [...new Set([...allocationProjects().map((project) => project.slug), ...Object.keys(policyDraft?.projects || {})])];
@@ -741,7 +749,17 @@ function allocationSaveCheck() {
   });
 }
 
-function allocationProjects() { return Object.values(state?.control?.projects || {}); }
+function allocationProjects() {
+  const register = new Map((state?.projectRegister || []).map((record) => [record.slug, record]));
+  const projects = Object.values(state?.control?.projects || {}).map((project) => ({
+    ...project, state: register.get(project.slug)?.state, share: policyDraft?.projects?.[project.slug]?.share ?? project.share ?? 0,
+  }));
+  return filterProjectVisibility(projects, { showParked: showParkedAllocation });
+}
+function setShowParkedAllocation(show) {
+  showParkedAllocation = show === true;
+  try { localStorage.setItem('herdr-boss-show-parked', String(showParkedAllocation)); } catch {}
+}
 function policyOnlyStatus(s, slug) {
   const workspace = (s.control?.workspaces || []).find((item) => item.slug === slug);
   const parts = [workspace ? 'Open workspace' : 'Closed workspace', 'No project lead'];
@@ -811,20 +829,23 @@ function distributeRemaining() {
   markPolicyDirty();
 }
 
-function removePolicyProject(slug) {
+async function removePolicyProject(slug) {
   if (!policyDraft?.projects?.[slug]) return;
-  if (!window.confirm(`Remove ${slug} from policy? Its share will be set to zero and redistributed to other policy projects. Apply policy to save this change.`)) return;
-  const slugs = policyShareSlugs();
-  const before = policyDraftShares();
-  const after = redistributePolicyShare(before, slugs, slug);
-  const changed = slugs.filter((entry) => after[entry] !== before[entry]);
-  if (!changed.length) return;
-  for (const entry of changed) {
-    policyDraft.projects[entry].share = after[entry];
-    allocationMeta?.touched.add(entry);
+  if (policyDirty) { saveMessage = 'Apply or reload the current policy edits before removing a project.'; lastRender = ''; render(); return; }
+  if (!window.confirm(`Remove ${slug} from policy? Its entry will be deleted. The other project shares will be adjusted to total 100%. Run herdr-boss project open ${slug} to add a policy entry again.`)) return;
+  try {
+    const response = await fetch(`/api/policy/projects/${encodeURIComponent(slug)}`, { method: 'DELETE', headers: OWNER_PAGE_HEADERS });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The project could not be removed from policy.');
+    policyDraft = result.policy;
+    policyDirty = false; allocationMeta = null; policyStale = false;
+    saveMessage = 'Project removed from policy. The other shares total 100%.';
+    state.policy = result.policy; state.control = result.control;
+    lastRender = ''; render();
+  } catch (error) {
+    saveMessage = error.message;
+    lastRender = ''; render();
   }
-  updateShares();
-  markPolicyDirty();
 }
 
 function controlBlock(s) {
@@ -901,6 +922,7 @@ function controlBlock(s) {
         <div class="allocation-bar" role="group" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
         <div class="allocation-scale"><span>0%</span><span>100%</span></div>
         ${allocationFooterHtml(allocationTotal(), policyStale)}
+        <label class="show-parked-allocation"><input type="checkbox" data-show-parked-allocation ${showParkedAllocation ? 'checked' : ''}> Show parked</label>
         ${projectRows}${policyOnlyRows}</div>
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
@@ -2040,8 +2062,9 @@ function segBar(c) {
 }
 
 function projectSlugs(s) {
-  const open = Object.keys(s.control?.projects || {});
-  return s.control ? open : (s.projects || []).map((p) => p.slug);
+  const candidates = s.control ? Object.keys(s.control?.projects || {}) : (s.projects || []).map((p) => p.slug);
+  const registered = new Map((s.projectRegister || []).map((record) => [record.slug, record]));
+  return candidates.filter((slug) => !registered.has(slug) || registered.get(slug)?.state === 'open');
 }
 
 function defaultProject(s) {
@@ -5663,24 +5686,86 @@ async function runProjectRegisterActions(action, slugs) {
   await refreshProjectRegister();
 }
 
+function projectRegisterDetail(s, record, slug, canWrite) {
+  if (!record) return '';
+  const actions = record.state === 'open' ? [['park', 'Park'], ['archive', 'Archive']]
+    : record.state === 'parked' ? [['open', 'Open'], ['archive', 'Archive']]
+      : record.state === 'archived' ? [['unarchive', 'Unarchive']] : [];
+  const policy = s.policy?.projects?.[slug];
+  const live = s.control?.projects?.[slug];
+  const policyInfo = policy
+    ? `<dl class="project-register-fields"><div><dt>Saved share</dt><dd>${esc(policy.share ?? 0)}%</dd></div><div><dt>Mode</dt><dd>${esc(policy.mode || 'not set')}</dd></div><div><dt>Effective allocation</dt><dd>${live ? `${esc(live.slots ?? 0)} slots · ${esc(live.effectiveMode || live.mode || 'active')}` : 'No live allocation'}</dd></div><div><dt>Excluded kinds</dt><dd>${esc((policy.excludedKinds || []).join(', ') || 'None')}</dd></div></dl>`
+    : '<p>No policy entry.</p>';
+  const locks = (s.locks || []).flatMap((lock) => {
+    const rows = lock.project === slug
+      ? [`<li><b>${esc(lock.name || 'Project lock')}</b> · ${esc(lock.state || 'held')}${lock.ownerPane ? ` · ${esc(lock.ownerPane)}` : ''}</li>`]
+      : [];
+    for (const ticket of lock.queue || []) {
+      if (ticket.project === slug) rows.push(`<li><b>${esc(lock.name || 'Project lock')}</b> · queued${Number.isInteger(ticket.position) ? ` at ${ticket.position}` : ''}${ticket.pane ? ` · ${esc(ticket.pane)}` : ''}</li>`);
+    }
+    return rows;
+  }).join('');
+  const triage = record.issueSource?.repo
+    ? `<p>Issue source: <code>${esc(record.issueSource.repo)}</code>${record.issueSource.label ? ` · label <code>${esc(record.issueSource.label)}</code>` : ''}</p><p>Issue triage: ${record.autoOpen === 'on' ? 'auto-open approved issues' : 'Owner approval required'}</p>`
+    : '<p>No issue source is set.</p>';
+  return `<section class="panel project-register-detail" aria-label="Project policy, locks, register and issue triage"><div class="section-head"><h2>Register and issue triage</h2><span>${esc(record.state || 'open')}</span></div>
+    <div class="project-register-info"><section><h3>Policy</h3>${policyInfo}</section><section><h3>Locks</h3><ul class="project-lock-list">${locks || '<li>No held or queued project locks.</li>'}</ul></section></div>
+    <dl class="project-register-fields"><div><dt>Area</dt><dd>${esc(record.group || 'No area')}</dd></div><div><dt>Client</dt><dd>${esc(record.clientTag || 'No client tag')}</dd></div><div><dt>Priority</dt><dd>${esc(record.priority || 'normal')}</dd></div><div><dt>Next action</dt><dd>${esc(record.nextAction || 'No next action')}</dd></div><div><dt>Last activity</dt><dd>${esc(record.lastActivityAt || 'No activity yet')}</dd></div></dl>
+    ${triage}<div class="project-register-detail-actions">${actions.map(([action, label]) => `<button type="button" class="quiet" data-register-action="${action}" data-register-slug="${esc(slug)}"${canWrite ? '' : ' disabled'}>${label}</button>`).join('')}</div></section>`;
+}
+
 function projectsView(s, slug) {
   const register = projectRegisterData;
   const canWrite = Boolean(register && !register.readOnly);
-  const header = '<header class="page-intro"><div><h1>Projects</h1><p>Keep the projects in focus visible. Parked projects keep their work and return when you open them.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>';
-  // A project link keeps the existing status page available beside the register.
-  if (slug && (projectSlugs(s).includes(slug) || (s.projects || []).some((item) => item.slug === slug))) {
-    return `${header}<p><a class="quiet-link" href="/projects">Back to all projects</a></p>${project(s, slug)}`;
-  }
-  if (!register && !projectRegisterLoading && !projectRegisterError) return `${header}<p class="register-loading" role="status">Loading the project register…</p>`;
+  const records = register?.projects || s.projectRegister || [];
+  const header = '<header class="page-intro"><div><h1>Projects</h1><p>Review open project cards or manage the full project register.</p></div><button type="button" class="wizard-open" data-wizard-open aria-haspopup="dialog">New project</button></header>';
+  const available = new Set([...projectSlugs(s), ...(s.projects || []).map((item) => item.slug)]);
+  if (slug && available.has(slug)) projectPageSelected = slug;
+  const selected = projectPageSelected && available.has(projectPageSelected) ? projectPageSelected : defaultProject(s);
+  const tabs = `<nav class="project-page-tabs" aria-label="Projects view"><button type="button" data-projects-mode="cards" aria-pressed="${projectPageMode === 'cards'}">Project cards</button><button type="button" data-projects-mode="register" aria-pressed="${projectPageMode === 'register'}">Register</button></nav>`;
   const message = projectRegisterError || (projectRegisterLoading ? 'Loading the project register…' : '');
-  return `${header}${message ? `<p class="register-loading" role="status">${esc(message)}</p>` : ''}${renderProjectRegister(register?.projects || [], {
-    filters: projectRegisterPrefs,
-    selected: [...projectRegisterSelected],
-    folds: projectRegisterPrefs.folds,
-    canWrite,
-    feedback: projectRegisterFeedback,
+  const allocation = allocationSummary(s);
+  const notice = message ? `<p class="register-loading" role="status">${esc(message)}</p>` : '';
+  if (projectPageMode === 'register') return `${header}${notice}${allocation}${tabs}${renderProjectRegister(records, {
+    filters: projectRegisterPrefs, selected: [...projectRegisterSelected], folds: projectRegisterPrefs.folds,
+    canWrite, feedback: projectRegisterFeedback, openCount: register?.openCount, cap: register?.cap,
   })}`;
+
+  const live = s.control?.projects || {};
+  const published = new Map((s.projects || []).map((item) => [item.slug, item]));
+  const registerBySlug = new Map(records.map((record) => [record.slug, record]));
+  const cards = projectSlugs(s).map((projectSlug) => {
+    const p = published.get(projectSlug), l = live[projectSlug], r = registerBySlug.get(projectSlug) || {};
+    const name = r.title || p?.project || l?.label || projectSlug;
+    const status = r.state || 'open';
+    const share = r.share ?? l?.share ?? s.policy?.projects?.[projectSlug]?.share ?? 0;
+    const color = allocationColor(s, projectSlug);
+    return `<button type="button" class="panel proj project-selector project-card-button${projectSlug === selected ? ' selected' : ''}${color ? ` has-allocation ${allocationActivity(l || {})}` : ''}" data-project-card="${esc(projectSlug)}" aria-pressed="${projectSlug === selected}"${color ? ` style="--allocation-color:${color}"` : ''}>
+      <span class="project-card-top"><span class="project-status-dot state-${esc(status)}" aria-hidden="true"></span><span class="project-card-title">${esc(name)}</span><span class="tag">${esc(status)}</span></span>
+      <span class="project-card-meta"><span>${esc(r.group || 'No group')}</span>${r.clientTag ? `<span class="register-client-tag">${esc(r.clientTag)}</span>` : ''}<span>${share}% share</span></span>
+      ${p?.summary ? `<span class="proj-summary">${esc(p.summary)}</span>` : ''}${p ? segBar(taskCounts(p)) : ''}
+      <span class="project-card-foot">${p ? `updated ${ago(p.updated)}` : 'Awaiting project status'} · ${l ? `${l.running}/${l.slots} workers` : 'No live allocation'}</span>
+    </button>`;
+  }).join('');
+  const detailRecord = registerBySlug.get(selected);
+  const detail = selected ? `${project(s, selected)}${projectRegisterDetail(s, detailRecord, selected, canWrite)}` : '<div class="panel empty">No open projects. Use Register to review parked and archived projects.</div>';
+  return `${header}${notice}${allocation}${tabs}<section class="project-card-scroller" aria-label="Open projects">${cards || '<p class="register-empty">No open project cards.</p>'}</section><div class="project-detail" id="project-detail">${detail}</div>`;
 }
+
+document.addEventListener('click', (event) => {
+  const mode = event.target.closest?.('[data-projects-mode]');
+  if (mode) {
+    projectPageMode = mode.dataset.projectsMode === 'register' ? 'register' : 'cards';
+    try { localStorage.setItem(PROJECT_PAGE_VIEW_KEY, projectPageMode); } catch {}
+    lastRender = ''; render();
+    return;
+  }
+  const card = event.target.closest?.('[data-project-card]');
+  if (!card) return;
+  projectPageSelected = card.dataset.projectCard;
+  if (location.pathname !== '/projects') history.replaceState({}, '', '/projects');
+  lastRender = ''; render();
+});
 
 document.addEventListener('input', (event) => {
   if (!event.target.matches?.('[data-register-search]')) return;
@@ -5692,6 +5777,11 @@ document.addEventListener('input', (event) => {
 });
 
 document.addEventListener('change', (event) => {
+  if (event.target.matches?.('[data-show-parked-allocation]')) {
+    setShowParkedAllocation(event.target.checked);
+    lastRender = ''; render();
+    return;
+  }
   const target = event.target;
   if (target.matches?.('[data-register-group]')) projectRegisterPrefs.group = target.value;
   else if (target.matches?.('[data-register-state]')) projectRegisterPrefs.state = target.value;
@@ -5825,7 +5915,8 @@ function saveFleet() {
 
 // The published projects with tasks, with the display name of the allocation.
 function fleetProjects(s) {
-  return (s.projects || []).filter((p) => p?.slug && Array.isArray(p.tasks) && p.tasks.length)
+  const register = new Map((s.projectRegister || []).map((record) => [record.slug, record]));
+  return (s.projects || []).filter((p) => p?.slug && (!register.has(p.slug) || register.get(p.slug)?.state === 'open') && Array.isArray(p.tasks) && p.tasks.length)
     .map((p) => ({ ...p, label: avatarTitle(p.slug, p.project || p.slug) }));
 }
 
@@ -7077,8 +7168,8 @@ const HELP = {
     <h3>Watch symbol</h3><p>The eye symbol in the top bar, next to the chat, mail, and needs-action icons, shows the watch. When no watch runs, the symbol is faded. While a watch runs, the symbol is clear and, on a wide screen, shows a label such as <b>until 08:00</b> or <b>on</b>. On a phone it shows the icon only. Select it to open a popover with the end time, the mode, and <b>Stop</b>. The page asks you to confirm a stop. The page has no banner. A read-only preview shows the symbol and refuses a change.</p>
     <h3>Subscriptions and machine health</h3><p>Select a bar to open all usage limit windows, or the processes and load history. After a restart, "Usage limits from HH:MM" shows saved usage limits until the first new usage limit read succeeds. When a provider probe fails, the last good reading stays visible with its age. A reading becomes stale after three hours. Pacing advances expected use with the usage limit window time and keeps the measured used percent. The Claude probe starts with a 60-second timeout. A timeout permits one 90-second retry after the probe child exits. Failed readings raise the next Claude timeout to 90 seconds. A good reading resets it to 60 seconds. Codex and OpenCode Go keep the 20, 45, then 90-second timeout sequence. On timeout, Herdr Boss sends SIGTERM to the owned child by PID and to its own process group. It sends SIGKILL if the child remains after three seconds. It never selects a process by name. An unconfirmed exit prevents the retry. The last 100 probe attempts record the killed PID state and retry flag. A missing usage reader or login shows the reading as unknown with its reason; it is not a failure and raises no warning. Each provider row in Settings names the source of the last reading and its age. A factory reads each usage limit with the pinned CodexBar CLI first, the same code path as the Mac. It falls back to the own readers when CodexBar is missing, exits with an error, returns an error row, or times out. The own Codex reading comes from <code>codex app-server</code> and the Codex login of the factory. The reading is unknown when Codex is not installed, has no login, or has an API key login with no usage limit. A timeout, a failed read, a changed protocol, or an app server that exited is a probe failure, and the last good reading stays as stale. OpenCode Go reads its local cost history from CodexBar. The account windows need an OpenCode API key, so until the key exists the reason is <i>account windows need an API key</i>. The row also shows the reset time that you set by hand in <b>OpenCode Go reset time</b> and a local estimate labeled <i>used in this factory (local estimate)</i>. The estimate shows tokens and cost from <code>opencode stats</code> for the days in <b>OpenCode Go estimate days</b>. It is never a percent and never a usage limit. The Fleet page shows it in the card of the factory. The Claude reading comes from the status line helper of the factory and exists only while a Claude session runs there. Turn the helper off with <code>factories.claudeUsageHelper</code> in Settings. The Boss gets one warning when the Claude probe fails for over 60 minutes. The Machine guard switch turns CPU and load warnings and worker-start blocks on or off. Choose a pause length to suspend those rules for a time; select <b>Resume guard</b> to end a pause early. Memory and disk warnings stay on. Disk space reports the filesystem that contains the Herdr Boss data directory.</p>`],
   projects: ['Projects', `
-    <p>The Projects page is the register of the projects you track. Search by title, area, client tag, or next action. Filter by area or state, and sort by last activity, priority, or title. Groups use areas. A client appears as a tag.</p>
-    <p>Open projects show first. Parked and archived projects stay in closed folds. Pin up to three open projects to keep them in focus. Select rows to open, park, or archive several projects. Select a project title to see its published status and live work.</p>
+    <p>The Projects page restores the project cards. The allocation bar stays above either view. The cards show open projects and their register state, area, client tag, share, and status dot. Select a card to show its status, tasks, workers, locks, browser, policy, register fields, issue source, triage, and actions below.</p>
+    <p>Select <b>Register</b> to search and manage all projects. Search by title, area, client tag, or next action. Filter by area or state, and sort by last activity, priority, or title. Parked and archived projects stay in closed folds. Pin up to three open projects. Select rows to open, park, or archive several projects. A policy-only project has <b>Add</b>. A project that has its kit but no workspace or project lead shows its missing step and <b>Start orchestrator</b>.</p>
     <p><b>Open</b> starts the project lead from the current project files and restores the workspace. <b>Park</b> closes the project's Herdr workspace after the safety checks. It keeps the repository, project status, Mailbox, and other state. Park is different from pause: a paused project keeps its panes. The read-only preview disables register actions.</p>
     <p>Auto-park closes an open, unpinned project after it has had no activity for the time in <b>Settings → Project register → Auto-park idle projects</b>. It runs the same checks as <code>project park</code>. A running worker, an unmerged worker branch, or an unanswered Mailbox item keeps the project open. Set the hours to <code>0</code> to turn auto-park off.</p>
     <p>In Settings, set the open project cap and optional GitHub triage. Triage starts off. When it is on, the service reads the selected issue label for parked projects and adds one proposal to the Mailbox when a slot is free. Select <b>Accept</b> to open the project, or <b>Deny</b> to wait 24 hours before another proposal for that project. Keep a project's <code>autoOpen</code> off to require Accept.</p>
@@ -7178,7 +7269,7 @@ const HELP = {
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The line <b>Total</b> next to the bar shows the sum of the shares. When the sum is below 100, select <b>Distribute the remaining N</b> to add the remainder to the largest share. Herdr Boss never adds it by itself. A sum above 100 blocks <b>Apply policy</b>.</p>
-    <p>A project in the policy with no live project lead stays editable. Its row shows whether its workspace is open or closed and whether the project is registered. You can change its share, mode, and exclusions. <b>Remove from policy</b> asks for confirmation, sets the share to zero, and redistributes it among the other policy projects. <b>Apply policy</b> then uses the same share confirmations as every other project.</p>
+    <p>A project in the policy with no live project lead stays editable. Its row shows whether its workspace is open or closed and whether the project is registered. You can change its share, mode, and exclusions. <b>Remove from policy</b> asks for confirmation, saves a backup, deletes the project entry, and adjusts the other shares to total 100%. Run <code>herdr-boss project open SLUG</code> to add a policy entry again. Select <b>Show parked</b> to show parked or archived projects with a zero share.</p>
     <p>A project without a saved share shows the marker <b>default, not saved</b>. The default is a part of the room that the saved shares leave. Herdr Boss writes it only when you change that share or confirm the dialog. <b>Apply policy</b> asks you to confirm when it changes three or more shares, changes more than one boundary, or changes the total by more than 5 points. The dialog lists the old and new share of every project. A total other than 100 needs a second confirmation.</p>
     <p>When the policy changes on the server while you have unsaved edits, the page shows <b>The policy changed on the server. Reload the shares?</b> Select <b>Reload the shares</b> to discard your edits and load the saved shares.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
