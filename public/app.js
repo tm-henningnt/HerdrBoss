@@ -1,6 +1,7 @@
 import { fleetView, fleetMailbox, fleetSettingsFromForm, fleetSharesFromForm } from './fleet.js';
 import { APP_VIEW_ROUTES, KEYED_ROUTES, HELP_FILES, helpRoute } from './routes.js';
 import { mountMenu, syncMenu, readLocation } from './shell.js';
+import { installNavMenu } from './nav-menu.js';
 import { markdownOrPlain, plainTextHtml, sanitizeRendered } from './markdown.js';
 import { FLOW, FLOW_LABEL, DONE_LIMIT, taskMap, taskState, blockReasons, boardColumns, dependencyChain, criticalPath, graphTasks, graphDepths, blockerIds, elapsedText, domPart, fleetItems, fleetColumns, fleetFilter, fleetWho, visibleLanes, cardFacts, divergenceText, waitsForOwner } from './board.js';
 import { patchHtml } from './keyed.js';
@@ -153,21 +154,7 @@ document.addEventListener('submit', async (event) => {
 });
 // The route registry fills the menu: the pages in order, then Settings and Docs. Roamgate stays the last entry when it is shown.
 mountMenu($nav);
-let lastNavTrigger = null;
-function setNavMenu(open) {
-  $nav.classList.toggle('open', open);
-  for (const trigger of document.querySelectorAll('[data-nav-trigger]')) trigger.setAttribute('aria-expanded', String(open));
-}
-let navPointerDown = false;
-$nav.addEventListener('pointerdown', (e) => { navPointerDown = Boolean(e.target.closest?.('a, button')); });
-document.addEventListener('pointerup', (e) => {
-  if (!navPointerDown) return;
-  navPointerDown = false;
-  if ($nav.contains(e.target)) return;
-  setNavMenu(false);
-  lastNavTrigger = null;
-});
-document.addEventListener('pointercancel', () => { navPointerDown = false; });
+let setNavMenu = () => {};
 function syncBrandMenuLabel() {
   if (isPhone() && !document.body.classList.contains('app-view')) $brand.setAttribute('aria-label', 'Menu');
   else $brand.removeAttribute('aria-label');
@@ -7350,7 +7337,7 @@ function fillHelp() {
     body = text;
   }
   document.getElementById('help-title').textContent = title;
-  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The logo does not go to Overview. Select Overview in the menu to open it. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
+  document.getElementById('help-body').innerHTML = `${body}<p class="help-more">There is one menu on every page. It has every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The logo does not go to Overview. Select Overview in the menu to open it. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too. The Mailbox and Chat counts, lists, badges, and open conversations refresh without a reload. Commands and setup: <a href="/docs/cli">the command reference</a> and <a href="/docs/start-here">Start here</a> in the Docs.</p>`;
 }
 
 function setHelp(open) {
@@ -7365,47 +7352,11 @@ document.getElementById('help-toggle').addEventListener('click', () => setHelp(d
 document.getElementById('help-close').addEventListener('click', () => setHelp(false));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if ($nav.classList.contains('open')) {
-    const trigger = document.querySelector('[data-nav-trigger][aria-expanded="true"]') || lastNavTrigger;
-    setNavMenu(false);
-    trigger?.focus();
-    lastNavTrigger = null;
-    return;
-  }
+  if (navMenu.escape()) return;
   if (!document.getElementById('help-panel').hidden && !document.getElementById('browser-viewer').open) setHelp(false);
 });
-$nav.addEventListener('click', (e) => { if (e.target.closest('a')) setNavMenu(false); });
-$nav.addEventListener('focusout', (e) => {
-  if (navPointerDown) return;
-  if (e.relatedTarget && $nav.contains(e.relatedTarget)) return;
-  setNavMenu(false);
-  lastNavTrigger = null;
-});
-document.addEventListener('click', (e) => {
-  const trigger = e.target.closest?.('[data-nav-trigger]');
-  if (trigger) {
-    if (trigger === $brand) {
-      if (!isPhone() || document.body.classList.contains('app-view')) return;
-      e.preventDefault();
-    }
-    lastNavTrigger = trigger;
-    const open = !$nav.classList.contains('open');
-    setNavMenu(open);
-    if (open) $nav.querySelector('a[aria-current="page"], a')?.focus();
-    else trigger.focus();
-    return;
-  }
-  if (e.target.closest?.('[data-nav-help]')) {
-    setNavMenu(false);
-    lastNavTrigger = null;
-    setHelp(true);
-    return;
-  }
-  if (!$nav.classList.contains('open')) return;
-  if (e.target.closest?.('#primary-nav')) return;
-  setNavMenu(false);
-  lastNavTrigger = null;
-});
+const navMenu = installNavMenu({ doc: document, nav: $nav, brand: $brand, isPhone, isAppView: () => document.body.classList.contains('app-view'), openHelp: () => setHelp(true) });
+setNavMenu = navMenu.setOpen;
 
 // ---------- Reviews ----------
 // The pack list and the section list of hosted review packs. public/review.js renders them. This part loads the data and handles the events.
