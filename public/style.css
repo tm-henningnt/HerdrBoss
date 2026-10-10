@@ -245,7 +245,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .register-client-tag { border: 1px solid var(--line); }
 .register-priority { text-transform: capitalize; }
 .register-priority.priority-high { color: var(--crit); }
-.register-priority.priority-low { color: var(--faint); }
+.register-priority.priority-low { color: var(--muted); }
 .register-next-action { font-size: 12px; overflow-wrap: anywhere; }
 .register-row-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
 .register-row-actions button, .register-pin { min-height: 34px; }

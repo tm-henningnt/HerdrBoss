@@ -39,3 +39,7 @@ A project keeps at most 30 bookmarks. A bookmark name has at most 60 characters.
 ## Control
 
 Select the screenshot to open the large view. The large view shows a still image of the last capture. Turn on **Control browser** or **Live** to refresh it at the chosen interval. Turn on **Control browser**, then click the image and type. Paste long text or a password into the masked field. To sign in to a web app, enter its address in the sign-in field and select **Open sign-in tab**. Click the image, then type or paste the password and the one-time code. The sign-in route accepts the dashboard page on this computer or a page with a login session. On this computer, any local process counts as the owner for this route. Input without the sign-in flag stays open to project agents. The login stays in the project browser profile. On a phone the large view is full screen and the image fills the height. The text field and key controls appear only while **Control browser** is on.
+
+Each project keeps its bookmarks in a closed dropdown. Select **Bookmarks N** to open it. Use **Filter bookmarks** to find a name or address. Select the summary again to close the list. **Open** loads a bookmark in the current tab. **New tab** opens it in another tab.
+
+Turn on **Show tenant hosts** in Settings to show full hosts in project browser URLs on this dashboard. The browser page must send a same-origin signal. A process on this machine can still forge the headers. Use this setting only on the Owner's own machine. Other browser output stays masked.

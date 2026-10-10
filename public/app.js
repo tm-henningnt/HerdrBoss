@@ -6847,10 +6847,6 @@ function project(s, slug) {
 // Short notes for each page. They say what the page shows and how to use it; the CLI and setup are in docs/.
 
 const HELP = {
-  browsers: ['Browsers', `
-    <h3>Bookmarks</h3><p>Each project keeps its bookmarks in a closed dropdown. Select <b>Bookmarks N</b> to open it, then use <b>Filter bookmarks</b> to find a name or address. Select the summary again to close the list. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in another tab.</p>
-    <p>Turn on <b>Show tenant hosts</b> in Settings to show full hosts in project browser URLs on this dashboard. The browser page must send a same-origin signal. A process on this machine can still forge the headers. Use this setting only on the Owner's own machine. Other browser output stays masked.</p>
-  `],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <p>Run <code>herdr-boss setup</code> for the first-hour steps. Run <code>herdr-boss setup --resume</code> after a step waits for you. If another run changes your progress, resume setup. After a crash, resume setup to continue your saved progress.</p>

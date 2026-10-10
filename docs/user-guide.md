@@ -10,6 +10,7 @@ Use Chat for ordinary messages. Use the Mailbox to answer, approve, or decide. A
 - [I want to limit the cost](guide/cost.md)
 - [I want to use it from my phone](guide/phone.md)
 - [I want to add a project](guide/project.md)
+- [I want to work on the projects in focus](guide/focus.md)
 - [I want to add a factory](guide/factory.md)
 - [I want to move the head office](guide/factory.md#move-the-head-office)
 - [I want to see the usage limits of a factory](guide/factory.md#sign-in-the-agent-apps-and-start-the-factory-boss)

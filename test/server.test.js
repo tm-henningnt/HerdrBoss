@@ -123,6 +123,7 @@ try {
     'watch.maxWorkers', 'watch.maxWorkersByLane', 'watch.quietHours',
     'browsers.reapOrphanDaemons', 'browsers.orphanDaemonMinAgeSeconds', 'browsers.staleOwnedMinutes', 'browsers.sweepCodeSignClones', 'browser.idleCloseMinutes', 'browser.allowVisible', 'browser.showTenantHosts', 'chromePath', 'releases.repos',
     'tickSeconds', 'quotaSeconds', 'push', 'alertCooldownSeconds', 'providerKinds', 'orchestratorLabel', 'port', 'host', 'allowedHosts', 'log.maxMegabytes', 'log.keepFiles', 'factories.claudeUsageHelper', 'analytics.actionsMinutes',
+    'register.cap', 'register.capCountsPinned', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes',
   ]);
   assert.deepEqual(view.map(({ source }) => source), [
     'default', 'default',
@@ -130,6 +131,7 @@ try {
     'config', 'default', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
     'default', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default', 'default', 'config', 'config',
     'config', 'default', 'config', 'config', 'config', 'config', 'default', 'default', 'default', 'default', 'default',
+    'default', 'default', 'default', 'default', 'default',
   ]);
   assert.deepEqual(view.find(({ setting }) => setting === 'watch.maxWorkers'), {
     group: 'Workers', setting: 'watch.maxWorkers', value: 16, source: 'config',
