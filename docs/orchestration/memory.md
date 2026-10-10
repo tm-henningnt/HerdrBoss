@@ -1009,3 +1009,22 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Evidence: `test/project-type.test.js` and `test/project-new-cli.test.js` 27 of 27; `test/guide-scan.test.js` 4 of 4. Kit revision stays d5a92aea96a1.
 - Also in r53: `vr1` (VR1: the service reads commit, commit date, kit revision and start time once; `/api/state` `version`; Settings header line; Fleet line per factory; `factory status` commit and checkoutHead; `factory update` before -> after). The fleet summary contract moves to 1.2.0 (optional fields); a factory on 1.1.0 shows drift `factory older` until it updates. The second r53 suite failed 3 contract tests that expected 1.1.0; tests and examples moved to 1.2.0. Rule for contract briefs: run `test/factory/*.test.js` too.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Owner decision: lanes (2026-10-10, through the Boss)
+
+- The Claude stop line moves from 85 to 95 percent weekly use (20x plan). Claude is allowed again for work that fits it: Sonnet for hosted browser checks, design passes, reviews and final judges; Haiku for bounded checks. Codex gpt-6.1-sol and the free lanes still carry the bulk of the code work.
+- The pace guard may refuse a Claude start: use `--force --reason TEXT` for a bounded, useful run (authorized under the Owner's watch order). Keep one Claude worker per project.
+- Orchestrators default to Codex gpt-6.1-sol. A Claude orchestrator moves to Codex at its next task boundary (handover by the Boss).
+
+## Owner decision: factory dashboard connection (2026-10-10, through the Boss)
+
+- A factory dashboard connects over HTTPS through Tailscale Serve (HTTPS 443 to the dashboard port). Tailnet HTTPS certificates must be enabled. `project transfer plan` refuses a plain HTTP non-loopback dashboard.
+- Two factory hosts are connected and run commit 90c56a07. FX1 (`fx1`) makes `factory connect` replace a plain HTTP route or print the two repair commands, adds the shared-tag acls text with port 443, adds `factory clean-smoke`, and documents the Windows host runbook.
+
+## Release checkpoint r54 (MB-FORM, SL1, REG-FIX, PG3, PJ1, AL-DUP, BT2, BT3, FX1)
+
+- Reviewed branches: `regfix` b3d5887 and 4630dbd (project register import at start; Projects card and tab colors with a CSS test), `form` 6c30096 and c18e5ad (MB-FORM: a dirty form or focused field defers a render; SL1: succession ladder with saved unavailable values, stable row keys, arrows, Apply policy saves the order), `aldup` c73df02 (disk alerts group under one key with count and first and last time; informational notices expire after 24 hours and can be dismissed in the browser), `bt2` (filtered, counts-only search rule), `bt3` 9a5c620 (`herdr-boss redact`), `fx1` 3a78dfc (FX1, see above).
+- Merge: conflicts in `src/server.js`, `docs/user-guide.md`, `public/app.js`, `test/settings-render.test.js` and `kit/CHANGES.md` resolved by keeping both sides. The two kit change entries became one entry for the merged revision 7b9d7994e55b; `SKILL.md` was shortened to stay inside its word cap.
+- Rule: when two branches change the kit, the merged tree needs one `kit/CHANGES.md` entry for its own revision. Run `test/kit-*.test.js` in the integration tree.
+- Evidence: worker scoped tests passed for each branch; browser checks at 1280 and 393 px for regfix. Not checked in a browser: MB-FORM, SL1 and the alert Dismiss button.
+- State: integrated only. Suite, ff-only, restart and push are pending.
