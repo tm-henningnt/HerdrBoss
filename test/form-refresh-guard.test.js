@@ -62,7 +62,7 @@ function element(tagName, attrs = {}) {
   return node;
 }
 
-function makeHarness() {
+function makeHarness({ ladder = false } = {}) {
   const handlers = new Map();
   const helpPanel = { hidden: true };
   const body = { classList: { toggle() {}, remove() {}, contains: () => false } };
@@ -77,12 +77,14 @@ function makeHarness() {
       if (this.field && doc.activeElement === this.field) doc.activeElement = body;
       this.currentHtml = html;
       this.rows = [];
-      this.region = createElement('div', { 'data-release-repos-editor': '' });
+      this.region = createElement('div', ladder ? { id: 'control-plane' } : { 'data-release-repos-editor': '' });
       this.rowsNode = createElement('div', { 'data-release-repo-rows': '' });
       this.addButton = createElement('button', { 'data-release-repo-add': '' });
       this.rowsNode.parentNode = this.region;
       this.addButton.parentNode = this.region;
-      this.field = createElement('input', { id: 'repo-name', value: 'stored' });
+      this.field = ladder
+        ? createElement('select', { 'data-ladder-key': 'succession-1', value: 'codex/a' })
+        : createElement('input', { id: 'repo-name', value: 'stored' });
       this.field.parentNode = this.region;
       this.field.root = this;
       this.region.root = this;
@@ -91,6 +93,7 @@ function makeHarness() {
     },
     contains(node) { return Boolean(node && node.root === this); },
     querySelector(selector) {
+      if (selector === '#control-plane') return ladder ? this.region : null;
       if (selector === '[data-release-repo-rows]') return this.rowsNode;
       if (selector === '[data-release-repos-editor]') return this.region;
       if (selector === '[data-release-repo-add]') return this.addButton;
@@ -137,7 +140,9 @@ function makeHarness() {
     APP_VIEW_ROUTES: [],
     KEYED_ROUTES: ['settings'],
     readLocation: () => ({ route: 'settings', slug: null, task: null, pendingHash: null }),
-    settingsView: (state) => `<section id="settings-plane"><p data-revision>${state.revision}</p><div data-release-repos-editor><input id="repo-name" value="${state.repo}"/><div data-release-repo-rows></div><button data-release-repo-add>Add repository</button></div></section>`,
+    settingsView: (state) => ladder
+      ? `<section id="control-plane"><p data-revision>${state.revision}</p><select data-ladder-key="succession-1" value="${state.choice}"></select></section>`
+      : `<section id="settings-plane"><p data-revision>${state.revision}</p><div data-release-repos-editor><input id="repo-name" value="${state.repo}"/><div data-release-repo-rows></div><button data-release-repo-add>Add repository</button></div></section>`,
     patchHtml: (target, html) => { target.innerHTML = html; },
     captureScroll: () => ({ keys: {}, tops: {} }),
     restoreScroll() {},
@@ -180,7 +185,10 @@ function makeHarness() {
   context.render = context.render.bind(context);
   app.innerHTML = '';
 
-  const snapshots = [
+  const snapshots = ladder ? [
+    { revision: 1, choice: 'codex/a', updatedAt: '2026-10-10T09:00:00.000Z' },
+    { revision: 2, choice: 'claude/b', updatedAt: '2026-10-10T09:00:01.000Z' },
+  ] : [
     { revision: 1, repo: 'stored', updatedAt: '2026-10-10T09:00:00.000Z' },
     { revision: 2, repo: 'server update', updatedAt: '2026-10-10T09:00:01.000Z' },
   ];
@@ -254,4 +262,21 @@ test('a clean focused field catches up after blur', async (t) => {
   page.dispatch('focusout', field);
   await Promise.resolve();
   assert.match(page.app.innerHTML, /<p data-revision>2<\/p>/, 'a clean blur runs one catch-up render');
+});
+
+test('a dirty project lead succession select survives a state tick in the control-plane region', async (t) => {
+  const page = makeHarness({ ladder: true });
+  t.after(() => page.store.stop());
+  await page.start();
+  const select = page.app.field;
+  select.value = 'claude/b';
+  select.focus();
+  page.dispatch('change', select);
+
+  await page.tick();
+
+  assert.equal(page.app.field, select, 'the select node stays in the dirty control-plane region');
+  assert.equal(select.value, 'claude/b', 'the unsaved ladder selection survives the state tick');
+  assert.equal(page.doc.activeElement, select, 'the selection keeps focus');
+  assert.match(page.app.innerHTML, /<p data-revision>1<\/p>/, 'the dirty ladder keeps its current rendered state');
 });

@@ -213,6 +213,8 @@ const dirtyFormRegions = new Map();
 // The project page patches its DOM in place when the previous render was the project page too.
 let lastRoute = null;
 let models = {};
+const successionRowIds = new WeakMap();
+let successionRowSequence = 0;
 let usage = null;
 let denials = null;
 let machineHours = null;
@@ -852,13 +854,25 @@ function controlBlock(s) {
     return `<button type="button" class="allocation-handle" data-boundary="${i}" role="slider" aria-label="${esc(p.label)} allocation boundary" aria-valuemin="${minimum}" aria-valuemax="100" aria-valuenow="${cumulative}" aria-valuetext="${esc(p.label)} ${d.projects[p.slug]?.share || 0} percent" style="left:${cumulative}%"></button>`;
   }).join('');
   const ladderRows = (d.orchestratorLadder || []).map((rung, i) => {
-    const cfg = models[rung.kind] ? { ...models[rung.kind], allowedModels: kindModels(rung.kind, d) } : { allowedModels: [rung.model], allowedEfforts: [] };
+    const allowedKinds = successionAllowedKinds(s, d);
+    const allowedModels = successionAllowedModels(s, rung.kind, d);
+    const kindUnavailable = !allowedKinds.includes(rung.kind);
+    const modelUnavailable = !allowedModels.includes(rung.model);
+    const kinds = [...allowedKinds, ...(kindUnavailable ? [rung.kind] : [])];
+    const rungModels = [...allowedModels, ...(modelUnavailable ? [rung.model] : [])];
     const effortCfg = effortSettings(rung.kind, rung.model);
-    return `<div class="succession-row"><span class="num">${i + 1}</span>
-      <select data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${Object.keys(models).map((kind) => `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''}>${esc(kind)}</option>`).join('')}</select>
-      <select data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${cfg.allowedModels.map((model) => `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>
-      ${effortCfg.allowedEfforts?.length ? `<select data-ladder-effort="${i}" aria-label="Choice ${i + 1} reasoning effort">${effortCfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || effortCfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}</select>` : '<span class="sub">No effort setting</span>'}
-      <div class="succession-actions"><button type="button" class="quiet" data-ladder-up="${i}" aria-label="Move choice ${i + 1} up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="quiet" data-ladder-down="${i}" aria-label="Move choice ${i + 1} down" ${i === d.orchestratorLadder.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="quiet" data-ladder-remove="${i}" aria-label="Remove choice ${i + 1}" ${d.orchestratorLadder.length === 1 ? 'disabled' : ''}>Remove</button></div>
+    const rowKey = successionRowKey(rung);
+    return `<div class="succession-row" data-key="${rowKey}"><span class="num">${i + 1}</span>
+      <select data-ladder-key="${rowKey}" data-ladder-kind="${i}" aria-label="Choice ${i + 1} harness">${kinds.map((kind) => {
+        const unavailable = kind === rung.kind && kindUnavailable;
+        return `<option value="${esc(kind)}" ${kind === rung.kind ? 'selected' : ''} ${unavailable ? 'data-saved-unavailable' : ''}>${esc(kind)}${unavailable ? ' · saved, unavailable' : ''}</option>`;
+      }).join('')}</select>
+      <select data-ladder-key="${rowKey}" data-ladder-model="${i}" aria-label="Choice ${i + 1} model">${rungModels.map((model) => {
+        const unavailable = model === rung.model && modelUnavailable;
+        return `<option value="${esc(model)}" ${model === rung.model ? 'selected' : ''} ${unavailable ? 'data-saved-unavailable' : ''}>${esc(model)}${unavailable ? ' · saved, unavailable' : ''}</option>`;
+      }).join('')}</select>
+      ${effortCfg.allowedEfforts?.length ? `<select data-ladder-effort="${i}" data-ladder-key="${rowKey}" aria-label="Choice ${i + 1} reasoning effort">${effortCfg.allowedEfforts.map((effort) => `<option value="${esc(effort)}" ${effort === (rung.effort || effortCfg.defaultEffort) ? 'selected' : ''}>${esc(effort)}</option>`).join('')}${rung.effort && !effortCfg.allowedEfforts.includes(rung.effort) ? `<option value="${esc(rung.effort)}" selected data-saved-unavailable>${esc(rung.effort)} · saved, unavailable</option>` : ''}</select>` : '<span class="sub">No effort setting</span>'}
+      <div class="succession-actions"><button type="button" class="quiet" data-ladder-key="${rowKey}" data-ladder-up="${i}" aria-label="Move choice ${i + 1} up" ${i ? '' : 'disabled'}>↑</button><button type="button" class="quiet" data-ladder-key="${rowKey}" data-ladder-down="${i}" aria-label="Move choice ${i + 1} down" ${i === d.orchestratorLadder.length - 1 ? 'disabled' : ''}>↓</button><button type="button" class="quiet" data-ladder-key="${rowKey}" data-ladder-remove="${i}" aria-label="Remove choice ${i + 1}" ${d.orchestratorLadder.length === 1 ? 'disabled' : ''}>Remove</button></div>
     </div>`;
   }).join('');
   const projectRows = projects.map((p) => {
@@ -1127,6 +1141,40 @@ function routeFor(kind, model, d = policyDraft) {
   if (d?.modelProviders && Object.hasOwn(d.modelProviders, model)) return d.modelProviders[model];
   if (kind === 'codex' || kind === 'claude') return kind;
   return model.startsWith('opencode-go/') ? 'opencodego' : null;
+}
+function successionRowKey(rung) {
+  if (!rung || typeof rung !== 'object') return `succession-${++successionRowSequence}`;
+  if (!successionRowIds.has(rung)) successionRowIds.set(rung, `succession-${++successionRowSequence}`);
+  return successionRowIds.get(rung);
+}
+function successionModelUnavailable(s, kind, model, d) {
+  if (!d.allowedKinds?.includes(kind) || !models[kind] || !kindModels(kind, d).includes(model) || !modelOn(kind, model, d)) return true;
+  const globalAllowed = s?.control?.globalAllowed;
+  if (globalAllowed && (!Array.isArray(globalAllowed[kind]) || !globalAllowed[kind].includes(model))) return true;
+  if ((s?.unavailableModels || []).some((item) => item.kind === kind && item.model === model && item.retryAt > Date.now())) return true;
+  const provider = routeFor(kind, model, d);
+  if (!provider) {
+    const freeLane = s?.lanes?.unmetered;
+    if (freeLane?.exhausted?.some((item) => item.model === model && item.retryAt > Date.now())) return true;
+    if (freeLane?.unavailable?.some((item) => item.kind === kind && item.model === model)) return true;
+    return false;
+  }
+  const control = s?.control || {};
+  if (control.risks?.[provider] || control.exhausted?.[provider]) return true;
+  const lane = s?.lanes?.[provider];
+  if (lane?.state === 'trickle' && lane.usedTodayPercent >= lane.allowancePercent) return true;
+  const used = control.weeklyUse?.[provider];
+  return (provider === 'codex' && Number.isFinite(used) && used > 85)
+    || (provider === 'claude' && Number.isFinite(used) && used >= 100);
+}
+function successionAllowedModels(s, kind, d) {
+  if (!d.allowedKinds?.includes(kind) || !models[kind]) return [];
+  return kindModels(kind, d).filter((model) => !successionModelUnavailable(s, kind, model, d));
+}
+function successionAllowedKinds(s, d) {
+  const globalAllowed = s?.control?.globalAllowed;
+  const kinds = globalAllowed ? Object.keys(globalAllowed) : (d.allowedKinds || []);
+  return kinds.filter((kind) => d.allowedKinds?.includes(kind) && models[kind] && successionAllowedModels(s, kind, d).length);
 }
 // Codex and Claude run only their own subscription models. Open harnesses can use any provider. The server applies the same rule.
 function harnessProviders(kind) {
@@ -8978,12 +9026,14 @@ document.addEventListener('change', (e) => {
     return;
   }
   if (e.target.dataset.ladderKind !== undefined || e.target.dataset.ladderModel !== undefined || e.target.dataset.ladderEffort !== undefined) {
-    const i = Number(e.target.dataset.ladderKind ?? e.target.dataset.ladderModel ?? e.target.dataset.ladderEffort);
-    const rung = policyDraft?.orchestratorLadder?.[i];
+    const list = policyDraft?.orchestratorLadder;
+    const i = e.target.dataset.ladderKey ? list?.findIndex((entry) => successionRowKey(entry) === e.target.dataset.ladderKey) : Number(e.target.dataset.ladderKind ?? e.target.dataset.ladderModel ?? e.target.dataset.ladderEffort);
+    const rung = list?.[i];
     if (!rung) return;
     if (e.target.dataset.ladderKind !== undefined) {
       rung.kind = e.target.value;
-      rung.model = models[rung.kind].defaultModel;
+      const choices = successionAllowedModels(state, rung.kind, policyDraft);
+      rung.model = choices.find((model) => !list.some((other, index) => index !== i && other.kind === rung.kind && other.model === model)) || choices[0] || models[rung.kind]?.defaultModel || rung.model;
       rung.effort = effortSettings(rung.kind, rung.model).defaultEffort || null;
     } else if (e.target.dataset.ladderModel !== undefined) {
       rung.model = e.target.value;
@@ -9923,16 +9973,25 @@ document.addEventListener('click', async (e) => {
     const list = policyDraft?.orchestratorLadder;
     if (!list) return;
     if (e.target.dataset.ladderAdd !== undefined) {
-      const kind = Object.keys(models).find((k) => kindModels(k).some((m) => !list.some((r) => r.kind === k && r.model === m))) || Object.keys(models)[0];
+      const kinds = successionAllowedKinds(state, policyDraft);
+      const kind = kinds.find((k) => successionAllowedModels(state, k, policyDraft).some((m) => !list.some((r) => r.kind === k && r.model === m))) || kinds[0];
       if (!kind) return;
-      const cfg = models[kind];
-      const model = kindModels(kind).find((m) => !list.some((r) => r.kind === kind && r.model === m)) || cfg.defaultModel;
+      const choices = successionAllowedModels(state, kind, policyDraft);
+      const model = choices.find((m) => !list.some((r) => r.kind === kind && r.model === m)) || choices[0];
+      if (!model) return;
       list.push({ kind, model, effort: effortSettings(kind, model).defaultEffort || null });
     } else {
-      const i = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
+      const renderedIndex = Number(e.target.dataset.ladderUp ?? e.target.dataset.ladderDown ?? e.target.dataset.ladderRemove);
+      const i = e.target.dataset.ladderKey ? list.findIndex((entry) => successionRowKey(entry) === e.target.dataset.ladderKey) : renderedIndex;
+      if (i < 0 || i >= list.length) return;
       if (e.target.dataset.ladderRemove !== undefined) list.splice(i, 1);
-      else { const next = i + (e.target.dataset.ladderUp !== undefined ? -1 : 1); [list[i], list[next]] = [list[next], list[i]]; }
+      else {
+        const next = i + (e.target.dataset.ladderUp !== undefined ? -1 : 1);
+        if (next < 0 || next >= list.length) return;
+        [list[i], list[next]] = [list[next], list[i]];
+      }
     }
+    markFormDirty(e.target, e.target.closest?.('#control-plane'));
     policyDirty = true; saveMessage = ''; lastRender = ''; render(true);
     return;
   }

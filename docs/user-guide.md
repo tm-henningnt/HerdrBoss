@@ -10,6 +10,8 @@ The dashboard uses cool blue, teal, violet, cyan, and green colors for its contr
 
 Mailbox counts and lists refresh every second. Open Mailbox conversations, Owner Chat lists and conversations, and Agents lists and open pairs refresh every second. A CLI message appears without a page reload. The top-bar badges, Needs-you heading, and list use one Mailbox count source. The page refreshes its reads when you return online or show it again. A form keeps unsaved input while the page refreshes. A sent message first shows **Sending…**, then **Sent. Waiting for delivery.** It shows **delivered** with a time, or **failed** with the reason. Open the conversation in **Sent** and select **Retry** after a failure. Retry uses the same client ID, so it does not create a duplicate. Select **Clear** to remove the failed message from this browser.
 
+On **Resource allocation**, set the ordered choices for automatic project lead handover. The selectors offer harnesses and models allowed by policy and current usage limits. A saved choice that is no longer allowed stays visible with an unavailable mark. Use the arrows to change the order, then select **Apply policy**.
+
 - [I want to see what is happening](guide/see.md)
 - [I want to answer a Mailbox question](guide/answer.md)
 - [I want to review a pack](guide/review.md)
