@@ -16,6 +16,18 @@ The pre-gate rule accepts an approval only when the recorded list has one separa
 
 The helper takes the `qlik-cli` executable as an input and defaults to `qlik`. Tests inject a fake runner. They use no tenant connection.
 
-The sheet adapter supports these JSON field names: object type in `type`, `objectType`, `qType`, `qInfo.qType`, `qMeta.type`, or `qMetaDef.type`; object ID in `id`, `objectId`, `qId`, `qInfo.qId`, or `qMetaDef.qId`; published state in `published`, `isPublished`, `meta.published`, `qMeta.published`, or `qMetaDef.published`; approved state in `approved`, `isApproved`, `meta.approved`, `qMeta.approved`, or `qMetaDef.approved`. The Owner checked these fields against the `qlik-cli` installed on the Owner's machine. No `qlik-cli` version is pinned. Update `adaptSheetListing()` and its test fixture when the installed output uses another field.
+The adapter reads object types from `type`, `objectType`, `qType`, `qInfo.qType`, `qMeta.type`, or `qMetaDef.type`.
+It reads object IDs from `id`, `objectId`, `qId`, `qInfo.qId`, or `qMetaDef.qId`.
+It reads state from the listing when the listing has state fields.
+Published fields may use `published`, `isPublished`, `meta.published`, `qMeta.published`, or `qMetaDef.published`.
+Approved fields may use `approved`, `isApproved`, `meta.approved`, `qMeta.approved`, or `qMetaDef.approved`.
+If the listing has no state, the helper runs `qlik app object properties ID --app APPID --json` for each sheet.
+It reads `qMeta.published` and `qMeta.approved` from that output.
+The helper refuses if either state value is missing.
+The helper prints a fixed message for each known refusal. It does not print input values.
+App and sheet IDs must start with a letter or number and may contain only letters, numbers, `_`, or `-`.
+The helper refuses when a listing has more than 500 sheets or duplicate sheet IDs.
+No `qlik-cli` version is pinned.
+Add a fixture when the installed output uses another field.
 
 The helper scan reports counts for private key blocks, token-like strings, private paths, URL hosts, allowed Qlik Engine inline paths, and bytes. It stops when it finds a private key block, token-like string, private path, or a file that exceeds the scan limit. `release request` runs the full release scan, including the browser-session host check.
