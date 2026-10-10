@@ -49,15 +49,17 @@ You want to answer a question while you are away.
 
 What you do:
 
-1. Tap the menu button in the header. It shows the name of the current page.
-2. Tap **Mailbox**. Open "Needs you".
+1. Tap the Herdr Boss logo at the top left.
+2. Tap **Mailbox**. Tap the logo to open the shared menu. Select **Needs you**.
 3. Tap an item. Choose an answer or write one.
-4. Tap the Chat icon in the header to talk with the Boss.
+4. Tap the Chat icon in the app bar to talk with the Boss.
 
-What you should see: each page fits the screen width. Tables show stacked rows. Each button is at least 44 px high. A review pack opens as a full page.
+What you should see: the same menu has every section. This includes **Fleet** and **Docs**. On Mailbox pages, it also has the Mailbox folders. The Herdr Boss logo opens the menu on every phone page. Each page fits the screen width. Tables show stacked rows. Each button is at least 44 px high. A review pack opens as a full page.
+
+The Mailbox and Chat update while they are open. If you switch apps or lose the network, they refresh when the page becomes visible or the network returns.
 
 If you do not see it:
 
 - If the page scrolls sideways, reload it. A wide table scrolls inside its own box.
-- If a warning line shows under the header, the page lost its connection to the service. Check Tailscale and reload.
+- If a warning line shows under the header, check Tailscale. The page retries its reads after the connection returns.
 - If the screen zooms when you tap a field, update your phone software. The fields use a 16 px font to prevent this.

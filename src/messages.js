@@ -30,9 +30,11 @@ export const CLOSE_NOTE_PROJECT = 'resolved by the project';
 export const CLOSE_NOTE_ELSEWHERE = 'answered elsewhere';
 export const CHOICES_MAX = 10;
 export const CHOICE_TEXT_MAX = 200;
+const OWNER_CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const OWNER_KINDS = ['message', 'nudge', 'status-request'];
 
 export const validThread = (thread) => thread === 'boss' || (typeof thread === 'string' && SLUG.test(thread));
+export const validOwnerClientId = (clientId) => typeof clientId === 'string' && OWNER_CLIENT_ID.test(clientId);
 
 export function readMessages({ dir = DATA_DIR } = {}) {
   return openMessageStore({ dir }).all();
@@ -58,6 +60,7 @@ export function listThread(thread, { dir = DATA_DIR, limit = THREAD_LIMIT } = {}
 export function validateOwnerSend(body, { knownThreads, records = [], now = Date.now() }) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, error: 'Send a JSON object with thread, kind, and text.' };
   const { thread, kind } = body;
+  if (body.clientId !== undefined && !validOwnerClientId(body.clientId)) return { status: 400, error: 'clientId must be 1 to 128 letters, numbers, or . _ : - characters.' };
   try { validateAttachmentIds(body.attachments === undefined ? [] : body.attachments); }
   catch (error) { return { status: error.statusCode, error: error.message }; }
   if (!validThread(thread)) return { status: 400, error: 'The thread must be boss or a project slug.' };
@@ -81,7 +84,22 @@ export function validateOwnerSend(body, { knownThreads, records = [], now = Date
   }
   const recent = records.filter((record) => record.from === 'owner' && Date.parse(record.at) > now - 60000).length;
   if (recent >= SEND_LIMIT_PER_MINUTE) return { status: 429, error: `Herdr Boss accepts at most ${SEND_LIMIT_PER_MINUTE} Owner messages a minute. Wait, then send again.` };
-  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0, ...(body.attachments !== undefined ? { attachments: body.attachments } : {}) } };
+  return { fields: { thread, from: 'owner', to: thread === 'boss' ? 'boss' : 'orch', kind, text, action: null, replyTo, status: 'queued', attempts: 0, ...(body.clientId !== undefined ? { clientId: body.clientId } : {}), ...(body.attachments !== undefined ? { attachments: body.attachments } : {}) } };
+}
+
+export function ownerSendMatches(record, body) {
+  const text = body.kind === 'message'
+    ? (typeof body.text === 'string' ? body.text.trim() : '')
+    : body.kind === 'nudge' ? body.text : STATUS_REQUEST_TEXT;
+  const requestedAttachments = Array.isArray(body.attachments) ? body.attachments : [];
+  const storedAttachments = Array.isArray(record.attachments) ? record.attachments.map((item) => typeof item === 'string' ? item : item?.id).filter(Boolean) : [];
+  return record.from === 'owner'
+    && record.clientId === body.clientId
+    && record.thread === body.thread
+    && record.kind === body.kind
+    && record.text === text
+    && (record.replyTo ?? null) === (body.replyTo ?? null)
+    && JSON.stringify(storedAttachments) === JSON.stringify(requestedAttachments);
 }
 
 const PROMPT_QUOTE_MAX = 400;

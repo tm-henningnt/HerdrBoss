@@ -2,7 +2,7 @@
 
 ## Reviews page
 
-The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Board**. The page is an app view, as the Mailbox: on a screen of 760 px or less it fills the screen, and the menu button at the top left opens the drawer.
+The **Reviews** page shows the review packs that projects send to the Owner. The menu entry is after **Board**. The page is an app view, as the Mailbox and Chat: on a screen of 760 px or less it fills the screen. Its menu button opens the shared route menu.
 
 Herdr Boss deletes a closed pack 30 days after it closes. An open pack expires after 60 days without a change. Herdr Boss keeps each result for 180 days. It keeps the newest 3 versions. The review pack quota is 2 GiB. Run `herdr-boss review delete <slug> <pack>` to delete a pack.
 
@@ -908,7 +908,7 @@ The Mailbox page at `/mailbox` is the inbox of the Owner. It lists replies from 
 
 ### Folders
 
-The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**. **Sent** is below a divider. On a desktop the folder rail is on the left, with **New message** at the top. On a phone the folders are in the menu drawer. Each folder shows its count. The folder pane shows a read-only line with the limits: the retention and the send limit. The folder pane shows on a desktop. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
+The folders are **Needs you**, **Inbox**, **Reports and updates**, and **Done**. **Sent** is below a divider. On a desktop the folder rail is on the left, with **New message** at the top. On a phone, the same shared menu shows the folder links while the Mailbox is open. Each folder shows its count. The folder pane shows a read-only line with the limits: the retention and the send limit. The folder pane shows on a desktop. The page keeps the selected folder in the address and in browser storage. When Needs you has open items, it is the default folder. When it has no items and you have selected another folder before, the page restores that folder. Otherwise, Needs you is the default folder.
 
 - **Needs you** shows open items with action `answer`, `approve`, or `decide`, newest first. When this folder is empty, the page shows “Nothing needs you.” and a link to the Inbox.
 - **Inbox** shows the open Needs-you items and the unread information items, newest first. The list has two sections: Needs you first, then Reports and updates. A read information item is not in the Inbox. `GET /api/mailbox?folder=inbox` returns the items.
@@ -935,6 +935,10 @@ Select **Attach a picture** to choose pictures from your device. The picker can 
 
 Select **New message** to start a thread with the Boss or a project that has an `orch` pane. Type a message or attach a picture, then confirm the send. The page applies the same send limit and safety gates as other Owner messages. It opens the new thread in **Sent**. Use the reply box at the bottom of a conversation to reply to its last open agent message. When that message is an open answer, approve, or decide item, the item form replaces the reply box. You can attach pictures to a reply. The page asks you to confirm each reply.
 
+### Retry a failed message
+
+A failed message stays in the **Sent** folder and its conversation. Select **Retry** on the failed message. Herdr Boss reuses its client ID. A repeated request returns the stored message, so it does not create a duplicate. Select **Clear** to remove the failed message from this browser.
+
 ### Close an item without an answer
 
 An open Needs-you item closes in three ways without an Owner answer in the Mailbox.
@@ -949,7 +953,7 @@ The choices are the list items under a Markdown heading with the text `Choices`,
 
 ### Automatic refresh
 
-The page reads new data every 30 seconds and on each state event. It changes only the parts of the page that changed. Each row, conversation, chat, and bubble has a key (`data-key`), and `public/keyed.js` keeps the DOM node of each key. The page keeps the open conversation, the selection, the typed text, the focus, and the caret. It keeps the scroll position of the list and of the conversation. A new folder or a new conversation starts at the top.
+Mailbox counts and lists refresh every second. Owner Chat lists and conversations refresh every second. The Agents list and open pair refresh every second. Other page data refreshes every 30 seconds and on each state event. The page updates only changed parts. Each row, conversation, chat, and bubble has a key (`data-key`). `public/keyed.js` keeps each keyed DOM node. The page keeps the open conversation, selection, typed text, focus, and caret. It also keeps list and conversation scroll positions. A new folder or conversation starts at the top.
 
 The refresh waits while you type or scroll. It runs 3 seconds after your last input or scroll. The Chat page uses the same rule.
 
@@ -957,7 +961,7 @@ The refresh waits while you type or scroll. It runs 3 seconds after your last in
 
 The `needsYouUnread` count is the open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
 
-The top bar shows three icons on a desktop and on a phone. Each icon has a count. The menu has no Mailbox entry and no Chat entry. The icons open the Chat and the Mailbox. The icon of the open page has `aria-current="page"` and a mark: Chat on the Chat, Updates on the Mailbox folder Updates, and Needs action on the Mailbox folder Needs you. On a phone the Mailbox, the Chat, and the Reviews hide the top bar. Their slim bar shows the same three icons at the right of the page title, with the same counts, faded state, names, and current mark. The icons open the Chat and the Mailbox in one tap. Each icon is 44 px wide and 44 px high on a phone. Four targets of 44 px fit in a width of 320 px.
+The top bar shows three icons on a desktop and on a phone. Each icon has a count. The shared menu lists every section, including Mailbox and Chat. The icons open Chat and Mailbox. The open page icon has `aria-current="page"` and a mark. Chat has the mark on Chat. Updates has it in the Updates folder. Needs action has it in Needs you. On a phone, Mailbox, Chat, and Reviews hide the top bar. Their slim bar shows the same three icons at the right of the page title. It keeps the same counts, faded state, names, and current mark. The icons open Chat and Mailbox in one tap. Each icon is 44 px wide and high on a phone. Four 44 px targets fit in a width of 320 px. On a Mailbox page, the shared menu also lists Mailbox folders.
 
 | Icon | Count | Field in `mailbox` | Link |
 |---|---|---|---|
@@ -1008,10 +1012,10 @@ The Owner can use an own image for the Boss and for each project. The page uses 
 
 ## Phone app view
 
-On a screen up to 760 px wide, the Mailbox and the Chat are app views. The page header, the menu bar, and the page padding do not show. The page has the height of the visual viewport. The page itself does not scroll. Only the list, the conversation, or the chat log scrolls.
+On a screen up to 760 px wide, the Mailbox, Chat, and Reviews are app views. The page header and page padding do not show. The page has the height of the visual viewport. The page itself does not scroll. Only the list, the conversation, or the chat log scrolls. The menu button in the app bar opens the shared route menu, with every section including Fleet and Docs, and Help. The Herdr Boss logo is the menu button.
 
 - The top bar is 52 px high, plus the top safe-area inset. It holds the menu button and the page title with its count. In a conversation it holds the Back arrow, the avatar, and the name.
-- The menu button opens a drawer. The drawer holds the Mailbox folders on the Mailbox, the links to the pages, and **Help**. The drawer has no Mailbox entry and no Chat entry. A dot on the menu button shows unread items on the other page.
+- The menu button opens the shared route menu. On a Mailbox page, the menu also shows the Mailbox folders. On a desktop, the folder rail stays on the left. The menu holds every section, including Fleet and Docs, and **Help**.
 - The Mailbox list has a floating **New** button at the bottom right.
 - In a Mailbox conversation, the actions of the open item sit in a bar at the bottom edge, above the bottom safe-area inset. The bar holds the item actions from [Answer an item](#answer-an-item):
   - Each bar has a last row with **Close as answered elsewhere**. The button has a 44 px target.
@@ -1124,7 +1128,7 @@ Select **Load older** to read the page before the oldest message. The page uses 
 
 Type text in the search box and press Enter to search the message text. The list then shows only the pairs that hold a match. An open pair shows only its matching messages. Select the project filter to show one project. The address keeps the filter, the search text, and the open pair: `/chat?tab=agents&project=SLUG&pair=KEY&q=TEXT`.
 
-The page refreshes with the other extras every 30 seconds. It keeps the scroll position. It scrolls down only when you already read the newest message.
+The Agents tab refreshes its list and open pair every second. It keeps the scroll position. It scrolls down only when you already read the newest message.
 
 The service keeps the message text for 14 days and the metadata rows for 180 days. A row of metadata has no text. The Agents tab shows only messages that still have text. After 14 days a pair disappears from the tab. Set `agentMessages.retentionDays` and `agentMessages.metaRetentionDays` under **Pictures** on Settings to change the periods. The metadata is available with `GET /api/agent-meta`.
 
@@ -1151,7 +1155,7 @@ On a phone, the list fills the page. Select a chat to open it full screen. Selec
 
 The dashboard adapts to a phone and to a home-screen web app.
 
-- On a screen up to 760 px wide, the header is one row: the Herdr Boss mark, a menu button with the current page name, the watch symbol, the three top-bar icons, and **Help**. On a screen below 375 px the icons move to a second row. The page name in the menu button shortens before the header wraps. Select an icon to open the Chat or that Mailbox folder. Select the menu button to open the page menu. The menu closes after you choose a page and when you press Escape.
+- On a screen up to 760 px wide, the header is one row. It shows the Herdr Boss logo menu button, the watch symbol, three top-bar icons, and **Help**. Below 375 px, the icons move to a second row. Select an icon to open Chat or a Mailbox folder. Select the logo to open the shared page menu. The menu closes after you choose a page or press Escape.
 - On a phone the header does not show the update time. A warning line under the header shows that the page lost its connection to the service.
 - On a phone, the long sections of a project page start collapsed. Select a section title to open it. The browser remembers each open section for that project in its local storage. The Now section, overall progress, the current frontier, and the board stay open.
 - Project cards become compact. They show the name, mode, status line, and task bar.

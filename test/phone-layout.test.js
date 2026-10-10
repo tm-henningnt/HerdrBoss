@@ -168,7 +168,7 @@ test('the Mailbox and the Chat each render one h1, and the page shell renders no
   assert.doesNotMatch(html, /<h1\b/);
   const fn = (name) => new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n\\}`).exec(app)?.[1] || '';
   for (const name of ['mailboxView', 'chatView']) assert.equal((fn(name).match(/<h1\b/g) || []).length, 1, name);
-  for (const name of ['mailConversationView', 'mailComposeView', 'mailRowsHtml', 'chatConversationView', 'appDrawer', 'appMenuButton']) assert.doesNotMatch(fn(name), /<h1\b/, name);
+  for (const name of ['mailConversationView', 'mailComposeView', 'mailRowsHtml', 'chatConversationView', 'appMenuButton']) assert.doesNotMatch(fn(name), /<h1\b/, name);
 });
 
 // The row checkbox is 18px wide at the right edge of a 40px column, so it starts at 22px. The Select all box starts there too.

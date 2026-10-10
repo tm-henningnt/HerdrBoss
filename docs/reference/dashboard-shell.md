@@ -1,6 +1,6 @@
 # Dashboard shell and route registry
 
-The dashboard shell is the part of the page that does not change between pages. It holds the menu, the Help panel, the phone drawer, and the address rules.
+The dashboard shell is the part of the page that does not change between pages. It holds the shared menu, the Help panel, and the address rules.
 
 ## Add a route
 
@@ -12,9 +12,8 @@ Each record has these fields:
 |---|---|
 | `id` | The route name. The menu, the Help panel, and the render code use it. |
 | `path` | The canonical address. |
-| `label` | The menu label and the menu button text. |
+| `label` | The menu label. |
 | `menu` | The place in the main menu. Omit it for a page without a menu entry. |
-| `drawer` | `true` for a link in the phone drawer of the Mailbox, the Reviews, and the Chat. |
 | `help` | `inline` for a topic in `HELP` in `public/app.js`. `file` for `docs/help/<id>.md`. |
 | `phone` | `true` when the page fills the phone viewport and hides the page header. |
 | `keyed` | `true` when a render patches the page in place. |
@@ -22,10 +21,10 @@ Each record has these fields:
 ## Modules
 
 - `public/routes.js` holds the registry and the pure address rules. It has no DOM use.
-- `public/shell.js` fills the menu, marks the current page, builds the drawer links, and applies the address rules to the location.
+- `public/shell.js` fills the shared menu, marks the current page, and applies the address rules to the location.
 - `public/app-view.js` re-exports `APP_VIEW_ROUTES` from the registry.
 
-The main menu has one host, the `nav` element `#primary-nav` in `public/index.html`. `index.html` holds only the Roamgate link. `mountMenu` in `public/shell.js` inserts the page links before it, in the `menu` order.
+The main menu has one host, the `nav` element `#primary-nav` in `public/index.html`. It holds Help, context links, and the Roamgate link. `mountMenu` in `public/shell.js` inserts the page links before them, in the `menu` order. A phone Mailbox page adds its folder links to this host. Phone app views use a button in the app bar to open this same menu.
 
 ## Client data store
 
@@ -53,4 +52,4 @@ Use `public/components.js` for shared list rows and status chips. Use `public/th
 
 ## Tests
 
-`test/routes.test.js` covers the 14 routes, the three aliases, the task query, the fragments, the menu host, and the phone drawer.
+`test/routes.test.js` covers the 14 routes, the three aliases, the task query, the fragments, and the shared menu host.

@@ -1,23 +1,22 @@
 // The route registry of the dashboard. It is the one place that names the pages.
-// Each record holds the id, the canonical path, the menu label, the menu place, the Help source, and the phone-shell rule.
+// Each record holds the id, the canonical path, the menu label, the Help source, and the phone-shell rule.
 // To add a route, add one record here and a render branch in app.js. No DOM use, so the Node tests import it.
 import { docsPageName } from './docs-view.js';
 import { parseReviewPath } from './review.js';
 import { HOST_GUIDE_PATH } from './host-guide-view.js';
 
-// menu: the place in the main menu (1 is first), or null for no entry. drawer: the entry in the phone drawer of the Mailbox,
-// the Reviews, and the Chat. help: 'inline' (HELP in app.js), 'file' (docs/help/<id>.md), or null (the Overview text).
+// menu: the place in the main menu (1 is first), or null for no entry. help: 'inline' (HELP in app.js), 'file' (docs/help/<id>.md), or null (the Overview text).
 // phone: the route fills the phone viewport. keyed: a render of the route patches the DOM in place.
 export const ROUTES = [
-  { id: 'overview', path: '/', label: 'Overview', menu: 1, drawer: true, help: 'inline' },
+  { id: 'overview', path: '/', label: 'Overview', menu: 1, help: 'inline' },
   { id: 'fleet', path: '/fleet', label: 'Fleet', menu: 2, help: 'file', keyed: true },
-  { id: 'board', path: '/board', label: 'Board', menu: 3, drawer: true, help: 'file', keyed: true },
-  { id: 'reviews', path: '/reviews', label: 'Reviews', menu: 4, drawer: true, help: 'inline', phone: true, keyed: true },
-  { id: 'agents', path: '/agents', label: 'Agents', menu: 5, drawer: true, help: 'inline' },
-  { id: 'projects', path: '/projects', label: 'Projects', menu: 6, drawer: true, help: 'inline', keyed: true },
-  { id: 'browsers', path: '/browsers', label: 'Browsers', menu: 7, drawer: true, help: 'file' },
-  { id: 'allocation', path: '/allocation', label: 'Allocation', menu: 8, drawer: true, help: 'inline', keyed: true },
-  { id: 'analytics', path: '/analytics', label: 'Analytics', menu: 9, drawer: true, help: 'inline', keyed: true },
+  { id: 'board', path: '/board', label: 'Board', menu: 3, help: 'file', keyed: true },
+  { id: 'reviews', path: '/reviews', label: 'Reviews', menu: 4, help: 'inline', phone: true, keyed: true },
+  { id: 'agents', path: '/agents', label: 'Agents', menu: 5, help: 'inline' },
+  { id: 'projects', path: '/projects', label: 'Projects', menu: 6, help: 'inline', keyed: true },
+  { id: 'browsers', path: '/browsers', label: 'Browsers', menu: 7, help: 'file' },
+  { id: 'allocation', path: '/allocation', label: 'Allocation', menu: 8, help: 'inline', keyed: true },
+  { id: 'analytics', path: '/analytics', label: 'Analytics', menu: 9, help: 'inline', keyed: true },
   { id: 'settings', path: '/settings', label: 'Settings', menu: 10, help: 'inline', keyed: true },
   { id: 'docs', path: '/docs', label: 'Docs', menu: 11, help: 'file' },
   { id: 'mailbox', path: '/mailbox', label: 'Mailbox', help: 'inline', phone: true, keyed: true },
@@ -29,7 +28,6 @@ export const ROUTE_IDS = ROUTES.map((route) => route.id);
 export const routeById = (id) => ROUTES.find((route) => route.id === id) || null;
 export const NAV_LABEL = Object.fromEntries(ROUTES.map((route) => [route.id, route.label]));
 export const MENU_ROUTES = ROUTES.filter((route) => route.menu).sort((a, b) => a.menu - b.menu);
-export const DRAWER_ROUTES = ROUTES.filter((route) => route.drawer);
 export const APP_VIEW_ROUTES = ROUTES.filter((route) => route.phone).map((route) => route.id);
 export const KEYED_ROUTES = ROUTES.filter((route) => route.keyed).map((route) => route.id);
 export const HELP_FILES = ROUTES.filter((route) => route.help === 'file').map((route) => route.id);

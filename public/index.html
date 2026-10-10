@@ -21,14 +21,14 @@
 <body>
 <header class="top">
   <a class="brand" href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 7l4 3M18 7l-4 3M6 17l4-3M18 17l-4-3"/></svg>Herdr Boss</a>
-  <button type="button" id="nav-menu" class="nav-menu" aria-expanded="false" aria-controls="primary-nav"><span id="nav-menu-label">Menu</span><span class="nav-menu-chevron" aria-hidden="true"></span></button>
+  <button type="button" id="nav-menu" class="nav-menu" data-nav-trigger aria-label="Menu" aria-expanded="false" aria-controls="primary-nav"><svg class="app-logo-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 7l4 3M18 7l-4 3M6 17l4-3M18 17l-4-3"/></svg></button>
   <div class="top-icons" role="group" aria-label="Unread and open items">
     <button type="button" id="watch-toggle" class="top-icon watch-icon" data-empty="true" aria-label="Watch off" aria-haspopup="dialog" aria-expanded="false" aria-controls="watch-pop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span class="watch-label" data-watch-label hidden></span></button>
     <a class="top-icon" data-top-icon="chat" data-empty="true" href="/chat" aria-label="Chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 4v-15Z"/></svg><span class="top-icon-badge" data-top-badge="chat" hidden></span></a>
     <a class="top-icon" data-top-icon="mail" data-empty="true" href="/mailbox?folder=updates" aria-label="Updates"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h17v12h-17z"/><path d="m4 7 8 6 8-6"/></svg><span class="top-icon-badge" data-top-badge="mail" hidden></span></a>
     <a class="top-icon top-icon-needs" data-top-icon="needs-action" data-empty="true" href="/mailbox?folder=needs-you" aria-label="Needs you"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg><span class="top-icon-badge" data-top-badge="needs-action" hidden></span></a>
   </div>
-  <nav id="primary-nav" aria-label="Main navigation"><a id="roamgate-link" href="/roamgate" target="_blank" rel="noopener noreferrer" hidden>Roamgate ↗</a></nav>
+  <nav id="primary-nav" aria-label="Main navigation"><div id="mail-folder-menu" hidden></div><button type="button" id="nav-help" data-nav-help>Help</button><a id="roamgate-link" href="/roamgate" target="_blank" rel="noopener noreferrer" hidden>Roamgate ↗</a></nav>
   <span class="top-spacer" aria-hidden="true"></span>
   <button type="button" id="help-toggle" class="help-toggle" aria-expanded="false" aria-controls="help-panel">Help</button>
   <div class="live"><span id="dot" class="dot"></span><span id="updated">connecting…</span></div>

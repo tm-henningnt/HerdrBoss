@@ -1,5 +1,5 @@
 // The client data store owns shared reads, their last good values, event delivery, and refresh timers.
-const SHARED = ['mailboxCounts', 'chats', 'roamgate'];
+const SHARED = ['mailboxCounts', 'roamgate'];
 const URL_CACHE_LIMIT = 50;
 const pageReads = (reads = []) => [...SHARED, ...reads];
 
@@ -26,8 +26,8 @@ export const PAGE_READS = Object.freeze({
   analytics: pageReads(['models', 'usage', 'browserSessions', 'handoffs', 'denials', 'prices', 'spend', 'analytics', 'machineHours', 'quotaPlan']),
   settings: pageReads(['models', 'prices', 'settingsReads']),
   docs: pageReads(['docsReads']),
-  mailbox: pageReads(['fleetBundle', 'mailboxList', 'mailboxReads']),
-  chat: pageReads(['chatReads', 'agentRefresh']),
+  mailbox: ['roamgate', 'fleetBundle', 'mailboxList', 'mailboxReads'],
+  chat: pageReads(['chats', 'chatReads', 'agentChatRefresh']),
   'add-host': pageReads(['hostGuideReads']),
 });
 
@@ -40,6 +40,8 @@ export function createClientStore({
   pages = PAGE_READS,
   setIntervalImpl = globalThis.setInterval,
   clearIntervalImpl = globalThis.clearInterval,
+  isHidden = () => globalThis.document?.hidden === true,
+  nowImpl = Date.now,
 } = {}) {
   const values = new Map();
   const errors = new Map();
@@ -49,6 +51,9 @@ export function createClientStore({
   const eventListeners = new Map();
   const connectionListeners = new Set();
   const timers = new Map();
+  const retryStates = new Map();
+  const forceFollowups = new Map();
+  const forcedReads = new Set();
   let page = null;
   let source = null;
   let connected = false;
@@ -81,6 +86,12 @@ export function createClientStore({
     connected = next;
     for (const listener of connectionListeners) listener(connected);
   };
+  const resetRetry = (name) => {
+    const state = retryStates.get(name);
+    if (!state) return;
+    state.delay = state.intervalMs;
+    state.nextAt = 0;
+  };
   const emit = (type, value) => {
     if (type === 'state') {
       stateEventVersion += 1;
@@ -93,8 +104,20 @@ export function createClientStore({
     try { return JSON.parse(event.data); } catch { return null; }
   };
 
-  async function fetchValue(key, url, options) {
-    if (inFlight.has(key)) return inFlight.get(key);
+  async function fetchValue(key, url, options, { force = false } = {}) {
+    if (inFlight.has(key)) {
+      const current = inFlight.get(key);
+      if (!force || forcedReads.has(key)) return current;
+      if (!forceFollowups.has(key)) {
+        const followup = current.catch(() => undefined).then(() => {
+          forceFollowups.delete(key);
+          forcedReads.add(key);
+          return fetchValue(key, url, options).finally(() => forcedReads.delete(key));
+        });
+        forceFollowups.set(key, followup);
+      }
+      return forceFollowups.get(key);
+    }
     const requestStateEventVersion = key === 'state' ? stateEventVersion : null;
     const request = (async () => {
       try {
@@ -105,6 +128,7 @@ export function createClientStore({
         }
         if (!keepsUrlKey(key)) return body;
         errors.delete(key);
+        resetRetry(key);
         const current = values.get(key);
         if (key === 'state' && (requestStateEventVersion !== stateEventVersion || olderUpdatedAt(body, current))) {
           return current;
@@ -136,6 +160,7 @@ export function createClientStore({
       try {
         const value = await request;
         errors.delete(name);
+        resetRetry(name);
         return value;
       }
       catch (error) { errors.set(name, error); throw error; }
@@ -147,6 +172,7 @@ export function createClientStore({
         try {
           const value = await definition.load({ fetchImpl });
           errors.delete(name);
+          resetRetry(name);
           notify(name, value);
           return value;
         } catch (error) {
@@ -169,7 +195,7 @@ export function createClientStore({
     const key = name || `url:${url}`;
     touchUrlKey(key);
     if (!force && values.has(key)) return Promise.resolve(values.get(key));
-    return fetchValue(key, url, options || (name ? resources[name].options : undefined));
+    return fetchValue(key, url, options || (name ? resources[name].options : undefined), { force });
   }
 
   async function refreshPage(route = page) {
@@ -185,11 +211,26 @@ export function createClientStore({
       if (active.has(name)) continue;
       clearIntervalImpl(timer);
       timers.delete(name);
+      retryStates.delete(name);
     }
     for (const name of active) {
       const intervalMs = resources[name]?.intervalMs;
       if (!Number.isFinite(intervalMs) || intervalMs <= 0 || timers.has(name)) continue;
-      timers.set(name, setIntervalImpl(() => { void refresh(name).catch(() => {}); }, intervalMs));
+      const retry = { intervalMs, delay: intervalMs, nextAt: 0, running: false };
+      retryStates.set(name, retry);
+      timers.set(name, setIntervalImpl(async () => {
+        if (isHidden() || retry.running || nowImpl() < retry.nextAt) return;
+        retry.running = true;
+        try {
+          await refresh(name);
+          if (errors.has(name)) throw errors.get(name);
+          retry.delay = intervalMs;
+          retry.nextAt = 0;
+        } catch {
+          retry.delay = Math.min(30000, retry.delay * 2);
+          retry.nextAt = nowImpl() + retry.delay;
+        } finally { retry.running = false; }
+      }, intervalMs));
     }
     return refreshPage(route);
   }
@@ -209,6 +250,7 @@ export function createClientStore({
   function stop() {
     for (const timer of timers.values()) clearIntervalImpl(timer);
     timers.clear();
+    retryStates.clear();
     source?.close?.();
     source = null;
     setConnected(false);

@@ -1,16 +1,18 @@
-// The Mailbox and the Chat have no menu entry. The top-bar icons lead to them.
+// The Mailbox and Chat icons stay in the top bar. Every page uses the shared primary menu.
 import test from 'node:test';
 import { readUserGuide } from './helpers/user-guide.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const { MENU_ROUTES, DRAWER_ROUTES, ROUTE_IDS } = await import('../public/routes.js');
+const { MENU_ROUTES, ROUTE_IDS } = await import('../public/routes.js');
 const read = (p) => fs.readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8');
 const html = read('index.html');
 const app = read('app.js');
 const css = read('style.css').replace(/\/\*[\s\S]*?\*\//g, '');
 const review = read('review.js');
+const shell = read('shell.js');
 const guide = readUserGuide();
+const docsHelp = fs.readFileSync(new URL('../docs/help/docs.md', import.meta.url), 'utf8');
 
 const nav = /<nav id="primary-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || '';
 // The registry (routes.js) fills the menu host. The first nine entries are the pages of the Owner order; Settings and Docs follow.
@@ -22,9 +24,30 @@ test('the desktop menu has no Mailbox and no Chat entry and keeps the other entr
   assert.doesNotMatch(nav, /href="\/mailbox"|href="\/chat"|data-chat-badge/);
 });
 
-test('the phone drawer has no Mailbox and no Chat entry and keeps the other entries in order', () => {
-  const hrefs = DRAWER_ROUTES.map((r) => r.path);
-  assert.deepEqual(hrefs, ['/', '/board', '/reviews', '/agents', '/projects', '/browsers', '/allocation', '/analytics']);
+test('the phone menu uses the same complete route list as the desktop menu', () => {
+  assert.deepEqual(MENU_ROUTES.map((r) => r.id), ['overview', 'fleet', 'board', 'reviews', 'agents', 'projects', 'browsers', 'allocation', 'analytics', 'settings', 'docs']);
+  assert.match(shell, /for \(const route of MENU_ROUTES\)/);
+  assert.doesNotMatch(shell, /DRAWER_ROUTES|drawerLinksHtml/);
+  assert.doesNotMatch(app, /function appDrawer\(|class="app-drawer|data-app-drawer/);
+  assert.match(app, /data-nav-trigger/);
+  assert.doesNotMatch(app, /drawerLinksHtml|DRAWER_ROUTES/);
+  assert.doesNotMatch(app, /\$navMenu\b/, 'mailbox badge updates do not use the removed menu button');
+});
+
+test('Mailbox folders appear inside the shared menu on phone Mailbox pages', () => {
+  assert.match(html, /<div id="mail-folder-menu" hidden><\/div>/);
+  assert.match(app, /function syncMailboxFolderMenu\(route, s\)[\s\S]*?route !== 'mailbox' \|\| !appPhone\(\)[\s\S]*?mailFolderLinks\(folder, counts, 'nav-mail-folder-link'\)/);
+  assert.match(app, /syncMailboxFolderMenu\(route, state\)/);
+  assert.match(css, /#primary-nav \.nav-mail-folder-link\s*\{[^}]*min-height:\s*44px/);
+});
+
+test('the phone menu button is the Herdr Boss logo, has the Menu label, and exposes its open state', () => {
+  assert.match(html, /<button[^>]*id="nav-menu"[^>]*aria-label="Menu"[^>]*aria-expanded="false"[^>]*aria-controls="primary-nav"[^>]*>[\s\S]*?viewBox="0 0 24 24"/);
+  assert.match(app, /function appMenuButton\([\s\S]*?aria-label="Menu"[\s\S]*?aria-expanded="\$\{[^}]+\}"[\s\S]*?aria-controls="primary-nav"[\s\S]*?\$\{APP_LOGO_MARK\}/);
+  assert.match(app, /const APP_LOGO_MARK = '<svg class="app-logo-mark"/);
+  assert.match(css, /#nav-menu\[aria-expanded="true"\]/);
+  assert.match(css, /\.app-menu\[aria-expanded="true"\]/);
+  assert.match(css, /\.app-icon-button\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/);
 });
 
 test('the top bar has a Chat icon, an Updates icon, and a Needs you icon with the right links and names', () => {
@@ -82,10 +105,41 @@ test('every page route has at least one link', () => {
   assert.match(app, /reviewOpenLinkHtml\(item, esc\)/);
 });
 
-test('the help text and the user guide describe the menu without Mailbox and Chat', () => {
-  assert.doesNotMatch(guide, /The menu entry is after \*\*Mailbox\*\*/);
-  assert.match(guide, /The menu has no Mailbox entry and no Chat entry/);
-  assert.match(app, /The menu has no Mailbox entry and no Chat entry/);
+test('the help text and the user guide describe one menu with Fleet and Docs on every page', () => {
+  assert.match(guide, /one menu on every page/i);
+  assert.match(guide, /Fleet and Docs/);
+  assert.match(app, /one menu on every page/i);
+  assert.match(app, /Fleet and Docs/);
+  assert.match(docsHelp, /same menu/i);
+  assert.match(docsHelp, /Fleet and Docs/);
+});
+
+test('only the shared app and review helpers render a menu trigger', () => {
+  const markers = ['data-nav-trigger', 'class="nav-menu"', 'aria-label="Menu"', 'id="primary-nav"'];
+  const count = (source, marker) => source.split(marker).length - 1;
+  assert.deepEqual(Object.fromEntries(markers.map((marker) => [marker, count(app, marker)])), {
+    'data-nav-trigger': 4, // one button and three event or state selectors
+    'class="nav-menu"': 0,
+    'aria-label="Menu"': 1,
+    'id="primary-nav"': 0,
+  });
+  assert.deepEqual(Object.fromEntries(markers.map((marker) => [marker, count(review, marker)])), {
+    'data-nav-trigger': 0,
+    'class="nav-menu"': 0,
+    'aria-label="Menu"': 0,
+    'id="primary-nav"': 0,
+  });
+  const appMenu = /function appMenuButton\([\s\S]*?\n\}/.exec(app)?.[0] || '';
+  assert.equal(count(appMenu, 'data-nav-trigger'), 1);
+  assert.equal(count(appMenu, 'aria-label="Menu"'), 1);
+  assert.equal([...`${app}\n${review}`.matchAll(/<button[^>]*data-nav-trigger[^>]*>/g)].length, 1, 'the full source has one trigger template');
+  const reviewHelper = /function reviewHelpers\(s\) \{([\s\S]*?)\n\}/.exec(app)?.[0] || '';
+  assert.match(reviewHelper, /menuButton: appMenuButton\(s, 'reviews'\)/);
+  assert.match(review, /\$\{h\.menuButton \|\| ''\}/);
+});
+
+test('the shared menu closes when focus leaves the primary navigation', () => {
+  assert.match(app, /\$nav\.addEventListener\('focusout', \(e\) => \{[\s\S]*?\$nav\.contains\(e\.relatedTarget\)[\s\S]*?setNavMenu\(false\)/);
 });
 
 test('the app-view bar of the Mailbox, the Chat, and the Reviews holds the three icons on a phone', () => {

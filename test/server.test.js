@@ -1163,7 +1163,7 @@ function rawRequest(base, method, route, { headers = {}, body } = {}) {
 test('the messages API validates Owner sends, refuses cross-origin and unauthenticated remote requests, and limits the rate', { timeout: 20000 }, async (t) => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
-  const { readMessages, STATUS_REQUEST_TEXT, NUDGES } = await import('../src/messages.js');
+  const { appendMessage, readMessages, STATUS_REQUEST_TEXT, NUDGES } = await import('../src/messages.js');
   const cfg = loadConfig();
   cfg.host = '127.0.0.1';
   cfg.port = 0;
@@ -1241,7 +1241,8 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   });
   assert.equal(remoteSend.status, 200, remoteSend.text);
 
-  const sent = await post({ thread: 'alpha', kind: 'message', text: '  Please continue.  ' });
+  const ownerSend = { thread: 'alpha', kind: 'message', text: '  Please continue.  ', clientId: 'owner-send-test-001' };
+  const sent = await post(ownerSend);
   assert.equal(sent.status, 200);
   const record = (await sent.json()).message;
   assert.equal(record.thread, 'alpha');
@@ -1249,6 +1250,13 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   assert.equal(record.to, 'orch');
   assert.equal(record.status, 'queued');
   assert.equal(record.text, 'Please continue.');
+  assert.equal(record.clientId, ownerSend.clientId, 'the client id stays on the stored record');
+  const duplicate = await post(ownerSend);
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).message.id, record.id, 'a repeated client id returns the stored message');
+  assert.equal(readMessages().filter((message) => message.clientId === ownerSend.clientId).length, 1);
+  const conflictingDuplicate = await post({ ...ownerSend, text: 'Different content.' });
+  assert.equal(conflictingDuplicate.status, 409, 'a repeated id cannot change the stored request');
   const nudge = await post({ thread: 'alpha', kind: 'nudge', text: NUDGES[1] });
   assert.equal((await nudge.json()).message.text, 'Use your free worker slots.');
   const statusRequest = await post({ thread: 'boss', kind: 'status-request' });
@@ -1257,18 +1265,28 @@ test('the messages API validates Owner sends, refuses cross-origin and unauthent
   assert.equal(STATUS_REQUEST_TEXT, 'Send a short status report with herdr-boss say, and publish your status file.');
   assert.equal(statusRecord.to, 'boss');
 
+  const question = appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', text: 'Which option?', action: 'answer', status: 'new' }, { dir: process.env.HERDR_BOSS_DIR });
+  const answerBody = { thread: 'alpha', kind: 'message', text: 'Option A.', replyTo: question.id, clientId: 'owner-answer-test-001' };
+  const answer = await post(answerBody);
+  assert.equal(answer.status, 200);
+  const answerRecord = (await answer.json()).message;
+  assert.ok(readMessages().find((message) => message.id === question.id).closedAt, 'the first answer closes its item');
+  const repeatedAnswer = await post(answerBody);
+  assert.equal(repeatedAnswer.status, 200, 'a retry still succeeds after the first response closed the item');
+  assert.equal((await repeatedAnswer.json()).message.id, answerRecord.id);
+
   const thread = await fetch(`${base}/api/messages?thread=alpha`);
   assert.equal(thread.status, 200);
-  assert.deepEqual((await thread.json()).map((m) => m.text), ['Please continue.', 'Use your free worker slots.'], 'newest last');
+  assert.deepEqual((await thread.json()).map((m) => m.text), ['Please continue.', 'Use your free worker slots.', 'Which option?', 'Option A.'], 'newest last');
   assert.equal((await fetch(`${base}/api/messages?thread=Bad Thread`)).status, 400);
   assert.equal((await fetch(`${base}/api/messages`)).status, 400);
 
-  // Four sends so far. The rate limit allows 10 in a minute across all threads.
-  for (let i = 0; i < 6; i += 1) assert.equal((await post({ thread: i % 2 ? 'boss' : 'alpha', kind: 'message', text: `Send ${i}.` })).status, 200);
+  // Five sends so far. The rate limit allows 10 in a minute across all threads.
+  for (let i = 0; i < 5; i += 1) assert.equal((await post({ thread: i % 2 ? 'boss' : 'alpha', kind: 'message', text: `Send ${i}.` })).status, 200);
   const limited = await post({ thread: 'boss', kind: 'message', text: 'One too many.' });
   assert.equal(limited.status, 429);
   assert.match((await limited.json()).error, /10/);
-  assert.equal(readMessages().length, 10);
+  assert.equal(readMessages().length, 11, 'the stored Agent item is not an Owner send');
 });
 
 test('chat routes list writable threads, page messages, and mark Owner messages read', { timeout: 20000 }, async (t) => {
@@ -2254,7 +2272,7 @@ test('Allocation manages config pools and documents the safe limits', () => {
   assert.match(guide, /The read-only preview refuses pool changes\./);
 });
 
-test('the Chat page has a route, a menu position, a composer key rule, a before page, and a message event handler', () => {
+test('the Chat page has a route, a menu position, a composer key rule, a before page, and short refreshes', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
@@ -2279,14 +2297,14 @@ test('the Chat page has a route, a menu position, a composer key rule, a before 
   assert.match(app, /const before = oldest \? `&before=\$\{encodeURIComponent\(oldest\.id\)\}` : '';/);
   assert.match(app, /if \(scroller\.scrollTop < 32 && chat\.more && !chat\.moreLoading\) loadChatOlder\(\);/);
   assert.match(app, /chat\.keepScroll = \{ top: scroller\.scrollTop, height: scroller\.scrollHeight \};/);
-  // The app passes message events from the client store to Chat.
-  assert.match(app, /clientStore\.subscribeEvent\('message', onChatMessage\)/);
-  assert.match(app, /function onChatMessage\(event\)/);
-  assert.match(app, /chat\.unseen \+= 1;/);
+  // The app polls the list and the open thread while Chat is active.
+  assert.match(app, /clientStore\.subscribe\('chats'/);
+  assert.match(app, /chatReads: \{ intervalMs: 1000, run: refreshChatThread \}/);
+  assert.match(app, /function refreshChatThread\(\)/);
   assert.match(app, /data-chat-jump/);
   // Opening a chat marks it read. A send is the only write path, and a refused send offers a retry.
   assert.match(app, /fetch\(`\/api\/chats\/\$\{encodeURIComponent\(thread\)\}\/read`, \{ method: 'POST' \}\)/);
-  assert.match(app, /postJson\('\/api\/messages', \{ thread, kind: 'message', text, \.\.\.\(attached\.ids\.length \? \{ attachments: attached\.ids \} : \{\}\) \}\);/);
+  assert.match(app, /postJson\('\/api\/messages', \{ thread, kind: 'message', text, clientId: pending\.clientId, \.\.\.\(attached\.ids\.length \? \{ attachments: attached\.ids \} : \{\}\) \}\);/);
   assert.match(app, /data-chat-retry/);
   assert.match(css, /\.chat-layout\b/);
   assert.match(css, /\.chat-bubble\.from-owner\b/);
@@ -2324,7 +2342,7 @@ test('the Chat page shows the Mailbox action cards, uses the Mailbox write route
   assert.match(app, /const start = lines\.findIndex\(\(line\) => \/\^#\{1,6\}/);
   // One write path. The card sends the same request the Mailbox sends, with replyTo set to the item.
   assert.match(app, /async function chatSendAction\(record, text\)/);
-  assert.match(app, /await postJson\('\/api\/messages', \{ thread: record\.thread, kind: 'message', text, replyTo: record\.id \}\);/);
+  assert.match(app, /await postJson\('\/api\/messages', \{ thread: record\.thread, kind: 'message', text, replyTo: record\.id, clientId: ownerClientId\(\) \}\);/);
   assert.match(app, /chat\.results\[record\.id\] = `\$\{chatResultLabel\(text\)\} \$\{clock\(new Date\(\)\.toISOString\(\)\)\}`;/);
   assert.match(app, /await loadChatThread\(record\.thread\);/);
   // The log is a live region, and every bubble has a name with the sender, the time, the text, and the state.
@@ -2368,7 +2386,7 @@ test('the top bar shows three icons with a count, and a faded icon when it has n
   // The counts come from the state. An empty icon is faded and has no badge.
   assert.match(app, /chat: s\?\.mailbox\?\.chatUnread \?\? 0,/);
   assert.match(app, /mail: s\?\.mailbox\?\.mailUnread \?\? 0,/);
-  assert.match(app, /'needs-action': s\?\.mailbox\?\.needsAction \?\? s\?\.mailbox\?\.open \?\? 0,/);
+  assert.match(app, /'needs-action': mailboxActionCount\(s\),/);
   assert.match(app, /icon\.dataset\.empty = count \? 'false' : 'true';/);
   assert.match(app, /icon\.setAttribute\('aria-label', count \? TOP_ICON_COUNT_LABEL\[name\]\(count\) : TOP_ICON_NAMES\[name\]\);/);
   assert.match(app, /badge\.hidden = !count;/);
