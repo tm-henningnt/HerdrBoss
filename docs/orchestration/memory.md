@@ -905,6 +905,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - 2026-10-10: The Owner accepted the SC1 extension template plan and estimates (pack sc1-extension-template-plan v1). The knowledge base guides (step 3) may start; the scaffold build (step 4) waits for the Owner's accept of the TY1 layout. No worker starts while the 5-minute load is above 30. Guides follow the guide list and sizes in the pack inventory.
 - 2026-10-10: Claude lane (Boss): 80 percent of the weekly window against 51 percent expected; the stop line is 85 percent. Start no Claude worker unless it is a Haiku bounded check or a final judge. Use Codex or free models for all else. My review subagents use Haiku only from now on; a diff review that needs more goes to a read-only Codex worker (gpt-6.1-sol) within the cap of 2 Codex workers per project.
 
+- 2026-10-10: NL1 accepted (Owner, card m-mv1lnzhi-99e340bf, through the Boss): a lock class `network` for runs that wait on a remote service and use almost no CPU. It has its own cap of 2 and does not take the CPU suite slot. A project declares a command as network-bound in its project config, and the lock uses the `network` class for that command only. Start as one Codex bundle, ticket NL1, before the rest of G3. The first declared command is TmProcessMining `verify:cloud`; the project declares it in its own config (another project's repository: the Boss relays the request).
+
 ## State 2026-10-10 (orchestrator handover)
 
 - **Main:** `c32e105` plus this commit, pushed and live (suite clean; kit revision `0d76ed813630`). Released since r41: r42 DA1-C (`release add-asset`, `release apply-asset`); r43 batch: K61 (Codex hook dialog detection), MD1 trial models, BT1, WB1, AP1 (approval rule, `herdr-boss proposal check`), DA1-A/B (`requireDemoApp`), DA1-D, DISK1.
@@ -954,4 +956,4 @@ Owner queue (credentials, billing, and Owner-applied settings):
 ## Release checkpoint r48
 
 - Reviewed branches: `gui3` 032236d and `gui4` (GUI-FIX1 round 2): the Allocation lead goal and Boss rules are growing textareas; the Settings card row spans the full width at 1600 px and above; the usage source text has its own row; the agent app selects fill the row with an ellipsis and a visible arrow. Evidence: 1,196 focused tests passed; isolated preview at a 393 px viewport and at 1920 and 2560 px; a second rendered check found the fixed 79 px textarea and the clipped select, and round 2 fixed both.
-- State: integrated only. Suite, ff-only, restart and push are pending.
+- Released: `main` fd9b68b (adds a dvh fallback for the textarea max-height after the first r48 suite failed `test/phone-layout.test.js`). Full suite exit 0, reuse, service restarted, `/api/state` 200, pushed. Open: TR1/TY1 pack fix round (`tr1fix`), then the second judge pass; SC1 scaffold waits for the TY1 layout accept; PL1 after TR1; NL1 waits for the Owner; live Mailbox update has unit evidence only.
