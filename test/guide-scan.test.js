@@ -52,20 +52,16 @@ test('the knowledge base guides hold no GUID, tenant host, token or home path', 
         const file = path.join(current, entry.name);
         if (entry.isDirectory()) {
           visit(file);
-        } else if (entry.isFile()) {
-          try {
-            new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file));
-            textFiles.push(file);
-          } catch (error) {
-            if (!(error instanceof TypeError)) throw error;
-          }
+        } else {
+          assert.ok(!entry.isSymbolicLink(), `${path.relative(repo, file)} is a symbolic link`);
+          textFiles.push(file);
         }
       }
     };
     visit(folder);
 
     for (const file of textFiles) {
-      const findings = scanGuideText(fs.readFileSync(file, 'utf8'));
+      const findings = scanGuideText(fs.readFileSync(file, 'latin1'));
       const relativeFile = path.relative(repo, file).split(path.sep).join('/');
       assert.deepEqual(findings, [], `${relativeFile} holds a ${findings.join(', ')}`);
     }
