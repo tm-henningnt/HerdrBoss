@@ -122,7 +122,7 @@ test('the page wires the worker list, the HELP text, the docs, and the phone lay
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const guide = readUserGuide();
-  assert.match(app, /import \{ orchestratorFocus, workerListHtml \} from '\.\/worker-rows\.js'/);
+  assert.match(app, /import \{ orchestratorFocus, workerListHtml, workerRows \} from '\.\/worker-rows\.js'/);
   assert.match(app, /workerListHtml\(s, \{ \.\.\.workerUi, now: Date\.now\(\) \}/);
   assert.match(app, /\/api\/worker-brief\?project=/);
   assert.match(app, /<b>Doing now<\/b> column/);
