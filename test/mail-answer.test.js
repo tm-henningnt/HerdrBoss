@@ -311,11 +311,13 @@ test('the Mailbox thread view renders the question, the answer, the time, and th
   assert.ok(answered.includes(`delivered ${api.clock(answer.sentAt)} · replied ${api.clock(answer.repliedAt)}`), 'the delivery state');
 });
 
-test('the Chat page ignores a live Owner answer that the server flagged, and reads an answer that the server attached', () => {
-  assert.match(fn('onChatMessage(event)'), /isMailAnswerRecord\(record\)/);
-  assert.match(fn('chatAnswerTo(record)'), /record\.answer/);
-  assert.match(app, /const isMailAnswerRecord = \(record\) => record\.mailAnswer === true;/);
-  const flag = new Function('record', `${/const isMailAnswerRecord = (.*);/.exec(app)[1].replace(/^\(record\) => /, 'return ')}`);
-  assert.equal(flag({ from: 'owner', replyTo: 'm-1', mailAnswer: true }), true);
-  assert.equal(flag({ from: 'owner', replyTo: 'm-1' }), false, 'a reply to a plain chat reply has no flag');
+test('the polling Chat thread reads server-filtered records and their attached answers', () => {
+  const pollerAt = app.indexOf('async function loadChatThread(');
+  assert.ok(pollerAt >= 0, 'the Chat page defines its polling reader');
+  const pollerEnd = app.indexOf('\nasync function refreshChatThread()', pollerAt);
+  const poller = app.slice(pollerAt, pollerEnd);
+  assert.match(poller, /fetch\(`\/api\/chats\/\$\{encodeURIComponent\(thread\)\}/, 'the reader uses the filtered Chat API');
+  assert.match(poller, /limit=\$\{CHAT_PAGE_LIMIT\}\$\{before\}/, 'the reader keeps the current page and cursor');
+  const answer = { id: 'm-a', text: 'Choice: SQLite', at: iso(3) };
+  assert.deepEqual(load(['chatAnswerTo']).chatAnswerTo({ answer }), answer, 'the bubble reads the answer attached by the polling API');
 });
