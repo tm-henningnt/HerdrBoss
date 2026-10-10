@@ -26,7 +26,7 @@ test('the kit, orchestrator skill, user guide, and CLI describe the Owner approv
     'a new feature',
     'a new test program',
     'a release outside an Owner request',
-    'one Mailbox decision card',
+    'one To do decide item',
     'what, why, cost, and recommendation',
     "The Boss's yes does not replace the Owner's yes.",
   ];

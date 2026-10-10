@@ -971,7 +971,7 @@ herdr-boss proposal check proposal.md
 herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."
 ```
 
-The proposal check reports missing headings, cost fields, or choices. The `tell` command sends the Boss the file path and the `decide` card type. The Boss posts the file with `herdr-boss mail post --to owner --action decide FILE` as one Mailbox decision card. The card states what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
+The proposal check reports missing headings, cost fields, or choices. The `tell` command sends the Boss the file path and the `decide` card type. The Boss puts the file in a To do decide file and posts it with `herdr-boss todo post FILE` as one To do decide item. The item states what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
 
 The command output names the destination. For example, `say` prints `Message ID sent in chat.` An action prints `Message ID posted as a Mailbox item (decide).` A reply to an item prints `Message ID sent as an answer to ID.` `mail post` names the Mailbox item. `mail close` names the Mailbox. `messages relay` names the chat message.
 

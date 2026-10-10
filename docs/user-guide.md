@@ -81,7 +81,7 @@ Approved work includes a backlog task, an Owner goal, a fix for a finding of app
 
 A subagent read or survey inside approved work is allowed. Get the Owner's yes before a survey, review, or audit that is itself new work outside those categories. Get the Owner's yes before a refactor, a new feature, a new test program, or a release outside an Owner request.
 
-Each proposal uses one Mailbox decision card. The card states what, why, cost, and recommendation. Select **Accept** or **Deny** to decide. The Boss's yes does not replace the Owner's yes. See [Owner messages](cli.md#owner-messages) for the command.
+Each proposal uses one To do decide item. The item states what, why, cost, and recommendation. Select **Accept** or **Deny** to decide. The Boss's yes does not replace the Owner's yes. See [Owner messages](cli.md#owner-messages) for the command.
 
 ## Sign in to a site with a project browser
 
