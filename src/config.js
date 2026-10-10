@@ -184,6 +184,11 @@ const DEFAULTS = {
   // codexbar provider -> herdr agent kinds that consume it.
   providerKinds: { claude: ['claude'], codex: ['codex'], opencodego: ['opencode', 'pi'] },
   orchestratorLabel: 'orch',
+  register: {
+    cap: 3,
+    capCountsPinned: false,
+    triage: { enabled: false, label: 'ready-for-agent', pollMinutes: 30 },
+  },
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
   // Only these repositories can use release request or release publish. The Owner must approve each request in the Mailbox.
   // Each entry has a GitHub name (OWNER/REPO), a project slug, and a release kind.
@@ -241,6 +246,11 @@ const SERVICE_SETTINGS = [
   ['Service', 'log.keepFiles'],
   ['Service', 'factories.claudeUsageHelper'],
   ['Analytics', 'analytics.actionsMinutes'],
+  ['Project register', 'register.cap'],
+  ['Project register', 'register.capCountsPinned'],
+  ['Project register', 'register.triage.enabled'],
+  ['Project register', 'register.triage.label'],
+  ['Project register', 'register.triage.pollMinutes'],
 ];
 
 const POOL_KEYS = new Set(['name', 'items', 'range', 'split', 'env', 'ttlMinutes', 'check', 'graceMinutes', 'idleMinutes', 'waitSeconds', 'portEnv']);
@@ -458,6 +468,8 @@ const SERVICE_SETTING_RANGES = new Map([
   ['workers.paneCloseDelayMinutes', [0, 60]],
   ['workers.uncollectedNoticeMinutes', [1, 1440]],
   ['workers.leaseGraceMinutes', [1, 1440]],
+  ['register.cap', [1, 20]],
+  ['register.triage.pollMinutes', [5, 1440]],
   ['watch.maxWorkers', [1, 40]],
   ['watch.maxWorkersByLane', [1, 40]],
   ['browsers.staleOwnedMinutes', [5, 1440]],
@@ -475,7 +487,7 @@ const SERVICE_SETTING_DECIMALS = new Map([
   ['quotaPlan.holdMargin', [0, 50]],
   ['quotaPlan.slowFactor', [0.1, 1]],
 ]);
-const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode', 'quota.opencodeGoResetAt']);
+const SERVICE_SETTING_TEXT = new Set(['quotaPlan.horizon', 'quotaPlan.planMode', 'quota.opencodeGoResetAt', 'register.triage.label']);
 export const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/;
 const SERVICE_SETTING_BOOLEANS = new Set([
   'browsers.reapOrphanDaemons',
@@ -488,6 +500,8 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'browser.showTenantHosts',
   'worktrees.pruneAtCollect',
   'workers.autoCloseReview',
+  'register.capCountsPinned',
+  'register.triage.enabled',
 ]);
 const MAX_ALLOWED_HOSTS = 50;
 // One lower-case DNS label, or a list of labels. A pattern is a name or `*.` and a name. It has no port, user, or path.
@@ -627,6 +641,10 @@ function validateServiceSettingValues(changes) {
         && (typeof value !== 'string' || !ISO_TIME.test(value) || !Number.isFinite(Date.parse(value)))) {
         throw new Error('quota.opencodeGoResetAt must be blank or an ISO time.');
       }
+      if (setting === 'register.triage.label'
+        && (typeof value !== 'string' || value.trim() !== value || value.length < 1 || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value))) {
+        throw new Error('register.triage.label must be 1 to 100 characters without control characters.');
+      }
       normalizedChanges[setting] = value;
     } else if (SERVICE_SETTING_BOOLEANS.has(setting)) {
       if (typeof value !== 'boolean') throw new Error(`${setting} must be true or false.`);
@@ -705,6 +723,15 @@ export function loadConfig() {
   try { user = migrateLegacyWatchKeys(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
   const cfg = merge(DEFAULTS, user);
   Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
+  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
+    const parts = setting.split('.');
+    const value = parts.reduce((current, key) => current?.[key], cfg);
+    try { validateServiceSettingValues({ [setting]: value }); }
+    catch {
+      process.stderr.write(`herdr-boss: config.json ${setting} is invalid. Using the default.\n`);
+      setServiceSetting(cfg, setting, parts.reduce((current, key) => current[key], DEFAULTS));
+    }
+  }
   if (!cfg.quotaPlan || typeof cfg.quotaPlan !== 'object' || Array.isArray(cfg.quotaPlan)) cfg.quotaPlan = { ...DEFAULTS.quotaPlan };
   for (const setting of Object.keys(DEFAULTS.quotaPlan)) {
     const value = cfg.quotaPlan?.[setting];

@@ -18,7 +18,7 @@ export const ELSEWHERE_LABEL = 'Close as answered elsewhere';
 // The button that closes an open item that the Owner answered in another place. It has the same route and the same look on every surface.
 export function mailElsewhereButtonHtml(item, { esc, busy = false, icon = null, className = '' }) {
   // A review item closes when the Owner submits the review.
-  if (item.kind === 'review') return '';
+  if (item.kind === 'review' || item.triage?.type === 'project-open') return '';
   const id = esc(item.id);
   const off = busy ? ' disabled' : '';
   if (icon) return `<button type="button" class="app-icon-button mail-bar-icon ${className}" data-mail-elsewhere="${id}" aria-label="${ELSEWHERE_LABEL}" title="${ELSEWHERE_LABEL}"${off}>${icon('check')}</button>`;
@@ -27,7 +27,7 @@ export function mailElsewhereButtonHtml(item, { esc, busy = false, icon = null, 
 
 // The suggestion after the Owner wrote on the thread. Keep open stores the dismissal on the item.
 export function mailSuggestionHtml(item, { esc, busy = false }) {
-  if (!item || !item.closeSuggestion || item.closedAt) return '';
+  if (!item || item.triage?.type === 'project-open' || !item.closeSuggestion || item.closedAt) return '';
   const id = esc(item.id);
   const off = busy ? ' disabled' : '';
   return `<div class="mail-suggest" role="group" aria-label="Close this item?" data-key="mail-suggest:${id}"><p class="mail-suggest-text">Close this item?</p>`
@@ -39,6 +39,12 @@ export function mailActionBarHtml(item, helpers) {
   const { esc, icon, busy = false, draft = '', status = '', noteOpen = false, attachments = [], attachmentNotice = '' } = helpers;
   const id = esc(item.id);
   const off = busy ? ' disabled' : '';
+  if (item.triage?.type === 'project-open') {
+    return `<div class="mail-action-bar mail-triage-actions" data-key="mail-bar:${id}" role="group" aria-label="Project opening decision">`
+      + `<div class="mail-bar-row"><button type="button" class="mail-bar-primary" data-triage-item="${id}" data-triage-decision="accept"${off}>Accept</button>`
+      + `<button type="button" class="mail-decline" data-triage-item="${id}" data-triage-decision="deny"${off}>Deny</button></div>`
+      + `<p class="mail-status" role="status">${esc(status)}</p></div>`;
+  }
   const attachContext = `mail-item:${item.id}`;
   const attach = attachmentPickerHtml(attachContext, icon, esc, { disabled: busy });
   const strip = attachmentStripHtml(attachContext, attachments, esc, attachmentNotice);
@@ -75,6 +81,6 @@ export function mailSelectionBarHtml({ selected, total, busy = false, esc, icon 
   return `<div class="mail-action-bar mail-select-bar" data-key="mail-select-bar" role="region" aria-label="Selection">`
     + `<div class="mail-bar-row"><button type="button" class="app-icon-button mail-bar-icon" data-mail-select-clear aria-label="Clear the selection">${icon('close')}</button>`
     + `<span class="mail-select-count" aria-live="polite"><span class="num">${esc(String(selected))}</span> selected</span>`
-    + `<label class="mail-bar-all"><input type="checkbox" data-mail-select-all aria-label="Select all Needs-you items"${all ? ' checked' : ''}><span aria-hidden="true">All</span></label>`
+    + `<label class="mail-bar-all"><input type="checkbox" data-mail-select-all aria-label="Select all dismissible Needs-you items"${all ? ' checked' : ''}><span aria-hidden="true">All</span></label>`
     + `<button type="button" class="mail-bar-primary" data-mail-dismiss-selected${busy ? ' disabled' : ''}>Dismiss ${esc(String(selected))}</button></div></div>`;
 }

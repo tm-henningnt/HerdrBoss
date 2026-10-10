@@ -156,6 +156,40 @@ test('GitHub Actions minutes is an on-by-default boolean service setting', (t) =
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).analytics, { actionsMinutes: false });
 });
 
+test('project register settings expose cap and safe triage defaults with bounded values', (t) => {
+  const defaults = serviceSettingsView({});
+  const expected = {
+    'register.cap': 3,
+    'register.capCountsPinned': false,
+    'register.triage.enabled': false,
+    'register.triage.label': 'ready-for-agent',
+    'register.triage.pollMinutes': 30,
+  };
+  for (const [setting, value] of Object.entries(expected)) {
+    assert.deepEqual(defaults.find((item) => item.setting === setting), {
+      group: 'Project register', setting, value, source: 'default',
+    });
+  }
+  for (const [setting, value] of [
+    ['register.cap', 1], ['register.cap', 20],
+    ['register.capCountsPinned', true], ['register.capCountsPinned', false],
+    ['register.triage.enabled', true], ['register.triage.enabled', false],
+    ['register.triage.label', 'ready-for-agent'],
+    ['register.triage.pollMinutes', 5], ['register.triage.pollMinutes', 1440],
+  ]) assertSetting(t, setting, value);
+  for (const [setting, value] of [
+    ['register.cap', 0], ['register.cap', 21], ['register.cap', 3.5],
+    ['register.capCountsPinned', 'false'], ['register.triage.enabled', 1],
+    ['register.triage.label', ''], ['register.triage.label', ' ready '], ['register.triage.label', 'bad\nlabel'],
+    ['register.triage.pollMinutes', 4], ['register.triage.pollMinutes', 1441],
+  ]) assertRejectedSetting(t, setting, value);
+  const dataDir = configDir(t);
+  writeServiceSettings({ 'register.triage.enabled': true, 'register.triage.label': 'ready-for-agent' }, { dataDir });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')).register.triage, {
+    enabled: true, label: 'ready-for-agent',
+  });
+});
+
 test('service settings update only selected keys, retain key order, and keep the config file mode', (t) => {
   const initial = {
     before: { first: 'keep', second: 3 },

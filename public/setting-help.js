@@ -108,6 +108,13 @@ export const SETTING_GROUPS = [
     restart: 'No restart. Select Save in the group.',
   },
   {
+    id: 'project-register', title: 'Project register', advanced: true,
+    controls: 'The open project cap and GitHub issue triage for the local project register.',
+    affects: 'The Projects page and project lifecycle. Triage reads issues with the selected label and asks before it opens a parked project.',
+    safe: 'Triage starts off. Turn it on only when the register has repository sources for projects on this factory.',
+    restart: 'No restart. Select Save in the group.',
+  },
+  {
     id: 'readiness', title: 'Agent app readiness', advanced: true,
     controls: 'A read-only table that shows if each agent app entry that orchestration needs is present. A project switch controls Codex access to each registered project\'s common Git directory.',
     affects: 'The table only reports. The switch changes Codex writable roots and the Git pin checks that push and suite use.',
@@ -992,6 +999,43 @@ export const SETTING_HELP = Object.fromEntries([
     default: 'On', unit: 'Switch', range: 'On or off',
     raise: 'The service uses its GitHub token. It skips repositories that the token cannot read.',
     lower: 'Turn it off to stop GitHub API calls. The Analytics page hides the card.',
+    apply: 'service',
+  }),
+
+  // Project register
+  S('project-register', 'register.cap', 'Open project cap', {
+    what: 'Limits the number of open projects. The open button refuses a new project when the cap is full.',
+    default: '3', unit: 'Projects', range: '1 to 20',
+    raise: 'A higher cap lets more projects stay open at once.',
+    lower: 'A lower cap keeps the Projects page smaller.',
+    apply: 'service',
+  }),
+  S('project-register', 'register.capCountsPinned', 'Pinned projects count toward cap', {
+    what: 'Counts pinned projects when the service checks the open project cap.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on uses a cap slot for each pinned project.',
+    lower: 'Turning it off keeps pinned projects outside the cap.',
+    apply: 'service',
+  }),
+  S('project-register', 'register.triage.enabled', 'Auto-open from triage', {
+    what: 'Lets the service read ready issues for parked projects and create Mailbox proposals to open them.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turning it on lets GitHub issues create one Mailbox proposal when an open slot is free.',
+    lower: 'Turning it off stops issue reads and new proposals. Existing Mailbox items stay available.',
+    apply: 'service',
+  }),
+  S('project-register', 'register.triage.label', 'Triage label', {
+    what: 'The default GitHub issue label for project sources without a label override.',
+    default: 'ready-for-agent', unit: 'GitHub label', range: '1 to 100 characters without control characters',
+    raise: 'Use the label that the Owner applies to ready issues. A project can set its own label.',
+    lower: 'Changing this label affects only project sources that use the default.',
+    apply: 'service',
+  }),
+  S('project-register', 'register.triage.pollMinutes', 'Triage poll minutes', {
+    what: 'The time between reads of GitHub issues for parked projects.',
+    default: '30', unit: 'Minutes', range: '5 to 1440',
+    raise: 'A higher value reads GitHub less often.',
+    lower: 'A lower value finds ready issues sooner and makes more GitHub calls.',
     apply: 'service',
   }),
 

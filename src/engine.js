@@ -54,6 +54,7 @@ import { inspectLockWatchdog } from './lock-watchdog.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
 import { deriveTickReadings } from './engine-tick.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
+import { createProjectRegisterTriage } from './project-register-triage.js';
 import { ACTION_REFRESH_MS, capFinished, cleanScreen, maskText, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
@@ -579,7 +580,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, projectRegisterTriageRunner = null, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
     super();
     initializeLifecyclePort();
     this.cfg = cfg;
@@ -688,6 +689,22 @@ export class Engine extends EventEmitter {
     this.actionsMinutesRun = actionsMinutesRun;
     this.actionsMinutesRunning = false;
     this.actionsMinutesAt = null;
+    this.projectRegisterTriageAt = null;
+    this.projectRegisterTriageRunning = false;
+    this.projectRegisterTriageTask = null;
+    this.projectRegisterTriage = projectRegisterTriageRunner ?? createProjectRegisterTriage({
+      dataDir: DATA_DIR,
+      now: () => this.clock(),
+      runLifecycle: async (action, args) => {
+        const { projectLifecycleCommand } = await import('./project-lifecycle.js');
+        return projectLifecycleCommand(action, args, {
+          env: {}, herdr: (herdrArgs, options) => this.herdrRunner('herdr', herdrArgs, options), dataDir: DATA_DIR,
+          registerSettings: { cap: this.cfg.register?.cap, capCountsPinned: this.cfg.register?.capCountsPinned ?? false },
+          auditBy: 'auto-open',
+          log: () => {},
+        });
+      },
+    });
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
     this.lockLedgerReader = lockLedgerReader;
@@ -1658,6 +1675,7 @@ export class Engine extends EventEmitter {
       }
       await this.deliverNightReports(snap, now);
       if (this.act && this.push) await this.deliverWatchRoutines(herdr, now);
+      this.scheduleProjectRegisterTriage(now);
       snap.watchRoutines = effectiveRoutines({ dataDir: DATA_DIR, kitRoot: this.kitRoot });
       snap.night = readNight({ dataDir: DATA_DIR, now });
       snap.events = this.events.slice(-60);
@@ -1690,6 +1708,26 @@ export class Engine extends EventEmitter {
     } finally {
       this.running = false;
     }
+  }
+
+  scheduleProjectRegisterTriage(now) {
+    const settings = this.cfg.register?.triage;
+    if (!this.act || settings?.enabled !== true) {
+      this.projectRegisterTriageAt = null;
+      return null;
+    }
+    const interval = (Number.isSafeInteger(settings.pollMinutes) ? settings.pollMinutes : 30) * 60 * 1000;
+    if (this.projectRegisterTriageRunning || (this.projectRegisterTriageAt !== null && now - this.projectRegisterTriageAt < interval)) return null;
+    this.projectRegisterTriageAt = now;
+    this.projectRegisterTriageRunning = true;
+    this.projectRegisterTriageTask = Promise.resolve().then(() => this.projectRegisterTriage.poll({
+      settings,
+      cap: this.cfg.register?.cap ?? 3,
+      capCountsPinned: this.cfg.register?.capCountsPinned === true,
+    })).catch(() => {
+      this.log('error', 'Project register triage poll failed.');
+    }).finally(() => { this.projectRegisterTriageRunning = false; });
+    return this.projectRegisterTriageTask;
   }
 
   // GitHub calls run in the background. The service tick never waits for them.

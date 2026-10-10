@@ -641,7 +641,10 @@ async function main() {
     }
     const { projectCommand } = await import('./project-new-cli.js');
     const { createHerdrRunner } = await import('./kit/workers.js');
-    const code = await projectCommand(args, { env: process.env, herdr: createHerdrRunner() });
+    const lifecycleOptions = ['open', 'park', 'archive', 'unarchive'].includes(args[0])
+      ? { registerSettings: loadConfig().register }
+      : {};
+    const code = await projectCommand(args, { env: process.env, herdr: createHerdrRunner(), lifecycleOptions });
     if (code) process.exitCode = code;
     return;
   }

@@ -548,7 +548,7 @@ Run these commands from an Owner terminal or the pane labeled `boss`. A pane lab
 | `--reason TEXT` | Required with `--force`. Give 1 to 300 characters. |
 | `--dry-run` | Print every check and step. Change no state, take no lock, and write no audit line. |
 
-An archived project must be unarchived before it can open. A project with an active transfer is refused. The default cap is 3 open projects. Pinned open projects count toward the cap. Settings for the cap and pinned count will be available in a later slice. A forced open writes to `action-audit.jsonl` only when it bypasses the cap. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
+An archived project must be unarchived before it can open. A project with an active transfer is refused. The default cap is 3 open projects. Pinned open projects do not count toward the cap. Set the cap and pinned-project rule in **Settings → Project register**. A forced open writes to `action-audit.jsonl` only when it bypasses the cap. The `--start` flag starts the project lead. Without it, the command skips the workspace start.
 
 `project park <slug>` changes an open project to parked after all checks pass. It checks workers, input prompts, Git state, locks and leases, published status, project memory, and blocking Owner mailbox items. It refuses a workspace that contains an unrecognized pane. It checks the pane list again just before it closes the saved Herdr workspace by its ID. It closes the workspace before it releases the browser reservation. It never closes a browser. It keeps the repository, status, policy, Mailbox items, review packs, and data files. It clears the pin when park finishes.
 
@@ -739,22 +739,24 @@ Run `project unregister <slug>` to remove one project from the registry. The com
 
 ## Project register
 
-The project register lists every project of this factory. Herdr Boss stores the register in the file `project-register.json` in the data folder. The file has mode 0600. The register never lands in a Git repository. Each record holds the 16 fields `slug`, `title`, `group`, `repo`, `remote`, `factory`, `state`, `pinned`, `priority`, `issueSource`, `autoOpen`, `lastOpenedAt`, `lastActivityAt`, `nextAction`, `notes`, and `createdAt`.
+The project register lists every project of this factory. Herdr Boss stores the register in the file `project-register.json` in the data folder. The file has mode 0600. The register never lands in a Git repository. Each record holds the 17 fields `slug`, `title`, `group`, `clientTag`, `repo`, `remote`, `factory`, `state`, `pinned`, `priority`, `issueSource`, `autoOpen`, `lastOpenedAt`, `lastActivityAt`, `nextAction`, `notes`, and `createdAt`. Use `group` for an area and `clientTag` for the client label.
 
 | `herdr-boss` command | Effect |
 | --- | --- |
 | `project register list [--state STATE] [--group NAME] [--json]` | Print the records sorted by slug. `--state` takes `open`, `parked`, or `archived`. Only this subcommand accepts `--json`. |
-| `project register add SLUG [FIELD ...] [--dry-run]` | Add one record. The record starts in the state `parked` with the factory of this data folder. |
-| `project register edit SLUG [FIELD ...] [--dry-run]` | Change Owner fields of one record. The command prints the changed field names, never the values. State changes belong to a later slice. |
+| `project register add SLUG [FIELD ...] [--dry-run]` | Add one record. Use `--group AREA` and `--client-tag TEXT` to group by area and show a client tag. A GitHub `--remote` sets the issue source by default. Add `--issue-repo OWNER/REPO` to set another issue source. Add `--issue-label LABEL` with a GitHub `--remote` or `--issue-repo` to override the default triage label. Add `--auto-open on` only when automatic opening is intended. The record starts parked in this data folder's factory. |
+| `project register edit SLUG [FIELD ...] [--dry-run]` | Change Owner fields of one record. Use `--group AREA` and `--client-tag TEXT` to set its area and client tag. Add `--issue-repo OWNER/REPO` to set an issue source. Add `--issue-label LABEL` to set or change the label for the existing issue source, or use `--issue-clear` to remove the source. Add `--auto-open on` only when automatic opening is intended. The command prints changed field names, never values. |
 | `project register sync [--dry-run]` | Copy the repo and the remote from `project-repos.json` into the matching record. |
 | `project register import [--dry-run]` | Add a record for each source that the register does not hold yet. |
 | `project scan DIR [--depth N] [--add] [--dry-run]` | List repositories and propose records. `--add` registers new records. |
 
-Run `herdr-boss project register add acme-web --title "Acme Web" --repo /path/to/repo --remote owner/repo` to add one project. Run `herdr-boss project register edit acme-web --group web --pinned on` to change fields. Run `herdr-boss project register list --state open` to list the open projects. A bare `herdr-boss project register` prints the usage of every subcommand.
+Run `herdr-boss project register add pine-api --title "Pine API" --group platform --client-tag "Example Client"` to add one project. Run `herdr-boss project register edit pine-api --group web --client-tag "Sample Studio"` to change its area and client tag. Run `herdr-boss project register list --state open` to list the open projects. A bare `herdr-boss project register` prints the usage of every subcommand.
 
 Each `project register` subcommand runs a caller check before it reads an option. A plain terminal is the Owner and passes the check. A Herdr pane must carry the label `boss` or `orch`. A worker pane is refused, and the refusal tells the worker to ask its project lead. `project scan` writes nothing, so it runs from every pane.
 
 Every subcommand that writes the register accepts `--dry-run`. A dry run prints the same result lines as the real run. It writes no register file and no audit line. A refused command prints a reason and writes nothing. A refusal names the class of a value that matches the secret scan, never the value itself. A remote must be `owner/name` or a URL without credentials, a query string, or a fragment. An SSH remote may have a user name without a password.
+
+The **Project register** settings control the open project cap and issue triage. The cap starts at three and does not count pinned projects. Triage starts off. When enabled, it checks the default label on each registered issue repository at the configured interval. A project can set its own label. A ready issue on a parked project creates a Mailbox proposal with **Accept** and **Deny** actions. Accept opens the project. Deny waits 24 hours before another proposal for that project. Set a project's `autoOpen` field to `on` only when the service may open it without Mailbox acceptance.
 
 `project register import` reads three sources: the rows of `project-repos.json`, the project keys of `policy.json`, and the published status files in the folder `projects/`. It adds one record for each slug that the register does not hold. It keeps each record that the register already holds, so a second import adds nothing and keeps the edits of the Owner. A slug that names a Herdr workspace gets the state `open`. Every other new record gets the state `parked`. When Herdr lists no workspaces, the command prints a warning on the error stream and parks every new record.
 
@@ -1475,6 +1477,21 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | GitHub Actions minutes | `analytics.actionsMinutes` | Lets the service read Actions run times for registered GitHub repositories. Minutes are estimated from run times. | On | Switch | On or off | The service uses its GitHub token. It skips repositories that the token cannot read. | Turn it off to stop GitHub API calls. The Analytics page hides the card. | Select Save in the group. The change takes effect at once. |
+
+#### Project register (Advanced)
+
+- Controls: The open project cap and GitHub issue triage for the local project register.
+- Effect: The Projects page and project lifecycle. Triage reads issues with the selected label and asks before it opens a parked project.
+- Safe to change: Triage starts off. Turn it on only when the register has repository sources for projects on this factory.
+- Restart: No restart. Select Save in the group.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Open project cap | `register.cap` | Limits the number of open projects. The open button refuses a new project when the cap is full. | 3 | Projects | 1 to 20 | A higher cap lets more projects stay open at once. | A lower cap keeps the Projects page smaller. | Select Save in the group. The change takes effect at once. |
+| Pinned projects count toward cap | `register.capCountsPinned` | Counts pinned projects when the service checks the open project cap. | Off | Switch | On or off | Turning it on uses a cap slot for each pinned project. | Turning it off keeps pinned projects outside the cap. | Select Save in the group. The change takes effect at once. |
+| Auto-open from triage | `register.triage.enabled` | Lets the service read ready issues for parked projects and create Mailbox proposals to open them. | Off | Switch | On or off | Turning it on lets GitHub issues create one Mailbox proposal when an open slot is free. | Turning it off stops issue reads and new proposals. Existing Mailbox items stay available. | Select Save in the group. The change takes effect at once. |
+| Triage label | `register.triage.label` | The default GitHub issue label for project sources without a label override. | ready-for-agent | GitHub label | 1 to 100 characters without control characters | Use the label that the Owner applies to ready issues. A project can set its own label. | Changing this label affects only project sources that use the default. | Select Save in the group. The change takes effect at once. |
+| Triage poll minutes | `register.triage.pollMinutes` | The time between reads of GitHub issues for parked projects. | 30 | Minutes | 5 to 1440 | A higher value reads GitHub less often. | A lower value finds ready issues sooner and makes more GitHub calls. | Select Save in the group. The change takes effect at once. |
 
 #### Agent app readiness (Advanced)
 

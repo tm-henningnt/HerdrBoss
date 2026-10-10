@@ -70,6 +70,18 @@ test('every service setting has an explanation', () => {
   for (const { setting } of serviceSettingsView({})) assert.ok(SETTING_HELP[setting], `${setting} has no explanation`);
 });
 
+test('project register settings explain cap and Mailbox triage behavior', () => {
+  const group = SETTING_GROUPS.find((item) => item.id === 'project-register');
+  assert.equal(group.title, 'Project register');
+  assert.match(group.controls, /open project cap.*GitHub issue triage/i);
+  assert.match(group.affects, /asks before it opens/);
+  assert.equal(SETTING_HELP['register.cap']?.default, '3');
+  assert.equal(SETTING_HELP['register.capCountsPinned']?.default, 'Off');
+  assert.equal(SETTING_HELP['register.triage.enabled']?.default, 'Off');
+  assert.equal(SETTING_HELP['register.triage.label']?.default, 'ready-for-agent');
+  assert.equal(SETTING_HELP['register.triage.pollMinutes']?.default, '30');
+});
+
 test('Codex shared Git has a schema row and one page help button', () => {
   const setting = 'projects.SLUG.codexSharedGit';
   assert.equal(SETTING_HELP[setting]?.group, 'readiness');
@@ -213,7 +225,7 @@ test('the popup and the guide come from the same text', () => {
 
 test('the Advanced group holds the rarely used groups', () => {
   const advanced = SETTING_GROUPS.filter((group) => group.advanced).map((group) => group.id);
-  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'quota-plan', 'analytics', 'readiness']);
+  assert.deepEqual(advanced, ['prices', 'avatars', 'service', 'quota-plan', 'analytics', 'project-register', 'readiness']);
   const first = SETTING_GROUPS.slice(0, 4).map((group) => group.id);
   assert.deepEqual(first, ['harnesses', 'quotas', 'machine', 'locks']);
 });

@@ -51,6 +51,13 @@ test('a release report uses the Mailbox approval controls', () => {
   assert.match(html, /data-mail-verdict="Rejected\."[^>]*>Reject<\/button>/);
 });
 
+test('a phone triage bar has typed Accept and Deny actions', () => {
+  const html = mailActionBarHtml({ id: 'm-triage-12345678', action: 'approve', triage: { type: 'project-open' } }, helpers());
+  assert.match(html, /data-triage-decision="accept"[^>]*>Accept<\/button>/);
+  assert.match(html, /data-triage-decision="deny"[^>]*>Deny<\/button>/);
+  assert.doesNotMatch(html, /<form|data-mail-verdict|data-mail-dismiss/);
+});
+
 test('the note field opens on request and stays open while it holds text', () => {
   for (const extra of [{ noteOpen: true }, { draft: 'Keep the old flag.' }]) {
     const html = mailActionBarHtml({ id: 'a1', action: 'approve' }, helpers(extra));
@@ -89,9 +96,9 @@ test('the selection bar shows the count, Clear, Select all, and Dismiss', () => 
   assert.match(html, /^<div class="mail-action-bar mail-select-bar" data-key="mail-select-bar" role="region" aria-label="Selection">/);
   assert.match(html, /data-mail-select-clear aria-label="Clear the selection"/);
   assert.match(html, /<span class="mail-select-count" aria-live="polite"><span class="num">2<\/span> selected<\/span>/);
-  assert.match(html, /<input type="checkbox" data-mail-select-all aria-label="Select all Needs-you items">/);
+  assert.match(html, /<input type="checkbox" data-mail-select-all aria-label="Select all dismissible Needs-you items">/);
   assert.match(html, /<button type="button" class="mail-bar-primary" data-mail-dismiss-selected>Dismiss 2<\/button>/);
-  assert.match(mailSelectionBarHtml({ selected: 3, total: 3, busy: true, esc, icon }), /data-mail-select-all aria-label="Select all Needs-you items" checked>[\s\S]*data-mail-dismiss-selected disabled>Dismiss 3/);
+  assert.match(mailSelectionBarHtml({ selected: 3, total: 3, busy: true, esc, icon }), /data-mail-select-all aria-label="Select all dismissible Needs-you items" checked>[\s\S]*data-mail-dismiss-selected disabled>Dismiss 3/);
 });
 
 test('a keyed refresh of the bar keeps the focused field, its text, and its caret', () => {

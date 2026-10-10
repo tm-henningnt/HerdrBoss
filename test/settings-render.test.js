@@ -227,6 +227,46 @@ test('Settings renders and saves the tenant host display switch, off by default'
   assert.throws(() => validateServiceSettings({ 'browser.showTenantHosts': 'true' }), /must be true or false/);
 });
 
+test('Settings renders the project cap and triage controls in their own group', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const html = app.settingsView(fixture());
+  assert.match(html, /data-service-setting="register\.cap" data-service-group="Project register"/);
+  assert.match(html, /data-service-setting="register\.capCountsPinned" data-service-group="Project register"/);
+  assert.match(html, /data-service-setting="register\.triage\.enabled" data-service-group="Project register"/);
+  assert.match(html, /data-service-setting="register\.triage\.label" data-service-group="Project register"/);
+  assert.match(html, /data-service-setting="register\.triage\.pollMinutes" data-service-group="Project register"/);
+  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
+    assert.equal(html.split(`data-setting-help="${setting}"`).length - 1, 1);
+  }
+  assert.match(html, /data-save-service-settings="Project register"/);
+
+  const inputs = [
+    { type: 'number', dataset: { serviceSetting: 'register.cap' }, value: '3' },
+    { type: 'checkbox', dataset: { serviceSetting: 'register.capCountsPinned' }, checked: false },
+    { type: 'checkbox', dataset: { serviceSetting: 'register.triage.enabled' }, checked: true },
+    { type: 'text', dataset: { serviceSetting: 'register.triage.label' }, value: 'ready-for-agent' },
+    { type: 'number', dataset: { serviceSetting: 'register.triage.pollMinutes' }, value: '30' },
+  ];
+  app.context.document = {
+    querySelectorAll: () => inputs,
+    querySelector: () => ({ textContent: '' }),
+  };
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ settings: [] }) };
+  };
+  await app.saveServiceSettings('Project register', { disabled: false });
+  assert.deepEqual(sent.changes, {
+    'register.cap': 3,
+    'register.capCountsPinned': false,
+    'register.triage.enabled': true,
+    'register.triage.label': 'ready-for-agent',
+    'register.triage.pollMinutes': 30,
+  });
+});
+
 test('Settings renders the Haiku pace tolerance beside the general pace tolerance', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });

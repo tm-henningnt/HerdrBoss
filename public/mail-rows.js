@@ -75,15 +75,19 @@ export function mailRowHtml(row, helpers) {
   const subject = mailSubject(item);
   // A Done row closed by the Boss shows the close note in place of the preview.
   const preview = item.closedBy === 'boss' ? `answered through the Boss: ${item.closeNote || ''}` : mailPreview(item);
-  const closedLine = item.closedBy === 'owner' ? (item.closeNote === 'review submitted' ? 'Review submitted' : 'Closed as answered elsewhere') : item.closedBy === 'project' ? 'Resolved by the project' : '';
+  const closedLine = item.triage?.type === 'project-open'
+    ? (item.triage.decision === 'accept' ? 'Project opened' : item.triage.decision === 'deny' ? 'Proposal declined' : '')
+    : item.closedBy === 'owner' ? (item.closeNote === 'review submitted' ? 'Review submitted' : 'Closed as answered elsewhere')
+      : item.closedBy === 'project' ? 'Resolved by the project' : '';
   const tag = mailTag(item);
   const unread = row.unread && item.from !== 'owner';
   const checked = row.ids.some((id) => selected.has(id));
   const open = current === row.key;
-  const select = selectable ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(row.ids.join(','))}" aria-label="Select ${esc(subject)}"${checked ? ' checked' : ''}></label>` : '';
+  const canSelect = typeof selectable === 'function' ? selectable(item) : selectable;
+  const select = canSelect ? `<label class="mail-select"><input type="checkbox" data-mail-select="${esc(row.ids.join(','))}" aria-label="Select ${esc(subject)}"${checked ? ' checked' : ''}></label>` : '';
   const extra = state ? `<span class="mail-state">${esc(state(item))}</span>` : '';
   // An open Needs-you item has the row action that closes it as answered elsewhere.
-  const elsewhere = icon && item.from !== 'owner' && item.kind !== 'review' && !item.closedAt && NEEDS_YOU.has(item.action)
+  const elsewhere = icon && item.from !== 'owner' && item.kind !== 'review' && item.triage?.type !== 'project-open' && !item.closedAt && NEEDS_YOU.has(item.action)
     ? `<button type="button" class="app-icon-button mail-row-action" data-mail-elsewhere="${esc(item.id)}" aria-label="Close as answered elsewhere" title="Close as answered elsewhere">${icon('check')}</button>`
     : '';
   return `<li class="mail-row${unread ? ' unread' : ''}${open ? ' current' : ''}" data-key="row:${esc(row.key)}">${select}<button class="mail-entry" type="button" data-mail-open data-mail-thread="${esc(item.thread)}" data-mail-conversation="${esc(item.conversationId || item.id)}" data-mail-item-id="${esc(item.id)}"${open ? ' aria-current="true"' : ''}>`

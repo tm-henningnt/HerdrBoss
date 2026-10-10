@@ -49,6 +49,17 @@ test('the mailbox holds every reply and report to the Owner, and an item without
   for (const action of ['answer', 'approve', 'decide', 'read']) assert.equal(mailboxAction(reply('alpha', 'x', { action })), action);
 });
 
+test('a project triage proposal renders typed Accept and Deny buttons in the Mailbox', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const source = /function mailActions\(item\) \{[\s\S]*?\n\}/.exec(app)?.[0];
+  assert.ok(source, 'the page defines Mailbox actions');
+  const mailActions = new Function('mailbox', 'esc', `return ${source}`)({ busy: false, status: {} }, (value) => String(value));
+  const html = mailActions({ id: 'm-sample-12345678', triage: { type: 'project-open' } });
+  assert.match(html, /data-triage-decision="accept"[^>]*>Accept<\/button>/);
+  assert.match(html, /data-triage-decision="deny"[^>]*>Deny<\/button>/);
+  assert.doesNotMatch(html, /<textarea|data-mail-form/);
+});
+
 test('the mailbox separates Needs you from Updates and counts only unopened open actions', () => {
   const noAction = reply('alpha', 'Information without an action.');
   delete noAction.action;
