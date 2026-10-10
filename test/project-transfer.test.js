@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { execFileSync } from 'node:child_process';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import test from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { createFleetGuideAccess, createFleetReadAccess } from '../src/fleet-access.js';
@@ -15,7 +17,7 @@ import { installedKitRevision, kitRevision } from '../src/kit/agents-check.js';
 import { startWorker } from '../src/kit/workers.js';
 import { recordProjectRepo } from '../src/harness.js';
 import { writeProject } from '../src/projects.js';
-import { readProjectTransferLock } from '../src/project-transfer-locks.js';
+import { createProjectTransferLock, readProjectTransferLock } from '../src/project-transfer-locks.js';
 import { createProjectTransfer, projectTransferCommand, projectTransferRoot } from '../src/project-transfer.js';
 import { serve } from '../src/server.js';
 import { FACTORY_PROJECT_GROUP } from '../src/factory-role.js';
@@ -84,7 +86,7 @@ function fakeHerdr({ workspaces = [], panes = [], agentStatus = 'working', event
   return run;
 }
 
-function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWorkers = [], dashboardUrl = DASHBOARD } = {}) {
+function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWorkers = [], dashboardUrl = DASHBOARD, sourceOptions = {}, targetOptions = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-transfer-'));
   const sourceData = path.join(root, 'source-data');
   const targetData = path.join(root, 'target-data');
@@ -124,15 +126,17 @@ function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWork
     hooks: { waitForPane: () => {}, waitForReady: () => true, readText: () => '', wait: () => {} },
     env: { ...process.env, HOME: root, HERDR_BOSS_DIR: targetData, HERDR_ENV: '1' },
     allowGitRemote: () => true,
+    ...targetOptions,
   });
   const calls = [];
   const fetchImpl = async (url, options) => {
     calls.push({ url, options });
     sequence.push('target request');
-    const body = JSON.parse(options.body);
     assert.equal(options.headers.authorization, `Bearer ${GUIDE}`);
     assert.equal(options.redirect, 'error');
-    const result = await target.handle(body);
+    const query = new URL(url).searchParams;
+    const result = options.method === 'GET'
+      ? target.jobStatus(query.get('slug'), query.get('jobId')) : await target.submit(JSON.parse(options.body));
     return new Response(JSON.stringify(result.body), { status: result.status, headers: { 'content-type': 'application/json' } });
   };
   const source = createProjectTransfer({
@@ -144,6 +148,8 @@ function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWork
     env: { ...process.env, HOME: root, HERDR_BOSS_DIR: sourceData },
     allowGitRemote: () => true,
     getRunningWorkers: () => runningWorkers,
+    pollIntervalMs: 0,
+    ...sourceOptions,
   });
   return { root, sourceData, targetData, sourcePrivate, targetPrivate, sourceRoot, targetRoot, repo, remote, herdr, sourceHerdr, source, target, calls, sequence,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
@@ -159,6 +165,243 @@ function decide(f, text) {
   assert.ok(ask, 'transfer must ask the Owner through the source Mailbox');
   appendMessage({ thread: 'boss', from: 'owner', to: 'boss', kind: 'reply', text, replyTo: ask.id, action: 'answer', status: 'new' }, { dir: f.sourceData });
 }
+
+test('a slow start polls the accepted target job until the project lead is ready', async (t) => {
+  let elapsed = 0;
+  let polls = 0;
+  let f;
+  const jobId = '00000000-0000-4000-8000-000000000021';
+  f = fixture({ sourceOptions: {
+    timeoutMs: 100, pollIntervalMs: 10, now: () => elapsed,
+    wait: async (ms) => { elapsed += ms; },
+    fetchImpl: async (url, options) => {
+      let result;
+      if (options.method === 'GET') {
+        const query = new URL(url).searchParams;
+        assert.equal(query.get('jobId'), jobId);
+        assert.equal(query.get('slug'), 'alpha');
+        polls += 1;
+        result = { status: polls < 3 ? 202 : 200, body: { ok: true, factoryId: TARGET_ID,
+          status: polls < 3 ? 'starting' : 'pending', jobId } };
+      } else if (JSON.parse(options.body).action === 'start') {
+        result = { status: 202, body: { ok: true, factoryId: TARGET_ID, status: 'starting', jobId } };
+      } else result = await f.target.handle(JSON.parse(options.body));
+      return Response.json(result.body, { status: result.status });
+    },
+  } });
+  t.after(f.cleanup);
+  const result = await command(f.source, 'start', f);
+  assert.equal(result.code, 3, result.text);
+  assert.equal(polls, 3);
+  assert.equal(elapsed, 30);
+  assert.match(result.text, /target project lead is ready/i);
+});
+
+test('a start deadline keeps the same transfer locked for retry and prints the working message', async (t) => {
+  let elapsed = 0;
+  let f;
+  const ids = [];
+  f = fixture({ sourceOptions: {
+    timeoutMs: 25, pollIntervalMs: 10, now: () => elapsed,
+    wait: async (ms) => { elapsed += ms; },
+    fetchImpl: async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (body?.action === 'plan') {
+        const result = await f.target.handle(body);
+        return Response.json(result.body, { status: result.status });
+      }
+      if (body) ids.push(body.transferId);
+      return Response.json({ ok: true, factoryId: TARGET_ID, status: 'starting', jobId: ids.at(-1) }, { status: 202 });
+    },
+  } });
+  t.after(f.cleanup);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await command(f.source, 'start', f);
+    assert.equal(result.code, 1);
+    assert.equal(result.text, 'Error: The target is still working. Run the same command again.');
+    assert.equal(readProjectTransferLock('alpha', { dataDir: f.sourceData }).transferId, ids[0]);
+  }
+  assert.equal(elapsed, 50);
+  assert.deepEqual(ids, [ids[0], ids[0]]);
+  assert.equal(f.sourceHerdr.calls.filter((args) => args[0] === 'pane' && args[1] === 'close').length, 1);
+});
+
+test('a connection failure keeps the unreachable message while a start abort reports working', async (t) => {
+  let fail = false;
+  let abort = false;
+  let f;
+  f = fixture({ sourceOptions: { fetchImpl: async (url, options) => {
+    if (fail) throw new TypeError('Connection refused');
+    const body = JSON.parse(options.body);
+    if (abort && body.action === 'start') throw new DOMException('Deadline passed', 'TimeoutError');
+    const result = await f.target.handle(body);
+    return Response.json(result.body, { status: result.status });
+  } } });
+  t.after(f.cleanup);
+  fail = true;
+  const unreachable = await command(f.source, 'plan', f);
+  assert.equal(unreachable.code, 1);
+  assert.match(unreachable.text, /target factory could not be reached/);
+  fail = false; abort = true;
+  const timedOut = await command(f.source, 'start', f);
+  assert.equal(timedOut.code, 1);
+  assert.equal(timedOut.text, 'Error: The target is still working. Run the same command again.');
+  fail = true;
+  const disconnected = await command(f.source, 'start', f);
+  assert.match(disconnected.text, /target factory could not be reached/);
+  assert.doesNotMatch(disconnected.text, /target is still working/);
+});
+
+test('start uses 300 seconds and plan, switch, and cancel use 30 seconds', async (t) => {
+  const timeouts = [];
+  const original = AbortSignal.timeout;
+  t.mock.method(AbortSignal, 'timeout', (ms) => { timeouts.push(ms); return original.call(AbortSignal, ms); });
+  const f = fixture(); t.after(f.cleanup);
+  assert.equal((await command(f.source, 'plan', f)).code, 0);
+  assert.equal((await command(f.source, 'start', f)).code, 3);
+  decide(f, 'Accept the switch');
+  assert.equal((await command(f.source, 'switch', f)).code, 0);
+  const g = fixture(); t.after(g.cleanup);
+  assert.equal((await command(g.source, 'start', g)).code, 3);
+  assert.equal((await command(g.source, 'cancel', g)).code, 0);
+  assert.deepEqual(timeouts, [30000, 30000, 300000, 30000, 30000, 300000, 30000]);
+});
+
+async function finishedJob(target, slug, jobId) {
+  for (;;) {
+    const result = target.jobStatus(slug, jobId);
+    if (result.status !== 202) return result;
+    await nextTurn();
+  }
+}
+
+test('production import work runs off the request thread and leaves a failed clone resumable', { timeout: 20000 }, async (t) => {
+  const f = fixture();
+  const bin = path.join(f.root, 'fake-bin');
+  fs.mkdirSync(bin);
+  let markStarted;
+  let socket;
+  let released = false;
+  const entered = new Promise((resolve) => { markStarted = resolve; });
+  const bridge = net.createServer((connection) => {
+    socket = connection; markStarted();
+    if (released) socket.end('finish clone');
+  });
+  bridge.listen(0, '127.0.0.1');
+  await once(bridge, 'listening');
+  const release = () => { released = true; socket?.end('finish clone'); };
+  fs.writeFileSync(path.join(bin, 'git'), `#!${process.execPath}
+import fs from 'node:fs';
+import net from 'node:net';
+if (process.argv[2] === 'clone') {
+  fs.mkdirSync(process.argv.at(-1), { recursive: true });
+  const socket = net.connect(${bridge.address().port}, '127.0.0.1');
+  socket.on('data', () => { socket.end(); process.exitCode = 1; });
+}
+`, { mode: 0o700 });
+  const target = createProjectTransfer({ role: 'target', dataDir: f.targetData, projectRoot: f.targetRoot,
+    privateDir: f.targetPrivate, settings: () => ({ factoryId: TARGET_ID, name: TARGET_NAME }),
+    kitRevision: kitRevision, env: { ...process.env, HOME: f.root, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  const body = { action: 'start', slug: 'alpha', transferId: '00000000-0000-4000-8000-000000000026',
+    sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(),
+    sourceRemote: 'https://github.com/example/alpha.git' };
+  t.after(async () => {
+    release();
+    await finishedJob(target, body.slug, body.transferId);
+    await new Promise((resolve) => bridge.close(resolve)); f.cleanup();
+  });
+  assert.equal((await target.submit(body)).status, 202);
+  await entered;
+  assert.equal(target.jobStatus(body.slug, body.transferId).status, 202);
+  assert.equal((await target.submit(body)).status, 202);
+  release();
+  const result = await finishedJob(target, body.slug, body.transferId);
+  assert.equal(result.status, 400);
+  assert.match(result.body.error, /could not be cloned/);
+  assert.equal(readProjectTransferLock('alpha', { dataDir: f.targetData }).transferId, body.transferId);
+});
+
+test('the target accepts one background import and returns its result on repeated start', async (t) => {
+  let release;
+  let installing;
+  let installs = 0;
+  const entered = new Promise((resolve) => { installing = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const f = fixture({ targetOptions: { install: async () => { installs += 1; installing(); await gate; } } });
+  const body = { action: 'start', slug: 'alpha', transferId: '00000000-0000-4000-8000-000000000022',
+    sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(), sourceRemote: f.remote };
+  t.after(async () => { release(); await finishedJob(f.target, body.slug, body.transferId); f.cleanup(); });
+  const accepted = await f.target.submit(body);
+  assert.equal(accepted.status, 202);
+  assert.equal(accepted.body.jobId, body.transferId);
+  await entered;
+  assert.equal((await f.target.submit(body)).status, 202);
+  assert.equal(f.target.jobStatus('alpha', body.transferId).status, 202);
+  release();
+  const complete = await finishedJob(f.target, 'alpha', body.transferId);
+  assert.equal(complete.status, 200);
+  assert.equal(complete.body.status, 'pending');
+  assert.equal((await f.target.submit(body)).body.status, 'pending');
+  assert.equal(installs, 1);
+  assert.equal(f.herdr.state.prompts.length, 1);
+});
+
+test('retry resumes the owned half-finished clone after a failed kit install', async (t) => {
+  let installs = 0;
+  const f = fixture({ targetOptions: { install: () => { if (++installs === 1) throw new Error('Kit installation interrupted.'); } } });
+  t.after(f.cleanup);
+  const failed = await command(f.source, 'start', f);
+  assert.equal(failed.code, 1);
+  const repo = path.join(f.targetRoot, 'alpha');
+  assert.equal(fs.existsSync(path.join(repo, '.git')), true);
+  const lock = readProjectTransferLock('alpha', { dataDir: f.targetData });
+  assert.ok(lock);
+  fs.writeFileSync(path.join(repo, 'resume-marker'), 'owned clone');
+  const result = await command(f.source, 'start', f);
+  assert.equal(result.code, 3, result.text);
+  assert.equal(fs.readFileSync(path.join(repo, 'resume-marker'), 'utf8'), 'owned clone');
+  assert.equal(readProjectTransferLock('alpha', { dataDir: f.targetData }).transferId, lock.transferId);
+  assert.equal(f.herdr.state.prompts.length, 1);
+  assert.equal(installs, 2);
+});
+
+test('retry resumes a half-started project lead without starting a second agent', async (t) => {
+  let readyChecks = 0;
+  const f = fixture({ targetOptions: { hooks: {
+    waitForPane: () => {}, readText: () => '', wait: () => {},
+    waitForReady: () => { if (++readyChecks === 1) throw new Error('Project lead startup interrupted.'); return true; },
+  } } });
+  t.after(f.cleanup);
+  assert.equal((await command(f.source, 'start', f)).code, 1);
+  const stateFile = path.join(f.targetData, 'project-transfers', 'alpha.json');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.equal(state.status, 'starting');
+  assert.equal(state.workspace.agentStarted, true);
+  const result = await command(f.source, 'start', f);
+  assert.equal(result.code, 3, result.text);
+  assert.equal(f.herdr.calls.filter((args) => args[0] === 'agent' && args[1] === 'start').length, 1);
+  assert.equal(f.herdr.state.workspaces.length, 1);
+  assert.equal(f.herdr.state.prompts.length, 1);
+});
+
+test('retry replaces an interrupted clone owned by the same transfer', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  const body = { action: 'start', slug: 'alpha', transferId: '00000000-0000-4000-8000-000000000023',
+    sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(), sourceRemote: f.remote };
+  const repo = path.join(f.targetRoot, 'alpha');
+  fs.mkdirSync(repo);
+  fs.writeFileSync(path.join(repo, 'incomplete-clone'), 'partial clone');
+  fs.mkdirSync(path.join(f.targetData, 'project-transfers'));
+  fs.writeFileSync(path.join(f.targetData, 'project-transfers', 'alpha.json'), JSON.stringify({ schema: 1,
+    slug: 'alpha', transferId: body.transferId, status: 'starting', toFactory: TARGET_NAME,
+    sourceFactoryId: SOURCE_ID, targetFactoryId: TARGET_ID, repoPath: repo, workspace: {} }));
+  createProjectTransferLock('alpha', { transferId: body.transferId, side: 'target', peerFactoryId: SOURCE_ID, dataDir: f.targetData });
+  const result = await f.target.handle(body);
+  assert.equal(result.status, 200, result.body.error);
+  assert.equal(result.body.status, 'pending');
+  assert.equal(fs.existsSync(path.join(repo, '.git')), true);
+  assert.equal(fs.existsSync(path.join(repo, 'incomplete-clone')), false);
+});
 
 test('plan checks both factories and a reachable remote without changing either factory', async (t) => {
   const f = fixture(); t.after(f.cleanup);
@@ -204,7 +447,8 @@ test('start clones, installs the kit, creates a fresh project lead, asks the Own
   assert.equal(readProjectTransferLock('alpha', { dataDir: f.targetData }).side, 'target');
   assert.ok(fs.existsSync(path.join(f.sourceData, 'project-transfers', 'audit.jsonl')));
   assert.ok(fs.existsSync(path.join(f.targetData, 'project-transfers', 'audit.jsonl')));
-  assert.equal(f.calls.at(-1).url, `${DASHBOARD}/api/fleet/transfer`);
+  assert.equal(new URL(f.calls.at(-1).url).pathname, '/api/fleet/transfer');
+  assert.equal(f.calls.at(-1).options.method, 'GET');
 });
 
 test('the accepted Mailbox decision switches ownership and marks the source project transferred', async (t) => {
@@ -374,7 +618,12 @@ test('factory transfer projects use the factory work group', () => {
   assert.equal(projectTransferRoot({ env: { HOME: '/tmp/home-fixture' }, factoryRole: () => false, projectRoot: '/tmp/configured-projects' }), path.resolve('/tmp/configured-projects'));
 });
 
-test('the HTTP transfer route requires the fleetGuide credential', async (t) => {
+test('the HTTP transfer routes require fleetGuide and serve status during a slow import', async (t) => {
+  let release;
+  let installing;
+  const entered = new Promise((resolve) => { installing = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const f = fixture();
   const dataDir = process.env.HERDR_BOSS_DIR;
   const privateDir = path.join(dataDir, 'private-transfer-route');
   writeFleetFile(path.join(dataDir, 'factory-identity.json'), { factoryId: TARGET_ID });
@@ -387,16 +636,58 @@ test('the HTTP transfer route requires the fleetGuide credential', async (t) => 
   engine.state = { updatedAt: new Date().toISOString(), herdr: { panes: [] }, kit: { current: kitRevision() }, quotas: [], projects: [], machine: {} };
   engine.tick = async () => engine.state;
   engine.log = () => {};
-  const app = serve(cfg, { liveDataDir: dataDir, createEngine: () => engine, fleet: { privateDir, registryFile: path.join(dataDir, 'empty-fleet.json') } });
-  t.after(async () => { await app.close(); });
+  const app = serve(cfg, { liveDataDir: dataDir, createEngine: () => engine, fleet: { privateDir,
+    registryFile: path.join(dataDir, 'empty-fleet.json'), projectTransfer: {
+      dataDir: f.targetData, projectRoot: f.targetRoot, herdr: f.herdr,
+      env: { ...process.env, HOME: f.root, HERDR_BOSS_DIR: f.targetData },
+      allowGitRemote: () => true, install: async () => { installing(); await gate; },
+      hooks: { waitForPane: () => {}, waitForReady: () => true, readText: () => '', wait: () => {} },
+    } } });
+  let completed;
+  t.after(async () => {
+    release();
+    if (completed) await completed;
+    await app.close(); f.cleanup();
+  });
   if (!app.server.listening) await once(app.server, 'listening');
   const url = `http://127.0.0.1:${app.server.address().port}/api/fleet/transfer`;
   const body = { action: 'plan', slug: 'alpha', sourceFactoryId: SOURCE_ID, sourceKitRevision: kitRevision() };
   const request = (token, method = 'POST') => fetch(url, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: method === 'POST' ? JSON.stringify(body) : undefined });
   assert.equal((await request(null)).status, 401);
   assert.equal((await request(read)).status, 403);
-  assert.equal((await request(guide, 'GET')).status, 403);
+  assert.equal((await request(guide, 'GET')).status, 400);
+  assert.equal((await request(null, 'GET')).status, 401);
+  assert.equal((await request(read, 'GET')).status, 403);
   const response = await request(guide);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).factoryId, TARGET_ID);
+  const start = { action: 'start', slug: 'alpha', transferId: '00000000-0000-4000-8000-000000000024',
+    sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(), sourceRemote: f.remote };
+  const post = (body) => fetch(url, { method: 'POST', headers: { authorization: `Bearer ${guide}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const accepted = await post(start);
+  assert.equal(accepted.status, 202);
+  assert.equal((await accepted.json()).jobId, start.transferId);
+  const statusUrl = `${url}?${new URLSearchParams({ slug: 'alpha', jobId: start.transferId })}`;
+  const poll = () => fetch(statusUrl, { headers: { authorization: `Bearer ${guide}` } });
+  completed = (async () => {
+    await gate;
+    for (;;) {
+      const result = await poll();
+      if (result.status !== 202) return { status: result.status, body: await result.json() };
+      await result.body.cancel();
+    }
+  })();
+  await entered;
+  assert.equal((await poll()).status, 202);
+  assert.equal((await post(start)).status, 202);
+  assert.equal((await post({ ...start, transferId: '00000000-0000-4000-8000-000000000025' })).status, 409);
+  const cancel = { action: 'cancel', slug: 'alpha', transferId: start.transferId, sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME };
+  assert.equal((await post(cancel)).status, 409);
+  release();
+  const done = await completed;
+  assert.equal(done.status, 200);
+  assert.equal(done.body.status, 'pending');
+  assert.deepEqual(Object.keys(done.body).sort(), ['factoryId', 'ok', 'status']);
+  assert.equal((await post(start)).status, 200);
+  assert.equal(f.herdr.state.prompts.length, 1);
 });

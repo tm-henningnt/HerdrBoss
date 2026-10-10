@@ -646,11 +646,15 @@ The target dashboard must use HTTPS or loopback HTTP. If the connection is unsaf
 
 Use `start` to freeze a project for transfer. It lists a dirty tree, unpushed commits, an unpushed branch, or a running worker and stops when it finds one. It refuses while the source project lead is working or waiting for input. When the checks pass, Herdr Boss locks the project on both factories. It closes an idle project lead on the source, clones the repository on the target, installs the kit, creates the project record, and starts a fresh project lead. The new lead reads `docs/orchestration/memory.md`. The command posts a decision to the source Mailbox and exits with code 3.
 
+The target accepts `start` with HTTP 202 and a job ID. It runs the import outside the HTTP service thread. The source checks the job each second for at most 300 seconds. If this limit expires, the command exits with code 1 and prints `The target is still working. Run the same command again.` The target continues the import. Run the same `start` command to check or resume that transfer. The retry keeps the transfer ID and the locks. It uses the existing clone and project lead. It replaces an incomplete clone only when that transfer owns it. A finished target import returns its result again. A connection failure prints `The target factory could not be reached`.
+
+The request limit for `plan`, `switch`, and `cancel` is 30 seconds. The target refuses `switch` and `cancel` while its import job runs. Retry after the job finishes.
+
 After you answer the Mailbox item, run `switch`. It waits with code 3 until it finds a clear answer. `Accept the switch` marks the source project as transferred and unlocks both factories. `Deny the switch` removes the target project and restarts the source project lead.
 
 Use `cancel` before the switch to remove the target project and clone, close the Mailbox decision, unlock both factories, and restart the source project lead. Cancel is refused after the switch.
 
-Herdr Boss transfers the repository through GitHub. It does not copy secrets, login state, Mailbox items, review packs, or message text. Both factories write an audit record. The transfer API accepts only `POST /api/fleet/transfer` with the fleet guide credential.
+Herdr Boss transfers the repository through GitHub. It does not copy secrets, login state, Mailbox items, review packs, or message text. Both factories write an audit record. The transfer API requires the fleet guide credential for `POST /api/fleet/transfer` and `GET /api/fleet/transfer?slug=SLUG&jobId=ID`. The GET request returns HTTP 202 while the job runs. It returns the result when the job finishes. The job response holds no repository path or remote address.
 
 ### Module
 
