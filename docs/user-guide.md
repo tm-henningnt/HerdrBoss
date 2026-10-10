@@ -104,6 +104,8 @@ A handover removes empty lock directories after it transfers resources. It remov
 
 Run `herdr-boss harness check` or `herdr-boss harness sync` to record changed harness facts. The first run saves a baseline. Later runs add markers for version, model list, or sandbox changes to the Analytics denial chart. Version facts come from the last `herdr-boss tools check`. A missing reading keeps the last known fact. A dry run writes no marker or baseline. Automatic markers contain no paths or setting values. Herdr Boss keeps at most 200 rows and 64 KiB in the marker file. A recording error prints one warning with no path. Check and sync keep their result and exit code. Herdr Boss saves the baseline before it writes markers. A failed marker is not retried.
 
+A CPU-bound command in this class runs without the load guard. Mark only commands that wait on a remote service. Declare a remote-wait command in `networkCommands` in `.herdr-boss.json`. Herdr Boss matches its command after whitespace normalization and uses the network class. The class has its own FIFO queue and slot cap. It does not use or block a `full-suite` slot, and it does not wait for the 5-minute load guard.
+
 ## Full-suite lock watchdog
 
 The lock watchdog checks a live `full-suite` lock after it runs longer than the multiplier times its predicted hold time. It sends one notice to the holder pane and the Boss when the process tree stays below the CPU limit in the Locks panel on Settings. The notice names the holder and child processes and tells you to inspect the pane. The Boss or holder pane can run `herdr-boss lock release`; the watchdog never releases the lock.

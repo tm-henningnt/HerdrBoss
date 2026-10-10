@@ -400,6 +400,13 @@ export const SETTING_HELP = Object.fromEntries([
   }),
 
   // Locks
+  S('locks', 'locks.network.slots', 'Network lock slots', {
+    what: 'A CPU-bound command in this class runs without the load guard. Mark only commands that wait on a remote service. This setting sets the maximum number of network-bound commands that can run at the same time. Network runs do not use a full-suite slot.',
+    default: '2', unit: 'Slots', range: '1 to 8',
+    raise: 'A higher value lets more network-bound commands run at once.',
+    lower: 'A lower value limits new network-bound commands. Existing holders finish before admission fits the lower capacity.',
+    apply: 'lock-policy',
+  }),
   S('locks', 'locks.slots', 'Machine lock slots', {
     what: 'The total number of holders for a machine lock. One holder uses the long lane. The other slots hold short jobs.',
     default: '2', unit: 'Slots', range: '1 to 4',

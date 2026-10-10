@@ -49,11 +49,29 @@ test('every policy machine key and top-level policy setting has an explanation',
 
 test('every lock lane policy key has a Locks group explanation', () => {
   const keys = [
-    ...Object.keys(POLICY_DEFAULTS.locks).filter((key) => key !== 'guard').map((key) => `locks.${key}`),
+    ...Object.keys(POLICY_DEFAULTS.locks).filter((key) => key !== 'guard' && key !== 'network').map((key) => `locks.${key}`),
+    ...Object.keys(POLICY_DEFAULTS.locks.network).map((key) => `locks.network.${key}`),
     ...Object.keys(POLICY_DEFAULTS.locks.guard).map((key) => `locks.guard.${key}`),
   ];
   assert.ok(SETTING_GROUPS.some((group) => group.id === 'locks' && group.title === 'Locks'));
   for (const key of keys) assert.equal(SETTING_HELP[key]?.group, 'locks', `${key} has a Locks explanation`);
+  assert.equal(SETTING_HELP['locks.network.slots']?.default, '2');
+  assert.equal(SETTING_HELP['locks.network.slots']?.range, '1 to 8');
+  assert.match(SETTING_HELP['locks.network.slots']?.what || '', /network-bound commands.*do not use a full-suite slot/i);
+});
+
+test('network lock help and docs warn before declaring a command', () => {
+  const warning = 'A CPU-bound command in this class runs without the load guard. Mark only commands that wait on a remote service.';
+  const cli = fs.readFileSync(new URL('../docs/cli.md', import.meta.url), 'utf8');
+  const settings = fs.readFileSync(new URL('../docs/reference/settings.md', import.meta.url), 'utf8');
+  const guide = fs.readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(SETTING_HELP['locks.network.slots']?.what || '', new RegExp(warning.replaceAll('.', '\\.')));
+  assert.ok(cli.indexOf(warning) >= 0 && cli.indexOf(warning) < cli.indexOf('Add exact command strings to `networkCommands`'));
+  assert.match(cli, /A manual `lock acquire network` is machine-scoped and uses its own FIFO queue with `--wait`\./);
+  assert.ok(settings.indexOf(warning) >= 0 && settings.indexOf(warning) < settings.indexOf('Set its cap with `locks.network.slots`'));
+  assert.ok(guide.indexOf(warning) >= 0 && guide.indexOf(warning) < guide.indexOf('Declare a remote-wait command in `networkCommands`'));
+  assert.ok(app.includes(warning));
 });
 
 test('lock watchdog help applies at the next engine tick', () => {

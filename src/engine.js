@@ -48,7 +48,7 @@ import { nextDailyTime, nightNoticeSent, quietHoursActive, readNight, readNightR
 import { inspectWorkerTransitions, inspectWorkerReports, readBoundedWorkerReport, isWorkerPane, applyWorkerFailureStatuses, resolveWorkerRun, activeUnavailableModels, extendModelUnavailability, workerModelCooldown, activeFreeModelExhaustions, extendFreeModelExhaustion } from './worker-failures.js';
 import { appendMachineSample, highSwapHoursLine, sampleLine } from './machine-samples.js';
 import { appendMemorySample, sampleMemory, MEMORY_SAMPLE_INTERVAL_MS, MEMORY_PS_TIMEOUT_MS } from './memory-classes.js';
-import { clearLockWatchdogNotice, FULL_SUITE_LOCK, lockLedgerSummary, queueLockWatchdogNotice, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
+import { clearLockWatchdogNotice, FULL_SUITE_LOCK, NETWORK_LOCK, lockLedgerSummary, queueLockWatchdogNotice, readLockQueue, readLockTakeoverNotices, readMachineLocks, removeLockTakeoverNotice } from './kit/locks.js';
 import { readLockWatchdogLedger } from './kit/lock-lanes.js';
 import { inspectLockWatchdog } from './lock-watchdog.js';
 import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-minutes.js';
@@ -1307,21 +1307,23 @@ export class Engine extends EventEmitter {
         browserHeadlessMigrations: this.memory.browserHeadlessMigrations || {},
         resourceLeases,
         locks: [],
+        networkLockQueue: [],
         lockStats: null,
         errors,
         modelScorecard: buildModelScorecard(readUsage(), now),
         quotaPlanSummary: this.quotaPlanService.summary({ now }),
       };
-      let queue = [];
+      let queues = new Map();
       try {
         const livePanes = new Set((herdr?.panes || []).map((pane) => pane.id));
-        queue = readLockQueue({ dataDir: this.lockDataDir, livePanes, now });
+        queues = new Map([FULL_SUITE_LOCK, NETWORK_LOCK].map((name) => [name, readLockQueue({ dataDir: this.lockDataDir, name, livePanes, now })]));
+        snap.networkLockQueue = queues.get(NETWORK_LOCK) ?? [];
         snap.locks = readMachineLocks({
           dataDir: this.lockDataDir,
           livePanes,
           now,
           night: snap.night,
-        }).map((lock) => lock.name === FULL_SUITE_LOCK ? { ...lock, queue } : lock);
+        }).map((lock) => ({ ...lock, queue: queues.get(lock.name) ?? [] }));
         snap.lockStats = lockLedgerSummary({ dataDir: this.lockDataDir, now });
       } catch (error) { errors.push(`locks: ${error.message}`); }
       snap.projects = this.communicationProjects;

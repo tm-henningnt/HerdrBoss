@@ -720,8 +720,13 @@ test('the Agents page shows both machine lock lanes, their queues, predictions, 
       name: 'full-suite', scope: 'machine', state: 'live', lane: 'short', slot: 1, kind: 'suite',
       ownerPane: 'ws:short-holder', project: 'beta', ageSeconds: 30, slotsInUse: 2, slotLimit: 2, predictedMs: 60000,
     },
+    {
+      name: 'network', class: 'network', scope: 'machine', state: 'live', lane: 'network', slot: 1, kind: 'suite',
+      ownerPane: 'ws:network-holder', project: 'delta', ageSeconds: 12, slotsInUse: 1, slotLimit: 2, configuredSlotLimit: 2,
+      queue: [{ id: 'network-ticket', class: 'network', position: 1, lane: 'network', project: 'epsilon', pane: 'ws:network-waiter', kind: 'suite', waitSeconds: 9, slotsInUse: 1, slotLimit: 2 }],
+    },
   ];
-  s.lockStats = { acquires: 3, windowDays: 7, medianWaitMs: 2000, medianHoldMs: 60000, byLane: { long: { acquires: 2 }, short: { acquires: 1 } } };
+  s.lockStats = { acquires: 3, windowDays: 7, medianWaitMs: 2000, medianHoldMs: 60000, byLane: { long: { acquires: 2 }, short: { acquires: 1 }, network: { acquires: 1 } }, byName: { network: { medianHoldMs: 12000, medianWaitMs: 9000 } } };
   const html = app.agentsView(s);
   assert.match(html, /<h2>Locks<\/h2>/);
   assert.match(html, /Long lane/);
@@ -732,7 +737,26 @@ test('the Agents page shows both machine lock lanes, their queues, predictions, 
   assert.match(html, /ws:long-wait/);
   assert.match(html, /predicted 15m/);
   assert.match(html, /predicted 1m/);
+  assert.match(html, /data-lock-class="network"/);
+  assert.match(html, /Network class <span>1 \/ 2 slots/);
+  assert.match(html, /ws:network-holder/);
+  assert.match(html, /ws:network-waiter/);
+  assert.match(html, /network: hold 12s, wait 9s/);
   assert.match(html, /guard on/i);
+});
+
+test('the network queue renders from the engine field without a network holder record', async () => {
+  const app = await views();
+  const s = fixture();
+  s.locks = [];
+  s.networkLockQueue = [{ id: 'orphaned-network-ticket', class: 'network', position: 1, lane: 'network', project: 'epsilon', pane: 'ws:network-waiter', kind: 'suite', waitSeconds: 9 }];
+  const html = app.agentsView(s);
+  assert.match(html, /Network class <span>0 \/ 2 slots/);
+  assert.match(html, /No holder/);
+  assert.match(html, /1\. epsilon · ws:network-waiter \(suite\)/);
+  assert.match(html, /<ol class="machine-lock-lane-list machine-lock-queue-list">/);
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.machine-lock-queue-list\s*\{\s*list-style:\s*none;/);
 });
 
 test('the Settings page renders all lock lane policy controls with setting help ids', async () => {
@@ -742,6 +766,9 @@ test('the Settings page renders all lock lane policy controls with setting help 
   app.setState(s);
   const html = app.settingsView(s);
   assert.match(html, /<h2>Locks<\/h2>/);
+  assert.match(html, /data-policy-lock-network="slots"/);
+  assert.match(html, /Network lock slots/);
+  assert.match(html, /max="8"/);
   assert.match(html, /data-policy-lock="slots"/);
   assert.match(html, /data-policy-lock="shortLimitMinutes"/);
   assert.match(html, /data-policy-lock="watchdogMultiplier"/);
