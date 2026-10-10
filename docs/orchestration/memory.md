@@ -979,7 +979,21 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Reviewed branches: `da1d2` 0039235 (per-sheet state, strict ids, 500-sheet limit, refusal causes), `menu` b721ae7 (MB-MENU: the shared menu stays open through focusout while a pointer is down on a menu entry), `flicker` ee7e5ac (MB-FLICKER: optimistic and stored Mailbox records collapse by client id; keyed scroll region). Each branch merges into `integrate-r50` together with `nl1`.
 - Open: the MB-MENU and MB-FLICKER causes have unit evidence only (VM simulation). The live browser check at 393 px runs after the release.
 - The third r50 suite did not finish: the previous orchestrator shell ended at the handoff. The suite for this merge replaces it.
-- State: integrated only. Suite, ff-only, restart and push are pending.
+- Released: `main` bf0c1e2 (r50 NL1 and r51 together). Full suite exit 0 on the integration tree, `suite --reuse` exit 0, kit install ran (kit revision d5a92aea96a1), service restarted, `/api/state` 200, pushed.
+- Open: live phone check of MB-MENU and live check of MB-FLICKER by the Owner or the Boss. The MB-FLICKER cause (optimistic record and server twin shown twice) does not by itself explain a flicker of a stable stored message; if the Owner still sees it, trace the live render signature of that message. TR1/TY1 pack: judge pass 4 found 1 Major and 7 Minor; fix round 8 (`tr5`) runs. `docs/orchestration/herdr-boss.md` and this file ship with the next commit.
+
+## Owner request TH1 (2026-10-10, through the Boss)
+
+- TH1: revamp the dashboard color scheme and add a theme picker with Tokyo Night and other well-known editor themes. Low priority. Queue: after TR1/TY1, PL1 and the open defects. First step is a design note pack with Accept and Deny; no code before it. Spec: Boss file `task-th1-gui-themes.md` (token-based themes, palette licenses checked, WCAG AA contrast, wide and phone checks, docs and page help).
+- TH1 detail (Boss, same day): the Owner is tired of the brown, orange and amber of the current look. The new default theme drops them and uses a cool palette in the Tokyo Night style. A warm color stays only where it carries a status meaning.
+
+## Owner decision: TR1/TY1 pack accepted with changes (2026-10-10, review `tr1-ty1-work-tracking-and-project-types` v1)
+
+- Accepted: 16 decision items, no denial. The design notes stay outside the public repository because they name other projects; workers read them as copied inputs under `.orchestration/inputs/` and write neutral public docs.
+- Build order (TY1 section 13): type definition, SC1 scaffold, PR1 register type field, TR1 tracker, PL1 planning, wizard last.
+- Owner note on propagation: license enforcement differs per project. Some extensions only show a watermark when unlicensed, some enforce a license strictly (for example a mining framework), some need no license. A type or project declares its license mode; do not hard-code one mode. Shared changes must carry this as a per-project setting.
+- Owner note on the wizard: setup steps fail when a label already exists in the tracker (for example `wontfix`). Treat an existing label as success, guide the user in detail on each failure, and offer to do as much as possible on their behalf.
+- Owner idea, not a decision: a web terminal client in the dashboard (ghostty-web or wterm style, inside a tailnet) to reach the Boss, orchestrators and workers from elsewhere and to resolve login/approval prompts during setup. Sent to the Boss as a proposal candidate.
 
 ## Release checkpoint r52 (TH0)
 
