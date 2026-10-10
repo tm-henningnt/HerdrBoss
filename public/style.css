@@ -231,7 +231,7 @@ h2 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
 .project-card-button:hover, .project-card-button:focus-visible { border-color: var(--accent); }
 .project-card-button.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
 .project-card-top, .project-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-width: 0; }
-.project-card-title { flex: 1; min-width: 0; color: var(--text); font-weight: 700; overflow-wrap: anywhere; }
+.project-card-title { flex: 1 1 8em; min-width: 0; color: var(--text); font-weight: 700; overflow-wrap: break-word; }
 .project-card-meta, .project-card-foot { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
 .project-card-foot { align-self: end; }
 .project-status-dot { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
