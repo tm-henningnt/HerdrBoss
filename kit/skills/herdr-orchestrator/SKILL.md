@@ -180,6 +180,7 @@ Start `--task` or the task file with a plain title: what the worker does and for
 - Tell the worker not to start other agents.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
 - Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
+- Tell the worker to run every search or listing over a repository, a log, or a pane through the id and host filter. Tell the worker to return paths, line numbers, and class counts, never matching text. Forbid a broad search over a sibling repository.
 - Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 - Do not leave implicit paths, version assumptions, or acceptance criteria.
 - List the decisions already made in the task, under the heading "Decisions already made". Workers do not reopen them.

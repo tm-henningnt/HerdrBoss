@@ -322,3 +322,7 @@ Summary: The release checklist names the pre-gate approval rule and the Boss-onl
 ## d5a92aea96a1
 Impact: useful
 Summary: The demo app helper reads the sheet state per sheet, refuses when the state is unknown, and names the cause of each refusal.
+
+## fc64323892c5
+Impact: useful
+Summary: The worker brief template and the orchestrator skill require every search or listing over a repository, a log or a pane to run through the id and host filter, return paths, line numbers and class counts only, and never search sibling repositories broadly.
