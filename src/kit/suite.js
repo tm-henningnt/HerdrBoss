@@ -7,7 +7,7 @@ import { agentPromptTimeoutMs } from '../agent-prompt.js';
 import { createHerdrRunner } from './workers.js';
 import { DEFAULT_RULES_FILE } from './config.js';
 import { SWAP_FORCE_ENV, swapGuardFor } from './swap-guard.js';
-import { FULL_SUITE_LOCK, acquireProjectLock, printLockRecords, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock } from './locks.js';
+import { FULL_SUITE_LOCK, NETWORK_LOCK, acquireProjectLock, printLockRecords, readLockQueue, readMachineLocks, recordLockRelease, releaseProjectLock } from './locks.js';
 import { DEFAULT_SUITE_UNTESTED, SUITE_PASSES_FILE, cleanTreeKey, findDocsOnlyBase, readSuitePasses, samePassKey, sameTreeKey, writeSuitePasses } from './suite-passes.js';
 
 export { SUITE_PASSES_FILE };
@@ -16,6 +16,13 @@ export const SUITE_WAIT_SECONDS = 1800;
 // Claude Code sets the messaging names in every tool shell. A test does not need them or any credential.
 const ALWAYS_REMOVED = new Set(['CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_MESSAGING_SOCKET']);
 const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|API_KEY|_KEY)$/i;
+const normalizeCommandText = (text) => text.trim().replace(/\s+/gu, ' ');
+
+export function suiteLockForCommand(command, networkCommands = []) {
+  const text = normalizeCommandText(command.join(' '));
+  return Array.isArray(networkCommands) && networkCommands.some((candidate) => typeof candidate === 'string'
+    && normalizeCommandText(candidate) === text) ? NETWORK_LOCK : FULL_SUITE_LOCK;
+}
 
 export function cleanSuiteEnvironment(env, keep = []) {
   const kept = new Set(keep);
@@ -79,6 +86,7 @@ export function runSuite(command, {
   rulesFile = DEFAULT_RULES_FILE,
 } = {}) {
   if (!Array.isArray(command) || !command.length) throw new Error('suite needs a command after --.');
+  const lockName = suiteLockForCommand(command, config?.networkCommands);
   assertProjectGitPins({ config: config ?? { root: cwd }, env, dataDir, output, now, gitPinOverride });
   const repoRoot = config?.root ?? cwd;
   const commandArray = [...command];
@@ -115,7 +123,7 @@ export function runSuite(command, {
   const swapText = swapGuardFor(rulesFile, { env, herdr, now, override: `Set ${SWAP_FORCE_ENV}=1 to override.` });
   if (swapText) throw new Error(swapText);
 
-  const lock = acquireProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
+  const lock = acquireProjectLock(lockName, { config, env, herdr, dataDir, waitSeconds, output, now, pause, pidAlive, kind: 'suite' });
   const heldSince = now();
   if (lock.reentrant) output('suite: reusing the full-suite lock of herdr-boss push');
   let exitCode;
@@ -146,10 +154,10 @@ export function runSuite(command, {
     if (lock.reentrant) {
       recordLockRelease({ ...lock, project: config?.slug ?? null, kind: 'suite' }, { dataDir, now, holdMs: Math.max(0, now() - heldSince), reentrant: true });
     } else {
-      try { releaseProjectLock(FULL_SUITE_LOCK, { config, env, herdr, dataDir, output, pidAlive, now, expectedRecord: lock }); }
+      try { releaseProjectLock(lockName, { config, env, herdr, dataDir, output, pidAlive, now, expectedRecord: lock }); }
       catch (error) {
         const reason = String(error?.message ?? error).replace(/\s+/g, ' ').replace(/[. ]+$/, '');
-        output(`Warning: could not release lock ${FULL_SUITE_LOCK}: ${reason}. The lock is stale when this process ends.`);
+        output(`Warning: could not release lock ${lockName}: ${reason}. The lock is stale when this process ends.`);
         // A pass is a pass. A failed lock release never changes the exit code of a passing suite.
       }
     }

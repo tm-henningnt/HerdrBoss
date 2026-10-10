@@ -411,8 +411,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       const { positional, flags } = parseArgs(rest);
       if (positional.length !== 1) fail('Usage: lock release <name> [--slot long|N]');
       knownFlags(flags, ['slot']);
-      const slot = flags.slot === undefined ? null : flags.slot === 'long' ? 'long' : /^[1-4]$/.test(flags.slot) ? Number(flags.slot) : NaN;
-      if (Number.isNaN(slot)) fail('--slot must be long or an integer from 1 to 4.');
+      const slot = flags.slot === undefined ? null : flags.slot === 'long' ? 'long' : /^[1-8]$/.test(flags.slot) ? Number(flags.slot) : NaN;
+      if (Number.isNaN(slot)) fail('--slot must be long or an integer from 1 to 8.');
       return releaseProjectLock(positional[0], {
         config, env, herdr, dataDir: lockDataDir, output, pidAlive, now, slot,
       });

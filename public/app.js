@@ -341,9 +341,9 @@ function lockNumberError(value, min, max) {
 
 function readLockNumber(input) {
   const value = input.value.trim() === '' ? null : Number(input.value);
-  const key = input.dataset.policyAttachment || input.dataset.policyLockGuard || input.dataset.policyLock;
+  const key = input.dataset.policyAttachment || input.dataset.policyLockGuard || input.dataset.policyLockNetwork || input.dataset.policyLock;
   const min = key === 'slots' || key === 'shortLimitMinutes' || key === 'watchdogMultiplier' || key === 'watchdogCpuPercent' || key === 'retentionDays' ? 1 : 0;
-  const max = { retentionDays: 365, slots: 4, shortLimitMinutes: 60, watchdogMultiplier: 20, watchdogCpuPercent: 100, maxLoadPercent: 1000, maxSwapPercent: 100, minFreeMemPercent: 100 }[key];
+  const max = input.dataset.policyLockNetwork ? 8 : { retentionDays: 365, slots: 4, shortLimitMinutes: 60, watchdogMultiplier: 20, watchdogCpuPercent: 100, maxLoadPercent: 1000, maxSwapPercent: 100, minFreeMemPercent: 100 }[key];
   const error = lockNumberError(value, min, max);
   input.setCustomValidity(error);
   if (error) input.setAttribute('aria-invalid', 'true');
@@ -1319,6 +1319,7 @@ function settingsView(s) {
   const quotaPanel = `<section class="panel"><h2>Provider usage limits</h2><h3>Usage limit mode${helpButton('quota.mode')}</h3>${providerRows}<h3 class="quota-goals">Pacing goals${helpButton('quota.goalPercent')}</h3>${goalRows}<h3 class="quota-goals">Pace tolerance</h3>${settingRow('paceTolerancePoints', 'Pace tolerance points', `<input id="${helpFid('paceTolerancePoints')}" type="number" min="0" max="50" step="1" value="${d.paceTolerancePoints}" data-policy-number="paceTolerancePoints">`)}${settingRow('paceHaikuTolerancePoints', 'Haiku pace tolerance points', `<input id="${helpFid('paceHaikuTolerancePoints')}" type="number" min="0" max="100" step="1" value="${d.paceHaikuTolerancePoints}" data-policy-number="paceHaikuTolerancePoints">`)}${settingRow('paceMinUsePercent', 'Minimum use for ahead of pace %', `<input id="${helpFid('paceMinUsePercent')}" type="number" min="0" max="100" step="1" value="${d.paceMinUsePercent}" data-policy-number="paceMinUsePercent">`)}${settingRow('paceRouting', 'Route to a below-pace lane', `<input id="${helpFid('paceRouting')}" type="checkbox" data-policy-bool="paceRouting" ${d.paceRouting ? 'checked' : ''}>`)}<h3 class="quota-goals">Claude probe back-off</h3>${settingRow('quotaProbe.backoffAfterTimeouts', 'Claude timeouts before back-off', `<input id="${helpFid('quotaProbe.backoffAfterTimeouts')}" type="number" min="1" max="10" step="1" value="${d.quotaProbe?.backoffAfterTimeouts ?? 2}" data-policy-quota-probe="backoffAfterTimeouts">`)}${settingRow('quotaProbe.backoffMinutes', 'Claude back-off minutes', `<input id="${helpFid('quotaProbe.backoffMinutes')}" type="number" min="1" max="1440" step="1" value="${d.quotaProbe?.backoffMinutes ?? 20}" data-policy-quota-probe="backoffMinutes">`)}</section>`;
   const lockPolicy = d.locks || {};
   const lockGuard = lockPolicy.guard || {};
+  const networkLockPolicy = lockPolicy.network || {};
   const lockInput = (key, label, value, min, max, dataset) => {
     const id = helpFid(key);
     const error = lockNumberError(value, min, max);
@@ -1326,7 +1327,8 @@ function settingsView(s) {
   };
   const lockNumber = (key, label, min, max) => lockInput(`locks.${key}`, label, lockPolicy[key], min, max, `data-policy-lock="${key}"`);
   const lockGuardNumber = (key, label, min, max) => lockInput(`locks.guard.${key}`, label, lockGuard[key], min, max, `data-policy-lock-guard="${key}"`);
-  const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${lockNumber('shortLimitMinutes', 'Short job limit minutes', 1, 60)}${lockNumber('watchdogMultiplier', 'Watchdog multiplier', 1, 20)}${lockNumber('watchdogCpuPercent', 'Watchdog CPU limit %', 1, 100)}<p class="setting-help">The watchdog checks each full-suite holder after its age exceeds the predicted hold times the multiplier. It sends one notice when CPU for the holder and child processes stays below the limit in two samples.</p>${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
+  const networkLockNumber = lockInput('locks.network.slots', 'Network lock slots', networkLockPolicy.slots ?? 2, 1, 8, 'data-policy-lock-network="slots"');
+  const lockSettings = `<section class="panel"><h2>Locks</h2>${lockNumber('slots', 'Machine lock slots', 1, 4)}${networkLockNumber}${lockNumber('shortLimitMinutes', 'Short job limit', 1, 60)}${lockNumber('watchdogMultiplier', 'Watchdog multiplier', 1, 20)}${lockNumber('watchdogCpuPercent', 'Watchdog CPU limit %', 1, 100)}<p class="setting-help">The watchdog checks each full-suite holder after its age exceeds the predicted hold times the multiplier. It sends one notice when CPU for the holder and child processes stays below the limit in two samples.</p>${settingRow('locks.guard.enabled', 'Guard for short jobs', `<input id="${helpFid('locks.guard.enabled')}" type="checkbox" role="switch" aria-label="Guard for short jobs" data-policy-lock-guard="enabled" ${lockGuard.enabled !== false ? 'checked' : ''}>`)}${lockGuardNumber('maxLoadPercent', 'Maximum load % of cores', 0, 1000)}${lockGuardNumber('maxSwapPercent', 'Maximum swap % used', 0, 100)}${lockGuardNumber('minFreeMemPercent', 'Minimum free memory %', 0, 100)}</section>`;
   const attachmentSettings = `<section class="panel"><h2>Pictures and agent messages</h2>${lockInput('attachments.retentionDays', 'Picture retention days', Object.hasOwn(d.attachments || {}, 'retentionDays') ? d.attachments.retentionDays : 30, 1, 365, 'data-policy-attachment="retentionDays"')}${lockInput('agentMessages.retentionDays', 'Agent message text retention days', Object.hasOwn(d.agentMessages || {}, 'retentionDays') ? d.agentMessages.retentionDays : 14, 1, 90, 'data-policy-agent-message="retentionDays"')}${lockInput('agentMessages.metaRetentionDays', 'Agent message metadata retention days', Object.hasOwn(d.agentMessages || {}, 'metaRetentionDays') ? d.agentMessages.metaRetentionDays : 180, 7, 730, 'data-policy-agent-message="metaRetentionDays"')}${lockInput('agentMessages.promptTimeoutSeconds', 'Agent prompt timeout', Object.hasOwn(d.agentMessages || {}, 'promptTimeoutSeconds') ? d.agentMessages.promptTimeoutSeconds : 25, 1, 120, 'data-policy-agent-message="promptTimeoutSeconds"')}</section>`;
   const settingsGroups = ['Paths', 'Machine', 'Quota', 'Quota plan', 'Status', 'Workers', 'Watch', 'Browsers', 'Service', 'Releases', 'Analytics', 'Project register'];
   const serviceSettingPaths = new Set(['worktreeRoot', 'projectRoot', 'chromePath']);
@@ -2152,38 +2154,45 @@ function allocationView(s) {
 
 function machineLocksBlock(s) {
   const locks = Array.isArray(s.locks) ? s.locks : [];
-  const machineLocks = locks.filter((lock) => lock.scope === 'machine' && lock.name === 'full-suite');
-  const laneTickets = [...new Map(machineLocks.flatMap((lock) => lock.queue || []).map((ticket) => [ticket.id || `${ticket.lane}:${ticket.seq}`, ticket])).values()];
+  const machineLocks = locks.filter((lock) => lock.scope === 'machine' && ['full-suite', 'network'].includes(lock.name));
+  const fullSuiteLocks = machineLocks.filter((lock) => lock.name === 'full-suite');
+  const networkLocks = machineLocks.filter((lock) => lock.name === 'network' || lock.class === 'network');
+  const laneTickets = [...new Map(fullSuiteLocks.flatMap((lock) => lock.queue || []).map((ticket) => [ticket.id || `${ticket.lane}:${ticket.seq}`, ticket])).values()];
   const policyLocks = s.policy?.locks || {};
-  const slots = machineLocks[0]?.slotLimit ?? policyLocks.slots ?? 2;
-  const configuredSlots = machineLocks[0]?.configuredSlotLimit ?? policyLocks.slots ?? slots;
-  const legacyExclusive = machineLocks.some((lock) => lock.admissionMode === 'legacy-exclusive');
+  const slots = fullSuiteLocks[0]?.slotLimit ?? policyLocks.slots ?? 2;
+  const configuredSlots = fullSuiteLocks[0]?.configuredSlotLimit ?? policyLocks.slots ?? slots;
+  const networkSlots = networkLocks[0]?.slotLimit ?? policyLocks.network?.slots ?? 2;
+  const networkTickets = Array.isArray(s.networkLockQueue) ? s.networkLockQueue : [];
+  const networkHolders = networkLocks.filter((lock) => lock.state === 'live');
+  const legacyExclusive = fullSuiteLocks.some((lock) => lock.admissionMode === 'legacy-exclusive');
   const guard = policyLocks.guard || { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 };
   const prediction = (value) => value == null ? 'unknown' : dur(Math.ceil(value / 1000));
-  const laneName = (item) => item.lane === 'short' ? 'short' : 'long';
+  const laneName = (item) => item.class === 'network' || item.name === 'network' ? 'network' : item.lane === 'short' ? 'short' : 'long';
   const laneHolder = (lock) => `${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')} (${esc(lock.kind)}) · ${laneName(lock)} job${lock.lane === 'short' && lock.slot === 'long' ? ' · borrowed long slot' : ''} · predicted ${prediction(lock.predictedMs)}`;
-  const liveMachineLocks = machineLocks.filter((lock) => lock.state === 'live');
+  const liveMachineLocks = fullSuiteLocks.filter((lock) => lock.state === 'live');
   const laneCard = (lane, capacity, holders, tickets) => `<section class="machine-lock-lane" data-lock-lane="${lane}">
     <h3>${lane === 'long' ? 'Long lane' : 'Short lane'} <span>${holders.length} / ${capacity} slots</span></h3>
     <ul class="machine-lock-lane-list">${holders.length ? holders.map((lock) => `<li>${laneHolder(lock)}</li>`).join('') : '<li class="muted">No holder</li>'}</ul>
     <h4>Queue</h4>
-    <ol class="machine-lock-lane-list">${tickets.length ? tickets.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} · ${esc(ticket.pane)} (${esc(ticket.kind)}) · predicted ${prediction(ticket.predictedMs)} · waiting ${esc(dur(ticket.waitSeconds))}${ticket.waitReason ? ` · ${esc(ticket.waitReason)}` : ''}</li>`).join('') : '<li class="muted">No queued jobs</li>'}</ol>
+    <ol class="machine-lock-lane-list machine-lock-queue-list">${tickets.length ? tickets.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} · ${esc(ticket.pane)} (${esc(ticket.kind)}) · predicted ${prediction(ticket.predictedMs)} · waiting ${esc(dur(ticket.waitSeconds))}${ticket.waitReason ? ` · ${esc(ticket.waitReason)}` : ''}</li>`).join('') : '<li class="muted">No queued jobs</li>'}</ol>
   </section>`;
   const longHolders = liveMachineLocks.filter((lock) => lock.slot === 'long' || lock.slot == null);
   const shortHolders = liveMachineLocks.filter((lock) => Number.isInteger(lock.slot) && lock.slot > 0);
   const lanes = `<div class="machine-lock-lanes">${laneCard('long', 1, longHolders, laneTickets.filter((ticket) => laneName(ticket) === 'long'))}${laneCard('short', Math.max(0, slots - 1), shortHolders, laneTickets.filter((ticket) => laneName(ticket) === 'short'))}</div>`;
+  const networkClass = `<section class="machine-lock-network" data-lock-class="network"><h3>Network class <span>${networkHolders.length} / ${esc(networkSlots)} slots</span></h3><ul class="machine-lock-lane-list">${networkHolders.length ? networkHolders.map((lock) => `<li>${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')} (${esc(lock.kind)}) · held ${esc(dur(lock.ageSeconds))}</li>`).join('') : '<li class="muted">No holder</li>'}</ul><h4>Queue</h4><ol class="machine-lock-lane-list machine-lock-queue-list">${networkTickets.length ? networkTickets.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} · ${esc(ticket.pane)} (${esc(ticket.kind)}) · waiting ${esc(dur(ticket.waitSeconds))}</li>`).join('') : '<li class="muted">No queued jobs</li>'}</ol></section>`;
   const guardStatus = guard.enabled === false
     ? 'Guard off.'
     : `Guard on. Pause above ${esc(guard.maxLoadPercent ?? 231)}% load or ${esc(guard.maxSwapPercent ?? 96)}% swap, and below ${esc(guard.minFreeMemPercent ?? 40)}% free memory.`;
-  const rows = locks.map((lock) => {
+  const rows = machineLocks.map((lock) => {
     const queue = Array.isArray(lock.queue) ? lock.queue : [];
-    const queueRow = queue.length ? `<tr class="machine-lock-queue"><td colspan="9"><strong>Queue</strong><ol>${queue.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} ${esc(ticket.pane)} (${esc(ticket.kind)}) ${esc(ticket.lane || 'long')} lane · predicted ${prediction(ticket.predictedMs)} · ${esc(dur(ticket.waitSeconds))}${ticket.waitReason ? ` · ${esc(ticket.waitReason)}` : ''}</li>`).join('')}</ol></td></tr>` : '';
+    const queueRow = queue.length ? `<tr class="machine-lock-queue"><td colspan="10"><strong>Queue</strong><ol class="machine-lock-queue-list">${queue.map((ticket) => `<li>${esc(ticket.position)}. ${esc(ticket.project)} ${esc(ticket.pane)} (${esc(ticket.kind)}) ${esc(laneName(ticket))} lane · predicted ${prediction(ticket.predictedMs)} · ${esc(dur(ticket.waitSeconds))}${ticket.waitReason ? ` · ${esc(ticket.waitReason)}` : ''}</li>`).join('')}</ol></td></tr>` : '';
     return `<tr>
     <td class="mono" data-label="Lock">${esc(lock.name)}</td>
+    <td data-label="Class">${esc(lock.class || 'full-suite')}</td>
     <td data-label="Holder">${esc(lock.project || 'Unknown project')} · ${esc(lock.ownerPane || 'Unknown pane')}</td>
     <td data-label="Kind">${esc(lock.kind)}</td>
     <td data-label="Lane">${esc(laneName(lock))}</td>
-    <td data-label="Slot">${typeof lock.slot === 'number' ? `short ${esc(lock.slot)}` : 'long'}</td>
+    <td data-label="Slot">${typeof lock.slot === 'number' ? `${lock.class === 'network' ? 'network' : 'short'} ${esc(lock.slot)}` : 'long'}</td>
     <td data-label="Age">${esc(dur(lock.ageSeconds))}</td>
     <td data-label="Time left">${lock.kind === 'manual' ? `${esc(until(lock.expiresAt))} left` : 'until the command ends'}</td>
     <td data-label="Predicted">${esc(prediction(lock.predictedMs))}</td>
@@ -2200,8 +2209,9 @@ function machineLocksBlock(s) {
     <p class="machine-lock-help" data-lock-capacity>Admission capacity: ${esc(slots)} slot${slots === 1 ? '' : 's'}. Saved capacity: ${esc(configuredSlots)} slot${configuredSlots === 1 ? '' : 's'}.${legacyExclusive ? ' Legacy records require one global FIFO queue.' : ''}</p>
     <p class="machine-lock-help machine-lock-guard" data-lock-guard>${guardStatus}</p>
     ${lanes}
+    ${networkClass}
     ${statsLine}
-    ${locks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Holder</th><th>Kind</th><th>Lane</th><th>Slot</th><th>Age</th><th>Time left</th><th>Predicted</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
+    ${machineLocks.length ? `<div class="machine-lock-table-wrap"><table class="machine-lock-table"><thead><tr><th>Lock</th><th>Class</th><th>Holder</th><th>Kind</th><th>Lane</th><th>Slot</th><th>Age</th><th>Time left</th><th>Predicted</th><th>State</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="machine-lock-empty">No machine locks are held.</p>'}
     <p class="machine-lock-help">A command lock ends when its command ends. A manual lock expires after 60 minutes. Herdr Boss takes over a stale lock. The lane queues follow ticket order. A short job that uses the long slot is marked as borrowed.</p>
   </section>`;
 }
@@ -7109,6 +7119,7 @@ const HELP = {
     <p>A read-only preview shows the chats and refuses a send. It also refuses a read, so the unread count stays.</p>`],
   allocation: ['Allocation', `
     <p>The resource policy for all projects. Changes are a draft until you select <b>Apply policy</b>.</p>
+    <p>A CPU-bound command in this class runs without the load guard. Mark only commands that wait on a remote service. A network-bound command waits on a remote service and uses little CPU. Declare its exact command in <code>networkCommands</code> in <code>.herdr-boss.json</code>. Herdr Boss normalizes whitespace when it matches the command. The network class has its own FIFO queue and slot cap. It runs beside a full suite and does not use the machine load guard.</p>
     <h3>Capacity and handover</h3><p>The global limit of working agents, the lending of unused slots, the usage limit reserve, and automatic handover with its activation level. Automatic handover prepares a successor only for a workspace that has a working agent or a running worker. It skips a project that is paused or stood down in its published status or summary, and it activates a successor only when that model is not weaker than the source model. It never runs for the Boss. The context token setting starts a second trigger: at a task boundary, a Claude project lead above the limit gets a fresh successor with the same model. Above <b>Force handover at context tokens</b>, Herdr Boss asks the project lead to write and commit <code>docs/orchestration/memory.md</code>. It prepares a fresh successor after the commit or after 20 minutes. After a timeout, the successor cannot activate until Herdr Boss verifies a later memory commit. It also waits until the source pane is idle or done. By default, Herdr Boss gives a Claude successor the Owner goal as plain text. Turn on <b>Automatic Claude goal command</b> to send it as <code>/goal</code>. This setting does not change the manual <code>herdr-boss goal set</code> command. <b>Allow Opus without --force</b> lets <code>worker start</code> start a Claude Opus worker without <code>--force</code>. Otherwise use <code>--force --reason TEXT</code> with Owner approval. <b>Running Opus workers at most</b> limits the Opus workers that run at the same time. A forced start needs <code>--reason TEXT</code>. A refused Opus start names the setting. A failed pane command during handover activation prints up to 20 lines of redacted stderr.</p>
     <h3>Project lead succession</h3><p>The ranked successors for automatic handover. Use the arrows to change the order. Unlisted choices are never selected automatically.</p>
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
@@ -8838,6 +8849,7 @@ document.addEventListener('change', (e) => {
   if (el.dataset.policyAttachment) { d.attachments ||= {}; d.attachments[el.dataset.policyAttachment] = readLockNumber(el); }
   if (el.dataset.policyAgentMessage) { d.agentMessages ||= {}; d.agentMessages[el.dataset.policyAgentMessage] = readLockNumber(el); }
   if (el.dataset.policyLock) { d.locks ||= {}; d.locks[el.dataset.policyLock] = readLockNumber(el); }
+  if (el.dataset.policyLockNetwork) { d.locks ||= {}; d.locks.network ||= {}; d.locks.network.slots = readLockNumber(el); }
   if (el.dataset.policyLockGuard) {
     d.locks ||= {};
     d.locks.guard ||= {};
@@ -9750,7 +9762,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.id === 'save-policy' && policyDraft) {
     e.target.disabled = true;
     try {
-      const invalidLock = document.querySelector('[data-policy-lock][aria-invalid="true"], [data-policy-lock-guard][aria-invalid="true"], [data-policy-attachment][aria-invalid="true"]');
+      const invalidLock = document.querySelector('[data-policy-lock][aria-invalid="true"], [data-policy-lock-network][aria-invalid="true"], [data-policy-lock-guard][aria-invalid="true"], [data-policy-attachment][aria-invalid="true"]');
       if (invalidLock) { invalidLock.reportValidity(); throw new Error(invalidLock.validationMessage); }
       const pacingError = pacingDraftError(policyDraft, state?.quotas);
       if (pacingError) throw new Error(pacingError);

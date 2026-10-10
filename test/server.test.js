@@ -222,7 +222,7 @@ for (const { title, lane, ageMinutes, eligible } of [
   });
 }
 
-test('engine lock snapshots include the median hold and wait from the lock ledger', { timeout: 20000 }, async (t) => {
+test('engine lock snapshots include per-class hold and wait stats from the lock ledger', { timeout: 20000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-lock-ledger-state-'));
   const lockDataDir = path.join(root, 'boss-data');
   fs.mkdirSync(lockDataDir, { recursive: true, mode: 0o700 });
@@ -233,6 +233,8 @@ test('engine lock snapshots include the median hold and wait from the lock ledge
     { at, event: 'release', name: 'full-suite', project: 'alpha', kind: 'suite', holdMs: 100000 },
     { at, event: 'acquire', name: 'full-suite', project: 'beta', kind: 'push', waitMs: 6000 },
     { at, event: 'release', name: 'full-suite', project: 'beta', kind: 'push', holdMs: 300000 },
+    { at, event: 'acquire', name: 'network', class: 'network', lane: 'network', project: 'delta', kind: 'suite', waitMs: 5000 },
+    { at, event: 'release', name: 'network', class: 'network', lane: 'network', project: 'delta', kind: 'suite', holdMs: 4000 },
     { at: '2020-01-01T00:00:00.000Z', event: 'release', name: 'full-suite', project: 'old', kind: 'suite', holdMs: 9000000 },
   ];
   fs.writeFileSync(path.join(lockDataDir, 'lock-ledger.jsonl'), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
@@ -251,10 +253,93 @@ test('engine lock snapshots include the median hold and wait from the lock ledge
   } });
   const state = await engine.tick();
   assert.equal(state.lockStats.windowDays, 7);
-  assert.equal(state.lockStats.acquires, 2);
-  assert.equal(state.lockStats.medianWaitMs, 4000);
-  assert.equal(state.lockStats.medianHoldMs, 200000);
+  assert.equal(state.lockStats.acquires, 3);
+  assert.equal(state.lockStats.medianWaitMs, 5000);
+  assert.equal(state.lockStats.medianHoldMs, 100000);
   assert.equal(state.lockStats.byName['full-suite'].medianHoldMs, 200000);
+  assert.equal(state.lockStats.byName.network.acquires, 1);
+  assert.equal(state.lockStats.byName.network.medianWaitMs, 5000);
+  assert.equal(state.lockStats.byLane.network.acquires, 1);
+});
+
+test('engine snapshots expose network tickets when no network holder exists', { timeout: 20000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-network-queue-state-'));
+  const lockDataDir = path.join(root, 'boss-data');
+  const queueDir = path.join(lockDataDir, 'locks', 'machine', 'queue', 'network');
+  fs.mkdirSync(queueDir, { recursive: true, mode: 0o700 });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ticketId = '00000000-0000-4000-8000-000000000003';
+  fs.writeFileSync(path.join(queueDir, `${ticketId}.json`), JSON.stringify({
+    id: ticketId, seq: 1, pane: 'ws:network-waiter', project: 'epsilon', pid: process.pid,
+    kind: 'suite', lane: 'network', command: 'herdr-boss lock acquire network', createdAt: new Date().toISOString(),
+  }));
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  const engine = new Engine(cfg, { push: false, act: false, lockDataDir, collectors: {
+    collectHerdr: async () => ({ panes: [{ id: 'ws:network-waiter' }], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  } });
+  const state = await engine.tick();
+  assert.deepEqual(state.locks, []);
+  assert.deepEqual(state.networkLockQueue.map(({ position, class: lockClass, pane }) => [position, lockClass, pane]), [
+    [1, 'network', 'ws:network-waiter'],
+  ]);
+});
+
+test('the state API exposes the network lock class and configured cap', { timeout: 20000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-network-lock-api-'));
+  const lockDataDir = path.join(root, 'boss-data');
+  const machineDir = path.join(lockDataDir, 'locks', 'machine');
+  fs.mkdirSync(machineDir, { recursive: true, mode: 0o700 });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(lockDataDir, 'policy.json'), JSON.stringify({ locks: {
+    slots: 2, shortLimitMinutes: 6, network: { slots: 3 },
+    guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 },
+  } }));
+  fs.writeFileSync(path.join(machineDir, 'network.short.1.json'), JSON.stringify({
+    name: 'network', project: 'delta', gitCommonDir: '/fixture/repo/.git', ownerPane: 'ws:network-holder',
+    pid: process.pid, kind: 'suite', lane: 'network', slot: 1, predictedMs: null,
+    command: 'herdr-boss lock acquire network', acquiredAt: new Date().toISOString(), scope: 'machine',
+  }));
+  const collectors = {
+    collectHerdr: async () => ({ panes: [{ id: 'ws:network-holder' }], workspaces: [] }),
+    collectMachine: async () => null,
+    collectProcesses: async () => new Map(),
+    collectQuotas: async () => [],
+    collectWorktreeCounts: async () => ({}),
+    collectCwdProcesses: async () => [],
+    collectMissingWorktreeProcesses: async () => [],
+    collectPiModels: async () => ({ models: [] }),
+  };
+  const cfg = loadConfig();
+  cfg.host = '127.0.0.1';
+  cfg.port = 0;
+  cfg.tickSeconds = 3600;
+  const app = serve(cfg, {
+    readOnlyPreview: true,
+    createEngine: (config, options) => new Engine(config, { ...options, lockDataDir, collectors }),
+  });
+  t.after(async () => { await app.close(); });
+  await new Promise((resolve, reject) => {
+    app.server.once('listening', resolve);
+    app.server.once('error', reject);
+  });
+  if (!app.engine.state) await new Promise((resolve) => app.engine.once('state', resolve));
+  const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`);
+  assert.equal(response.status, 200);
+  const state = await response.json();
+  const network = state.locks.find((lock) => lock.name === 'network');
+  assert.equal(network.class, 'network');
+  assert.equal(network.slotLimit, 3);
+  assert.equal(network.configuredSlotLimit, 3);
+  await app.close();
 });
 
 test('the state API sends the watch state, read from the old night.json file, with the fields of the read view', { timeout: 20000 }, async (t) => {
@@ -2047,7 +2132,7 @@ process.stdout.write(JSON.stringify(state.workerConfig));
   assert.deepEqual(fields.map((field) => field.key), [
     'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
     'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
-    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag', 'networkCommands',
   ]);
   const field = (key) => fields.find((item) => item.key === key);
   assert.deepEqual(field('setup'), { key: 'setup', value: 'set', source: 'config' });

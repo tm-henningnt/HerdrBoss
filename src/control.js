@@ -15,7 +15,7 @@ export const POLICY_DEFAULTS = {
   agentMessages: { retentionDays: 14, metaRetentionDays: 180, promptTimeoutSeconds: 25 },
   opus: { allowWithoutForce: false, maxConcurrent: 2 },
   machine: { guardEnabled: true, guardPausedUntil: null, ownerAwayMinutes: 10, presentCpuPercent: 70, awayCpuPercent: 95, presentLoadFactor: 3, awayLoadFactor: 8, diskWarnFreeGB: 20, diskClearFreeGB: 24, diskCriticalFreeGB: 5, alertCooldownSeconds: 21600, swapWarnPercent: 80, swapRefusePercent: 95, swapMinUsedGB: 2, swapRefuseEnabled: false, kitDigestMinutes: 120 },
-  locks: { slots: 2, shortLimitMinutes: 6, watchdogMultiplier: 3, watchdogCpuPercent: 1,
+  locks: { slots: 2, shortLimitMinutes: 6, watchdogMultiplier: 3, watchdogCpuPercent: 1, network: { slots: 2 },
     guard: { enabled: true, maxLoadPercent: 231, maxSwapPercent: 96, minFreeMemPercent: 40 } },
   maxWorkers: 8,
   borrowIdle: true,
@@ -135,6 +135,7 @@ export function loadPolicy({ file = FILE, models = null, warn = (text) => consol
   const locks = {
     ...POLICY_DEFAULTS.locks,
     ...savedLocks,
+    network: { ...POLICY_DEFAULTS.locks.network, ...(isObject(savedLocks.network) ? savedLocks.network : {}) },
     guard: { ...POLICY_DEFAULTS.locks.guard, ...(isObject(savedLocks.guard) ? savedLocks.guard : {}) },
   };
   if (!Object.hasOwn(savedMachine, 'guardEnabled')) {
@@ -253,6 +254,8 @@ export function validatePolicy(value, models) {
   if (!isObject(value.locks)) errors.push('locks must be an object.');
   else {
     if (!Number.isInteger(value.locks.slots) || value.locks.slots < 1 || value.locks.slots > 4) errors.push('locks.slots must be an integer from 1 to 4.');
+    if (!isObject(value.locks.network)) errors.push('locks.network must be an object.');
+    else if (!Number.isInteger(value.locks.network.slots) || value.locks.network.slots < 1 || value.locks.network.slots > 8) errors.push('locks.network.slots must be an integer from 1 to 8.');
     if (!Number.isInteger(value.locks.shortLimitMinutes) || value.locks.shortLimitMinutes < 1 || value.locks.shortLimitMinutes > 60) errors.push('locks.shortLimitMinutes must be an integer from 1 to 60.');
     if (!Number.isInteger(value.locks.watchdogMultiplier) || value.locks.watchdogMultiplier < 1 || value.locks.watchdogMultiplier > 20) errors.push('locks.watchdogMultiplier must be an integer from 1 to 20.');
     if (!Number.isInteger(value.locks.watchdogCpuPercent) || value.locks.watchdogCpuPercent < 1 || value.locks.watchdogCpuPercent > 100) errors.push('locks.watchdogCpuPercent must be an integer from 1 to 100.');

@@ -36,6 +36,8 @@ export const PROJECT_DEFAULTS = Object.freeze({
   setup: null,
   // Flag that limits the test runner to two threads, for example "--maxWorkers=2". worker start puts it in the brief.
   testThreadsFlag: null,
+  // Exact shell text for commands that wait on a remote service and use little CPU.
+  networkCommands: [],
   setupTimeoutSeconds: 900,
   agentStartTimeoutMs: 90000,
   imageBudget: 10,
@@ -185,6 +187,9 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
   }
   if (config.setup !== null && (typeof config.setup !== 'string' || !config.setup.trim())) throw new Error('setup must be null or a non-empty shell command.');
   if (config.testThreadsFlag !== null && (typeof config.testThreadsFlag !== 'string' || !config.testThreadsFlag.trim())) throw new Error('testThreadsFlag must be null or a non-empty string.');
+  if (!Array.isArray(config.networkCommands) || config.networkCommands.some((command) => typeof command !== 'string' || !command.trim())) {
+    throw new Error('networkCommands must be an array of non-empty command strings.');
+  }
   validateArtifactChecks(config.artifactChecks);
   validateSuiteUntested(config.suiteUntested);
   if (config.checkAgents !== undefined) validateCheckAgents(config.checkAgents);
@@ -224,7 +229,7 @@ export function loadProjectConfig({ cwd = process.cwd(), file = '.herdr-boss.jso
 export const WORKER_CONFIG_FIELDS = Object.freeze([
   'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
   'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
-  'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+  'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag', 'networkCommands',
 ]);
 
 function sameValue(a, b) {

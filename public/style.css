@@ -1589,6 +1589,7 @@ p.wizard-errors { padding-left: 10px; }
 .machine-lock-lane h3 span, .machine-lock-lane h4 { color: var(--muted); font-size: 11px; font-weight: 600; }
 .machine-lock-lane h4 { margin: 12px 0 4px; }
 .machine-lock-lane-list { margin: 0; padding-left: 20px; font-size: 12px; }
+.machine-lock-queue-list { list-style: none; }
 .machine-lock-lane-list li { padding: 3px 0; overflow-wrap: anywhere; }
 .machine-lock-lane-list .muted { list-style: none; margin-left: -20px; color: var(--muted); }
 .machine-lock-guard { margin-top: 8px; }

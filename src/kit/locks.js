@@ -19,8 +19,9 @@ import { processInfo as defaultProcessInfo } from './process-info.js';
 const LOCK_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const COMMAND = (name) => `herdr-boss lock acquire ${name}`;
 // A machine lock is shared by all repositories on this machine. Other lock names are per repository.
-const MACHINE_LOCKS = new Set(['full-suite']);
+const MACHINE_LOCKS = new Set(['full-suite', 'network']);
 export const FULL_SUITE_LOCK = 'full-suite';
+export const NETWORK_LOCK = 'network';
 const PUSH_LOCK_WAIT_SECONDS = 1800;
 export const MUTATION_GUARD_WAIT_MS = 5000;
 const MANUAL_LOCK_TTL_MS = 60 * 60 * 1000;
@@ -35,6 +36,9 @@ export const LOCK_LEDGER_FILE = 'lock-ledger.jsonl';
 const LEDGER_EVENTS = new Set(['acquire', 'release', 'busy', 'timeout']);
 const LEDGER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const scopeFor = (name) => (MACHINE_LOCKS.has(name) ? 'machine' : 'repository');
+const lockClassFor = (name) => (name === NETWORK_LOCK ? NETWORK_LOCK : undefined);
+const configuredSlotLimit = (name, settings) => name === NETWORK_LOCK ? settings?.network?.slots : settings?.slots;
+const maxSlotsFor = (name) => name === NETWORK_LOCK ? 8 : 4;
 const CI_DOCS_REMINDER = 'ci: this push changes only docs and the CI runs on a main push; use [skip ci] or batch the push.';
 
 function createHerdrRunner(...args) {
@@ -173,8 +177,10 @@ function readRecord(file, commonDir, scope = 'repository') {
   }
   const machine = scope === 'machine';
   const fileName = path.basename(file, '.json');
-  const shortSlot = machine ? new RegExp(`^${value?.name}\\.short\\.([1-4])$`).exec(fileName) : null;
+  const shortSlot = machine && value?.name === NETWORK_LOCK ? /^network\.short\.([1-8])$/.exec(fileName)
+    : machine && value?.name === FULL_SUITE_LOCK ? /^full-suite\.short\.([1-4])$/.exec(fileName) : null;
   const fileSlot = fileName === value?.name ? 'long' : shortSlot ? Number(shortSlot[1]) : null;
+  const maxSlots = maxSlotsFor(value?.name);
   const slot = value?.slot ?? fileSlot ?? 'long';
   const lane = value?.lane ?? 'long';
   const predictedMs = value?.predictedMs ?? null;
@@ -184,8 +190,10 @@ function readRecord(file, commonDir, scope = 'repository') {
     || !LOCK_NAME.test(value.name) || fileSlot === null
     || (value.pidStart !== undefined && value.pidStart !== null
       && (typeof value.pidStart !== 'string' || !value.pidStart.trim() || value.pidStart.length > 256))
-    || (slot !== 'long' && (!Number.isInteger(slot) || slot < 1 || slot > 4)) || slot !== fileSlot
-    || !['long', 'short'].includes(lane) || (predictedMs !== null && (!Number.isFinite(predictedMs) || predictedMs < 0))
+    || (value.class !== undefined && value.class !== lockClassFor(value.name))
+    || (slot !== 'long' && (!Number.isInteger(slot) || slot < 1 || slot > maxSlots)) || slot !== fileSlot
+    || !(value?.name === NETWORK_LOCK ? ['long', 'short', NETWORK_LOCK].includes(lane) : ['long', 'short'].includes(lane))
+    || (predictedMs !== null && (!Number.isFinite(predictedMs) || predictedMs < 0))
     || value.command !== COMMAND(value.name) || typeof value.acquiredAt !== 'string'
     || (value.reentryToken !== undefined && (typeof value.reentryToken !== 'string' || value.reentryToken.length < 16 || value.reentryToken.length > 256))
     || (value.token !== undefined && (typeof value.token !== 'string' || value.token.length < 16 || value.token.length > 256))
@@ -193,16 +201,17 @@ function readRecord(file, commonDir, scope = 'repository') {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
   const kind = value.kind ?? 'manual';
-  if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && value.name !== FULL_SUITE_LOCK)) {
+  if (!LOCK_KINDS.has(kind) || (kind === 'suite' && ![FULL_SUITE_LOCK, NETWORK_LOCK].includes(value.name))
+    || (kind === 'push' && value.name !== FULL_SUITE_LOCK)) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
-  const expiresAt = value.expiresAt ?? (scope === 'machine' && value.name === FULL_SUITE_LOCK && kind === 'manual'
+  const expiresAt = value.expiresAt ?? (scope === 'machine' && kind === 'manual'
     ? new Date(Date.parse(value.acquiredAt) + MANUAL_LOCK_TTL_MS).toISOString()
     : undefined);
   if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) {
     throw new Error(`Lock record ${path.basename(file)} is invalid. Refusing to change it.`);
   }
-  return { ...value, kind, lane, slot, predictedMs, legacy: value.lane === undefined, ...(expiresAt ? { expiresAt } : {}), scope };
+  return { ...value, ...(lockClassFor(value.name) ? { class: lockClassFor(value.name) } : {}), kind, lane, slot, predictedMs, legacy: value.lane === undefined, ...(expiresAt ? { expiresAt } : {}), scope };
 }
 
 function recordFile(directory, name, slot = 'long') {
@@ -214,7 +223,8 @@ function lockRecordFiles(directory, name, scope) {
   let files;
   try { files = fs.readdirSync(directory); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  return files.filter((file) => file === `${name}.json` || new RegExp(`^${name}\\.short\\.[1-4]\\.json$`).test(file))
+  const slotPattern = name === NETWORK_LOCK ? /^network\.short\.[1-8]\.json$/ : /^full-suite\.short\.[1-4]\.json$/;
+  return files.filter((file) => file === `${name}.json` || (MACHINE_LOCKS.has(name) && slotPattern.test(file)))
     .sort((left, right) => left.localeCompare(right))
     .map((file) => path.join(directory, file));
 }
@@ -251,7 +261,7 @@ function lockIsLive(record, {
   herdr, livePanes = null, pidAlive = pidIsAlive, processInfo = defaultProcessInfo,
   now = Date.now, quietHours = false,
 }) {
-  if (record.name === FULL_SUITE_LOCK && record.kind === 'manual' && record.expiresAt
+  if (MACHINE_LOCKS.has(record.name) && record.kind === 'manual' && record.expiresAt
     && Date.parse(record.expiresAt) <= timeValue(now) && !quietHours) return false;
   let alive;
   try { alive = pidAlive(record.pid); }
@@ -302,31 +312,33 @@ function readQueueTickets(directory, name = FULL_SUITE_LOCK) {
       && (ticket.pidStart === undefined || ticket.pidStart === null
         || (typeof ticket.pidStart === 'string' && ticket.pidStart.trim() && ticket.pidStart.length <= 256))
       && LOCK_KINDS.has(ticket.kind) && ticket.command === COMMAND(name)
-      && (ticket.lane === undefined || ['long', 'short'].includes(ticket.lane))
+      && (ticket.lane === undefined || (name === NETWORK_LOCK ? ['long', 'short', NETWORK_LOCK] : ['long', 'short']).includes(ticket.lane))
+      && (ticket.kind !== 'suite' || [FULL_SUITE_LOCK, NETWORK_LOCK].includes(name))
+      && (ticket.kind !== 'push' || name === FULL_SUITE_LOCK)
       && (ticket.predictedMs === undefined || ticket.predictedMs === null || (Number.isFinite(ticket.predictedMs) && ticket.predictedMs >= 0))
       && typeof ticket.createdAt === 'string' && Number.isFinite(Date.parse(ticket.createdAt));
     if (!valid) {
       process.stderr.write(`Warning: skipped the unreadable or invalid lock queue ticket ${path.basename(file)}.\n`);
       continue;
     }
-    tickets.push({ ...ticket, lane: ticket.lane ?? 'long', predictedMs: ticket.predictedMs ?? null, legacy: ticket.lane === undefined });
+    tickets.push({ ...ticket, ...(lockClassFor(name) ? { class: lockClassFor(name) } : {}), lane: ticket.lane ?? 'long', predictedMs: ticket.predictedMs ?? null, legacy: ticket.lane === undefined });
   }
   // Equal sequence numbers keep a stable order by id.
   tickets.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
   return tickets;
 }
 
-function ticketIsLive(ticket, { livePanes, pidAlive = pidIsAlive, processInfo = defaultProcessInfo, now = Date.now }) {
+function ticketIsLive(ticket, { name = FULL_SUITE_LOCK, livePanes, pidAlive = pidIsAlive, processInfo = defaultProcessInfo, now = Date.now }) {
   // Old manual waiters stored a persistent shell PID, so cancellation cannot prove they exited.
   if (ticket.legacy && timeValue(now) - Date.parse(ticket.createdAt) >= LEGACY_TICKET_TTL_MS) return false;
-  return lockIsLive({ name: FULL_SUITE_LOCK, ownerPane: ticket.pane, pid: ticket.pid, pidStart: ticket.pidStart, kind: ticket.kind }, {
+  return lockIsLive({ name, ownerPane: ticket.pane, pid: ticket.pid, pidStart: ticket.pidStart, kind: ticket.kind }, {
     livePanes, pidAlive, processInfo, now,
   });
 }
 
-function removeQueueTicket(directory, ticket) {
+function removeQueueTicket(directory, ticket, name = FULL_SUITE_LOCK) {
   if (!ticket) return;
-  try { fs.unlinkSync(path.join(directory, 'queue', FULL_SUITE_LOCK, `${ticket.id}.json`)); }
+  try { fs.unlinkSync(path.join(directory, 'queue', name, `${ticket.id}.json`)); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
@@ -363,6 +375,7 @@ function createQueueTicket(directory, name, { config, caller, pid, kind, lane = 
     pid,
     pidStart: processStart(processInfo, pid),
     kind,
+    ...(lockClassFor(name) ? { class: lockClassFor(name) } : {}),
     lane,
     predictedMs,
     command: COMMAND(name),
@@ -817,14 +830,14 @@ function workerCallerFor(env, herdr, config) {
   return { paneId, workspaceId };
 }
 
-// The full-suite lock also accepts a worker pane with a live run record. Other locks accept only orch or boss.
+// Suite locks also accept a worker pane with a live run record. Manual locks accept only orch or boss.
 function callerFor(env, herdr, { name = null, config = null } = {}) {
   try { return verifyCallerPane(env, herdr, null); }
   catch (error) {
-    if (name !== FULL_SUITE_LOCK || !config) throw error;
+    if (![FULL_SUITE_LOCK, NETWORK_LOCK].includes(name) || !config) throw error;
     const worker = workerCallerFor(env, herdr, config);
     if (worker) return worker;
-    throw new Error(`${error.message} A worker pane can take the ${FULL_SUITE_LOCK} lock only with a live worker run record for this pane and worktree.`);
+    throw new Error(`${error.message} A worker pane can take a suite lock only with a live worker run record for this pane and worktree.`);
   }
 }
 
@@ -872,6 +885,7 @@ function ledgerLine(event, record, now, extra) {
     at: new Date(timeValue(now)).toISOString(),
     event,
     name: record.name,
+    ...(lockClassFor(record.name) ? { class: lockClassFor(record.name) } : {}),
     project: record.project ?? null,
     kind: record.kind ?? 'manual',
     lane: record.lane ?? 'long',
@@ -934,7 +948,8 @@ export function lockLedgerStats(lines) {
   const own = lines.filter((line) => !line.reentrant);
   const waits = own.filter((line) => line.event === 'acquire' && Number.isFinite(line.waitMs)).map((line) => line.waitMs);
   const holds = own.filter((line) => line.event === 'release' && !line.takeover && Number.isFinite(line.holdMs)).map((line) => line.holdMs);
-  const byLane = Object.fromEntries(['long', 'short'].map((lane) => {
+  const lanes = [...new Set(['long', 'short', ...lines.map((line) => line.lane).filter((lane) => lane === NETWORK_LOCK)])];
+  const byLane = Object.fromEntries(lanes.map((lane) => {
     const laneLines = lines.filter((line) => (line.lane ?? 'long') === lane);
     const laneWaits = laneLines.filter((line) => line.event === 'acquire' && !line.reentrant && Number.isFinite(line.waitMs)).map((line) => line.waitMs);
     return [lane, {
@@ -978,7 +993,16 @@ export function lockLedgerSummary({ dataDir = DATA_DIR, now = Date.now } = {}) {
 }
 
 const defaultPause = sleep;
-const ticketLane = (ticket, slots) => (slots < 2 || ticket?.lane !== 'short' ? 'long' : 'short');
+const ticketLane = (ticket, slots, name = FULL_SUITE_LOCK) => name === NETWORK_LOCK
+  ? NETWORK_LOCK : (slots < 2 || ticket?.lane !== 'short' ? 'long' : 'short');
+function chooseNetworkSlot({ slots, holders = [], tickets = [], ticketId = null } = {}) {
+  const capacity = lockAdmissionCapacity(slots, holders, tickets);
+  if (holders.length >= capacity) return null;
+  if (ticketId === null ? tickets.length > 0 : tickets[0]?.id !== ticketId) return null;
+  const occupied = new Set(holders.map((holder) => holder?.slot).filter(Number.isInteger));
+  for (let slot = 1; slot <= capacity; slot += 1) if (!occupied.has(slot)) return { slot };
+  return null;
+}
 export function lockLaneSettings(dataDir, { requireComplete = false } = {}) {
   let policy = {};
   try { policy = JSON.parse(fs.readFileSync(path.join(dataDir, 'policy.json'), 'utf8')); }
@@ -988,15 +1012,21 @@ export function lockLaneSettings(dataDir, { requireComplete = false } = {}) {
   }
   const saved = policy?.locks && typeof policy.locks === 'object' && !Array.isArray(policy.locks) ? policy.locks : {};
   const guard = saved.guard && typeof saved.guard === 'object' && !Array.isArray(saved.guard) ? saved.guard : {};
+  const network = saved.network && typeof saved.network === 'object' && !Array.isArray(saved.network) ? saved.network : {};
   const validNumber = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
   if (requireComplete && (!validNumber(saved.slots, 1, 4) || !validNumber(saved.shortLimitMinutes, 1, 60)
     || typeof guard.enabled !== 'boolean' || !validNumber(guard.maxLoadPercent, 0, 1000)
-    || !validNumber(guard.maxSwapPercent, 0, 100) || !validNumber(guard.minFreeMemPercent, 0, 100))) return null;
+    || !validNumber(guard.maxSwapPercent, 0, 100) || !validNumber(guard.minFreeMemPercent, 0, 100)
+    || (Object.hasOwn(saved, 'network') && (!saved.network || typeof saved.network !== 'object' || Array.isArray(saved.network)
+      || !validNumber(network.slots, 1, 8))))) return null;
   const defaults = POLICY_DEFAULTS.locks;
   return {
     slots: Number.isInteger(saved.slots) && saved.slots >= 1 && saved.slots <= 4 ? saved.slots : defaults.slots,
     shortLimitMinutes: Number.isInteger(saved.shortLimitMinutes) && saved.shortLimitMinutes >= 1 && saved.shortLimitMinutes <= 60
       ? saved.shortLimitMinutes : defaults.shortLimitMinutes,
+    network: {
+      slots: validNumber(network.slots, 1, 8) ? network.slots : defaults.network.slots,
+    },
     guard: {
       enabled: typeof guard.enabled === 'boolean' ? guard.enabled : defaults.guard.enabled,
       maxLoadPercent: Number.isInteger(guard.maxLoadPercent) && guard.maxLoadPercent >= 0 && guard.maxLoadPercent <= 1000
@@ -1041,8 +1071,9 @@ export function acquireProjectLock(name, {
   readMachineSample = null,
 } = {}) {
   validateName(name);
-  if (!LOCK_KINDS.has(kind) || (kind !== 'manual' && name !== FULL_SUITE_LOCK)) {
-    throw new Error('Lock kind must be manual, suite, or push. Only full-suite accepts suite and push kinds.');
+  if (!LOCK_KINDS.has(kind) || (kind === 'suite' && ![FULL_SUITE_LOCK, NETWORK_LOCK].includes(name))
+    || (kind === 'push' && name !== FULL_SUITE_LOCK)) {
+    throw new Error('Lock kind must be manual, suite, or push. Suite accepts full-suite and network; push accepts full-suite.');
   }
   if (reentryToken !== null && (kind !== 'push' || name !== FULL_SUITE_LOCK
     || typeof reentryToken !== 'string' || reentryToken.length < 16 || reentryToken.length > 256)) {
@@ -1056,14 +1087,15 @@ export function acquireProjectLock(name, {
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   const queued = scope === 'machine';
   let settings = lockSettings ?? lockLaneSettings(dataDir);
-  let slots = queued && Number.isInteger(settings?.slots) && settings.slots >= 1 && settings.slots <= 4
-    ? settings.slots : queued ? POLICY_DEFAULTS.locks.slots : 1;
+  const initialConfiguredSlots = configuredSlotLimit(name, settings);
+  let slots = queued && Number.isInteger(initialConfiguredSlots) && initialConfiguredSlots >= 1
+    && initialConfiguredSlots <= maxSlotsFor(name) ? initialConfiguredSlots : queued ? configuredSlotLimit(name, POLICY_DEFAULTS.locks) : 1;
   const shortLimitMinutes = Number.isInteger(settings?.shortLimitMinutes) && settings.shortLimitMinutes >= 1 && settings.shortLimitMinutes <= 60
     ? settings.shortLimitMinutes : POLICY_DEFAULTS.locks.shortLimitMinutes;
   const prediction = queued ? readLockDurationPrediction({ dataDir, project: config.slug, kind, name, now }) : { ms: null, samples: 0 };
   // Keep the prediction and classification fixed for this ticket. Capacity can temporarily collapse the lanes.
   const classifiedLane = queued ? classifyLockLane(prediction, shortLimitMinutes).lane : 'long';
-  let lane = slots > 1 ? classifiedLane : 'long';
+  let lane = name === NETWORK_LOCK ? NETWORK_LOCK : slots > 1 ? classifiedLane : 'long';
   const predictedMs = queued ? prediction.ms : null;
   const startedAt = timeValue(now);
   const deadline = waitSeconds === null ? null : BigInt(timeValue(now)) + BigInt(waitSeconds) * 1000n;
@@ -1085,7 +1117,7 @@ export function acquireProjectLock(name, {
           firstAttempt = false;
           const policyUnavailable = reloaded === null ? lockPolicyUnavailableReason(dataDir) : null;
           if (reloaded !== null) settings = reloaded;
-          const configuredSlots = queued ? settings.slots : 1;
+          const configuredSlots = queued ? configuredSlotLimit(name, settings) : 1;
           let tickets = [];
           let livePanes = null;
           if (queued) {
@@ -1094,8 +1126,8 @@ export function acquireProjectLock(name, {
             livePanes = paneIds(herdr);
             const live = [];
             for (const entry of tickets) {
-              if (ticketIsLive(entry, { livePanes, pidAlive, processInfo, now })) live.push(entry);
-              else removeQueueTicket(directory, entry);
+              if (ticketIsLive(entry, { name, livePanes, pidAlive, processInfo, now })) live.push(entry);
+              else removeQueueTicket(directory, entry, name);
             }
             tickets = live;
             if (!fs.statSync(queue).isDirectory()) throw new Error('The lock queue is not a directory.');
@@ -1126,7 +1158,7 @@ export function acquireProjectLock(name, {
 
           if (queued && waitSeconds !== null && !ticket) {
             ticket = createQueueTicket(directory, name, {
-              config, caller, pid: process.pid, kind, lane: classifiedLane, predictedMs, now, processInfo,
+              config, caller, pid: process.pid, kind, lane: name === NETWORK_LOCK ? NETWORK_LOCK : classifiedLane, predictedMs, now, processInfo,
             }, tickets);
             ticketOutstanding = true;
             tickets.push(ticket);
@@ -1134,11 +1166,11 @@ export function acquireProjectLock(name, {
           }
 
           slots = lockAdmissionCapacity(configuredSlots, liveRecords, tickets);
-          lane = slots > 1 ? classifiedLane : 'long';
-          const choice = chooseLockSlot({
-            lane, slots, holders: liveRecords, tickets, ticketId: ticket?.id ?? null,
-          });
-          const laneTickets = tickets.filter((entry) => ticketLane(entry, slots) === lane);
+          lane = name === NETWORK_LOCK ? NETWORK_LOCK : slots > 1 ? classifiedLane : 'long';
+          const choice = name === NETWORK_LOCK
+            ? chooseNetworkSlot({ slots, holders: liveRecords, tickets, ticketId: ticket?.id ?? null })
+            : chooseLockSlot({ lane, slots, holders: liveRecords, tickets, ticketId: ticket?.id ?? null });
+          const laneTickets = tickets.filter((entry) => ticketLane(entry, slots, name) === lane);
           if (!choice || policyUnavailable) {
             const activeRecord = liveRecords.find((record) => record.slot === 'long') ?? liveRecords[0] ?? null;
             return { activeRecord, holders: liveRecords, queueLength: tickets.length, tickets: laneTickets, ...(policyUnavailable ? { policyUnavailable } : {}) };
@@ -1153,7 +1185,7 @@ export function acquireProjectLock(name, {
           }
 
           if (ticketOutstanding) {
-            removeQueueTicket(directory, ticket);
+            removeQueueTicket(directory, ticket, name);
             ticketOutstanding = false;
           }
           const acquiredAt = new Date(timeValue(now)).toISOString();
@@ -1166,6 +1198,7 @@ export function acquireProjectLock(name, {
             pid,
             pidStart: processStart(processInfo, pid),
             kind,
+            ...(lockClassFor(name) ? { class: lockClassFor(name) } : {}),
             lane,
             slot: choice.slot,
             predictedMs,
@@ -1188,7 +1221,7 @@ export function acquireProjectLock(name, {
         if (error.code !== 'ELOCKBUSY') throw error;
         if (deadline === null || BigInt(timeValue(now)) >= deadline) {
           if (queued && waitSeconds !== null) {
-            const tickets = readQueueTickets(directory, name).filter((entry) => ticketLane(entry, slots) === lane);
+            const tickets = readQueueTickets(directory, name).filter((entry) => ticketLane(entry, slots, name) === lane);
             let activeRecord = null;
             try {
               const livePanes = paneIds(herdr);
@@ -1257,13 +1290,13 @@ export function acquireProjectLock(name, {
     failure = error;
     const failedEvent = error.ledgerEvent ?? (error.code === 'ELOCKBUSY' ? (waitSeconds === null ? 'busy' : 'timeout') : null);
     if (failedEvent) {
-      appendLockLedger(dataDir, failedEvent, { name, project: config.slug, kind, ownerPane: caller.paneId, lane, predictedMs }, now, { waitMs: Math.max(0, timeValue(now) - startedAt) });
+      appendLockLedger(dataDir, failedEvent, { name, class: lockClassFor(name), project: config.slug, kind, ownerPane: caller.paneId, lane, predictedMs }, now, { waitMs: Math.max(0, timeValue(now) - startedAt) });
     }
     throw error;
   } finally {
     if (ticketOutstanding) {
       try {
-        withMutationLock(directory, () => removeQueueTicket(directory, ticket));
+        withMutationLock(directory, () => removeQueueTicket(directory, ticket, name));
       } catch (error) {
         if (!failure) throw error;
         output(`Warning: could not remove lock queue ticket ${ticket.id}: ${String(error.message ?? error).replace(/\s+/g, ' ')}.`);
@@ -1285,8 +1318,8 @@ export function releaseProjectLock(name, {
   expectedRecord = null,
 } = {}) {
   validateName(name);
-  if (slot !== null && slot !== 'long' && (!Number.isInteger(slot) || slot < 1 || slot > 4)) {
-    throw new Error('--slot must be long or an integer from 1 to 4.');
+  if (slot !== null && slot !== 'long' && (!Number.isInteger(slot) || slot < 1 || slot > maxSlotsFor(name))) {
+    throw new Error(`--slot must be long or an integer from 1 to ${maxSlotsFor(name)}.`);
   }
   const { commonDir, directory, scope } = lockContext(config, dataDir, scopeFor(name));
   // A suite or push process releases the record that it holds by PID and token. The caller pane can be gone after a
@@ -1358,7 +1391,7 @@ export function listProjectLocks({
   callerFor(env, herdr);
   const quietHours = quietHoursActive(readNight({ dataDir, now: timeValue(now) }));
   const livePanes = paneIds(herdr);
-  const machineQueue = readLockQueue({ dataDir, livePanes, pidAlive, processInfo, now });
+  const machineQueues = new Map([...MACHINE_LOCKS].map((name) => [name, readLockQueue({ dataDir, name, livePanes, pidAlive, processInfo, now })]));
   const repository = (() => {
     const { commonDir, directory } = lockContext(config, dataDir, 'repository');
     return fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort().map((fileName) => {
@@ -1378,7 +1411,7 @@ export function listProjectLocks({
     });
   })();
   const machine = readMachineLocks({ dataDir, livePanes, pidAlive, processInfo, now, night: readNight({ dataDir, now: timeValue(now) }) })
-    .map((record) => ({ ...record, ...(record.name === FULL_SUITE_LOCK ? { queue: machineQueue } : {}) }));
+    .map((record) => ({ ...record, ...(MACHINE_LOCKS.has(record.name) ? { queue: machineQueues.get(record.name) ?? [] } : {}) }));
   const locks = [...repository, ...machine];
   if (!locks.length) output('No project locks.');
   printLockRecords(locks, output);
@@ -1392,7 +1425,8 @@ export function printLockRecords(locks, output = console.log) {
     const expiry = lock.expiresInMs === null ? '' : `; expires in ${formatDuration(Math.ceil(lock.expiresInMs / 1000))}`;
     const predicted = lock.predictedMs === null ? 'unknown' : formatDuration(Math.ceil(lock.predictedMs / 1000));
     const slot = typeof lock.slot === 'number' ? `short slot ${lock.slot}` : 'long slot';
-    output(`${lock.name} (${lock.scope}): held by pane ${lock.ownerPane} (${lock.kind}) for ${age}${expiry}; PID ${lock.pid}, ${lock.state}; lane ${lock.lane}, ${slot}, ${lock.slotsInUse} of ${lock.slotLimit} slots in use, predicted ${predicted}`);
+    const classText = lock.class ? `, class ${lock.class}` : '';
+    output(`${lock.name} (${lock.scope}${classText}): held by pane ${lock.ownerPane} (${lock.kind}) for ${age}${expiry}; PID ${lock.pid}, ${lock.state}; lane ${lock.lane}, ${slot}, ${lock.slotsInUse} of ${lock.slotLimit} slots in use, predicted ${predicted}`);
     if (lock.queue?.length) {
       output(`  Queue: ${lock.queue.map((ticket) => `${ticket.position}. ${ticket.project} ${ticket.pane} (${ticket.kind}) ${ticket.lane} lane, predicted ${ticket.predictedMs === null ? 'unknown' : formatDuration(Math.ceil(ticket.predictedMs / 1000))}, ${ticket.slotsInUse} of ${ticket.slotLimit} slots in use, waiting ${formatDuration(ticket.waitSeconds)}`).join(', ')}`);
     }
@@ -1407,7 +1441,7 @@ function readAllLockRecords(directory, commonDir, scope) {
   return files.map((file) => ({ file: path.join(directory, file), record: readRecord(path.join(directory, file), commonDir, scope) }));
 }
 
-// Re-own the locks and the full-suite queue tickets of one pane to its successor pane at a handover.
+// Re-own machine locks and their queue tickets of one pane to its successor pane at a handover.
 // The project filter keeps a handover inside its own workspace. Return the changed records.
 export function reownProjectLocks({ config, dataDir = DATA_DIR, fromPane, toPane } = {}) {
   if (typeof fromPane !== 'string' || typeof toPane !== 'string' || !fromPane || !toPane || fromPane === toPane) {
@@ -1425,13 +1459,14 @@ export function reownProjectLocks({ config, dataDir = DATA_DIR, fromPane, toPane
           changed.locks.push({ name: record.name, slot: record.slot, project: record.project, kind: record.kind });
         }
         if (scope !== 'machine') return;
-        // A waiting suite run also carries the pane of its caller.
-        const queue = path.join(directory, 'queue', FULL_SUITE_LOCK);
-        for (const ticket of readQueueTickets(directory, FULL_SUITE_LOCK)) {
-          if (ticket.pane !== fromPane || ticket.project !== project) continue;
-          const { legacy, ...raw } = ticket;
-          replaceRecord(path.join(queue, `${ticket.id}.json`), { ...raw, pane: toPane });
-          changed.tickets.push({ id: ticket.id, project: ticket.project, kind: ticket.kind });
+        for (const name of MACHINE_LOCKS) {
+          const queue = path.join(directory, 'queue', name);
+          for (const ticket of readQueueTickets(directory, name)) {
+            if (ticket.pane !== fromPane || ticket.project !== project) continue;
+            const { legacy, ...raw } = ticket;
+            replaceRecord(path.join(queue, `${ticket.id}.json`), { ...raw, pane: toPane });
+            changed.tickets.push({ id: ticket.id, project: ticket.project, kind: ticket.kind });
+          }
         }
       });
     } finally {
@@ -1453,21 +1488,21 @@ function formatDuration(seconds) {
 }
 
 export function readLockQueue({
-  dataDir = DATA_DIR, livePanes = null, herdr = createHerdrRunner(), pidAlive = pidIsAlive,
+  dataDir = DATA_DIR, name = FULL_SUITE_LOCK, livePanes = null, herdr = createHerdrRunner(), pidAlive = pidIsAlive,
   processInfo = defaultProcessInfo, now = Date.now,
 } = {}) {
   const directory = path.join(dataDir, 'locks', 'machine');
-  const tickets = readQueueTickets(directory);
+  const tickets = readQueueTickets(directory, name);
   if (!tickets.length) return [];
   const panes = livePanes ?? paneIds(herdr);
-  const live = tickets.filter((ticket) => ticketIsLive(ticket, { livePanes: panes, pidAlive, processInfo, now }));
+  const live = tickets.filter((ticket) => ticketIsLive(ticket, { name, livePanes: panes, pidAlive, processInfo, now }));
   const settings = lockLaneSettings(dataDir);
-  const configuredSlotLimit = settings.slots;
-  const holders = readMachineLocks({ dataDir, livePanes: panes, pidAlive, processInfo, now }).filter((record) => record.name === FULL_SUITE_LOCK && record.state === 'live');
-  const slots = lockAdmissionCapacity(configuredSlotLimit, holders, live);
+  const configuredCapacity = configuredSlotLimit(name, settings);
+  const holders = readMachineLocks({ dataDir, livePanes: panes, pidAlive, processInfo, now }).filter((record) => record.name === name && record.state === 'live');
+  const slots = lockAdmissionCapacity(configuredCapacity, holders, live);
   const admissionMode = [...holders, ...live].some(isLegacyLockEntry) ? 'legacy-exclusive' : slots === 1 ? 'exclusive' : 'lanes';
   const lanes = new Map();
-  const longHolder = holders.some((record) => record.lane !== 'short');
+  const longHolder = name === FULL_SUITE_LOCK && holders.some((record) => record.lane !== 'short');
   let guardWait;
   const guardWaitText = () => {
     if (guardWait === undefined) {
@@ -1478,13 +1513,14 @@ export function readLockQueue({
     return guardWait;
   };
   return live.map((ticket) => {
-    const lane = ticketLane(ticket, slots);
+    const lane = ticketLane(ticket, slots, name);
     const position = (lanes.get(lane) ?? 0) + 1;
     lanes.set(lane, position);
     const waitMs = Math.max(0, timeValue(now) - Date.parse(ticket.createdAt));
     const waitReason = lane === 'short' ? guardWaitText() : null;
     return {
       ...ticket,
+      ...(lockClassFor(name) ? { class: lockClassFor(name) } : {}),
       ...(waitReason ? { waitReason } : {}),
       lane,
       position,
@@ -1492,7 +1528,7 @@ export function readLockQueue({
       waitSeconds: Math.floor(waitMs / 1000),
       slotsInUse: holders.length,
       slotLimit: slots,
-      configuredSlotLimit,
+      configuredSlotLimit: configuredCapacity,
       admissionMode,
     };
   });
@@ -1508,8 +1544,8 @@ export function readMachineLocks({
   try { files = fs.readdirSync(directory).filter((file) => file.endsWith('.json')).sort(); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const settings = lockLaneSettings(dataDir);
-  const configuredSlotLimit = settings.slots;
-  const tickets = readQueueTickets(directory).filter((ticket) => ticketIsLive(ticket, { livePanes, pidAlive, processInfo, now }));
+  const tickets = new Map([...MACHINE_LOCKS].map((name) => [name,
+    readQueueTickets(directory, name).filter((ticket) => ticketIsLive(ticket, { name, livePanes, pidAlive, processInfo, now }))]));
   const records = files.map((file) => {
     const record = readRecord(path.join(directory, file), null, 'machine');
     const ageMs = Math.max(0, timeValue(now) - Date.parse(record.acquiredAt));
@@ -1524,17 +1560,21 @@ export function readMachineLocks({
   });
   return records.map((record) => {
     const sameLock = records.filter((other) => other.name === record.name && other.state === 'live');
-    const slotLimit = lockAdmissionCapacity(configuredSlotLimit, sameLock, tickets);
+    const configuredCapacity = configuredSlotLimit(record.name, settings);
+    const sameTickets = tickets.get(record.name) ?? [];
+    const slotLimit = lockAdmissionCapacity(configuredCapacity, sameLock, sameTickets);
     const { token, ...publicRecord } = record;
     return {
       ...publicRecord,
+      ...(lockClassFor(record.name) ? { class: lockClassFor(record.name) } : {}),
       slotsInUse: sameLock.length,
       slotLimit,
-      configuredSlotLimit,
-      admissionMode: [...sameLock, ...tickets].some(isLegacyLockEntry) ? 'legacy-exclusive' : slotLimit === 1 ? 'exclusive' : 'lanes',
+      configuredSlotLimit: configuredCapacity,
+      admissionMode: [...sameLock, ...sameTickets].some(isLegacyLockEntry) ? 'legacy-exclusive' : slotLimit === 1 ? 'exclusive' : 'lanes',
       laneSlotsInUse: {
         long: sameLock.filter((holder) => holder.slot === 'long').length,
-        short: sameLock.filter((holder) => holder.slot !== 'long').length,
+        short: sameLock.filter((holder) => holder.class !== NETWORK_LOCK && holder.slot !== 'long').length,
+        network: sameLock.filter((holder) => holder.class === NETWORK_LOCK).length,
       },
     };
   });

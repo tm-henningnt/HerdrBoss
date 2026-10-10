@@ -1107,7 +1107,7 @@ test('the worker config view holds allow-listed fields only and never a secret',
   assert.deepEqual(view.fields.map((field) => field.key), [
     'slug', 'baseBranch', 'worktreeRoot', 'worktreeName',
     'evidenceTiers', 'allowedModels', 'workerPanesPerTab', 'imageBudget',
-    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag',
+    'setup', 'setupTimeoutSeconds', 'agentStartTimeoutMs', 'testThreadsFlag', 'networkCommands',
   ]);
   const text = JSON.stringify(view);
   assert.equal(text.includes('must-not-enter-the-view'), false, 'a value outside the allow-list never enters the view');
@@ -1121,6 +1121,7 @@ test('the worker config view masks setup and shows the home folder as ~', () => 
   assert.deepEqual(field(set, 'setup'), { key: 'setup', value: 'set', source: 'config' });
   assert.deepEqual(field(set, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/trees', source: 'config' });
   assert.deepEqual(field(set, 'testThreadsFlag'), { key: 'testThreadsFlag', value: '--maxWorkers=2', source: 'config' });
+  assert.deepEqual(field(set, 'networkCommands'), { key: 'networkCommands', value: [], source: 'default' });
   const plain = workerConfigView({ ...PROJECT_DEFAULTS }, { home });
   assert.deepEqual(field(plain, 'setup'), { key: 'setup', value: 'not set', source: 'default' });
   assert.deepEqual(field(plain, 'worktreeRoot'), { key: 'worktreeRoot', value: '~/Projects/.herdr-wt', source: 'default' });
