@@ -97,7 +97,7 @@ Read each reference before its step:
 - For a behavior change, add a `file` or `diff` item for the docs change, or a `markdown` item with the `Docs-Exempt: <reason>`. See [the docs rules](reference/ledger-and-evidence.md#evidence-tiers).
 - Use `manifest.json` with one question per item. See [the review-pack values and evidence rules](reference/review-tasks.md#review-pack-values).
 - Keep secrets, tokens, and private data out. Publish scans text files and stops on a finding.
-- Pipe every command output that could hold an identifier through `herdr-boss redact`.
+- Pipe output through `herdr-boss redact`. Filter searches; return counts. Skip sibling repositories.
 - Publish with `herdr-boss review publish <slug> <folder> --judge-pass TEXT`. Import an existing HTML folder with `herdr-boss review import <slug> <folder>`.
 - Do not wait; continue independent work. The result arrives as an [owner] prompt with the verdict and a fetch command.
 - Read the result with `herdr-boss review result <slug> <pack> --json`. Fix denied items and notes. Record Owner decisions from pack notes in `docs/orchestration/memory.md`.
@@ -181,7 +181,6 @@ Start `--task` or the task file with a plain title: what the worker does and for
 - Tell the worker not to start other agents.
 - List processes with `pgrep -l`, `ps -o pid,ppid,etime,comm`, or `herdr-boss worktree prune`.
 - Do not print full process command lines or environments. Do not use `pgrep -fl`, `ps aux`, `ps -ef`, `ps e`, or `ps -E` with the output printed. Use `pgrep -f` only to match a pattern, never to print.
-- Require filtered, counts-only search output. Forbid broad searches of sibling repositories.
 - Treat a secret that reaches a transcript as disclosed. Report it to the orchestrator, who reports it to the Boss.
 - Do not leave implicit paths, version assumptions, or acceptance criteria.
 - List the decisions already made in the task, under the heading "Decisions already made". Workers do not reopen them.
