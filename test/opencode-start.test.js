@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -30,13 +31,56 @@ test('OpenCode start lock keeps a live owner even when its start is older than a
   assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, 'live-start');
 });
 
-test('OpenCode start lock refuses when the fake reader cannot verify a live owner', (t) => {
+test('OpenCode start lock waits for a fresh live owner when its process identity is unreadable', (t) => {
   const f = fixture(t);
-  fs.writeFileSync(f.owner, JSON.stringify({ pid: process.pid, pidStart: CURRENT_START, token: 'live-start' }));
+  for (const pidStart of [CURRENT_START, null]) {
+    const token = randomUUID();
+    fs.writeFileSync(f.owner, JSON.stringify({ pid: process.pid, pidStart, token }));
+    const mtimeMs = fs.statSync(f.owner).mtimeMs;
+    assert.throws(() => withOpenCodeStartLock(f.dir, () => assert.fail('must not launch'), {
+      timeoutMs: 0, output: () => {}, wait: () => assert.fail('no wait after the timeout'),
+      readProcessStart: () => null,
+    }), /start lock is still busy/);
+    assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
+    assert.equal(fs.statSync(f.owner).mtimeMs, mtimeMs, 'a waiter must not renew the owner record');
+  }
+});
+
+test('OpenCode start lock keeps unreadable owner proof when signal-0 returns EPERM', (t) => {
+  const f = fixture(t);
+  const token = randomUUID();
+  fs.writeFileSync(f.owner, JSON.stringify({ pid: process.pid, pidStart: null, token }));
+  const signal = t.mock.method(process, 'kill', (pid, signal) => {
+    assert.equal(pid, process.pid);
+    assert.equal(signal, 0);
+    throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+  });
   assert.throws(() => withOpenCodeStartLock(f.dir, () => assert.fail('must not launch'), {
     timeoutMs: 0, output: () => {}, readProcessStart: () => null,
-  }), /Cannot verify process start identity for the OpenCode start lock owner/);
-  assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, 'live-start');
+  }), /start lock is still busy/);
+  assert.equal(signal.mock.callCount(), 1);
+  assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
+});
+
+test('OpenCode start lock expires unreadable owner proof only after five minutes', (t) => {
+  const f = fixture(t);
+  const mtimeMs = Date.parse('2026-10-10T10:00:00Z');
+  const token = randomUUID();
+  fs.writeFileSync(f.owner, JSON.stringify({ pid: process.pid, pidStart: CURRENT_START, token }));
+  fs.utimesSync(f.owner, new Date(mtimeMs), new Date(mtimeMs));
+  const options = { timeoutMs: 0, output: () => {}, readProcessStart: () => null };
+  assert.throws(() => withOpenCodeStartLock(f.dir, () => assert.fail('must not launch at the limit'), {
+    ...options, wallNow: () => mtimeMs + 300_000,
+  }), /start lock is still busy/);
+  assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
+  assert.equal(withOpenCodeStartLock(f.dir, () => {
+    const owner = JSON.parse(fs.readFileSync(f.owner, 'utf8'));
+    assert.equal(owner.pid, process.pid);
+    assert.equal(owner.pidStart, null);
+    assert.notEqual(owner.token, token);
+    return 'recovered';
+  }, { ...options, wallNow: () => mtimeMs + 300_001 }), 'recovered');
+  assert.equal(fs.existsSync(f.owner), false);
 });
 
 test('OpenCode start lock records a valid fake process identity and recovers a stale PID', (t) => {
@@ -98,7 +142,24 @@ test('OpenCode start lock releases after failure so the next start can run', (t)
   assert.equal(fs.existsSync(f.owner), false);
 });
 
-test('OpenCode start lock recovers an owner whose CLI process was killed', { timeout: 10000 }, async (t) => {
+test('OpenCode start lock release preserves a foreign token or PID without process identity', (t) => {
+  const f = fixture(t);
+  for (const changed of ['token', 'pid']) {
+    let replacement;
+    assert.equal(withOpenCodeStartLock(f.dir, () => {
+      replacement = JSON.parse(fs.readFileSync(f.owner, 'utf8'));
+      if (changed === 'token') replacement.token = randomUUID();
+      else replacement.pid = process.ppid;
+      fs.writeFileSync(f.owner, JSON.stringify(replacement));
+      return 'started';
+    }, { readProcessStart: () => null }), 'started');
+    assert.equal(fs.existsSync(f.owner), true, `release must preserve a foreign ${changed}`);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.owner, 'utf8')), replacement);
+    fs.unlinkSync(f.owner);
+  }
+});
+
+test('OpenCode start lock recovers a dead PID without process identity', { timeout: 10000 }, async (t) => {
   const f = fixture(t);
   const source = `
     import fs from 'node:fs';
@@ -106,7 +167,7 @@ test('OpenCode start lock recovers an owner whose CLI process was killed', { tim
     withOpenCodeStartLock(process.env.TEST_START_DIR, () => {
       process.send('locked');
       fs.readSync(0, Buffer.alloc(1), 0, 1);
-    }, { readProcessStart: () => 'Mon Sep 28 10:00:00 2026' });
+    }, { readProcessStart: () => null });
   `;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source], {
     env: { ...process.env, TEST_START_DIR: f.dir }, stdio: ['pipe', 'ignore', 'pipe', 'ipc'],
@@ -117,27 +178,32 @@ test('OpenCode start lock recovers an owner whose CLI process was killed', { tim
   child.kill('SIGKILL');
   await exited;
   assert.equal(withOpenCodeStartLock(f.dir, () => 'recovered', {
-    readProcessStart: () => CURRENT_START,
+    readProcessStart: () => null,
   }), 'recovered');
   assert.equal(fs.existsSync(f.owner), false);
 });
 
-test('OpenCode start lock keeps refusing when the real process identity reader is unavailable', (t) => {
+test('OpenCode start lock runs and releases when the real process identity reader is unavailable', (t) => {
   const f = fixture(t);
   const source = `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import path from 'node:path';
     import { withOpenCodeStartLock } from ${JSON.stringify(new URL('../src/kit/opencode-start.js', import.meta.url).href)};
-    try {
-      withOpenCodeStartLock(process.env.TEST_START_DIR, () => process.exit(3));
-    } catch (error) {
-      if (/Cannot read process start identity for the OpenCode start lock owner/.test(error.message)) process.exit(0);
-      process.exit(2);
-    }
-    process.exit(4);
+    const file = path.join(process.env.TEST_START_DIR, 'opencode-start', 'owner.json');
+    assert.equal(withOpenCodeStartLock(process.env.TEST_START_DIR, () => {
+      const owner = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(owner.pid, process.pid);
+      assert.equal(owner.pidStart, null);
+      assert.ok(owner.token);
+      return 'started';
+    }), 'started');
+    assert.equal(fs.existsSync(file), false);
   `;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     env: { ...process.env, TEST_START_DIR: f.dir, PATH: '' }, encoding: 'utf8',
   });
-  assert.equal(result.status, 0, 'the default reader refuses when ps is unavailable');
+  assert.equal(result.status, 0, 'the default reader can use the PID and token when ps is unavailable');
 });
 
 test('OpenCode recovery stops when the agent lookup is invalid or unavailable', () => {

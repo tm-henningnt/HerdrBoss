@@ -1698,13 +1698,13 @@ function openCodeFixture(t, name) {
   };
 }
 
-test('OpenCode start lock uses the injected process identity reader', (t) => {
+test('OpenCode start lock uses the injected reader and falls back when identity is unreadable', (t) => {
   const f = openCodeFixture(t, 'opencode-reader-injected');
   let reads = 0;
-  assert.throws(() => f.start(undefined, {}, { readProcessStart: () => { reads++; return null; } }),
-    /Cannot read process start identity for the OpenCode start lock owner/);
+  const run = f.start(undefined, {}, { readProcessStart: () => { reads++; return null; } });
   assert.equal(reads, 1, 'startWorker passes the injected reader to the start lock');
-  assert.equal(f.starts, 0, 'the identity guard refuses before launching a TUI');
+  assert.equal(f.starts, 1, 'the PID and token proof permits the TUI start');
+  assert.equal(run.name, 'opencode-reader-injected');
 });
 
 test('OpenCode start relaunches a fake TUI that exits at launch', (t) => {
