@@ -476,10 +476,11 @@ export async function restartBrowser(project, headless, options = {}) {
   const externalClients = async () => {
     const session = listBrowserSessions()[project];
     if (!session) return 0;
-    const owner = browserOwner(await d.collectProcesses(), session);
-    return d.collectBrowserClients(session.port, { browserPid: owner?.pid, servicePid: process.pid });
+    return d.collectBrowserClients(session.port, { servicePid: process.pid });
   };
-  return withBrowserRestart(project, (restartId) => restoreBrowser(project, headless, options, restartId, externalClients), { ...options.activity, externalClients });
+  return withBrowserRestart(project, (restartId) => restoreBrowser(project, headless, options, restartId, externalClients), {
+    ...options.activity, externalClients, headless, allowUnknownClients: options.allowUnknownClients === true,
+  });
 }
 
 async function restoreBrowser(project, headless, options, restartId, externalClients) {
@@ -500,7 +501,15 @@ async function restoreBrowser(project, headless, options, restartId, externalCli
     }
   }
   rememberBrowserTabs(project, pages);
-  const closed = await closeBrowser(project, { ...d, beforeClose: async () => await externalClients() === 0 });
+  const closed = await closeBrowser(project, { ...d, beforeClose: async () => {
+    const count = await externalClients();
+    if (count == null && !options.allowUnknownClients) {
+      const error = new Error(`Browser restart refused before the close: CDP clients could not be checked. Override this unknown check with herdr-boss browser restart ${project} ${headless ? '--headless' : '--visible'} --allow-unknown-clients.`);
+      error.exitCode = 3;
+      throw error;
+    }
+    return count === 0 || (count == null && options.allowUnknownClients === true);
+  } });
   if (!closed.closed) {
     const error = new Error('Browser restart refused: a CDP client connected before the close. Disconnect it, then retry.');
     error.exitCode = 3;

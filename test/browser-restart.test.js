@@ -136,6 +136,25 @@ test('restart rechecks clients immediately before the close', async () => {
   assert.equal(f.relaunched(), false);
 });
 
+test('restart gives the exact unknown-client override if facts fail just before the close', async () => {
+  const f = fixture('unknown-race');
+  let calls = 0;
+  f.options.collectBrowserClients = async () => calls++ ? null : 0;
+  await assert.rejects(pool.restartBrowser('unknown-race', true, f.options), (error) => error.exitCode === 3
+    && /CDP clients could not be checked/.test(error.message)
+    && error.message.includes('herdr-boss browser restart unknown-race --headless --allow-unknown-clients'));
+  assert.equal(f.running(), true);
+  assert.equal(f.relaunched(), false);
+});
+
+test('the explicit override permits unknown clients at both restart checks', async () => {
+  const f = fixture('unknown-override');
+  f.options.collectBrowserClients = async () => null;
+  const result = await pool.restartBrowser('unknown-override', true, { ...f.options, allowUnknownClients: true });
+  assert.equal(f.relaunched(), true);
+  assert.equal(result.responsive, true);
+});
+
 test('the restored-tab path creates a separate background window', async () => {
   const f = fixture('own-window');
   const calls = [];

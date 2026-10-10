@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { retryOpenCodeStart, withOpenCodeStartLock } from '../src/kit/opencode-start.js';
 
@@ -62,7 +61,7 @@ test('OpenCode start lock keeps unreadable owner proof when signal-0 returns EPE
   assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
 });
 
-test('OpenCode start lock expires unreadable owner proof only after five minutes', (t) => {
+test('OpenCode start lock keeps unknown owner proof after five minutes', (t) => {
   const f = fixture(t);
   const mtimeMs = Date.parse('2026-10-10T10:00:00Z');
   const token = randomUUID();
@@ -73,14 +72,38 @@ test('OpenCode start lock expires unreadable owner proof only after five minutes
     ...options, wallNow: () => mtimeMs + 300_000,
   }), /start lock is still busy/);
   assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
-  assert.equal(withOpenCodeStartLock(f.dir, () => {
-    const owner = JSON.parse(fs.readFileSync(f.owner, 'utf8'));
-    assert.equal(owner.pid, process.pid);
-    assert.equal(owner.pidStart, null);
-    assert.notEqual(owner.token, token);
-    return 'recovered';
-  }, { ...options, wallNow: () => mtimeMs + 300_001 }), 'recovered');
-  assert.equal(fs.existsSync(f.owner), false);
+  assert.throws(() => withOpenCodeStartLock(f.dir, () => assert.fail('unknown must remain held'), {
+    ...options, wallNow: () => mtimeMs + 300_001,
+  }), /start lock is still busy/);
+  assert.equal(JSON.parse(fs.readFileSync(f.owner, 'utf8')).token, token);
+});
+
+test('OpenCode start lock uses service liveness before sandbox signal probes', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.owner, JSON.stringify({ pid: 501, pidStart: CURRENT_START, token: 'owner' }));
+  t.mock.method(process, 'kill', () => assert.fail('Sandbox PID probe must not run'));
+  assert.equal(withOpenCodeStartLock(f.dir, () => 'started', {
+    timeoutMs: 0, readProcessFacts: () => ({ known: true, alive: false, start: null }),
+    readProcessStart: () => CURRENT_START,
+  }), 'started');
+});
+
+test('service facts keep unknown or matching lock owners and recover a reused PID', (t) => {
+  const f = fixture(t);
+  t.mock.method(process, 'kill', () => assert.fail('Sandbox PID probe must not run'));
+  const owner = { pid: 501, pidStart: CURRENT_START, token: 'owner' };
+  for (const facts of [{ known: false, reason: 'unavailable' }, { known: true, alive: true, start: CURRENT_START }]) {
+    fs.writeFileSync(f.owner, JSON.stringify(owner));
+    fs.utimesSync(f.owner, new Date(0), new Date(0));
+    assert.throws(() => withOpenCodeStartLock(f.dir, () => assert.fail('owner must stay held'), {
+      timeoutMs: 0, output: () => {}, readProcessFacts: () => facts, readProcessStart: () => CURRENT_START,
+    }), /start lock is still busy/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.owner, 'utf8')), owner);
+  }
+  assert.equal(withOpenCodeStartLock(f.dir, () => 'recovered', {
+    timeoutMs: 0, output: () => {}, readProcessFacts: () => ({ known: true, alive: true, start: STALE_START }),
+    readProcessStart: () => CURRENT_START,
+  }), 'recovered');
 });
 
 test('OpenCode start lock records a valid fake process identity and recovers a stale PID', (t) => {
@@ -159,27 +182,17 @@ test('OpenCode start lock release preserves a foreign token or PID without proce
   }
 });
 
-test('OpenCode start lock recovers a dead PID without process identity', { timeout: 10000 }, async (t) => {
+test('OpenCode start lock recovers a dead PID without process identity', (t) => {
   const f = fixture(t);
-  const source = `
-    import fs from 'node:fs';
-    import { withOpenCodeStartLock } from ${JSON.stringify(new URL('../src/kit/opencode-start.js', import.meta.url).href)};
-    withOpenCodeStartLock(process.env.TEST_START_DIR, () => {
-      process.send('locked');
-      fs.readSync(0, Buffer.alloc(1), 0, 1);
-    }, { readProcessStart: () => null });
-  `;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', source], {
-    env: { ...process.env, TEST_START_DIR: f.dir }, stdio: ['pipe', 'ignore', 'pipe', 'ipc'],
+  fs.writeFileSync(f.owner, JSON.stringify({ pid: 501, pidStart: null, token: 'dead-owner' }));
+  const probe = t.mock.method(process, 'kill', (pid, signal) => {
+    assert.equal(pid, 501); assert.equal(signal, 0);
+    throw Object.assign(new Error('gone'), { code: 'ESRCH' });
   });
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill(); });
-  assert.equal((await once(child, 'message'))[0], 'locked');
-  const exited = once(child, 'exit');
-  child.kill('SIGKILL');
-  await exited;
   assert.equal(withOpenCodeStartLock(f.dir, () => 'recovered', {
     readProcessStart: () => null,
   }), 'recovered');
+  assert.equal(probe.mock.callCount(), 1);
   assert.equal(fs.existsSync(f.owner), false);
 });
 

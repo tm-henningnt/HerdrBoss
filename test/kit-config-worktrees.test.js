@@ -624,7 +624,7 @@ test('worktree apply removes a clean merged worker tree in a temporary repo', ()
   git(root, 'worktree', 'add', safe, 'safe');
   const config = loadProjectConfig({ cwd: root });
   const output = [];
-  const remaining = pruneWorktrees(config, { apply: true, herdr: () => ({ panes: [] }), output: (text) => output.push(text) });
+  const remaining = pruneWorktrees(config, { apply: true, herdr: () => ({ panes: [] }), listProcesses: () => [], output: (text) => output.push(text) });
   assert.equal(remaining.find((item) => item.path === safe).removable, true);
   assert.equal(fs.existsSync(safe), false);
   assert.throws(() => git(root, 'show-ref', '--verify', 'refs/heads/safe'));

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createHerdrRunner, listCwdProcesses } from './workers.js';
+import { createHerdrRunner, worktreeCwdProcesses } from './workers.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { projectKit } from './agents-check.js';
 export { archiveWorkerReports } from './worker-archive.js';
@@ -313,24 +313,41 @@ function processInWorktree(processes, worktree) {
   return processes.some((process) => process.cwd && cwdIsInWorktree(process.cwd, worktree));
 }
 
-export function pruneWorktrees(config, { apply = false, archive = true, cleanBuild = false, worktreePath = null, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = listCwdProcesses, checkoutKitFile = (root, file) => git(root, ['checkout', '--', file]) } = {}) {
+export function pruneWorktrees(config, { apply = false, archive = true, cleanBuild = false, worktreePath = null, herdr = createHerdrRunner(), output = console.log, now = Date.now(), listProcesses = null, readProcessFacts, checkoutKitFile = (root, file) => git(root, ['checkout', '--', file]) } = {}) {
   if (worktreePath !== null && (typeof worktreePath !== 'string' || worktreePath.trim() === '')) {
     throw new Error('worktreePath must be null or a non-empty path.');
   }
   const panesResponse = herdr(['pane', 'list']);
   const panes = Array.isArray(panesResponse) ? panesResponse : panesResponse.panes ?? [];
+  const classified = classifyWorktrees(config, { panes, now }).filter((worktree) => worktreePath === null || path.resolve(worktree.path) === path.resolve(worktreePath));
   let processes = [];
   let processScanError = null;
-  try {
-    processes = listProcesses();
-    if (!Array.isArray(processes)) throw new Error('process scan returned an invalid result');
-  } catch (error) {
-    processScanError = error.message || String(error);
-    output(`Process scan failed: ${processScanError}; no worktrees can be removed.`);
+  const processScanErrors = new Map();
+  if (listProcesses) {
+    try {
+      processes = listProcesses();
+      if (!Array.isArray(processes)) throw new Error('process scan returned an invalid result');
+    } catch (error) {
+      processScanError = error.message || String(error);
+      output(`Process scan failed: ${processScanError}; no worktrees can be removed.`);
+    }
+  } else {
+    for (const worktree of classified) {
+      try {
+        const facts = worktreeCwdProcesses(worktree.path, { readFacts: readProcessFacts });
+        if (!facts.known) throw new Error(facts.reason);
+        if (!Array.isArray(facts.processes)) throw new Error('process scan returned an invalid result');
+        processes.push(...facts.processes);
+      } catch (error) {
+        const reason = error.message || String(error);
+        processScanErrors.set(worktree.path, reason);
+        output(`Process scan failed in ${worktree.path}: ${reason}; worktree kept.`);
+      }
+    }
   }
-  const classified = classifyWorktrees(config, { panes, now }).filter((worktree) => worktreePath === null || path.resolve(worktree.path) === path.resolve(worktreePath));
   const worktrees = classified.map((worktree) => {
-    const matches = processScanError ? [] : processes.filter((process) => {
+    const scanError = processScanError || processScanErrors.get(worktree.path) || null;
+    const matches = scanError ? [] : processes.filter((process) => {
       if (!process.cwd || !cwdIsInWorktree(process.cwd, worktree.path)) return false;
       if (worktree.exists && worktree.removable) return true;
       return (!worktree.exists || worktree.prunable) && Number(process.ppid) === 1;
@@ -340,8 +357,8 @@ export function pruneWorktrees(config, { apply = false, archive = true, cleanBui
       ...worktree,
       processes: matches,
       processBlocked,
-      processScanError,
-      removable: worktree.removable && !processBlocked && !processScanError,
+      processScanError: scanError,
+      removable: worktree.removable && !processBlocked && !scanError,
     };
   });
   for (const worktree of worktrees) {
@@ -387,10 +404,13 @@ export function pruneWorktrees(config, { apply = false, archive = true, cleanBui
   }
   if (cleanBuild) {
     let freedBytes = 0;
-    if (processScanError) output('Skipped build cleanup because the process scan failed.');
-    else for (const worktree of worktrees) {
+    for (const worktree of worktrees) {
       if (!worktree.exists || worktree.isPrimary || !fs.existsSync(worktree.path)) continue;
       if (!apply && worktree.removable) continue;
+      if (worktree.processScanError) {
+        output(`Skipped build cleanup in ${worktree.path}: the process scan failed.`);
+        continue;
+      }
       if (worktree.livePane) {
         output(`Skipped build cleanup in ${worktree.path}: a live pane uses the worktree.`);
         continue;
