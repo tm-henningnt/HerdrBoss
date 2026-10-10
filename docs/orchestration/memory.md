@@ -1050,3 +1050,9 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Open: a target factory must run the updated service before the source can start a transfer to it (`factory update`). The extension id filter misses an id with an all-letter or all-digit group.
 - Not live-checked: a real transfer, a real folder-trust prompt on `worker start`, `publish --sync` against a real tracker.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Release checkpoint r59 (AL2, FU1, OC-LOCK, BR-SCOPE, RD-1b)
+
+- Reviewed branches: `al2` a1608fc and `al2check` (AL2: the Projects allocation bar shows every policy project and totals 100 percent, parked and transferring segments are hatched and labelled, bar, cards and legend share one `Workers live / total` count where review and collected rows are not live, the legend sits below the bar, cards wrap, cool palette tokens; a real-browser check at 1280 and 393 px, dark and light, on an isolated preview with a six-project fixture passed, and found one title wrap defect that is fixed), `fu1b` 469aa53 (FU1: a service-tier update saves local documentation changes as timestamped patches under `~/work/boss-notes/update-patches/` in the factory, appends memory notes to `~/work/boss-notes/memory.md`, stops on a tracked source change and names the file and the patch command), `oclock` effc397 (OC-LOCK: the OpenCode start lock falls back to pid, token and lock file age when the process start identity is unreadable), `brscope` 75cff61 (BR-SCOPE: a read-only map or audit brief gets a scope instruction instead of a review heading), `rd1b` ffdc4d3 (RD-1b: one `ext-id` class for two or three groups of 5 to 17 alphanumerics, total length 32).
+- Not live-checked: a real factory update with local changes, a real OpenCode start from a sandbox.
+- State: integrated only. Suite, ff-only, restart and push are pending.
