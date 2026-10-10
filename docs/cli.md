@@ -1772,6 +1772,8 @@ herdr-boss worker start fix-74 --kind claude --task-file brief.md --allow src/pa
 | `worker allow NAME PATH... --reason TEXT` | Approve extra paths for a running worker after a `WORKER QUESTION`. |
 | `worker scope add NAME PATH... --reason TEXT` | Approve and record extra paths for a running worker after a `WORKER QUESTION`. |
 
+Collection checks the recorded worker pane shell and its descendants. It ignores the caller's process tree, including tools that use the worktree as their current directory. If a record has no shell PID, collection uses the old current-directory rule for a worktree. For a no-worktree run with no shell PID, it does not block on processes that use the project root. A refusal lists each blocking PID, its ancestor command name, and the reason. For a worker descendant, it gives the worker stop-own command.
+
 Use `worker collect NAME --defects N` to record an integer defect count from 0 to 99. The count is optional. Without this option, the ledger and usage record have no `defects` field. Existing `defectsFound` lists stay supported. The model scorecard shows the total and the number of runs with a count beside the first-time and rework results. A dash means no count was recorded.
 
 #### Worker baseline
