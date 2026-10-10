@@ -973,3 +973,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - First declared command: the project that needs it declares it in its own config; the Boss relays.
 - The first r50 suite found a defect that the worker's scoped tests did not run: after the queue field change, `Engine.tick` still read the removed `queue` variable (`ReferenceError`, `src/engine.js` machine sample call). Fixed in the integration tree to read the full-suite queue; rule for lock briefs: run the engine tests (`test/engine-*.test.js`, `test/browser-*.test.js`) as well as the lock tests.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Release checkpoint r51 (MB-MENU, MB-FLICKER, DA1-D2, with NL1)
+
+- Reviewed branches: `da1d2` 0039235 (per-sheet state, strict ids, 500-sheet limit, refusal causes), `menu` b721ae7 (MB-MENU: the shared menu stays open through focusout while a pointer is down on a menu entry), `flicker` ee7e5ac (MB-FLICKER: optimistic and stored Mailbox records collapse by client id; keyed scroll region). Each branch merges into `integrate-r50` together with `nl1`.
+- Open: the MB-MENU and MB-FLICKER causes have unit evidence only (VM simulation). The live browser check at 393 px runs after the release.
+- The third r50 suite did not finish: the previous orchestrator shell ended at the handoff. The suite for this merge replaces it.
+- State: integrated only. Suite, ff-only, restart and push are pending.

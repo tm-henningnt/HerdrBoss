@@ -318,3 +318,7 @@ Summary: Restore the Owner decision and worker report wording in the orchestrato
 ## 7e7086f3ef3f
 Impact: useful
 Summary: The release checklist names the pre-gate approval rule and the Boss-only release cancel --force for an approved request that predates the demo app gate.
+
+## d5a92aea96a1
+Impact: useful
+Summary: The demo app helper reads the sheet state per sheet, refuses when the state is unknown, and names the cause of each refusal.
