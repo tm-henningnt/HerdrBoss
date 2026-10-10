@@ -460,7 +460,11 @@ The service keeps the last 100 probe attempts in `quota-probe-history.jsonl`. Ea
 |---|---|
 | `herdr-boss publish SLUG FILE [--force] [--sync]` | Validate a status file and install it for `/projects/SLUG`. Use `-` for standard input. Refuse a status in which a task has a live worker but is not `doing`. `--force` skips this check. `--sync` sets each card state from git, workers and issues before the install and prints how many cards changed. Schema: [project-status.md](project-status.md). |
 
-`publish --sync` reads the commits of the base branch, the run records and the issue tracker of the project in the Git top level, with the rules of [board.md](board.md). It sets `status` of each card that differs from its computed state. A card without a fact keeps its status. The command prints `synced N cards from git and workers` and one `sync: ID from -> to` line on standard error for each changed card. A commit fact adds its short id and the first 60 characters of its subject, for example `sync: G4 doing -> done (abc1234: G4: record samples)`. Use it at each task boundary. The check below runs after the sync.
+Run `publish --sync` at each task boundary. It reads facts from the project in the Git top level. See [Publish with sync](board.md#publish-with-sync). For a GitHub repository, GitHub controls completion. An issue must have `state: closed` and `state_reason: completed` before the sync can set its card to `done`. An open issue stays `doing` or `todo`. A failed GitHub read keeps each card as it is and prints the reason.
+
+A commit supplies completion evidence only with `Closes #N`, `Fixes #N`, `Resolves #N`, or a separate `Task: N` trailer line. The issue must belong to this repository. The author time must be after the issue creation time. The commit must be reachable from the GitHub default branch. Bare numbers, branch names, and merge subjects supply no completion evidence. A card with `partlyDone: true` never moves to `done` through the sync.
+
+The command prints `synced N cards from git and workers`. Each changed card gets a `sync: ID from -> to` line on standard error. A valid commit adds its short ID and the first 60 characters of its subject. When GitHub keeps an issue open, the command prints `kept open: GitHub open` with the short ID of an ignored commit, if one is present. The live-worker check below runs after the sync.
 
 `publish` reads the run records of the project in the Git top level. A worker blocks the publish when all of these are true:
 

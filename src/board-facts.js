@@ -90,15 +90,18 @@ export const validBranch = (branch) => typeof branch === 'string' && branch.leng
 
 // The newest commits of the base branch, newest first, or null when git cannot read the repository or the branch.
 // The command is read-only and runs without a shell. --end-of-options keeps the branch from becoming an option.
-export async function readCommits(repo, { branch = 'main', limit = GIT_LOG_LIMIT, timeout = GIT_TIMEOUT_MS, git = defaultGit } = {}) {
+export async function readCommits(repo, { branch = 'main', limit = GIT_LOG_LIMIT, timeout = GIT_TIMEOUT_MS, git = defaultGit, includeAuthorTime = false } = {}) {
   if (!repo || typeof repo !== 'string' || !validBranch(branch)) return null;
   let out;
-  try { out = await git(repo, ['log', `--max-count=${limit}`, `--format=${LOG_FORMAT}`, '--end-of-options', branch, '--'], timeout); } catch { return null; }
+  const format = includeAuthorTime ? `%aI%x1f${LOG_FORMAT}` : LOG_FORMAT;
+  try { out = await git(repo, ['log', `--max-count=${limit}`, `--format=${format}`, '--end-of-options', branch, '--'], timeout); } catch { return null; }
   const commits = [];
   for (const row of String(out).split(RECORD)) {
-    const [id, short, at, parents, subject = '', ...body] = row.replace(/^\n/, '').split(FIELD);
+    const fields = row.replace(/^\n/, '').split(FIELD);
+    const authoredAt = includeAuthorTime ? fields.shift() : null;
+    const [id, short, at, parents, subject = '', ...body] = fields;
     if (!id || !short) continue;
-    commits.push({ id, short, at, parents: parents ? parents.split(' ').filter(Boolean).length : 0, subject, body: body.join(FIELD).replace(/\n+$/, '') });
+    commits.push({ id, short, at, ...(includeAuthorTime ? { authoredAt } : {}), parents: parents ? parents.split(' ').filter(Boolean).length : 0, subject, body: body.join(FIELD).replace(/\n+$/, '') });
   }
   return commits;
 }
