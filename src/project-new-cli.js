@@ -5,11 +5,12 @@ import { FIXABLE_STEPS, factoryRole, runProjectNew, runProjectStep } from './pro
 import { checkProject, formatCheck } from './project-new-check.js';
 import { SLUG } from './projects.js';
 import { unregisterProjectRepo } from './harness.js';
+import { PROJECT_TYPE_USAGE, projectTypeCommand } from './project-type-cli.js';
 
 export const PROJECT_NEW_USAGE = 'Usage: project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none] [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT] [--start] [--dry-run] [--resume]';
 export const PROJECT_CHECK_USAGE = 'Usage: project check <slug> [--fix STEP [--start]]';
 export const PROJECT_UNREGISTER_USAGE = 'Usage: project unregister <slug>';
-export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}\n${PROJECT_UNREGISTER_USAGE}\nUsage: project open SLUG [--start] [--force --reason TEXT] [--dry-run]\nUsage: project park SLUG [--prepare] [--dry-run]\nUsage: project archive|unarchive SLUG [--dry-run]`;
+export const PROJECT_USAGE = `${PROJECT_NEW_USAGE}\n${PROJECT_CHECK_USAGE}\n${PROJECT_TYPE_USAGE}\n${PROJECT_UNREGISTER_USAGE}\nUsage: project open SLUG [--start] [--force --reason TEXT] [--dry-run]\nUsage: project park SLUG [--prepare] [--dry-run]\nUsage: project archive|unarchive SLUG [--dry-run]`;
 export function verifyProjectCaller(env, herdr, command = 'project new') {
   return verifyCaller(env, herdr, command);
 }
@@ -136,6 +137,7 @@ function checkCommand(args, { herdr, dataDir, log, hooks, env, flowOptions }) {
 // Run `project new` or `project check`. Returns the exit code. A usage error or a refusal throws.
 export function projectCommand(args, { env = process.env, herdr, dataDir, log = console.log, hooks, flowOptions = {}, lifecycleOptions = {} } = {}) {
   const [action, ...rest] = args;
+  if (action === 'type') return projectTypeCommand(rest, { log });
   if (action === 'unregister') return unregisterCommand(rest, { dataDir, log });
   if (['open', 'park', 'archive', 'unarchive'].includes(action)) {
     return import('./project-lifecycle.js').then(({ projectLifecycleCommand }) => projectLifecycleCommand(action, rest, {
