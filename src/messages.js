@@ -9,6 +9,7 @@ import { promptText, plannerPromptText, reviewAnswerPromptText } from './review-
 import { getSession } from './planner-sessions.js';
 import { uploadReportPictures } from './attachment-markdown.js';
 import { validateAttachmentIds, readAttachment, uploadLocalPictures, deleteAttachment } from './attachments.js';
+import { todoView } from './owner-todo-model.js';
 
 export { RETENTION_MS, messagesFile };
 
@@ -197,7 +198,7 @@ export function isMailAnswer(record, byId) {
 // The records that the Chat shows. A Mailbox answer stays in the Mailbox.
 export function chatRecords(records) {
   const byId = messagesById(records);
-  return records.filter((record) => record.kind !== 'agent' && !isMailAnswer(record, byId));
+  return records.filter((record) => !['agent', 'todo'].includes(record.kind) && !isMailAnswer(record, byId));
 }
 
 // One summary for each thread from the chat records: the last record, the count, and the unread records to the Owner.
@@ -273,9 +274,9 @@ export function mailboxCounts(records) {
   const needsYou = items.filter((item) => needsOwnerAction(item) && !item.closedAt);
   const needsYouUnread = needsYou.filter((item) => !item.readAt).length;
   const updates = items.filter((item) => !needsOwnerAction(item) && !isDone(item)).length;
-  const chatUnread = records.filter((record) => record.kind !== 'agent' && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail').length;
+  const chatUnread = records.filter((record) => !['agent', 'todo'].includes(record.kind) && record.to === 'owner' && !record.readAt && messageChannel(record, byId) !== 'mail').length;
   const mailUnread = items.filter((item) => messageChannel(item, byId) === 'mail' && !item.readAt).length;
-  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length };
+  return { needsYou: needsYou.length, needsYouUnread, updates, unread: needsYouUnread, open: needsYou.length, chatUnread, mailUnread, needsAction: needsYou.length, todoOpen: todoView(records).todo.length };
 }
 
 // An open Needs-you item gets the suggestion to close it when the Owner wrote on its thread after the item, and did not answer this item.
@@ -393,7 +394,7 @@ export function mailboxFolders(records) {
     .map((record) => ({ ...record, conversationId: conversations.get(record.id) ?? record.id }));
   const relayed = sent.filter((record) => record.status === 'relayed');
   const inbox = [...view.needsYou, ...view.updates].sort((left, right) => messageOrder(right, left));
-  return { ...view, inbox, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
+  return { ...view, ...todoView(records), inbox, sent, updatesUnread: view.updates.filter((record) => !record.readAt).length, done: [...view.done, ...relayed].sort((left, right) => messageOrder(right, left)) };
 }
 
 export function closeMailboxItem(id, { dir = DATA_DIR, now = Date.now() } = {}) {

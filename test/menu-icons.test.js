@@ -63,8 +63,9 @@ test('the phone logo is the only visible menu trigger in classic and app page he
   assert.match(css, /:root button\.app-menu\s*\{[^}]*color:\s*var\(--text\)/);
 });
 
-test('the top bar has a Chat icon, an Updates icon, and a Needs you icon with the right links and names', () => {
+test('the top bar has To do, Chat, Updates, and Needs you icons with the right links and names', () => {
   assert.deepEqual(icons, [
+    { name: 'todo', href: '/mailbox?folder=todo', label: 'To do' },
     { name: 'chat', href: '/chat', label: 'Chat' },
     { name: 'mail', href: '/mailbox?folder=updates', label: 'Updates' },
     { name: 'needs-action', href: '/mailbox?folder=needs-you', label: 'Needs you' },

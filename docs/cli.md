@@ -973,6 +973,46 @@ The command output names the destination. For example, `say` prints `Message ID 
 
 The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB. The report title defaults to the first Markdown heading, or to `Report`. The `mail close` note is 1 to 500 characters. The close command refuses an unknown or already closed ID and names that ID in its error. The Boss note does not send a reply. These commands refuse text that looks like a token, a key, or a password. The error does not print the text.
 
+## Owner to-do list
+
+Run `herdr-boss todo post FILE [--priority P] [--blocks TEXT]` from the Boss pane or an orchestrator pane. The service must be running. It verifies the pane with Herdr. It uses the project of the verified workspace. The Boss posts for `boss`. A worker or plain terminal cannot post. The file cannot select a project.
+
+Write a regular Markdown file of at most 64 KB. Use these headings once each. Give each section content.
+
+```md
+## Title
+Check the preview
+## Why
+Check the page before release.
+## Steps
+- Open https://example.test/preview.
+- Check the labels.
+## Expected result
+The labels are clear.
+## How to answer
+Select Done or Blocked with a reason.
+## What it blocks
+The next release.
+## Type
+check
+## Priority
+normal
+```
+
+Use type `decide`, `do`, `check`, `grant`, or `read`. Use priority `urgent`, `high`, `normal`, or `low`. Priority defaults to `normal`. The Priority section is optional. `--priority` overrides it. `--blocks` overrides What it blocks. Use only the documented headings. Put a review pack link in Steps when needed.
+
+Use a reserved example host, such as `example.test`, for each host. Refuse credential values. A grant item names the permission or credential that the Owner must grant. It never holds the value.
+
+The key combines the project with the title. Title case and repeated spaces do not change the key. A duplicate updates an open item and keeps its id and original age. Each project can post at most 10 items or updates per minute. An over-limit request stores nothing.
+
+The Mailbox To do view shows open items from all projects and the Boss. Its badge counts open items. It sorts urgent items first, then high, normal and low items. Within a priority, the oldest item comes first.
+
+Done closes an item. Mark read closes a read item. Answer accepts or denies a decide item. Blocked requires a reason. Snooze requires a future time. The item becomes open at that time. Not now requires a reason and cancels the item. Inspect saved actions under Blocked, snoozed and closed. Reopen makes a blocked or snoozed item open again. Unresolved items survive message retention. Closed items stay for 30 days after closure.
+
+Slice (a) saves the Owner action. Notice delivery, poster cancellation, `say --reply-to` answers, migration and digests belong to later slices. The [design note](specs/owner-todo.md) records the split.
+
+`POST /api/todo/post` accepts `text`, `caller`, and optional `priority` and `blocks`. The caller holds only `HERDR_ENV`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`. The service verifies them. `POST /api/todo/action` accepts an item `id` and `action`, with `reason`, `until`, or `decision` when required. The optional `updatedAt` refuses an answer to a changed item. `GET /api/mailbox?folder=todo` returns the open list, inactive items, and `mailbox.todoOpen`. The dashboard access and same-origin checks apply. A read-only preview refuses both POST routes.
+
 ## Agent messages
 
 | Command | Action |

@@ -8,6 +8,21 @@ The dashboard uses one menu on every page. It includes every section, including 
 
 The dashboard uses cool blue, teal, violet, cyan, and green colors for its controls and charts. Amber marks warning status. The accent color marks the critical path.
 
+## Complete an Owner action
+
+Open the Mailbox. Select **To do** in its folders or the header icon. The badge shows the number of open items from all projects and the Boss. The list sorts by priority, then by age. Each row names the project, action type, blocked work and poster. Open **Why and steps** to read the full ask.
+
+- Select **Done** after the steps or checklist are complete.
+- Select **Mark read** after you read an information item.
+- Select **Answer**, then **Accept** or **Deny**, for a decision. Add a note if needed.
+- Select **Blocked**. Give a reason. Select **Save Blocked**.
+- Select **Snooze**. Choose a future time. Select **Snooze** in the form. The item returns at that time.
+- Select **Not now**. Give a reason. Select **Save Not now**. This cancels the item.
+
+Open **Blocked, snoozed and closed** to inspect the saved action and reason. Select **Reopen** for a blocked or snoozed item. On a phone, the row text and action buttons wrap. A typed reason stays while the list refreshes.
+
+The Boss and project leads can post directly with `herdr-boss todo post FILE`. A grant item names what to grant. Enter its value only through the approved credential flow. The item never holds that value. The service saves each Owner action. The poster does not receive a notice yet. See the [CLI reference](cli.md#owner-to-do-list) for the file format and limits.
+
 ## See the running version
 
 Settings shows the running commit and date, kit revision, and service start time. The service reads these values when it starts. The Fleet page shows each factory's commit, kit revision, and uptime. A factory that does not report a field shows `unknown`. Run `herdr-boss factory status NAME` to compare the running service commit with the checkout `HEAD`. A successful `herdr-boss factory update NAME --tier service|image` prints the short commit before and after the update.
