@@ -961,15 +961,16 @@ The refresh waits while you type or scroll. It runs 3 seconds after your last in
 
 The `needsYouUnread` count is the open Needs-you items that the Owner has not opened. The number comes from `needsYouUnread` in the `mailbox` field in `/api/state`.
 
-The top bar shows three icons on a desktop and on a phone. Each icon has a count. The shared menu lists every section, including Mailbox and Chat. The icons open Chat and Mailbox. The open page icon has `aria-current="page"` and a mark. Chat has the mark on Chat. Updates has it in the Updates folder. Needs action has it in Needs you. On a phone, Mailbox, Chat, and Reviews hide the top bar. Their slim bar shows the same three icons at the right of the page title. It keeps the same counts, faded state, names, and current mark. The icons open Chat and Mailbox in one tap. Each icon is 44 px wide and high on a phone. Four 44 px targets fit in a width of 320 px. On a Mailbox page, the shared menu also lists Mailbox folders.
+The top bar shows four icons on a desktop and on a phone: To do, Chat, Updates, and Needs you. Each icon shows a count when it has items. An empty icon is faded and has no count. The shared menu lists every section, including Mailbox and Chat. The icons open To do and Chat or a Mailbox folder. The open page icon has `aria-current="page"` and a mark. To do has the mark in the To do folder. Chat has the mark on Chat. Updates has it in the Updates folder. Needs you has it in Needs you. On a phone, Mailbox, Chat, and Reviews hide the top bar. Their slim bar shows the same four icons at the right of the page title. It keeps the same counts, faded state, names, and current mark. The icons open their pages in one tap. Each icon is 44 px wide and high on a phone. Four 44 px targets fit in a width of 320 px. On a Mailbox page, the shared menu also lists Mailbox folders.
 
 | Icon | Count | Field in `mailbox` | Link |
 |---|---|---|---|
+| To do | open To do items | `todoOpen` | `/mailbox?folder=todo` |
 | Chat | chat records to the Owner with no `readAt` | `chatUnread` | `/chat` |
-| Mail | unread mail records | `mailUnread` | `/mailbox?folder=updates` |
-| Needs action | open action items | `needsAction` | `/mailbox?folder=needs-you` |
+| Updates | unread mail records | `mailUnread` | `/mailbox?folder=updates` |
+| Needs you | open action items | `needsAction` | `/mailbox?folder=needs-you` |
 
-An icon with nothing to show is faded. It has opacity 0.35 and no badge. An icon with something to show has opacity 1 and a badge with the count. Its `aria-label` holds the count. The Needs-action icon uses the warning color. It is the most visible of the three.
+An icon with nothing to show is faded. It has opacity 0.35 and no badge. An icon with something to show has opacity 1 and a badge with the count. Its `aria-label` holds the count. The Needs-you icon uses the warning color. It is the most visible of the four.
 
 ### API
 

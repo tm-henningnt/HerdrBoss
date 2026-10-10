@@ -2479,19 +2479,20 @@ test('the Chat page shows the Mailbox action cards, uses the Mailbox write route
   assert.match(guide, /The card uses the same send route as the Mailbox\./);
 });
 
-test('the top bar shows three icons with a count, and a faded icon when it has nothing to show', () => {
+test('the top bar shows four icons with a count, and a faded icon when it has nothing to show', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const icons = /<div class="top-icons"[\s\S]*?<\/div>/.exec(html)?.[0] || '';
-  // Three inline SVG icons: chat, mail, and needs action. Each has a badge and a link.
-  for (const [name, href] of [['chat', '/chat'], ['mail', '/mailbox?folder=updates'], ['needs-action', '/mailbox?folder=needs-you']]) {
+  // Four inline SVG icons: To do, chat, mail, and needs action. Each has a badge and a link.
+  for (const [name, href] of [['todo', '/mailbox?folder=todo'], ['chat', '/chat'], ['mail', '/mailbox?folder=updates'], ['needs-action', '/mailbox?folder=needs-you']]) {
     assert.match(icons, new RegExp(`data-top-icon="${name}" data-empty="true" href="${href.replace('?', '\\?').replace('=', '=')}"`), `${name} links to its page`);
     assert.match(icons, new RegExp(`data-top-badge="${name}" hidden`));
     assert.match(icons, new RegExp(`<svg viewBox="0 0 24 24" aria-hidden="true">[\\s\\S]*?</svg>`), `${name} holds an inline SVG`);
   }
-  assert.equal([...icons.matchAll(/data-top-icon="([^"]+)"/g)].map((m) => m[1]).join(','), 'chat,mail,needs-action');
+  assert.equal([...icons.matchAll(/data-top-icon="([^"]+)"/g)].map((m) => m[1]).join(','), 'todo,chat,mail,needs-action');
   // The counts come from the state. An empty icon is faded and has no badge.
+  assert.match(app, /todo: s\?\.mailbox\?\.todoOpen \?\? \(mailbox\.todo\?\.length \?\? 0\),/);
   assert.match(app, /chat: s\?\.mailbox\?\.chatUnread \?\? 0,/);
   assert.match(app, /mail: s\?\.mailbox\?\.mailUnread \?\? 0,/);
   assert.match(app, /'needs-action': mailboxActionCount\(s\),/);

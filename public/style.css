@@ -1493,7 +1493,7 @@ p.wizard-errors { padding-left: 10px; }
 .mail-status { margin: 0; min-height: 1.2em; color: var(--muted); font-size: 12.5px; }
 .mail-answer { display: grid; gap: 4px; margin: 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--panel); }
 .mail-answer .msg-text { margin: 0; }
-/* The three top-bar icons. An icon with nothing to show is faded and has no badge. */
+/* The four top-bar icons. An icon with nothing to show is faded and has no badge. */
 .top-icons { display: flex; align-items: center; gap: 2px; }
 .top-icon { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text); text-decoration: none; opacity: 1; }
 .top-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

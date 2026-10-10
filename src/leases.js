@@ -10,7 +10,7 @@ import { quietHoursActive, readNight } from './night.js';
 import { hasLiveWorkerRun, MUTATION_GUARD_WAIT_MS, withMutationLock } from './kit/locks.js';
 import { sharedWorktreeRoot } from './kit/config.js';
 import { processInfo } from './kit/process-info.js';
-import { verifyCallerPane } from './kit/workers.js';
+import { verifyCallerPane } from './caller-pane.js';
 
 export { processInfo } from './kit/process-info.js';
 
