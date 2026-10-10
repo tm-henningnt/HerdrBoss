@@ -18,7 +18,7 @@ A picture comes from `docs/images/`. Write its path in the Markdown, relative to
 
 ## Shared menu
 
-Every page uses the same menu. It lists every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The menu shows its open state.
+Every page uses the same menu. It lists every section, including Fleet and Docs. On a phone, select the Herdr Boss logo to open the menu. The menu shows its open state. Select the logo again to close the menu. Select the page outside the menu, or press Esc, to close it too.
 
 ## Diagrams
 
