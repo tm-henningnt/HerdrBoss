@@ -219,7 +219,7 @@ const MACHINE_HOURS_CACHE_MS = 60000;
 
 const PREVIEW_DEFAULT_HOST = '127.0.0.1';
 // The guide credential permits only these routes. A peer factory uses them for guidance, the head office role, handover, and project transfer.
-const FLEET_GUIDE_ROUTES = ['POST /api/fleet/guidance', 'POST /api/fleet/role', 'GET /api/fleet/role', 'GET /api/fleet/handover', 'POST /api/fleet/transfer'];
+const FLEET_GUIDE_ROUTES = ['POST /api/fleet/guidance', 'POST /api/fleet/role', 'GET /api/fleet/role', 'GET /api/fleet/handover', 'POST /api/fleet/transfer', 'GET /api/fleet/transfer'];
 
 // A preview bind address is an IP address or a host name. An empty value is refused.
 export function assertPreviewHost(host) {
@@ -264,7 +264,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     } });
   const projectTransfer = createProjectTransfer({ role: 'target', dataDir: DATA_DIR,
     privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, settings: fleetSettings.read,
-    registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, config: cfg });
+    registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, config: cfg, ...fleet.projectTransfer });
   const fleetShares = createFleetShares({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR,
     settings: fleetSettings.read, receiver: fleetGuidance, registryFile: fleet.registryFile, fetchImpl: fleet.fetchImpl, now: fleet.now });
   const fleetRole = createFleetRole({ dir: DATA_DIR, privateDir: fleet.privateDir || PRIVATE_ACCESS_DIR, settings: fleetSettings.read,
@@ -639,7 +639,11 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         catch (error) { return send(res, error.status || 503, { error: error.status ? error.message : 'The handover cannot be read.' }); }
       }
       if (p === '/api/fleet/transfer' && req.method === 'POST') {
-        const result = await projectTransfer.handle(await jsonBody(req));
+        const result = await projectTransfer.submit(await jsonBody(req));
+        return send(res, result.status, result.body);
+      }
+      if (p === '/api/fleet/transfer' && req.method === 'GET') {
+        const result = projectTransfer.jobStatus(url.searchParams.get('slug'), url.searchParams.get('jobId'));
         return send(res, result.status, result.body);
       }
       if (p === '/api/fleet/shares' && req.method === 'GET') {

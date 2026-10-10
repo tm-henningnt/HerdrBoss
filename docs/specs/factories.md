@@ -287,6 +287,9 @@ The command closes only workspaces whose labels start with `smoke-`. It removes 
 - The source orchestrator publishes its status and commits `memory.md`. Workers finish or stop. The source closes its orchestrator pane at the end of the freeze.
 - Unpushed work blocks the freeze, and the command lists it.
 - The target clones from GitHub, runs `kit install`, creates the project record, and asks for secrets again in the wizard. A fresh orchestrator reads `memory.md`, runs `project check`, and publishes its status.
+- The target accepts the start request with HTTP 202 and a job ID. It runs the import outside the HTTP service thread. The source checks the job each second. The start limit is 300 seconds. The limits for plan, switch, and cancel are 30 seconds.
+- A start timeout prints `The target is still working. Run the same command again.` The target continues. The same start command uses the same transfer ID. It resumes the owned clone and project lead checkpoints. It replaces an incomplete clone only when that transfer owns it. A finished import returns its result again. A connection failure keeps the `could not be reached` message.
+- The fleet guide credential permits the transfer POST request and the job GET request. A job response holds only status and result fields. The target refuses switch and cancel while the import job runs. Retry those actions after the job finishes.
 - The Owner confirms the switch. The source marks the project `transferred`. `cancel` before the switch removes the target project and clone and lifts the lock.
 - Owner items, review packs, and message text stay at the source. The transfer leaves an audit line on both factories.
 

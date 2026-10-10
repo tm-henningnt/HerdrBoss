@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { setTimeout as wait } from 'node:timers/promises';
+import { Worker } from 'node:worker_threads';
 import { DATA_DIR, PRIVATE_ACCESS_DIR } from './config.js';
 import { SLUG, writeProject } from './projects.js';
 import { readProjectRepos, recordProjectRepo } from './harness.js';
@@ -20,6 +22,10 @@ const TRANSFER_ID = /^[0-9a-f-]{36}$/i;
 const KIT_REVISION = /^[0-9a-f]{12}$/;
 const TARGET_TOKEN_FILE = 'fleet-guide-remotes.json';
 const LOCK_ERROR = 'The project already has an open transfer.';
+const START_TIMEOUT_MS = 300000;
+const ACTION_TIMEOUT_MS = 30000;
+const POLL_INTERVAL_MS = 1000;
+const STILL_WORKING = 'The target is still working. Run the same command again.';
 function safeError(message) {
   return String(message || 'The project transfer failed.')
     .replace(/\bhf_[a-z0-9]+_[a-f0-9]{64}\b/gi, '[credential]')
@@ -244,7 +250,10 @@ function startFreshProjectLead({ slug, repo, dataDir, herdr, env, home, hooks, s
   const inputs = { slug, name: slug, path: repo, goal: '' };
   workspaceStep(inputs, {
     start: true, kind: null, factory: true, dataDir, herdr, env, home, hooks, ids,
-    remember(patch) { Object.assign(ids, patch); state.workspace = { ...ids }; },
+    remember(patch) {
+      Object.assign(ids, patch); state.workspace = { ...ids };
+      writeTransfer(state, dataDir);
+    },
   });
   return ids;
 }
@@ -335,25 +344,50 @@ export function createProjectTransfer(options = {}) {
   const hooks = options.hooks || {};
   const projectRoot = projectTransferRoot({ ...options, env, config });
   const request = options.fetchImpl || fetch;
+  const jobs = new Map();
 
   const send = async (record, body) => {
     const dashboardUrl = safeDashboard(record);
     const token = guideToken(privateDir, record.factoryId);
-    let response;
+    const starting = body.action === 'start';
+    const timeoutMs = options.timeoutMs ?? (starting ? START_TIMEOUT_MS : ACTION_TIMEOUT_MS);
+    const deadline = now() + timeoutMs;
+    const signal = AbortSignal.timeout(timeoutMs);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' };
+    const receive = async (url, init) => {
+      const response = await request(url, { ...init, headers, redirect: 'error', signal });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        refuse(`The target factory refused the transfer request (HTTP ${response.status}).`, response.status);
+      }
+      return { status: response.status, body: await boundedJson(response) };
+    };
     try {
-      response = await request(`${dashboardUrl}/api/fleet/transfer`, {
-        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(options.timeoutMs || 5000),
-      });
-    } catch {
+      let reply = await receive(`${dashboardUrl}/api/fleet/transfer`, { method: 'POST', body: JSON.stringify(body) });
+      if (starting && now() >= deadline) refuse(STILL_WORKING, 504);
+      if (!starting || reply.status !== 202) return reply.body;
+      const jobId = reply.body.jobId;
+      if (!TRANSFER_ID.test(jobId || '')) refuse('The target factory returned an invalid transfer job.', 502);
+      const query = new URLSearchParams({ slug: body.slug, jobId });
+      while (reply.status === 202) {
+        if (reply.body.ok !== true || reply.body.factoryId !== record.factoryId || reply.body.status !== 'starting' || reply.body.jobId !== jobId) {
+          refuse('The target factory returned an invalid transfer job.', 502);
+        }
+        const remaining = deadline - now();
+        if (remaining <= 0) refuse(STILL_WORKING, 504);
+        const interval = Math.min(options.pollIntervalMs ?? POLL_INTERVAL_MS, remaining);
+        if (options.wait) await options.wait(interval, signal);
+        else await wait(interval, undefined, { signal });
+        if (now() >= deadline) refuse(STILL_WORKING, 504);
+        reply = await receive(`${dashboardUrl}/api/fleet/transfer?${query}`, { method: 'GET' });
+        if (now() >= deadline) refuse(STILL_WORKING, 504);
+      }
+      return reply.body;
+    } catch (error) {
+      if (starting && (signal.aborted || ['TimeoutError', 'AbortError'].includes(error.name))) refuse(STILL_WORKING, 504);
+      if (error.status) throw error;
       refuse('The target factory could not be reached. The transfer remains locked so you can retry or cancel.', 503);
     }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
-      const error = new Error(`The target factory refused the transfer request (HTTP ${response.status}).`);
-      error.status = response.status; throw error;
-    }
-    return boundedJson(response);
   };
 
   const resolveTarget = (name) => {
@@ -404,6 +438,7 @@ export function createProjectTransfer(options = {}) {
     const folder = path.join(projectRoot, body.slug);
     const transfer = jsonFile(transferFile(body.slug, dataDir));
     const transferOpen = Boolean(readProjectTransferLock(body.slug, { dataDir }))
+      || Boolean(jobs.get(body.slug)?.running)
       || Boolean(transfer && !['cancelled', 'switched'].includes(transfer.status));
     return { ok: true, factoryId: local.factoryId, factoryName: local.name, kitRevision: revision,
       projectExists: registered || status || fs.existsSync(folder), transferOpen };
@@ -421,16 +456,16 @@ export function createProjectTransfer(options = {}) {
     const repo = path.join(projectRoot, body.slug);
     const retry = state?.transferId === body.transferId && state.status === 'starting';
     const reusable = state?.status === 'cancelled';
-    if (state && (!retry && !reusable && !(state.transferId === body.transferId && state.status === 'pending'))) refuse('The target project already has a transfer record.', 409);
-    if (retry && (state.slug !== body.slug || state.sourceFactoryId !== body.sourceFactoryId
+    if (state && (!retry && !reusable && !(state.transferId === body.transferId && ['pending', 'switched'].includes(state.status)))) refuse('The target project already has a transfer record.', 409);
+    if (state?.transferId === body.transferId && (state.slug !== body.slug || state.sourceFactoryId !== body.sourceFactoryId
       || state.targetFactoryId !== local.factoryId || path.resolve(state.repoPath || '') !== path.resolve(repo))) {
       refuse('The target transfer record is invalid.', 409);
     }
-    if (state?.transferId === body.transferId && state.status === 'pending') {
+    if (state?.transferId === body.transferId && ['pending', 'switched'].includes(state.status)) {
       let existingPath;
       try { existingPath = fs.lstatSync(repo); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (existingPath?.isSymbolicLink() || !existingPath?.isDirectory()) refuse('The target project path is invalid.', 409);
-      return { ok: true, factoryId: local.factoryId, status: 'pending' };
+      return { ok: true, factoryId: local.factoryId, status: state.status };
     }
     let existingPath;
     try { existingPath = fs.lstatSync(repo); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -443,11 +478,30 @@ export function createProjectTransfer(options = {}) {
       || (existingProject && existingProject.transfer?.transferId !== body.transferId))) {
       refuse('The target project changed during the transfer.', 409);
     }
+    if (retry && existingPath) {
+      let completeClone = false;
+      let metadata;
+      try { metadata = fs.lstatSync(path.join(repo, '.git')); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (metadata && (!metadata.isDirectory() || metadata.isSymbolicLink())) refuse('The target project changed during the transfer.', 409);
+      try {
+        completeClone = Boolean(metadata) && git(repo, ['--git-dir=.git', 'rev-parse', '--verify', 'HEAD']).length > 0;
+      } catch { /* An interrupted clone can lack its Git metadata. */ }
+      if (completeClone && git(repo, ['--git-dir=.git', 'remote', 'get-url', 'origin']) !== body.sourceRemote) refuse('The target project changed during the transfer.', 409);
+      if (!completeClone) {
+        if (state.cloneComplete || existingRegistration || existingProject || state.workspace?.workspaceId || state.workspace?.paneId) {
+          refuse('The target project changed during the transfer.', 409);
+        }
+        // This record and lock own the incomplete clone. No project lead uses it yet.
+        fs.rmSync(repo, { recursive: true, force: true });
+      }
+    }
     try { execFileSync('git', ['ls-remote', '--heads', '--', body.sourceRemote], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: options.gitTimeoutMs || 60000 }); }
     catch { refuse('The GitHub remote is not reachable.'); }
     if (!existing) createProjectTransferLock(body.slug, { transferId: body.transferId, side: 'target', peerFactoryId: body.sourceFactoryId, dataDir, now });
     state = { schema: 1, slug: body.slug, transferId: body.transferId, status: 'starting', toFactory: local.name,
-      targetFactoryId: local.factoryId, sourceFactoryId: body.sourceFactoryId, sourceName: body.sourceName, repoPath: repo, workspace: state?.workspace || {} };
+      targetFactoryId: local.factoryId, sourceFactoryId: body.sourceFactoryId, sourceName: body.sourceName, repoPath: repo,
+      cloneComplete: retry && state.cloneComplete === true, workspace: retry ? state.workspace || {} : {} };
     writeTransfer(state, dataDir);
     try {
       fs.mkdirSync(projectRoot, { recursive: true });
@@ -456,8 +510,9 @@ export function createProjectTransfer(options = {}) {
         catch { refuse('The GitHub project could not be cloned.'); }
       }
       if (!fs.existsSync(path.join(repo, 'docs', 'orchestration', 'memory.md'))) refuse('The GitHub project has no docs/orchestration/memory.md.');
+      state.cloneComplete = true; writeTransfer(state, dataDir);
       const installed = options.install || installKit;
-      installed(repo);
+      await installed(repo);
       writeInitialProject(body.slug, repo, dataDir, revision, { status: 'pending', transferId: body.transferId, fromFactory: body.sourceName });
       const ids = startFreshProjectLead({ slug: body.slug, repo, dataDir, herdr, env, home: env.HOME, hooks, state });
       state.workspace = ids;
@@ -466,12 +521,8 @@ export function createProjectTransfer(options = {}) {
       appendAudit(dataDir, local, body.sourceFactoryId, body.slug, body.transferId, 'prepared', now);
       return { ok: true, factoryId: local.factoryId, status: 'pending' };
     } catch (error) {
-      try {
-        if (state.workspace?.paneId) herdr(['pane', 'close', state.workspace.paneId]);
-        removeTargetFiles(body.slug, repo, dataDir, projectRoot);
-        releaseProjectTransferLock(body.slug, body.transferId, { dataDir });
-        fs.rmSync(stateFile, { force: true });
-      } catch { /* Keep the lock if cleanup is incomplete, so worker start stays refused. */ }
+      // Retain the owned import and its workspace checkpoints for retry or cancel.
+      writeTransfer(state, dataDir);
       throw error;
     }
   };
@@ -538,6 +589,7 @@ export function createProjectTransfer(options = {}) {
     if (role !== 'target') return { status: 403, body: { error: 'This factory does not accept transfer requests.' } };
     try {
       const body = validateRequest(input);
+      if (jobs.get(body.slug)?.running && body.action !== 'plan') refuse('The target import is still working. Retry after it finishes.', 409);
       let result;
       if (body.action === 'plan') result = targetPlan(body);
       else if (body.action === 'start') result = await targetStart(body);
@@ -548,6 +600,65 @@ export function createProjectTransfer(options = {}) {
       const status = error.status || 400;
       return { status, body: { error: safeError(error.message) } };
     }
+  };
+
+  const jobStatus = (slug, jobId) => {
+    try {
+      if (role !== 'target') refuse('This factory does not accept transfer requests.', 403);
+      if (!SLUG.test(slug || '') || !TRANSFER_ID.test(jobId || '')) refuse('The transfer job request is invalid.');
+      const job = jobs.get(slug);
+      if (job?.id === jobId) {
+        if (!job.running) return job.result;
+        return { status: 202, body: { ok: true, factoryId: settings().factoryId, status: 'starting', jobId } };
+      }
+      const state = jsonFile(transferFile(slug, dataDir));
+      if (state?.transferId !== jobId || !['starting', 'pending', 'switched'].includes(state.status)) refuse('The transfer job was not found.', 404);
+      return { status: state.status === 'starting' ? 202 : 200,
+        body: { ok: true, factoryId: settings().factoryId, status: state.status, jobId } };
+    } catch (error) { return { status: error.status || 400, body: { error: safeError(error.message) } }; }
+  };
+
+  const submit = async (input) => {
+    try {
+      if (role !== 'target') refuse('This factory does not accept transfer requests.', 403);
+      const body = validateRequest(input);
+      if (body.action !== 'start') return handle(body);
+      const existing = jobs.get(body.slug);
+      if (existing?.running) {
+        if (existing.id !== body.transferId || Object.keys(body).some((key) => existing.body[key] !== body[key])) refuse(LOCK_ERROR, 409);
+        return jobStatus(body.slug, body.transferId);
+      }
+      const state = jsonFile(transferFile(body.slug, dataDir));
+      if (state?.transferId === body.transferId && ['pending', 'switched'].includes(state.status)) return handle(body);
+      const lock = readProjectTransferLock(body.slug, { dataDir });
+      if (lock && lock.transferId !== body.transferId) refuse(LOCK_ERROR, 409);
+      if (body.sourceKitRevision !== currentKit()) refuse('The source and target kit revisions do not match.', 409);
+      assertRemote(body.sourceRemote, allowGitRemote);
+      const job = { id: body.transferId, body, running: true, result: null };
+      jobs.set(body.slug, job);
+      const finish = (result) => { job.result = result; job.running = false; };
+      if (options.herdr || options.install || options.hooks) {
+        // Injected test adapters can run in process. Production work uses an isolated thread.
+        setImmediate(async () => {
+          try { finish({ status: 200, body: await targetStart(body) }); }
+          catch (error) { finish({ status: error.status || 400, body: { error: safeError(error.message) } }); }
+        });
+      } else {
+        let worker;
+        try { worker = new Worker(new URL('./project-transfer-job.js', import.meta.url), {
+          env: { ...env, HERDR_BOSS_DIR: dataDir },
+          workerData: { body, options: { dataDir, privateDir, config, projectRoot, gitTimeoutMs: options.gitTimeoutMs },
+            settings: settings(), revision: currentKit() },
+        }); } catch {
+          finish({ status: 503, body: { error: 'The target import could not start. Run the same command again.' } });
+          return job.result;
+        }
+        worker.once('message', finish);
+        worker.once('error', () => { if (job.running) finish({ status: 503, body: { error: 'The target import stopped. Run the same command again.' } }); });
+        worker.once('exit', () => { if (job.running) finish({ status: 503, body: { error: 'The target import stopped. Run the same command again.' } }); });
+      }
+      return jobStatus(body.slug, body.transferId);
+    } catch (error) { return { status: error.status || 400, body: { error: safeError(error.message) } }; }
   };
 
   const command = async (action, slug, to) => {
@@ -646,7 +757,7 @@ export function createProjectTransfer(options = {}) {
     throw new Error(PROJECT_TRANSFER_USAGE);
   };
 
-  return { role, dataDir, handle, command, plan, start: (slug, to) => command('start', slug, to),
+  return { role, dataDir, handle, submit, jobStatus, command, plan, start: (slug, to) => command('start', slug, to),
     switch: (slug, to) => command('switch', slug, to), cancel: (slug, to) => command('cancel', slug, to) };
 }
 
