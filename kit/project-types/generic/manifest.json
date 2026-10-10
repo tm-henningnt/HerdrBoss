@@ -1,0 +1,53 @@
+{
+  "schema": "herdr-boss.project-type/1",
+  "id": "generic",
+  "title": "Generic project",
+  "version": "1.0.0",
+  "default": true,
+  "templateRepository": null,
+  "setupSteps": [],
+  "templates": [],
+  "agentsSections": [],
+  "gates": [
+    {
+      "id": "repository",
+      "command": "git diff --check",
+      "expectedOutput": "exit code 0"
+    },
+    {
+      "id": "documentation",
+      "command": "node scripts/docs-gate.js",
+      "expectedOutput": "exit code 0"
+    }
+  ],
+  "trackerPreset": {
+    "triageLabels": [],
+    "stateLabels": {
+      "open": "open",
+      "inProgress": "in-progress",
+      "blocked": "blocked",
+      "done": "done"
+    }
+  },
+  "releaseFlow": null,
+  "settings": [],
+  "checks": [],
+  "requiredInputs": [
+    {
+      "id": "prd",
+      "kind": "document",
+      "required": false,
+      "destination": "private-inputs/prd.md"
+    },
+    {
+      "id": "mocks",
+      "kind": "images",
+      "required": false,
+      "destination": "private-inputs/mocks"
+    }
+  ],
+  "licenseMode": {
+    "values": ["none"],
+    "default": "none"
+  }
+}

@@ -486,6 +486,7 @@ herdr-boss project new <slug> [--group DIR | --path DIR] [--remote gh|URL|none]
   [--visibility private|public] [--org NAME] [--kind claude|codex] [--goal TEXT]
   [--start] [--dry-run] [--resume]
 herdr-boss project check <slug> [--fix STEP [--start]]
+herdr-boss project type check FOLDER
 herdr-boss project open <slug> [--start] [--force --reason TEXT] [--dry-run]
 herdr-boss project park <slug> [--prepare] [--dry-run]
 herdr-boss project archive|unarchive <slug> [--dry-run]
@@ -495,6 +496,8 @@ herdr-boss project unregister <slug>
 ```
 
 `project new` calls `runProjectNew` and prints one line for each step, the project path, and the next action. It never prints a token.
+
+Run `herdr-boss project type check FOLDER` to validate one type folder or a catalog folder. A type folder contains `manifest.json`. The command checks the schema, rejects unknown fields and unsafe paths, checks every file named by the manifest, and rejects an unknown setup operation. A catalog folder contains the type folders. The command checks all of them and requires one default type and unique type IDs. This command reads files and changes nothing.
 
 | Flag | Meaning |
 |---|---|
