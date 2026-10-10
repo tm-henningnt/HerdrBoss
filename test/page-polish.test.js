@@ -145,3 +145,11 @@ test('the compact phone table and the 44 px link rule reach only the Overview pr
   assert.doesNotMatch(targets, /(^|, )\.section-head(,|$)/);
   assert.doesNotMatch(targets, /\.fleet-table td/);
 });
+
+test('a project card title wraps at word breaks and the status tag moves below it instead of squeezing the title', () => {
+  const title = /(?:^|\n)\s*\.project-card-title\s*\{([^}]*)\}/.exec(css)?.[1] || '';
+  assert.match(title, /flex:\s*1 1 [0-9.]+(em|ch|px)/, 'the title has a flex basis, so the tag wraps below it');
+  assert.doesNotMatch(title, /overflow-wrap:\s*anywhere/, 'the title does not break inside a word when the line has room');
+  assert.match(title, /overflow-wrap:\s*break-word/, 'a word longer than the card still breaks');
+  assert.match(css, /\.project-card-top,[^{]*\{[^}]*flex-wrap:\s*wrap/, 'the card top row wraps');
+});
