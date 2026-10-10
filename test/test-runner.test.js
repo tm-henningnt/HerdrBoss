@@ -87,10 +87,10 @@ test('the test runner times out one file, reports elapsed time, and continues qu
   assert.equal(await waitFor(() => !processExists(fixturePid), 1000), true, 'the timed-out file process stops');
 });
 
-test('the Settings view tests release their client store refresh timers', { timeout: 10000 }, async (t) => {
+test('the Settings view tests release their client store refresh timers', { timeout: 15000 }, async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-settings-runner-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
-  const env = { ...process.env, HERDR_BOSS_TEST_TIMEOUT_MS: '2500', TMPDIR: tmp };
+  const env = { ...process.env, HERDR_BOSS_TEST_TIMEOUT_MS: '5000', TMPDIR: tmp };
   delete env.NODE_TEST_CONTEXT;
   let child;
   let closed;

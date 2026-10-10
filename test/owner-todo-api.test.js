@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { sharedDataDir } from './helpers/isolated-test-data.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,6 +28,11 @@ Release.
 check
 `;
 const caller = { HERDR_ENV: '1', HERDR_PANE_ID: 'wA:p1', HERDR_WORKSPACE_ID: 'wA' };
+
+test('To do API tests use an isolated message store instead of the runner shared store', () => {
+  assert.notEqual(DATA_DIR, sharedDataDir);
+});
+
 async function start(t, options = {}) {
   const cfg = loadConfig();
   cfg.host = '127.0.0.1'; cfg.port = 0; cfg.tickSeconds = 3600;

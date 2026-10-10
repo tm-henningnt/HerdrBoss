@@ -1,4 +1,5 @@
 import './helpers/test-env.js';
+import { sharedDataDir } from './helpers/isolated-test-data.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -26,6 +27,12 @@ Release.
 ## Type
 decide
 `;
+
+test('engine notices use an isolated message store instead of the runner shared store', async () => {
+  const { DATA_DIR } = await import('../src/config.js');
+  assert.notEqual(DATA_DIR, sharedDataDir);
+});
+
 function fixture(t, backend = 'json') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-notice-'));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ store: { messages: backend } }));

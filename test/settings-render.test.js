@@ -1,6 +1,6 @@
 import './helpers/test-env.js';
 // The Settings and Allocation views render with a fixture state. No two info buttons of one section may explain the same setting.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -14,6 +14,11 @@ import { patchHtml } from '../public/keyed.js';
 
 const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const clientStores = new Set();
+after(() => {
+  for (const store of clientStores) store.stop();
+  clientStores.clear();
+});
 
 // A stub that answers every property read and every call, so the page start-up code runs without a browser.
 function stub() {
@@ -34,7 +39,9 @@ function loadApp(code = source) {
     setInterval: () => 0, setTimeout: () => 0, clearTimeout() {}, clearInterval() {}, requestAnimationFrame: () => 0,
     URLSearchParams, URL, Date, JSON, Math, Promise, console, innerHeight: 800, innerWidth: 1280,
     EventSource: stub(), WebSocket: stub(), Blob, addEventListener() {}, removeEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }), getComputedStyle: () => stub(), scrollTo() {}, MutationObserver: stub(), ResizeObserver: stub(), IntersectionObserver: stub(), AbortController, FormData: stub(), Event: stub(), CustomEvent: stub(), Intl, Set, Map, Number, String, Object, Array, Error, RegExp, parseInt, parseFloat, isFinite, Symbol, encodeURIComponent, decodeURIComponent,
+    clientStoreTimers: new Set(),
   };
+  context.clientStoreTimerCount = () => context.clientStoreTimers.size;
   return context;
 }
 
@@ -51,20 +58,36 @@ async function views(code = source) {
     for (const name of match[1].split(',').map((item) => item.trim()).filter(Boolean)) {
       const [imported, local] = name.split(/\s+as\s+/);
       context[local || imported] = imported === 'createClientStore'
-        ? (options) => module[imported]({
-          ...options,
-          fetchImpl: context.fetch,
-          EventSourceImpl: context.EventSource,
-          setIntervalImpl: context.setInterval,
-          clearIntervalImpl: context.clearInterval,
-        })
+        ? (options) => {
+          const store = module[imported]({
+            ...options,
+            fetchImpl: context.fetch,
+            EventSourceImpl: context.EventSource,
+            setIntervalImpl: () => {
+              const timer = Symbol('client-store-refresh');
+              context.clientStoreTimers.add(timer);
+              return timer;
+            },
+            clearIntervalImpl: (timer) => context.clientStoreTimers.delete(timer),
+          });
+          clientStores.add(store);
+          return store;
+        }
         : module[imported];
     }
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, render, projectsView, project, removePolicyProject, setShowParkedAllocation, setProjectPageMode: (v) => { projectPageMode = v; }, getProjectPageSelected: () => projectPageSelected, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setProjectRegister: (v) => { projectRegisterData = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, render, projectsView, project, removePolicyProject, setShowParkedAllocation, setProjectPageMode: (v) => { projectPageMode = v; }, getProjectPageSelected: () => projectPageSelected, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setProjectRegister: (v) => { projectRegisterData = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft, stopClientStore: () => clientStore.stop(), clientStoreTimerCount };`, context);
   return { ...context.views, context };
 }
+
+test('Settings render fixtures stop their client store refresh timers', async () => {
+  const app = await views();
+  assert.ok(typeof app.stopClientStore === 'function');
+  assert.ok(app.clientStoreTimerCount() > 0);
+  app.stopClientStore();
+  assert.equal(app.clientStoreTimerCount(), 0);
+});
 
 const provider = (name) => ({ provider: name, windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 10, resetsAt: '2026-10-20T00:00:00.000Z' }], updatedAt: '2026-10-01T00:00:00.000Z' });
 function fixture() {
