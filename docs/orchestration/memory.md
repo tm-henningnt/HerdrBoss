@@ -940,4 +940,13 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Decision: park may close a workspace whose lead agent is idle. The park check blocks only on working or blocked agents.
 - Decision: an Owner message POST carries a client id; a repeated id returns the stored record, a reused id with another payload returns 409. No migration of stored messages.
 - Kit: `pr1open` adds a kit revision entry and restores SKILL.md wording. The Boss relays it after release.
-- State: integrated in `integrate-r46`. Suite, ff-only, restart, service check, push and the browser checks (CLI post to visible update within 3 seconds; 1280x800 and 393x852, light and dark) are pending.
+- Released: `main` 45a5353 (merge of `pr1open`, `msg`, `msg2`). Full suite exit 0, `suite --reuse` reused it, service restarted, `/api/state` 200, pushed. Kit revision 62a766092f88; `kit install` ran; `docs/orchestration/herdr-boss.md` is uncommitted and ships with the next commit.
+- Live check on an isolated instance (port 4479, `--read-only-preview`): a CLI `say` showed in the Chat list, unread count and rail badge within 3 seconds, no reload. A Mailbox item could not be posted (`mail post` runs only in the Boss pane): the Mailbox live update has unit evidence only.
+- Found in that check: on /fleet and /board at phone width the header shows a home-link logo and a separate round menu button, so the logo is not the one menu trigger on every page; the round button mark is invisible in dark mode. The headless browser viewport was 500 px wide, not 393. Fix runs as worker `gui2` (MSG3 gap plus GUI-FIX1).
+
+## Release checkpoint r47
+
+- Reviewed branch: `gui2` e060e46 (MSG3 gap: the logo is the one phone menu trigger on every page, no home navigation on a phone; dark-mode mark contrast; Allocation inputs and share bar; Settings model ID wrapping, usage mode select width, two-column advanced settings). Focused tests: menu-icons and settings-render 52 of 52 and every test that reads the public UI files.
+- Evidence of the rendered result, isolated preview at a true 393 px viewport (`browser viewport --tab ID 393x852 --mobile`; `browser size` plus restart gave 500 px): one logo control and one menu on /fleet, /board and /mailbox, light and dark; share bar fills to 100 percent at 1920 and 2560 px; opencode IDs wrap at hyphens; usage mode select shows its text.
+- Open minor findings, queued as GUI-FIX3: the lead goal and Boss rules single-line inputs cut text at 393 px (use a textarea); Settings preferred-model selects truncate at 393 px and one model ID wraps mid-token; the bottom card row of Settings fills only about 60 percent of the width at 1920 and 2560 px; the usage-limit source text wraps in a narrow column at 2560 px. The missing succession select label did not reproduce.
+- Method: use `browser viewport` for a per-tab phone size. Do not use `browser size` plus restart for a phone check.
