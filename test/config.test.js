@@ -161,6 +161,7 @@ test('project register settings expose cap and safe triage defaults with bounded
   const expected = {
     'register.cap': 3,
     'register.capCountsPinned': false,
+    'register.autoParkHours': 24,
     'register.triage.enabled': false,
     'register.triage.label': 'ready-for-agent',
     'register.triage.pollMinutes': 30,
@@ -172,6 +173,7 @@ test('project register settings expose cap and safe triage defaults with bounded
   }
   for (const [setting, value] of [
     ['register.cap', 1], ['register.cap', 20],
+    ['register.autoParkHours', 0], ['register.autoParkHours', 8760],
     ['register.capCountsPinned', true], ['register.capCountsPinned', false],
     ['register.triage.enabled', true], ['register.triage.enabled', false],
     ['register.triage.label', 'ready-for-agent'],
@@ -179,6 +181,7 @@ test('project register settings expose cap and safe triage defaults with bounded
   ]) assertSetting(t, setting, value);
   for (const [setting, value] of [
     ['register.cap', 0], ['register.cap', 21], ['register.cap', 3.5],
+    ['register.autoParkHours', -1], ['register.autoParkHours', 8761], ['register.autoParkHours', 24.5],
     ['register.capCountsPinned', 'false'], ['register.triage.enabled', 1],
     ['register.triage.label', ''], ['register.triage.label', ' ready '], ['register.triage.label', 'bad\nlabel'],
     ['register.triage.pollMinutes', 4], ['register.triage.pollMinutes', 1441],

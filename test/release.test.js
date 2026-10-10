@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { deflateRawSync, gzipSync } from 'node:zlib';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-test-'));
 process.env.HOME = path.join(root, 'home');
@@ -62,6 +63,90 @@ function zipWithEntry(name, { localName = name, centralName = name, hiddenLocalE
   return Buffer.concat([hidden, local, central, end]);
 }
 
+function zipWithFile(name, bytes, { deflate = false } = {}) {
+  const filename = Buffer.from(name);
+  const data = Buffer.from(bytes);
+  const compressed = deflate ? deflateRawSync(data) : data;
+  const method = deflate ? 8 : 0;
+  const local = Buffer.alloc(30 + filename.length + compressed.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(method, 8);
+  local.writeUInt16LE(filename.length, 26);
+  filename.copy(local, 30);
+  compressed.copy(local, 30 + filename.length);
+  const central = Buffer.alloc(46 + filename.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(method, 10);
+  central.writeUInt32LE(compressed.length, 20);
+  central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(filename.length, 28);
+  filename.copy(central, 46);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(local.length, 16);
+  return Buffer.concat([local, central, end]);
+}
+
+function zipWithFiles(entries) {
+  const locals = [];
+  const centrals = [];
+  let localOffset = 0;
+  for (const { name, bytes, deflate = false, method: methodOverride = null } of entries) {
+    const filename = Buffer.from(name);
+    const data = Buffer.from(bytes);
+    const compressed = deflate ? deflateRawSync(data) : data;
+    const method = methodOverride ?? (deflate ? 8 : 0);
+    const local = Buffer.alloc(30 + filename.length + compressed.length);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(filename.length, 26);
+    filename.copy(local, 30);
+    compressed.copy(local, 30 + filename.length);
+    locals.push(local);
+
+    const central = Buffer.alloc(46 + filename.length);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(filename.length, 28);
+    central.writeUInt32LE(localOffset, 42);
+    filename.copy(central, 46);
+    centrals.push(central);
+    localOffset += local.length;
+  }
+  const directory = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...locals, directory, end]);
+}
+
+function tarGzipWithFile(name, bytes) {
+  const data = Buffer.from(bytes);
+  const header = Buffer.alloc(512);
+  Buffer.from(name).copy(header, 0, 0, 100);
+  Buffer.from(`${data.length.toString(8).padStart(11, '0')}\0`).copy(header, 124);
+  header[156] = '0'.charCodeAt(0);
+  const padded = Buffer.alloc(Math.ceil(data.length / 512) * 512);
+  data.copy(padded);
+  return gzipSync(Buffer.concat([header, padded, Buffer.alloc(1024)]));
+}
+
 // A fake gh. `state` can change between calls: state.draft, state.files (name -> content), state.body.
 function fakeGh(state = {}) {
   state.draft ??= true;
@@ -109,6 +194,7 @@ function fakeHerdr() {
 }
 
 const request = (dir, run, extra = {}) => release.requestRelease({ repo: REPO, tag: TAG, run, dir, knownHosts, config, requesterPane: 'wA:p1', ...extra });
+const requestQlik = (dir, run, extra = {}) => release.requestRelease({ repo: REPO, tag: TAG, run, dir, knownHosts, config: qlikExtensionConfig, requesterPane: 'wA:p1', ...extra });
 const answer = (dir, id, text, offset = 1000) => openMessageStore({ dir }).append({
   thread: 'example', from: 'owner', to: 'orch', kind: 'message', text, replyTo: id, status: 'queued', at: new Date(Date.now() + offset).toISOString(),
 });
@@ -163,7 +249,7 @@ test('Qlik extension requests require and list a separate demo app asset', () =>
 
 test('Qlik extension requests refuse a draft without a separate demo app asset', () => {
   const dir = newDir();
-  assert.throws(() => request(dir, fakeGh(), { config: qlikExtensionConfig }), /requires one separate \.qvf demo app asset/);
+  assert.throws(() => request(dir, fakeGh({ files: { 'app.bin': 'archive bytes' } }), { config: qlikExtensionConfig }), /requires one separate \.qvf demo app asset/);
   assert.equal(openMessageStore({ dir }).all().filter((record) => record.release).length, 0);
 });
 
@@ -195,7 +281,8 @@ test('publish rechecks that a Qlik demo app stays separate after Owner approval'
   answer(dir, approval.id, 'Approved.');
   run.state.files['extension.zip'] = zipWithEntry('extension/demo.qvf');
   const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: approval.id, run, dir, knownHosts, config: qlikExtensionConfig });
-  assert.equal(result.code, 'scan-failed');
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /\.qvf/i);
   assert.ok(!run.calls.some((args) => args[1] === 'edit'));
 });
 
@@ -793,6 +880,115 @@ test('publish edits the draft, writes an audit line, and closes the item', () =>
   assert.ok(line.at);
   assert.equal(item(dir, id).closeNote, 'published');
   assert.ok(!run.calls.some((args) => ['delete', 'create', 'upload'].includes(args[1])));
+});
+
+test('Qlik extension zip inspection finds a QVF inside a nested zip', () => {
+  const dir = newDir();
+  const qvf = zipWithFile('demo.qvf', Buffer.from('demo app'));
+  const nested = zipWithFile('nested.zip', zipWithFile('inner.zip', qvf, { deflate: true }), { deflate: true });
+  const extension = zipWithFile('nested.zip', nested, { deflate: true });
+  const run = fakeGh({ draft: true, files: { 'extension.zip': extension, 'demo.qvf': 'demo app' } });
+
+  assert.throws(() => requestQlik(dir, run), /(?:archive|zip).*\.qvf|\.qvf.*(?:archive|zip)/i);
+
+  const tooDeepDir = newDir();
+  const tooDeep = zipWithFile('outer.zip', zipWithFile('middle.zip', zipWithFile('inner.zip', qvf, { deflate: true }), { deflate: true }), { deflate: true });
+  const tooDeepRun = fakeGh({ draft: true, files: { 'extension.zip': tooDeep, 'demo.qvf': 'demo app' } });
+  assert.throws(() => requestQlik(tooDeepDir, tooDeepRun), /inspection depth/i);
+});
+
+test('Qlik extension gate inspects tgz files and refuses uninspectable 7z files', () => {
+  const tgzDir = newDir();
+  const tgz = tarGzipWithFile('hidden/demo.qvf', Buffer.from('demo app'));
+  const tgzRun = fakeGh({ draft: true, files: { 'sample.tgz': tgz, 'demo.qvf': 'demo app' } });
+  assert.throws(() => requestQlik(tgzDir, tgzRun), /archive.*\.qvf|\.qvf.*archive/i);
+
+  const sevenZipDir = newDir();
+  const sevenZipRun = fakeGh({ draft: true, files: { 'sample.7z': Buffer.from('7z uninspected bytes'), 'demo.qvf': 'demo app' } });
+  assert.throws(() => requestQlik(sevenZipDir, sevenZipRun), /cannot inspect|cannot be checked|cannot be inspected|uninspectable/i);
+});
+
+test('Qlik archive inspection enforces one inflated-byte, entry-count, and nesting-depth budget', () => {
+  const tooManyBytesDir = newDir();
+  const tooManyBytesRun = fakeGh({ draft: true, files: {
+    'one.zip': zipWithFiles([{ name: 'one.qvf', bytes: '123456' }]),
+    'two.zip': zipWithFiles([{ name: 'two.qvf', bytes: '123456' }]),
+    'demo.qvf': 'demo app',
+  } });
+  assert.throws(() => requestQlik(tooManyBytesDir, tooManyBytesRun, { archiveLimits: { maxInflatedBytes: 10 } }), /total inflated.*byte.*limit/i);
+
+  const tooLargeTgzDir = newDir();
+  const tooLargeTgzRun = fakeGh({ draft: true, files: {
+    'extension.tgz': tarGzipWithFile('manifest.js', Buffer.from('manifest')),
+    'demo.qvf': 'demo app',
+  } });
+  assert.throws(() => requestQlik(tooLargeTgzDir, tooLargeTgzRun, { archiveLimits: { maxInflatedBytes: 10 } }), /total inflated.*byte.*limit/i);
+
+  const tooManyEntriesDir = newDir();
+  const tooManyEntriesRun = fakeGh({ draft: true, files: {
+    'first.zip': zipWithFiles([{ name: 'manifest.js', bytes: 'one' }, { name: 'style.css', bytes: 'two' }]),
+    'second.zip': zipWithFiles([{ name: 'readme.txt', bytes: 'three' }, { name: 'icon.svg', bytes: 'four' }]),
+    'demo.qvf': 'demo app',
+  } });
+  assert.throws(() => requestQlik(tooManyEntriesDir, tooManyEntriesRun, { archiveLimits: { maxEntries: 2 } }), /total archive entry.*limit/i);
+
+  const tooDeepDir = newDir();
+  const tooDeepRun = fakeGh({ draft: true, files: {
+    'extension.zip': zipWithFile('inner.zip', zipWithFile('demo.qvf', Buffer.from('demo app'), { deflate: true }), { deflate: true }),
+    'demo.qvf': 'demo app',
+  } });
+  assert.throws(() => requestQlik(tooDeepDir, tooDeepRun, { archiveLimits: { maxDepth: 0 } }), /inspection depth/i);
+});
+
+test('Qlik archive inspection inflates only QVF and archive entries', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: true, files: {
+    'extension.zip': zipWithFiles([{ name: 'ordinary.bin', bytes: 'not inspected', method: 99 }]),
+    'demo.qvf': 'demo app',
+  } });
+  assert.doesNotThrow(() => requestQlik(dir, run, { archiveLimits: { maxInflatedBytes: 1 } }));
+});
+
+test('a required demo app refuses unsupported and unknown archive-like assets and nested entries', () => {
+  for (const extension of ['tar.xz', 'tar.bz2', 'tbz2', 'gz', 'xz', 'rar', '7z', 'zst', 'zipx', 'tar.unknown']) {
+    const dir = newDir();
+    const run = fakeGh({ draft: true, files: { [`payload.${extension}`]: Buffer.from('opaque archive bytes'), 'demo.qvf': 'demo app' } });
+    assert.throws(() => requestQlik(dir, run), /archive.*cannot be inspected/i, extension);
+  }
+
+  const nestedDir = newDir();
+  const nestedRun = fakeGh({ draft: true, files: {
+    'extension.zip': zipWithFiles([{ name: 'nested.tar.xz', bytes: 'opaque archive bytes' }]),
+    'demo.qvf': 'demo app',
+  } });
+  assert.throws(() => requestQlik(nestedDir, nestedRun), /archive.*cannot be inspected/i);
+});
+
+test('publish uses the default service config when its config argument is null', (t) => {
+  const file = path.join(process.env.HERDR_BOSS_DIR, 'config.json');
+  const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => previous === null ? fs.rmSync(file, { force: true }) : fs.writeFileSync(file, previous));
+  fs.writeFileSync(file, `${JSON.stringify(qlikExtensionConfig)}\n`);
+
+  const dir = newDir();
+  const run = fakeGh({ draft: true, files: { 'extension.zip': zipWithEntry('extension.js'), 'demo.qvf': 'demo app' } });
+  const { id } = requestQlik(dir, run);
+  answer(dir, id, 'Approved.');
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, who: 'wA:p1', config: null });
+  assert.equal(result.published, true, result.reason);
+});
+
+test('publish returns the demo app cause when a nested QVF appears after approval', () => {
+  const dir = newDir();
+  const run = fakeGh({ draft: true, files: { 'extension.zip': zipWithEntry('extension.js'), 'demo.qvf': 'demo app' } });
+  const { id } = requestQlik(dir, run);
+  answer(dir, id, 'Approved.');
+  run.state.files['extension.zip'] = zipWithFile('nested.zip', zipWithFile('demo.qvf', Buffer.from('hidden app')), { deflate: true });
+
+  const result = release.publishRelease({ repo: REPO, tag: TAG, approvalId: id, run, dir, knownHosts, who: 'wA:p1', config: qlikExtensionConfig });
+  assert.equal(result.code, 'demo-app-failed');
+  assert.match(result.reason, /nested.*\.qvf|\.qvf.*nested/i);
 });
 
 test('publish uses --latest=false when the card says so', () => {

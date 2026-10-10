@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { SLUG } from './projects.js';
+import { recordProjectActivity } from './project-register.js';
 import { openMessageStore, RETENTION_MS, messagesFile, newId } from './message-store.js';
 import { redactSecrets } from './redact.js';
 import { promptText, plannerPromptText, reviewAnswerPromptText } from './review-result.js';
@@ -40,7 +41,16 @@ export function readMessages({ dir = DATA_DIR } = {}) {
 
 // Keep this wrapper while callers move to the message store interface.
 export function appendMessage(fields, { dir = DATA_DIR, now = Date.now() } = {}) {
-  return openMessageStore({ dir }).append(fields, { now });
+  const store = openMessageStore({ dir });
+  const record = store.append(fields, { now });
+  if (record.from === 'owner' && record.replyTo && record.thread !== 'boss' && SLUG.test(record.thread)) {
+    const byId = messagesById(store.all());
+    if (isMailAnswer(record, byId)) {
+      try { recordProjectActivity(record.thread, record.at, { dataDir: dir }); }
+      catch { /* Keep the saved Owner answer even if the activity update cannot run. */ }
+    }
+  }
+  return record;
 }
 
 export function updateMessage(id, patch, { dir = DATA_DIR, now = Date.now() } = {}) {
@@ -808,7 +818,7 @@ export function postReviewResult({ result, replyTo = null } = {}, { dir = DATA_D
   if (!validThread(ref.slug) || ref.slug === 'boss') throw new Error('The project slug must match [a-z0-9][a-z0-9-]* and have at most 64 characters.');
   if (!Number.isInteger(ref.version) || ref.version < 1) throw new Error('The review result needs a version.');
   const at = new Date(now).toISOString();
-  return openMessageStore({ dir }).mutate((records) => {
+  const record = openMessageStore({ dir }).mutate((records) => {
     const existing = records.find((record) => record.kind === 'review-result' && sameReview(record, ref));
     if (existing) return { records, result: existing };
     // The review item of the pack version names the planner session of the publisher. The result goes to that pane.
@@ -821,6 +831,11 @@ export function postReviewResult({ result, replyTo = null } = {}, { dir = DATA_D
     records.push(record);
     return { records, result: record };
   }, { now });
+  if (record.from === 'owner') {
+    try { recordProjectActivity(record.thread, record.at, { dataDir: dir }); }
+    catch { /* Keep the saved review result even if the activity update cannot run. */ }
+  }
+  return record;
 }
 
 // Queue the answer to an item reopened after submit. It uses the same delivery queue and planner-pane routing as a result prompt.
@@ -831,7 +846,7 @@ export function postReviewAnswer({ slug, pack, version, item, answer, replyTo = 
   if (!Number.isInteger(version) || version < 1 || !Number.isInteger(answer?.rev) || answer.rev < 1) throw new Error('The review answer needs a version and saved revision.');
   const ref = { slug, pack, version };
   const at = new Date(now).toISOString();
-  return openMessageStore({ dir }).mutate((records) => {
+  const record = openMessageStore({ dir }).mutate((records) => {
     const existing = records.find((record) => record.kind === 'review-answer' && sameReview(record, ref)
       && record.reviewAnswer?.item === item && record.reviewAnswer?.rev === answer.rev);
     if (existing) return { records, result: existing };
@@ -845,6 +860,11 @@ export function postReviewAnswer({ slug, pack, version, item, answer, replyTo = 
     records.push(record);
     return { records, result: record };
   }, { now });
+  if (record.from === 'owner') {
+    try { recordProjectActivity(record.thread, record.at, { dataDir: dir }); }
+    catch { /* Keep the saved review answer even if the activity update cannot run. */ }
+  }
+  return record;
 }
 
 // The delivery state of the result message of one pack version: queued, sent, or failed. `retry` is true while a failed message

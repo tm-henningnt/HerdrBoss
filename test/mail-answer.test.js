@@ -16,6 +16,7 @@ const { assertTempDataDir } = await import('../src/data-dir-guard.js');
 assertTempDataDir(dataDir);
 const messages = await import('../src/messages.js');
 const { openMessageStore } = await import('../src/message-store.js');
+const { readRegister, writeRegister } = await import('../src/project-register.js');
 const { serve } = await import('../src/server.js');
 const { loadConfig } = await import('../src/config.js');
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -49,6 +50,21 @@ test('an Owner answer to a mailbox item is a mail answer, and a plain chat messa
   assert.equal(messages.isMailAnswer(own, byId), false);
   const kept = messages.chatRecords(store.all()).map((record) => record.id);
   assert.deepEqual(kept, [chat.id, ask.id, own.id], 'the answer is not a chat record');
+});
+
+test('an Owner Mailbox answer refreshes the activity of its project', (t) => {
+  const dir = fs.mkdtempSync(path.join(dataDir, 'activity-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeRegister({ version: 1, projects: [{
+    slug: 'alpha', title: 'Alpha', group: '', clientTag: '', repo: '', remote: '', factory: 'factory-zero',
+    state: 'open', pinned: false, priority: 'normal', issueSource: null, autoOpen: 'off', lastOpenedAt: '',
+    lastActivityAt: '', nextAction: '', notes: '', createdAt: new Date(base).toISOString(),
+  }] }, dir);
+  const item = messages.appendMessage({ thread: 'alpha', from: 'orch', to: 'owner', kind: 'reply', action: 'decide', text: 'Choose one.' }, { dir, now: base });
+
+  messages.appendMessage({ thread: 'alpha', from: 'owner', to: 'orch', kind: 'message', text: 'Accepted.', replyTo: item.id, status: 'sent' }, { dir, now: base + 120000 });
+
+  assert.equal(readRegister(dir).projects[0].lastActivityAt, iso(2));
 });
 
 test('a needs-you review appears in Chat and Mailbox with its answer', (t) => {

@@ -55,6 +55,8 @@ import { refreshActionsMinutes, ACTIONS_MINUTES_REFRESH_MS } from './actions-min
 import { deriveTickReadings } from './engine-tick.js';
 import { createQuotaPlanService } from './quota-plan-service.js';
 import { createProjectRegisterTriage } from './project-register-triage.js';
+import { createProjectRegisterAutoPark } from './project-register-auto-park.js';
+import { recordProjectActivity } from './project-register.js';
 import { ACTION_REFRESH_MS, capFinished, cleanScreen, maskText, paneAction, pruneBriefCopies, readWorkerRows, workerBrief } from './worker-view.js';
 
 const TASK_WORKERS_INTERVAL_MS = 15_000;
@@ -580,7 +582,7 @@ export class Engine extends EventEmitter {
   leaseProbeCursor = 0;
   // The first tick that saw each pool item with a listener and no lease, keyed by pool and item.
   unleasedListeners = new Map();
-  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, projectRegisterTriageRunner = null, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
+  constructor(cfg, { push = cfg.push, act = true, collectors = {}, clock = () => Date.now(), handoffRunner = run, herdrRunner = run, gitRunner = (args) => run('git', args, { timeout: 10000 }), psRunner = (args, options) => run('env', args, options), actionsMinutesRun, projectRegisterTriageRunner = null, projectRegisterAutoParkRunner = null, kitRoot = KIT_ROOT, lockDataDir = DATA_DIR, lockLedgerReader = readLockWatchdogLedger, diskFreeSpaceReader = (file) => fs.statfsSync(file), diskScan = scanDiskUsage, diskDiagnosisWrite = writeDiskDiagnosis } = {}) {
     super();
     initializeLifecyclePort();
     this.cfg = cfg;
@@ -707,6 +709,21 @@ export class Engine extends EventEmitter {
     });
     this.kitRoot = kitRoot;
     this.lockDataDir = lockDataDir;
+    this.projectRegisterAutoParkAt = null;
+    this.projectRegisterAutoParkRunning = false;
+    this.projectRegisterAutoParkTask = null;
+    this.projectRegisterAutoPark = projectRegisterAutoParkRunner ?? createProjectRegisterAutoPark({
+      dataDir: this.lockDataDir,
+      runLifecycle: async (action, args, { log = () => {}, suppressAudit = false } = {}) => {
+        const { projectLifecycleCommand } = await import('./project-lifecycle.js');
+        return projectLifecycleCommand(action, args, {
+          env: {}, herdr: (herdrArgs, options) => this.herdrRunner('herdr', herdrArgs, options), dataDir: this.lockDataDir,
+          registerSettings: { cap: this.cfg.register?.cap, capCountsPinned: this.cfg.register?.capCountsPinned ?? false },
+          auditBy: 'auto-park', suppressAudit, log, now: () => this.clock(),
+        });
+      },
+      log: (line, slug) => this.log('project-register', line, { project: slug }),
+    });
     this.lockLedgerReader = lockLedgerReader;
     this.diskFreeSpaceReader = diskFreeSpaceReader;
     this.diskScan = diskScan;
@@ -1676,6 +1693,7 @@ export class Engine extends EventEmitter {
       await this.deliverNightReports(snap, now);
       if (this.act && this.push) await this.deliverWatchRoutines(herdr, now);
       this.scheduleProjectRegisterTriage(now);
+      this.scheduleProjectRegisterAutoPark(now);
       snap.watchRoutines = effectiveRoutines({ dataDir: DATA_DIR, kitRoot: this.kitRoot });
       snap.night = readNight({ dataDir: DATA_DIR, now });
       snap.events = this.events.slice(-60);
@@ -1730,6 +1748,28 @@ export class Engine extends EventEmitter {
     return this.projectRegisterTriageTask;
   }
 
+  scheduleProjectRegisterAutoPark(now) {
+    const configuredHours = this.cfg.register?.autoParkHours;
+    const hours = Number.isSafeInteger(configuredHours) ? configuredHours : 24;
+    if (!this.act || hours === 0) {
+      this.projectRegisterAutoParkAt = null;
+      return null;
+    }
+    const interval = 10 * 60 * 1000;
+    if (this.projectRegisterAutoParkRunning || (this.projectRegisterAutoParkAt !== null && now - this.projectRegisterAutoParkAt < interval)) return null;
+    this.projectRegisterAutoParkAt = now;
+    this.projectRegisterAutoParkRunning = true;
+    this.projectRegisterAutoParkTask = Promise.resolve().then(() => this.projectRegisterAutoPark.run({
+      hours,
+      now,
+      dataDir: this.lockDataDir,
+      workersByProject: this.taskWorkers,
+    })).catch(() => {
+      this.log('error', 'Project register auto-park failed.');
+    }).finally(() => { this.projectRegisterAutoParkRunning = false; });
+    return this.projectRegisterAutoParkTask;
+  }
+
   // GitHub calls run in the background. The service tick never waits for them.
   refreshActionsMinutes(now) {
     if (this.cfg.analytics?.actionsMinutes === false || this.actionsMinutesRunning || (this.actionsMinutesAt !== null && now - this.actionsMinutesAt < ACTIONS_MINUTES_REFRESH_MS)) return null;
@@ -1764,7 +1804,7 @@ export class Engine extends EventEmitter {
   // A changed HEAD, or a HEAD commit after the published updated time, means new commits landed.
   readProjectHeads(now) {
     const heads = (this.memory.statusHeads ||= {});
-    const repos = readProjectRepos(DATA_DIR);
+    const repos = readProjectRepos(this.lockDataDir);
     for (const slug of Object.keys(heads)) if (!repos.some((row) => row.slug === slug)) delete heads[slug];
     const reads = repos.filter((row) => !this.headReads.has(row.slug) && !(now - (heads[row.slug]?.checkedAt ?? -Infinity) < STATUS_HEAD_INTERVAL_MS)).map(async ({ slug, repo }) => {
       this.headReads.add(slug);
@@ -1774,6 +1814,8 @@ export class Engine extends EventEmitter {
         const committedAt = String(await this.gitRunner(['-C', repo, 'log', '-1', '--format=%cI'])).trim();
         const previous = heads[slug];
         heads[slug] = { checkedAt: now, head, committedAt, changedAt: previous.head && previous.head !== head ? now : previous.changedAt ?? null };
+        try { recordProjectActivity(slug, committedAt, { dataDir: this.lockDataDir }); }
+        catch { this.log('status', `Activity update for ${slug} failed.`, { project: slug }); }
       } catch (error) {
         this.log('status', `HEAD read for ${slug} failed (${error.code || 'error'}).`, { project: slug });
       } finally { this.headReads.delete(slug); }

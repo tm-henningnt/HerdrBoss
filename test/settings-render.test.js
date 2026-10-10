@@ -233,10 +233,11 @@ test('Settings renders the project cap and triage controls in their own group', 
   const html = app.settingsView(fixture());
   assert.match(html, /data-service-setting="register\.cap" data-service-group="Project register"/);
   assert.match(html, /data-service-setting="register\.capCountsPinned" data-service-group="Project register"/);
+  assert.match(html, /data-service-setting="register\.autoParkHours" data-service-group="Project register"/);
   assert.match(html, /data-service-setting="register\.triage\.enabled" data-service-group="Project register"/);
   assert.match(html, /data-service-setting="register\.triage\.label" data-service-group="Project register"/);
   assert.match(html, /data-service-setting="register\.triage\.pollMinutes" data-service-group="Project register"/);
-  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
+  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.autoParkHours', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
     assert.equal(html.split(`data-setting-help="${setting}"`).length - 1, 1);
   }
   assert.match(html, /data-save-service-settings="Project register"/);
@@ -244,6 +245,7 @@ test('Settings renders the project cap and triage controls in their own group', 
   const inputs = [
     { type: 'number', dataset: { serviceSetting: 'register.cap' }, value: '3' },
     { type: 'checkbox', dataset: { serviceSetting: 'register.capCountsPinned' }, checked: false },
+    { type: 'number', dataset: { serviceSetting: 'register.autoParkHours' }, value: '24' },
     { type: 'checkbox', dataset: { serviceSetting: 'register.triage.enabled' }, checked: true },
     { type: 'text', dataset: { serviceSetting: 'register.triage.label' }, value: 'ready-for-agent' },
     { type: 'number', dataset: { serviceSetting: 'register.triage.pollMinutes' }, value: '30' },
@@ -261,6 +263,7 @@ test('Settings renders the project cap and triage controls in their own group', 
   assert.deepEqual(sent.changes, {
     'register.cap': 3,
     'register.capCountsPinned': false,
+    'register.autoParkHours': 24,
     'register.triage.enabled': true,
     'register.triage.label': 'ready-for-agent',
     'register.triage.pollMinutes': 30,

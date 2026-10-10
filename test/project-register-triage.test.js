@@ -195,3 +195,26 @@ test('Engine schedules enabled triage at its configured interval on acting ticks
   assert.equal(engine.scheduleProjectRegisterTriage(NOW + 31 * 60 * 1000), null);
   assert.equal(calls.length, 2);
 });
+
+test('Engine schedules enabled auto-park at its interval on acting ticks only', async () => {
+  const calls = [];
+  const engine = Object.assign(Object.create(Engine.prototype), {
+    act: true,
+    cfg: { register: { autoParkHours: 24 } },
+    projectRegisterAutoParkAt: null,
+    projectRegisterAutoParkRunning: false,
+    projectRegisterAutoPark: { run: async (options) => { calls.push(options); } },
+    log() {},
+  });
+
+  await engine.scheduleProjectRegisterAutoPark(NOW);
+  assert.equal(engine.scheduleProjectRegisterAutoPark(NOW + 60_000), null);
+  await engine.scheduleProjectRegisterAutoPark(NOW + 10 * 60 * 1000);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].hours, 24);
+
+  engine.act = false;
+  engine.cfg.register.autoParkHours = 0;
+  assert.equal(engine.scheduleProjectRegisterAutoPark(NOW + 11 * 60 * 1000), null);
+  assert.equal(calls.length, 2);
+});

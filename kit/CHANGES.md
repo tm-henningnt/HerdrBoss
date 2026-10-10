@@ -310,3 +310,7 @@ Summary: The release scan accepts the Qlik Engine inline table path /home/engine
 ## 0d76ed813630
 Impact: required
 Summary: The models opencode/exo-free, opencode/step-5-preview-free and opencode-go/step-5-preview-free are trial models; pass --model-result at each collect. The worker brief says: never print a config value, a tenant host, a client id or an app id. A worker may use subagents for reads, surveys and review. The orchestrator skill says: bundle related issues into one worker brief, keep one tracker reference per issue, and use cheap models for subagents. Limit orchestrator work to Owner-approved items, define validated proposal cards sent through the Boss, and warn when the installed kit lacks the approval rule. Require a separate public Qlik demo app for extension releases; add the shared sheet publish, verify, export, and content scan helper.
+
+## 62a766092f88
+Impact: useful
+Summary: Restore the Owner decision and worker report wording in the orchestrator skill.

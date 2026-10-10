@@ -125,7 +125,7 @@ function assertFactory(record, dataDir) {
   if (record.factory !== factory) throw new Error(`Project ${record.slug} belongs to factory ${record.factory}. Run this command on that factory.`);
 }
 
-function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, by = 'owner-cli', now = Date.now, write = writeRegister } = {}) {
+function writeRecord(slug, dataDir, action, update, { result = 'done', failedCheck = null, by = 'owner-cli', now = Date.now, write = writeRegister, audit = true } = {}) {
   return withRegisterLock(dataDir, () => {
     const register = readRegister(dataDir);
     const index = register.projects.findIndex((item) => item.slug === slug);
@@ -133,13 +133,15 @@ function writeRecord(slug, dataDir, action, update, { result = 'done', failedChe
     const previous = register.projects[index];
     register.projects[index] = update({ ...previous });
     write(register, dataDir);
-    try {
-      appendAudit(slug, action, dataDir, { result, failedCheck, by, dryRun: false, at: new Date(now()).toISOString() });
-    } catch (error) {
-      register.projects[index] = previous;
-      try { write(register, dataDir); }
-      catch { throw new Error(`The ${action} audit line could not be written, and the register change could not be reverted.`); }
-      throw error;
+    if (audit) {
+      try {
+        appendAudit(slug, action, dataDir, { result, failedCheck, by, dryRun: false, at: new Date(now()).toISOString() });
+      } catch (error) {
+        register.projects[index] = previous;
+        try { write(register, dataDir); }
+        catch { throw new Error(`The ${action} audit line could not be written, and the register change could not be reverted.`); }
+        throw error;
+      }
     }
     return register.projects[index];
   });
@@ -557,7 +559,7 @@ async function parkProject(parsed, options) {
   }
   if (!checked.ok) {
     const failedCheck = failureId(checked);
-    appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck, by: options.auditBy ?? 'owner-cli' });
+    if (!options.suppressAudit) appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck, by: options.auditBy ?? 'owner-cli' });
     return 1;
   }
 
@@ -568,14 +570,14 @@ async function parkProject(parsed, options) {
     checked = inspectPark(slug, current, options);
     showParkChecks(checked, log);
     if (!checked.ok) {
-      appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failureId(checked), by: options.auditBy ?? 'owner-cli' });
+      if (!options.suppressAudit) appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failureId(checked), by: options.auditBy ?? 'owner-cli' });
       return 1;
     }
 
     let failedStep = 'register';
     try {
       writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parking' }), {
-        result: 'started', failedCheck: null, now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli',
+        result: 'started', failedCheck: null, now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli', audit: !options.suppressAudit,
       });
       failedStep = 'workspace';
       closeWorkspaceById(slug, current, checked, options);
@@ -583,14 +585,16 @@ async function parkProject(parsed, options) {
       await releaseBrowserReservation(slug, dataDir, options);
       failedStep = 'register';
       writeRecord(slug, dataDir, 'park', (project) => ({ ...project, state: 'parked', pinned: false }), {
-        now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli',
+        now: options.now, write: options.writeRegister, by: options.auditBy ?? 'owner-cli', audit: !options.suppressAudit,
       });
       log(`Parked ${slug}. Its project files and status stay in place.`);
       return 0;
     } catch (error) {
       let reservationError = null;
       try { await restoreBrowserReservation(slug, dataDir, options); } catch (restoreError) { reservationError = restoreError; }
-      try { appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failedStep, by: options.auditBy ?? 'owner-cli' }); } catch {}
+      if (!options.suppressAudit) {
+        try { appendAudit(slug, 'park', dataDir, { result: 'failed', failedCheck: failedStep, by: options.auditBy ?? 'owner-cli' }); } catch {}
+      }
       const state = (() => { try { return findRecord(slug, dataDir).state; } catch { return 'unknown'; } })();
       log(`Park stopped at ${failedStep}. Project ${slug} stays in state ${state}. ${error.message}${reservationError ? ` The browser reservation could not be restored: ${reservationError.message}` : ''}`);
       return 1;

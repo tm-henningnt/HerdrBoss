@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DATA_DIR } from './config.js';
+import { gunzipSync, inflateRawSync } from 'node:zlib';
+import { DATA_DIR, loadConfig } from './config.js';
 import { openMessageStore } from './message-store.js';
 import { scanText } from './secret-scan.js';
 import { scanTokenText } from '../scripts/docs-gate.js';
@@ -15,6 +16,7 @@ import { getResultRecord } from './review-store.js';
 
 const AUDIT_FILE = path.join('releases', 'audit.jsonl');
 const MAX_SCAN_BYTES = 20 * 1024 * 1024;
+const DEFAULT_ARCHIVE_LIMITS = Object.freeze({ maxInflatedBytes: 200 * 1024 * 1024, maxEntries: 5000, maxDepth: 2 });
 const MAX_CANCEL_REASON = 500;
 const APPROVED = /^\s*(approved|approve|accepted|accept|yes)\b/i;
 const REJECTED = /^\s*(rejected|reject|denied|deny|no)\b/i;
@@ -30,6 +32,7 @@ export const REFUSALS = {
   'answer-too-old': 'The Owner answer is older than the request. Request a new approval.',
   'checksum-mismatch': 'The draft assets changed after the request. Request a new approval.',
   'scan-failed': 'The secret scan found a problem after the request. Request a new approval.',
+  'demo-app-failed': 'The demo app gate failed after the request. Request a new approval.',
   'not-draft': 'The release is no longer a draft.',
   'wrong-operation': 'The approval item is for a different release action.',
   'file-changed': 'The add-asset files changed or cannot be read after the request. Cancel and request again.',
@@ -105,53 +108,146 @@ function readRelease(run, repo, tag) {
   };
 }
 
-function zipContainsQvf(content) {
+function archiveByteLimit(limit) {
+  const mib = 1024 * 1024;
+  const size = limit > 0 && limit % mib === 0 ? `${limit / mib} MB` : `${limit} bytes`;
+  return new Error(`Qlik extension archive inspection exceeded the total inflated-byte limit (${size}).`);
+}
+
+function archiveEntryLimit(limit) {
+  return new Error(`Qlik extension archive inspection exceeded the total archive entry limit (${limit}).`);
+}
+
+function archiveBudget(limits = {}) {
+  const selected = { ...DEFAULT_ARCHIVE_LIMITS, ...limits };
+  if (!Number.isSafeInteger(selected.maxInflatedBytes) || selected.maxInflatedBytes < 0
+    || !Number.isSafeInteger(selected.maxEntries) || selected.maxEntries < 0
+    || !Number.isSafeInteger(selected.maxDepth) || selected.maxDepth < 0) {
+    throw new Error('Qlik extension archive inspection limits must be non-negative safe integers.');
+  }
+  return {
+    ...selected,
+    inflatedBytes: 0,
+    entries: 0,
+    addBytes(bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > selected.maxInflatedBytes - this.inflatedBytes) throw archiveByteLimit(selected.maxInflatedBytes);
+      this.inflatedBytes += bytes;
+    },
+    addEntries(count = 1) {
+      if (!Number.isSafeInteger(count) || count < 0 || count > selected.maxEntries - this.entries) throw archiveEntryLimit(selected.maxEntries);
+      this.entries += count;
+    },
+  };
+}
+
+function archiveLikeName(name) {
+  return /\.(?:zipx?|tgz|tar(?:\.[a-z0-9][a-z0-9._-]*)?|tbz2?|txz|gz|gzip|bz2|bzip2|xz|zst|zstd|7z|rar\d*|lz|lzma|lzo|lz4|sz|br|z|cab|arj|ace|lha|lzh|cpio|iso|dmg|jar|war|ear|apk|deb|rpm|xar|sitx?|zoo|pak|archive)$/i.test(String(name));
+}
+
+function archiveKind(name) {
+  if (/\.zip$/i.test(name)) return 'zip';
+  if (/\.tar$/i.test(name)) return 'tar';
+  if (/\.(?:tgz|tar\.gz)$/i.test(name)) return 'tgz';
+  return null;
+}
+
+function archiveMagicKind(content) {
+  if (!Buffer.isBuffer(content)) return null;
+  if (content.length >= 4 && ['PK\x03\x04', 'PK\x05\x06', 'PK\x07\x08'].includes(content.subarray(0, 4).toString('latin1'))) return 'zip';
+  if (content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) return 'gzip';
+  if (content.length >= 6 && content.subarray(0, 6).equals(Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]))) return '7z';
+  if (content.length >= 6 && content.subarray(0, 6).toString('latin1') === 'Rar!\x1a\x07') return 'rar';
+  if (content.length >= 3 && content.subarray(0, 3).toString('ascii') === 'BZh') return 'bzip2';
+  if (content.length >= 6 && content.subarray(0, 6).equals(Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]))) return 'xz';
+  if (content.length >= 4 && content.subarray(0, 4).equals(Buffer.from([0x28, 0xb5, 0x2f, 0xfd]))) return 'zstd';
+  if (content.length >= 262 && content.subarray(257, 262).toString('ascii') === 'ustar') return 'tar';
+  return null;
+}
+
+function archiveSuffix(name) {
+  return /(\.tar\.[a-z0-9][a-z0-9._-]*|\.(?:zipx?|tgz|tbz2?|txz|gz|gzip|bz2|bzip2|xz|zst|zstd|7z|rar\d*|lz|lzma|lzo|lz4|sz|br|z|cab|arj|ace|lha|lzh|cpio|iso|dmg|jar|war|ear|apk|deb|rpm|xar|sitx?|zoo|pak|archive))$/i.exec(String(name))?.[1] || path.extname(String(name)) || '(unknown)';
+}
+
+function cannotInspectArchive(name) {
+  return new Error(`A Qlik extension archive type ${archiveSuffix(name)} cannot be inspected for a .qvf demo app.`);
+}
+
+function archiveInspectionError() {
+  return new Error('A Qlik extension archive could not be checked for a nested .qvf file.');
+}
+
+function zipEntries(content, budget, visit) {
   const first = Math.max(0, content.length - 65_557);
   let end = -1;
   for (let offset = content.length - 22; offset >= first; offset -= 1) {
     if (content.readUInt32LE(offset) !== 0x06054b50) continue;
     if (offset + 22 + content.readUInt16LE(offset + 20) === content.length) { end = offset; break; }
   }
-  if (end < 0) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+  if (end < 0) throw archiveInspectionError();
   const entryCount = content.readUInt16LE(end + 10);
   const directorySize = content.readUInt32LE(end + 12);
   const directoryOffset = content.readUInt32LE(end + 16);
   if (entryCount === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff
     || directoryOffset + directorySize > end) {
-    throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    throw archiveInspectionError();
   }
+  budget.addEntries(entryCount);
   let offset = directoryOffset;
-  let containsQvf = false;
+  let hiddenQvf = null;
+  let omittedLocalQvf = false;
   const localOffsets = new Set();
   for (let index = 0; index < entryCount; index += 1) {
     if (offset + 46 > end || content.readUInt32LE(offset) !== 0x02014b50) {
-      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+      throw archiveInspectionError();
     }
     const nameLength = content.readUInt16LE(offset + 28);
     const extraLength = content.readUInt16LE(offset + 30);
     const commentLength = content.readUInt16LE(offset + 32);
     const next = offset + 46 + nameLength + extraLength + commentLength;
-    if (next > end) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    if (next > end) throw archiveInspectionError();
     const name = content.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
+    const method = content.readUInt16LE(offset + 10);
+    const compressedSize = content.readUInt32LE(offset + 20);
+    const uncompressedSize = content.readUInt32LE(offset + 24);
     const localOffset = content.readUInt32LE(offset + 42);
     if (localOffset + 30 > directoryOffset || content.readUInt32LE(localOffset) !== 0x04034b50) {
-      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+      throw archiveInspectionError();
     }
     const localNameLength = content.readUInt16LE(localOffset + 26);
     const localExtraLength = content.readUInt16LE(localOffset + 28);
     const localNameEnd = localOffset + 30 + localNameLength;
     if (!localNameLength || localNameEnd + localExtraLength > directoryOffset) {
-      throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+      throw archiveInspectionError();
     }
     const localName = content.subarray(localOffset + 30, localNameEnd).toString('utf8');
-    const centralQvf = /\.qvf$/i.test(name);
-    const localQvf = /\.qvf$/i.test(localName);
-    if (centralQvf || localQvf) containsQvf = true;
-    if (name !== localName && !centralQvf && !localQvf) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+    const dataStart = localNameEnd + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > directoryOffset) throw archiveInspectionError();
+    if (name !== localName && !/\.qvf$/i.test(name) && !/\.qvf$/i.test(localName)) {
+      throw archiveInspectionError();
+    }
+    const qvfName = /\.qvf$/i.test(name) || /\.qvf$/i.test(localName);
+    const candidateArchive = archiveLikeName(name) || archiveLikeName(localName);
+    if (qvfName || candidateArchive) {
+      budget.addBytes(uncompressedSize);
+      let data;
+      try {
+        const compressed = content.subarray(dataStart, dataEnd);
+        if (method === 0) data = compressed;
+        else if (method === 8) data = inflateRawSync(compressed, { maxOutputLength: Math.max(1, uncompressedSize) });
+        else throw new Error('unsupported compression');
+      } catch (error) {
+        if (/total inflated-byte limit/.test(error.message)) throw error;
+        throw archiveInspectionError();
+      }
+      if (data.length !== uncompressedSize) throw archiveInspectionError();
+      if (qvfName) hiddenQvf ||= /\.qvf$/i.test(name) ? name : localName;
+      visit({ name: /\.qvf$/i.test(name) ? name : localName, localName, data });
+    }
     localOffsets.add(localOffset);
     offset = next;
   }
-  if (offset !== directoryOffset + directorySize) throw new Error('A Qlik extension ZIP could not be checked for a nested QVF file.');
+  if (offset !== directoryOffset + directorySize) throw archiveInspectionError();
 
   // Also find a local QVF header that an incomplete central directory omits.
   const localSignature = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -162,16 +258,118 @@ function zipContainsQvf(content) {
     const candidateNameEnd = candidate + 30 + candidateNameLength;
     if (!candidateNameLength || candidateNameLength > 4096 || candidateNameEnd + candidateExtraLength > directoryOffset) continue;
     const candidateName = content.subarray(candidate + 30, candidateNameEnd).toString('utf8');
-    if (/\.qvf$/i.test(candidateName)) containsQvf = true;
+    if (/\.qvf$/i.test(candidateName)) {
+      hiddenQvf ||= candidateName;
+      omittedLocalQvf = true;
+    }
   }
-  return containsQvf;
+  if (omittedLocalQvf) budget.addEntries(1);
+  return { hiddenQvf };
+}
+
+function paxValues(data) {
+  const values = {};
+  for (let offset = 0; offset < data.length;) {
+    const space = data.indexOf(32, offset);
+    if (space < 0) throw new Error('A Qlik extension archive could not be checked for a nested .qvf file.');
+    const length = Number.parseInt(data.toString('ascii', offset, space), 10);
+    if (!Number.isSafeInteger(length) || length <= space - offset + 2 || offset + length > data.length || data[offset + length - 1] !== 10) {
+      throw new Error('A Qlik extension archive could not be checked for a nested .qvf file.');
+    }
+    const field = data.toString('utf8', space + 1, offset + length - 1);
+    const equals = field.indexOf('=');
+    if (equals > 0) values[field.slice(0, equals)] = field.slice(equals + 1);
+    offset += length;
+  }
+  return values;
+}
+
+function tarEntries(tar, budget, visit, { alreadyInflated = false } = {}) {
+  let globalPath = null;
+  let nextPath = null;
+  let nextLongName = null;
+  for (let offset = 0; offset < tar.length;) {
+    if (offset + 512 > tar.length) throw archiveInspectionError();
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    budget.addEntries(1);
+    const rawName = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+    const prefix = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '');
+    const headerName = prefix ? `${prefix}/${rawName}` : rawName;
+    const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/, '').trim();
+    if (sizeText && !/^[0-7]+$/.test(sizeText)) throw archiveInspectionError();
+    const size = sizeText ? Number.parseInt(sizeText, 8) : 0;
+    const start = offset + 512;
+    const end = start + size;
+    if (!Number.isSafeInteger(size) || size < 0 || end > tar.length) throw archiveInspectionError();
+    const data = tar.subarray(start, end);
+    const type = header[156];
+    if (type === 120) nextPath = paxValues(data).path ?? null;
+    else if (type === 103) globalPath = paxValues(data).path ?? globalPath;
+    else if (type === 76) nextLongName = data.toString('utf8').replace(/\0.*$/, '').replace(/\n$/, '');
+    else if (type !== 75) {
+      const name = nextPath ?? nextLongName ?? globalPath ?? headerName;
+      if (/\.qvf$/i.test(name) || archiveLikeName(name)) {
+        if (!alreadyInflated) budget.addBytes(data.length);
+        visit({ name, data });
+      }
+      nextPath = null;
+      nextLongName = null;
+    }
+    offset = start + Math.ceil(size / 512) * 512;
+  }
+}
+
+function tarGzipEntries(content, budget) {
+  let tar;
+  const remaining = budget.maxInflatedBytes - budget.inflatedBytes;
+  try { tar = gunzipSync(content, { maxOutputLength: Math.max(1, remaining) }); }
+  catch (error) {
+    if (error?.code === 'ERR_BUFFER_TOO_LARGE' || /maxOutputLength/i.test(error?.message ?? '')) throw archiveByteLimit(budget.maxInflatedBytes);
+    throw archiveInspectionError();
+  }
+  budget.addBytes(tar.length);
+  return tar;
+}
+
+function archiveQvfPath(name, content, depth, requireDemoApp, budget) {
+  if (/\.qvf$/i.test(name)) return name;
+  const kind = archiveKind(name);
+  if (!kind) {
+    if (requireDemoApp && (archiveLikeName(name) || archiveMagicKind(content))) throw cannotInspectArchive(name);
+    return null;
+  }
+  if (depth > budget.maxDepth) throw new Error(`A Qlik extension archive is nested beyond the maximum inspection depth of ${budget.maxDepth} for a .qvf demo app.`);
+
+  let qvfPath = null;
+  const visit = (entry) => {
+    if (/\.qvf$/i.test(entry.name)) {
+      qvfPath ||= entry.name;
+      return;
+    }
+    if (!archiveLikeName(entry.name)) return;
+    const nested = archiveQvfPath(entry.name, entry.data, depth + 1, requireDemoApp, budget);
+    if (nested) qvfPath ||= `${entry.name}!${nested}`;
+  };
+
+  if (kind === 'zip') {
+    const result = zipEntries(content, budget, visit);
+    if (result.hiddenQvf) qvfPath ||= result.hiddenQvf;
+  } else if (kind === 'tgz') {
+    const tar = tarGzipEntries(content, budget);
+    tarEntries(tar, budget, visit, { alreadyInflated: true });
+  } else {
+    tarEntries(content, budget, visit);
+  }
+  return qvfPath;
 }
 
 // Download each asset into a temporary folder, hash it, and scan its text.
 // Returns [{ name, size, sha256, listedSha256, classes }]. A scan class never holds a value.
-function inspectAssets(run, repo, tag, release, knownHosts, { inspectQlikExtensionZips = false } = {}) {
+function inspectAssets(run, repo, tag, release, knownHosts, { inspectQlikExtensionZips = false, requireDemoApp = true, archiveLimits = {} } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-release-'));
   try {
+    const budget = archiveBudget(archiveLimits);
     const files = new Map();
     for (const asset of release.assets) {
       const result = run(['release', 'download', tag, '--repo', repo, '--pattern', asset.name, '--dir', tmp, '--clobber']);
@@ -191,11 +389,12 @@ function inspectAssets(run, repo, tag, release, knownHosts, { inspectQlikExtensi
         classes.push(...scan.classes);
         allowed = scan.allowed;
       }
-      const containsQvf = inspectQlikExtensionZips && /\.zip$/i.test(asset.name) ? zipContainsQvf(content) : false;
+      const shouldInspectArchive = inspectQlikExtensionZips && (archiveKind(asset.name) || (requireDemoApp && (archiveLikeName(asset.name) || archiveMagicKind(content))));
+      const qvfPath = shouldInspectArchive ? archiveQvfPath(asset.name, content, 0, requireDemoApp, budget) : null;
       const sidecar = files.get(`${asset.name}.sha256`);
       const listed = asset.digest ?? (sidecar ? fs.readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0].toLowerCase() : null);
       if (listed && listed !== sha256) classes.push('checksum differs from the listed checksum');
-      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes, allowed, containsQvf };
+      return { name: asset.name, size: content.length, sha256, listedSha256: listed, classes, allowed, containsQvf: qvfPath !== null, qvfPath };
     });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -270,7 +469,16 @@ function cardText({ repo, tag, release, notes, assets, demoApp, findings, latest
 
 function demoAppAsset(entry, assets) {
   if (entry?.kind !== 'qlik-extension') return null;
-  if (assets.some((asset) => asset.containsQvf)) throw new Error('A Qlik extension zip contains a .qvf file; ship the demo app as a separate asset.');
+  const embeddedQvf = assets.find((asset) => asset.containsQvf);
+  if (embeddedQvf) {
+    if (/\.zip$/i.test(embeddedQvf.name) && !embeddedQvf.qvfPath.includes('!')) {
+      throw new Error('A Qlik extension zip contains a .qvf file; ship the demo app as a separate asset.');
+    }
+    if (embeddedQvf.qvfPath.includes('!')) {
+      throw new Error(`A Qlik extension nested archive contains a .qvf file at ${embeddedQvf.name}!${embeddedQvf.qvfPath}; ship the demo app as a separate asset.`);
+    }
+    throw new Error(`A Qlik extension archive ${embeddedQvf.name} contains a .qvf file; ship the demo app as a separate asset.`);
+  }
   const qvfs = assets.filter((asset) => /\.qvf$/i.test(asset.name));
   const required = entry.requireDemoApp ?? true;
   if (required && qvfs.length !== 1) throw new Error('A Qlik extension release requires one separate .qvf demo app asset.');
@@ -281,7 +489,7 @@ function demoAppAsset(entry, assets) {
 
 // Request a release approval. Posts one Mailbox item of action approve.
 // Returns { id, repo, tag, alreadyOpen, scanOk }.
-export function requestRelease({ repo, tag, notesFile = null, pack = null, latest = true, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, requesterPane = null, config = null }) {
+export function requestRelease({ repo, tag, notesFile = null, pack = null, latest = true, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, requesterPane = null, config = null, archiveLimits = {} }) {
   if (!repo || !tag) throw new Error('Usage: release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]');
   if (typeof run !== 'function') throw new Error('A gh runner is required.');
   const entry = config ? repoConfig(repo, config) : { project: 'boss' };
@@ -296,7 +504,7 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   let currentAssets = null;
   try {
     release = readRelease(run, repo, tag);
-    if (open) currentAssets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
+    if (open) currentAssets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension', requireDemoApp: entry?.requireDemoApp ?? true, archiveLimits });
   } catch (error) {
     if (open) return { id: open.id, repo, tag, alreadyOpen: true, scanOk: null };
     throw error;
@@ -314,7 +522,7 @@ export function requestRelease({ repo, tag, notesFile = null, pack = null, lates
   }
   if (!release.draft) throw new Error(REFUSALS['not-draft']);
   const notes = readNotes(notesFile);
-  const assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
+  const assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension', requireDemoApp: entry?.requireDemoApp ?? true, archiveLimits });
   const demoApp = demoAppAsset(entry, assets);
   const findings = scanFindings(scanRelease(`${notes}\n${release.body}`, { knownHosts: hosts, file: 'notes' }), assets);
   const text = cardText({ repo, tag, release, notes, assets, demoApp, findings, latest, coverage: packCoverage({ dir, slug: entry.project, pack }) });
@@ -609,7 +817,8 @@ export function applyAddAsset({ repo, tag, approvalId, run, dir = DATA_DIR, now 
 export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now = Date.now(), knownHosts = null, who = null, config = null }) {
   if (!repo || !tag || !approvalId) throw new Error('Usage: release publish REPO TAG --approval ID');
   if (typeof run !== 'function') throw new Error('A gh runner is required.');
-  if (config && !repoConfig(repo, config)) return refuse('repo-not-allowed');
+  const effectiveConfig = config ?? loadConfig();
+  if (!repoConfig(repo, effectiveConfig)) return refuse('repo-not-allowed');
 
   const all = records(dir);
   const approval = all.find((record) => record.id === approvalId && isRelease(record));
@@ -625,12 +834,28 @@ export function publishRelease({ repo, tag, approvalId, run, dir = DATA_DIR, now
   const release = readRelease(run, repo, tag);
   if (!release.draft) return refuse('not-draft');
   const hosts = knownHosts ?? knownHostsFromSessions();
-  const entry = config ? repoConfig(repo, config) : null;
-  const assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension' });
+  const entry = repoConfig(repo, effectiveConfig);
+  let assets;
   let demoApp;
-  try { demoApp = demoAppAsset(entry, assets); } catch { return refuse('scan-failed'); }
-  if (entry?.kind === 'qlik-extension' && (entry.requireDemoApp ?? true) && !approval.release.demoApp) return refuse('checksum-mismatch');
-  if (JSON.stringify(approval.release.demoApp ?? null) !== JSON.stringify(demoApp)) return refuse('checksum-mismatch');
+  try { assets = inspectAssets(run, repo, tag, release, hosts, { inspectQlikExtensionZips: entry?.kind === 'qlik-extension', requireDemoApp: entry?.requireDemoApp ?? true }); }
+  catch (error) {
+    if (entry?.kind === 'qlik-extension' && /Qlik extension|demo app|\.qvf/i.test(error.message)) {
+      return refuse('demo-app-failed', { reason: `Demo app gate failed: ${redactSecrets(error.message)}` });
+    }
+    throw error;
+  }
+  try { demoApp = demoAppAsset(entry, assets); }
+  catch (error) {
+    if (entry?.kind === 'qlik-extension') return refuse('demo-app-failed', { reason: `Demo app gate failed: ${redactSecrets(error.message)}` });
+    return refuse('scan-failed');
+  }
+  if (entry?.kind === 'qlik-extension' && (entry.requireDemoApp ?? true) && !approval.release.demoApp) {
+    return refuse('demo-app-failed', { reason: 'Demo app gate failed: the approval does not name a separate .qvf asset.' });
+  }
+  if (JSON.stringify(approval.release.demoApp ?? null) !== JSON.stringify(demoApp)) {
+    if (entry?.kind === 'qlik-extension') return refuse('demo-app-failed', { reason: 'Demo app gate failed: the separate .qvf asset changed after approval.' });
+    return refuse('checksum-mismatch');
+  }
   const card = approval.release.assets ?? [];
   const same = card.length === assets.length && card.every((entry) => assets.some((asset) => asset.name === entry.name && asset.sha256 === entry.sha256 && asset.size === entry.size));
   if (!same) return refuse('checksum-mismatch');

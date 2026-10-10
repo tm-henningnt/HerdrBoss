@@ -187,6 +187,7 @@ const DEFAULTS = {
   register: {
     cap: 3,
     capCountsPinned: false,
+    autoParkHours: 24,
     triage: { enabled: false, label: 'ready-for-agent', pollMinutes: 30 },
   },
   roamgate: { port: 8787, tokenFile: path.join(os.homedir(), '.config/roamgate/auth-token') },
@@ -248,6 +249,7 @@ const SERVICE_SETTINGS = [
   ['Analytics', 'analytics.actionsMinutes'],
   ['Project register', 'register.cap'],
   ['Project register', 'register.capCountsPinned'],
+  ['Project register', 'register.autoParkHours'],
   ['Project register', 'register.triage.enabled'],
   ['Project register', 'register.triage.label'],
   ['Project register', 'register.triage.pollMinutes'],
@@ -469,6 +471,7 @@ const SERVICE_SETTING_RANGES = new Map([
   ['workers.uncollectedNoticeMinutes', [1, 1440]],
   ['workers.leaseGraceMinutes', [1, 1440]],
   ['register.cap', [1, 20]],
+  ['register.autoParkHours', [0, 8760]],
   ['register.triage.pollMinutes', [5, 1440]],
   ['watch.maxWorkers', [1, 40]],
   ['watch.maxWorkersByLane', [1, 40]],
@@ -723,7 +726,7 @@ export function loadConfig() {
   try { user = migrateLegacyWatchKeys(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch {}
   const cfg = merge(DEFAULTS, user);
   Object.defineProperty(cfg, CONFIG_SOURCE, { value: user });
-  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
+  for (const setting of ['register.cap', 'register.capCountsPinned', 'register.autoParkHours', 'register.triage.enabled', 'register.triage.label', 'register.triage.pollMinutes']) {
     const parts = setting.split('.');
     const value = parts.reduce((current, key) => current?.[key], cfg);
     try { validateServiceSettingValues({ [setting]: value }); }

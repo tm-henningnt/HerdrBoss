@@ -262,6 +262,22 @@ export function writeRegister(register, dataDir = DATA_DIR) {
   writeDataFile(path.join(dataDir, 'project-register.json'), body, dataDir);
 }
 
+// Move a project's activity time forward without replacing a newer event.
+export function recordProjectActivity(slug, at, { dataDir = DATA_DIR } = {}) {
+  let timestamp;
+  try { timestamp = at instanceof Date ? at.toISOString() : typeof at === 'number' ? new Date(at).toISOString() : at; }
+  catch { return false; }
+  if (!SLUG.test(slug) || !validIso(timestamp, { allowEmpty: false })) return false;
+  return withRegisterLock(dataDir, () => {
+    const register = readRegister(dataDir);
+    const record = register.projects.find((project) => project.slug === slug);
+    if (!record || (record.lastActivityAt && Date.parse(record.lastActivityAt) >= Date.parse(timestamp))) return false;
+    record.lastActivityAt = timestamp;
+    writeRegister(register, dataDir);
+    return true;
+  });
+}
+
 export function withRegisterLock(dataDir, operation) {
   const directory = path.join(dataDir, 'locks', 'project-register');
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -274,7 +290,7 @@ export function appendAudit(slug, action, dataDir = DATA_DIR, fields = {}) {
   try {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     const file = path.join(dataDir, 'project-audit.jsonl');
-    const line = `${JSON.stringify({ at: fields.at ?? new Date().toISOString(), slug, action, by: fields.by ?? 'owner-cli', result: fields.result ?? 'done', failedCheck: fields.failedCheck ?? null, dryRun: false })}\n`;
+    const line = `${JSON.stringify({ at: fields.at ?? new Date().toISOString(), slug, action, by: fields.by ?? 'owner-cli', result: fields.result ?? 'done', failedCheck: fields.failedCheck ?? null, dryRun: false, ...(fields.reason === undefined ? {} : { reason: fields.reason }) })}\n`;
     const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
     try {
       fs.fchmodSync(fd, 0o600);
