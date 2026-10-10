@@ -8,7 +8,7 @@ import { activeLaunchRecords, enableModel, markModelUnavailable } from './model-
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
-import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
+import { allowWorkerScope, baselineWorker, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
 import { initializeLifecyclePort } from './lifecycle.js';
 import { pruneWorktrees, worktreeDisk } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
@@ -24,7 +24,8 @@ import { validateProposalFile } from './proposal.js';
 const USAGE = `Kit commands:
   worker start <name> --kind <kind> (--task TEXT | --task-file FILE) [--task-id ID] [--lease POOL]... [--planner] [options]
   worker collect <name> [--no-record] [--keep-pane] [--allow PATH]... [--outcome done|partial|failed --gate-passed|--gate-failed]
-  worker commit <name> -m MESSAGE
+  worker commit <name> -m MESSAGE [--baseline COMMIT --reason TEXT]
+  worker baseline <name> [--commit COMMIT]
   worker stop-own <name> --pid PID
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
@@ -83,6 +84,7 @@ Options:
   --record                  Record the run in the ledger (default).
   --no-record               Read the report without writing a ledger entry.
   --allow PATH              Allow one path for this collection. Repeat this option.
+  --baseline COMMIT         Use an ancestor commit as the baseline; requires --reason TEXT.
   --outcome VALUE           Set done, partial, or failed.
   --gate-passed             Record that the independent gate passed.
   --gate-failed             Record that the independent gate failed.
@@ -93,12 +95,19 @@ Options:
   --model-reason TEXT       Explain the model result.
   --accept-scope FILES      Accept comma-separated out-of-scope files.
   --exclude-path PATHS      Exclude discarded out-of-scope paths when recording.
-  --reason TEXT             Explain --accept-scope or --exclude-path (1 to 300 characters for exclusions).
+  --reason TEXT             Explain --baseline, --accept-scope, or --exclude-path (1 to 300 characters for baselines and exclusions).
   -h, --help                Print this usage and exit.`,
-  commit: `Usage: worker commit <name> -m MESSAGE
+  commit: `Usage: worker commit <name> -m MESSAGE [--baseline COMMIT --reason TEXT]
 Options:
   -m MESSAGE, --message MESSAGE   Set the commit message.
+  --baseline COMMIT              Use an ancestor commit as the baseline; requires --reason TEXT.
+  --base COMMIT                  Alias for --baseline.
+  --reason TEXT                  Explain the baseline override (1 to 300 characters).
   -h, --help                      Print this usage and exit.`,
+  baseline: `Usage: worker baseline <name> [--commit COMMIT]
+Options:
+  --commit COMMIT           Record an ancestor commit as the start baseline.
+  -h, --help                Print this usage and exit.`,
 });
 
 function fail(message, code = 2) {
@@ -507,10 +516,10 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'], repeat: ['--allow'] });
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.collect);
-      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'excludepath', 'reason']);
+      knownFlags(flags, ['record', 'norecord', 'allow', 'outcome', 'gatepassed', 'gatefailed', 'keeppane', 'defects', 'rework', 'modelresult', 'modelreason', 'acceptscope', 'excludepath', 'reason', 'baseline']);
       if (flags.record && flags.norecord) fail('Use either --record or --no-record, not both.');
       if (flags.defects !== undefined && (!/^\d+$/.test(flags.defects) || Number(flags.defects) > 99)) fail('--defects must be an integer from 0 to 99.');
-      if (flags.reason != null && flags.acceptscope == null && flags.excludepath == null) fail('--reason needs --accept-scope FILE[,FILE] or --exclude-path PATH[,PATH].');
+      if (flags.reason != null && flags.acceptscope == null && flags.excludepath == null && flags.baseline == null) fail('--reason needs --accept-scope FILE[,FILE], --exclude-path PATH[,PATH], or --baseline COMMIT.');
       if (flags.acceptscope != null && !flags.reason?.trim()) fail('--accept-scope needs --reason TEXT.');
       if (flags.excludepath != null && !flags.reason?.trim()) fail('--exclude-path needs --reason TEXT (1 to 300 characters).');
       const acceptScope = flags.acceptscope == null ? undefined : flags.acceptscope.split(',').map((item) => item.trim()).filter(Boolean);
@@ -520,6 +529,8 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       if (excludePaths) forceReason(true, flags.reason, '--exclude-path');
       const serviceConfig = injectedServiceConfig ?? loadConfig();
       const summary = collectWorker(positional[0], {
+        baseline: flags.baseline,
+        reason: flags.baseline == null ? undefined : flags.reason,
         record: flags.record,
         noRecord: flags.norecord,
         allow: flags.allow ?? [],
@@ -536,7 +547,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
         rework: flags.rework == null ? 0 : Number(flags.rework),
         modelResult: flags.modelresult || null,
         modelReason: flags.modelreason || null,
-      }, { config, output, schedulePaneCloseFn, herdr, listWorktreeProcesses });
+      }, { config, output, schedulePaneCloseFn, herdr, listWorktreeProcesses, leaseDataDir: lockDataDir });
       if (!flags.norecord) {
         try {
           if (serviceConfig.worktrees?.pruneAtCollect === false) {
@@ -573,9 +584,15 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
     if (action === 'commit') {
       const normalized = rest.map((token) => token === '-m' ? '--message' : token);
       const { positional, flags } = parseArgs(normalized);
-      knownFlags(flags, ['message']);
+      knownFlags(flags, ['message', 'baseline', 'base', 'reason']);
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.commit);
-      return commitWorker(positional[0], { message: flags.message }, { config, output });
+      return commitWorker(positional[0], { message: flags.message, baseline: flags.baseline, base: flags.base, reason: flags.reason }, { config, output, leaseDataDir: lockDataDir });
+    }
+    if (action === 'baseline') {
+      const { positional, flags } = parseArgs(rest);
+      knownFlags(flags, ['commit']);
+      if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.baseline);
+      return baselineWorker(positional[0], { commit: flags.commit }, { config, output });
     }
     if (action === 'stop-own') {
       const { positional, flags } = parseArgs(rest);
@@ -603,7 +620,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       if (rest.length) fail('Usage: worker list');
       return listWorkers(config, { herdr, output });
     }
-    fail('Usage: worker start|collect|commit|stop-own|list|park|unpark|allow|scope add');
+    fail('Usage: worker start|collect|commit|baseline|stop-own|list|park|unpark|allow|scope add');
   }
 
   if (command === 'worktree') {

@@ -675,6 +675,7 @@ test('worker collect --record after merge and pane close writes one main-checkou
     workerDir: '.worker',
     base: 'main',
     baseCommit,
+    startCommit: baseCommit,
     startedAt: '2026-09-29T09:00:00.000Z',
     allowedPaths: ['src/'],
     pane: 'w1:p99',

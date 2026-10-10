@@ -1798,6 +1798,7 @@ function startWorkerOnce(name, options, {
     throw new Error('Copied inputs exceed the 200 MB total limit.');
   }
   const baseCommit = git(config.root, ['rev-parse', base]).trim();
+  const startCommit = options.noWorktree ? git(config.root, ['rev-parse', 'HEAD']).trim() : baseCommit;
   const branch = options.noWorktree ? git(config.root, ['branch', '--show-current']).trim() : name;
   if (!branch) throw new Error('--no-worktree requires the current worktree to have a named branch.');
   const worktree = options.noWorktree ? config.root : config.worktreePath(name);
@@ -1985,7 +1986,7 @@ function startWorkerOnce(name, options, {
     issue: options.issue == null ? null : Number(options.issue),
     ...(options.taskId != null ? { taskId: String(options.taskId) } : {}),
     ...(titleFromTask(task) ? { title: titleFromTask(task) } : {}),
-    briefCopy: briefCopy(brief, now), worktree, branch, base, baseCommit,
+    briefCopy: briefCopy(brief, now), worktree, branch, base, baseCommit, startCommit,
     shellPid: null, pane: null, workerDir: plan.workerDir, allowedPaths,
     readOnly: !!options.readOnly, state: 'starting',
     ...(leases.length ? { leases } : {}),
@@ -1997,7 +1998,7 @@ function startWorkerOnce(name, options, {
     stopInterruptWatch = watchStartInterruptions(recordFile, record, clock, output);
     if (!options.noWorktree) {
       fs.mkdirSync(path.dirname(worktree), { recursive: true });
-      git(config.root, ['worktree', 'add', '-b', branch, worktree, base]);
+      git(config.root, ['worktree', 'add', '-b', branch, worktree, startCommit]);
       createdWorktree = true;
       const mainRoot = mainCheckout(config.root);
       dependencyClone = tryCloneDependencies(mainRoot, worktree, cloneNodeModules);
@@ -2458,6 +2459,61 @@ function readRun(config, name) {
   return { file, run };
 }
 
+function resolveWorkerCommit(run, ref) {
+  let commit;
+  try {
+    commit = execFileSync('git', ['-C', run.worktree, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch {
+    throw new Error(`Worker ${run.name} baseline does not name a commit.`);
+  }
+  return commit;
+}
+
+function ancestorCommit(run, ref) {
+  const commit = resolveWorkerCommit(run, ref);
+  try {
+    execFileSync('git', ['-C', run.worktree, 'merge-base', '--is-ancestor', commit, 'HEAD'], { stdio: 'ignore' });
+  } catch {
+    throw new Error(`Worker ${run.name} baseline commit ${commit} is not an ancestor of the worker HEAD.`);
+  }
+  return commit;
+}
+
+function workerBaseline(run, { baseline = null, base = null, reason = null } = {}) {
+  if (baseline != null && base != null) throw new Error('Give --baseline COMMIT or --base COMMIT, not both.');
+  const explicit = baseline ?? base;
+  const maskedReason = forceReason(explicit != null, reason, '--baseline COMMIT');
+  if (explicit == null && !run.startCommit) {
+    throw new Error(`Worker ${run.name} has no recorded start baseline. Record it with herdr-boss worker baseline ${run.name} [--commit COMMIT], or pass --baseline COMMIT --reason TEXT (--base COMMIT for worker commit).`);
+  }
+  return { commit: ancestorCommit(run, explicit ?? run.startCommit), reason: maskedReason };
+}
+
+function auditWorkerBaseline(run, baseline, command, project, dataDir, now) {
+  if (baseline.reason == null) return;
+  appendForcedAction({
+    dataDir, time: new Date(now).toISOString(), command, project,
+    workerName: run.name, commit: baseline.commit, refusalKind: 'baseline', reason: baseline.reason,
+  });
+}
+
+export function baselineWorker(name, { commit = null } = {}, { config, output = console.log } = {}) {
+  const { file, run } = readRun(config, name);
+  const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
+  if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
+  let ref = commit;
+  if (ref == null) {
+    const base = resolveWorkerCommit(run, run.base || run.baseCommit);
+    ref = git(run.worktree, ['merge-base', 'HEAD', base]).trim();
+  }
+  run.startCommit = ancestorCommit(run, ref);
+  writeJsonAtomic(file, run);
+  output(`Recorded start baseline ${run.startCommit} for worker ${name}.`);
+  return { name, startCommit: run.startCommit };
+}
+
 // Name every missing recording flag at once, with a hint from the worker report. The orchestrator still decides.
 export function recordFlagErrors(options, reportJson = {}) {
   const missing = [];
@@ -2566,13 +2622,14 @@ export function cleanCommitMessage(message) {
 // pane, because a Codex worker cannot write the shared Git metadata of a worktree. The command stages
 // the changed paths inside the worker scope and refuses every path outside it, every secret-bearing
 // path, and the worker bookkeeping paths.
-export function commitWorker(name, { message = null } = {}, { config, output = console.log } = {}) {
+export function commitWorker(name, { message = null, baseline = null, base = null, reason = null } = {}, { config, output = console.log, leaseDataDir = DATA_DIR, now = Date.now() } = {}) {
   const { run } = readRun(config, name);
   const text = cleanCommitMessage(message);
   if (!text) throw new Error('worker commit needs -m MESSAGE.');
   const actualBranch = git(run.worktree, ['branch', '--show-current']).trim();
   if (actualBranch !== run.branch) throw new Error(`Worktree branch ${actualBranch || '(detached)'} does not match run branch ${run.branch}.`);
-  const baseRef = run.baseCommit || run.base;
+  const selectedBaseline = workerBaseline(run, { baseline, base, reason });
+  const baseRef = selectedBaseline.commit;
   // The worker's own brief and report files never count. The kit writes its own files in the worktree.
   const ownFile = (item) => item === '.worker' || String(item).startsWith('.worker/') || KIT_MANAGED_PATHS.includes(String(item));
   const extensionPaths = (Array.isArray(run.scopeExtensions) ? run.scopeExtensions : []).flatMap((extension) => Array.isArray(extension?.paths) ? extension.paths : []);
@@ -2583,6 +2640,7 @@ export function commitWorker(name, { message = null } = {}, { config, output = c
   const changed = changedAll.filter((item) => !ownFile(item));
   const outOfScope = compareChangedPaths(changed, allowedPaths);
   if (outOfScope.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${outOfScope.join(', ')}.`);
+  auditWorkerBaseline(run, selectedBaseline, 'worker commit', config.slug, leaseDataDir, now);
   if (!changed.length) {
     output(`Nothing to commit for worker ${name}.`);
     return { committed: false, paths: [] };
@@ -2676,7 +2734,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (leftovers.length) throw new Error(`Worker ${name} still has processes in its worktree: ${leftovers.map((process) => `${process.command || 'unknown'} (pid ${process.pid})`).join('; ')}. Stop them before collection.${stopSteps}`);
     if (run.issue != null && reportJson.issue !== run.issue) throw new Error(`Report issue ${reportJson.issue} does not match run issue ${run.issue}.`);
     if (reportJson.branch !== run.branch) throw new Error(`Report branch ${reportJson.branch} does not match run branch ${run.branch}.`);
-    const baseRef = run.baseCommit || run.base;
+    const selectedBaseline = workerBaseline(run, options);
+    const baseRef = selectedBaseline.commit;
     const log = gitLog(run.worktree, baseRef);
     // The worker's own brief and report files live under .worker/ and never count as changed product paths.
     // The kit writes its own files in the worktree. They never count as changed product paths either.
@@ -2725,6 +2784,14 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const reportScope = compareChangedPaths(includedReportPaths, allowedPaths);
     const actualScope = compareChangedPaths(changed, allowedPaths);
     const scopeErrors = [...new Set([...reportScope, ...actualScope, ...includedReportPaths.filter(impeccablePath), ...changed.filter(impeccablePath)])];
+    if (selectedBaseline.reason != null) {
+      const recordedScope = [...(run.allowedPaths ?? []), ...extensionPaths];
+      const outside = [...new Set([
+        ...compareChangedPaths([...includedReportPaths, ...changed], recordedScope),
+        ...includedReportPaths.filter(impeccablePath), ...changed.filter(impeccablePath),
+      ])];
+      if (outside.length) throw new Error(`Worker ${name} changed paths outside its allowed scope: ${outside.join(', ')}. A baseline override must match the recorded allowed paths.`);
+    }
     // A report entry that ends in / covers every changed file under that folder, when the folder is inside the
     // allowed paths. The scope check above still runs on each real file.
     const folders = reported.filter((item) => item.endsWith('/') && compareChangedPaths([item], allowedPaths).length === 0);
@@ -2768,6 +2835,7 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     const uncommitted = run.kind === 'codex' && !log.trim() && changed.length > 0;
     if (uncommitted) output(`Codex worker ${name} left ${changed.length} changed path(s) uncommitted; the orchestrator commits with herdr-boss worker commit ${name} -m MESSAGE.`);
     const recordedPaths = omitted.length ? changed : includedReportPaths;
+    auditWorkerBaseline(run, selectedBaseline, 'worker collect', config.slug, leaseDataDir, now);
     try {
       const reportStat = fs.statSync(path.join(reportDir, 'report.json'));
       recordWorkerReport({

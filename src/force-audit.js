@@ -49,8 +49,9 @@ function safeDiagnosis(value) {
   };
 }
 
-export function appendForcedAction({ dataDir, time = new Date().toISOString(), command, project = null, workerName = null, refusalKind, reason, diagnosis, paths }) {
+export function appendForcedAction({ dataDir, time = new Date().toISOString(), command, project = null, workerName = null, refusalKind, reason, diagnosis, paths, commit }) {
   const safeReason = normalizeForceReason(reason);
+  if (commit != null && (typeof commit !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit))) throw new Error('An audited commit must be a full Git commit id.');
   const safeDiagnostic = safeDiagnosis(diagnosis);
   const row = {
     time: new Date(time).toISOString(),
@@ -59,6 +60,7 @@ export function appendForcedAction({ dataDir, time = new Date().toISOString(), c
     workerName: workerName == null ? null : redactSecrets(String(workerName)).slice(0, 32),
     refusalKind: redactSecrets(String(refusalKind || 'none')).slice(0, 160),
     reason: safeReason,
+    ...(commit == null ? {} : { commit }),
     ...(safeDiagnostic ? { diagnosis: safeDiagnostic } : {}),
     ...(paths ? { paths: paths.slice(0, 20).map((item) => redactSecrets(String(item)).replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 1000)) } : {}),
   };
