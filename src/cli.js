@@ -263,6 +263,7 @@ const USAGE = `herdr-boss <command>
   harness check [--live-codex]  Check the harness settings that orchestration needs. Exit 1 on a missing entry.
                         --live-codex also runs one codex exec to check the worker shell variables.
   harness pin [PROJECT] --reason TEXT  Refresh shared Git pins after review.
+  harness pin --forget SLUG --reason TEXT  Remove a stale Git pin. Owner or Boss only.
   harness sync [--dry-run] [--codex-only]  Add missing Codex writable roots and the stop-own rule, and print the Claude autoMode lines.
   harness change <harness> <label> [--date YYYY-MM-DD]  Mark a harness fix on the denial chart of the Analytics page.
   kit install [--no-hook]  Write the kit file, the AGENTS.md stub, and the Claude SessionStart hook.
@@ -1392,16 +1393,35 @@ async function main() {
       } else if (action === 'pin') {
         const { readProjectRepos } = await import('./harness.js');
         const { assertPinCaller } = await import('./git-pin-caller.js');
-        const { pinProject, assertPinDirectoryWritable } = await import('./git-pins.js');
+        const { pinProject, unpinProject, pinnedProjects, assertPinDirectoryWritable } = await import('./git-pins.js');
         const { appendForcedAction, normalizeForceReason } = await import('./force-audit.js');
         const { createHerdrRunner } = await import('./kit/workers.js');
-        let slug, reason;
+        const usage = 'Usage: harness pin [PROJECT] --reason TEXT | harness pin --forget SLUG --reason TEXT';
+        let slug, forget, reason;
         for (let i = 0; i < flags.length; i += 1) {
-          if (flags[i] === '--reason') reason = normalizeForceReason(flags[++i]);
-          else if (!flags[i].startsWith('--') && slug === undefined) slug = flags[i];
-          else throw new Error('Usage: harness pin [PROJECT] --reason TEXT');
+          if (flags[i] === '--reason' && reason === undefined) {
+            const value = flags[++i];
+            if (value === undefined || value.startsWith('--')) throw new Error(usage);
+            reason = normalizeForceReason(value);
+          }
+          else if (flags[i] === '--forget' && forget === undefined) {
+            forget = flags[++i];
+            if (!forget || !SLUG.test(forget)) throw new Error(usage);
+          } else if (!flags[i].startsWith('--') && slug === undefined) slug = flags[i];
+          else throw new Error(usage);
         }
         if (reason === undefined) throw new Error('harness pin needs --reason TEXT (1 to 300 characters).');
+        if (forget !== undefined) {
+          if (slug !== undefined) throw new Error(usage);
+          assertPinCaller([], { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR, ownerOrBoss: true });
+          if (!pinnedProjects().some((project) => project.slug === forget)) throw new Error('Unknown Git pin for harness pin --forget.');
+          assertPinDirectoryWritable();
+          assertDataWritable();
+          const removed = unpinProject(forget, { beforeWrite: () => appendForcedAction({ dataDir: DATA_DIR, command: 'harness pin --forget', project: forget, refusalKind: 'pin-forget', reason }) });
+          if (!removed) throw new Error('Unknown Git pin for harness pin --forget.');
+          console.log(`Git pins: ${forget} forgotten.`);
+          break;
+        }
         let projects = readProjectRepos().filter((project) => slug === undefined || project.slug === slug);
         if (slug !== undefined && !projects.length) throw new Error('Unknown registered project for harness pin.');
         const caller = assertPinCaller(slug === undefined ? [] : projects, { env: process.env, herdr: createHerdrRunner(), dataDir: DATA_DIR });
@@ -1432,7 +1452,7 @@ async function main() {
         assertDataWritable();
         const entry = appendHarnessChange(DATA_DIR, { harness, label: label.join(' '), date });
         console.log(`Recorded the harness change: ${entry.date} ${entry.harness} ${entry.label}`);
-      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only] | harness pin [PROJECT] --reason TEXT | harness change <harness> <label> [--date YYYY-MM-DD]');
+      } else throw new Error('Usage: harness check [--live-codex] | harness sync [--dry-run] [--codex-only] | harness pin [PROJECT] --reason TEXT | harness pin --forget SLUG --reason TEXT | harness change <harness> <label> [--date YYYY-MM-DD]');
       break;
     }
     case 'install': {

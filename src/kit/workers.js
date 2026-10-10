@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendDelegatedRun, compareChangedPaths, gitLog, gitStatusPaths, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
+import { appendDelegatedRun, readDelegatedRuns, validateDelegatedRun, compareChangedPaths, gitLog, gitStatusPaths, gitWorkerChangedPaths, readJson, validateAllowedPaths, validateScopePaths, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { recordUsage } from '../usage.js';
 import { claudePaceHoldText, goalSummary, mergeModels, modelEnabled, paceHaikuTolerancePoints, paceMinUsePercent, providerFor, quotaPlanLaneText, selectModel, unavailablePiModels, unmeteredClosedParts, unmeteredSummary } from '../control.js';
 import { DATA_DIR, loadConfig } from '../config.js';
@@ -33,6 +33,8 @@ import { effortSettingsForModel } from './config.js';
 import { appendForcedAction, forceReason } from '../force-audit.js';
 import { clearDiskDiagnosisBulletin, scanDiskUsage, writeDiskDiagnosis } from '../disk-diagnosis.js';
 import { recordProjectActivity } from '../project-register.js';
+import { verifyProjectCaller } from '../project-caller.js';
+import { withMutationLock } from './locks.js';
 import { watchTrustPrompt } from '../trust-prompts.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -2912,6 +2914,67 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
     if (error?.exitCode !== undefined) refusal.exitCode = error.exitCode;
     throw refusal;
   }
+}
+
+// Close a stale parked run without collecting a report or approving its work.
+export function repairWorkerLedger(name, { reason } = {}, {
+  config, herdr = createHerdrRunner(), env = process.env, now = Date.now(), output = console.log,
+  dataDir = env.HERDR_BOSS_DIR || DATA_DIR,
+} = {}) {
+  const safeReason = forceReason(true, reason, 'worker ledger repair');
+  verifyProjectCaller(env, herdr, 'worker ledger repair', { targetSlug: config.slug, action: 'repair' });
+  // Read first so an unknown name cannot create a ledger or an audit file.
+  readRun(config, name);
+  return withMutationLock(config.runsPath, () => {
+    const { file, run } = readRun(config, name);
+    if (run.finishedAt) throw new Error(`Run ${name} is already finished.`);
+    if (!run.parked && run.state !== 'parked') throw new Error(`Run ${name} is not parked. Use worker collect to record its result.`);
+    let panes, agents;
+    try {
+      const paneList = herdr(['pane', 'list']);
+      const agentList = herdr(['agent', 'list']);
+      panes = Array.isArray(paneList) ? paneList : paneList?.panes;
+      agents = Array.isArray(agentList) ? agentList : agentList?.agents;
+      if (!Array.isArray(panes) || !Array.isArray(agents)) throw new Error('invalid list');
+    } catch { throw new Error('Cannot verify live panes and agents with Herdr. Nothing was repaired.'); }
+    if ((run.pane && panes.some((pane) => getPane(pane) === run.pane)) || agents.some((agent) => getName(agent) === name)) {
+      throw new Error(`Run ${name} has a live pane or agent. Nothing was repaired.`);
+    }
+    const base = run.baseCommit;
+    let commits, changedPaths;
+    try {
+      if (!base || !run.branch) throw new Error('missing branch or base');
+      const range = `${base}..refs/heads/${run.branch}`;
+      const inspectGit = (args) => execFileSync('git', ['-C', config.root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000 });
+      commits = Number(inspectGit(['rev-list', '--count', range]).trim());
+      if (!Number.isSafeInteger(commits) || commits < 0) throw new Error('invalid count');
+      changedPaths = inspectGit(['diff', '--no-renames', '--name-only', '-z', range]).split('\0').filter(Boolean);
+    } catch { throw new Error(`Cannot inspect commits for worker ${name}. Nothing was repaired.`); }
+    const outcome = commits === 0 ? 'abandoned' : 'failed';
+    const endedAt = new Date(typeof now === 'function' ? now() : now).toISOString();
+    const entry = {
+      issue: run.issue ?? null, model: run.model, surface: 'herdr', worktree: run.worktree,
+      startedAt: run.startedAt, endedAt, outcome, timedOut: false, toolCalls: null, changedPaths,
+      independentGate: { passed: false, command: 'Worker ledger repair inspected the run, Git commits, and live panes only. Original acceptance is unverified.' },
+      defectsFound: [], rework: [], evidenceTier: ['unit'], scopeExtensions: run.scopeExtensions ?? [],
+    };
+    const validation = { evidenceTiers: config.evidenceTiers };
+    const errors = validateDelegatedRun(entry, validation);
+    if (errors.length) throw new Error(`Cannot repair the worker ledger:\n- ${errors.join('\n- ')}`);
+    if (readDelegatedRuns(config.ledgerPath, validation).some((row) => row.worktree === run.worktree && row.startedAt === run.startedAt)) {
+      throw new Error(`Run ${name} already has a ledger entry. Nothing was repaired.`);
+    }
+    appendForcedAction({ dataDir, time: endedAt, command: 'worker ledger repair', project: config.slug, workerName: name, refusalKind: `parked-${outcome}`, reason: safeReason });
+    appendDelegatedRun(config.ledgerPath, entry, validation);
+    run.state = outcome;
+    run.outcome = outcome;
+    run.finishedAt = endedAt;
+    run.collectedAt = endedAt;
+    delete run.parked;
+    writeJsonAtomic(file, run);
+    output(`Worker ${name}: repaired as ${outcome} (${commits} commits after the base). Acceptance stays unverified. The branch and worktree stay in place.`);
+    return run;
+  });
 }
 
 // A parked worker waits on purpose, for example for the Owner. Its pane label tells Herdr Boss to leave it out of idle notices.

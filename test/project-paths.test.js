@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { pinProject, pinnedProjects } from '../src/git-pins.js';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli.js');
 const REPO = path.resolve(path.dirname(CLI), '..');
@@ -170,5 +171,32 @@ test('project unregister refuses an unknown slug without changing the registry',
     assert.match(result.stderr, /Unknown project slug: missing/);
     assert.equal(fs.readFileSync(registry, 'utf8'), original);
     assert.deepEqual(fs.readdirSync(f.dataDir), ['project-repos.json']);
+  } finally { f.cleanup(); }
+});
+
+test('project unregister clears only its Git pin and browser reservation and leaves the browser record', () => {
+  const f = fixture();
+  try {
+    const remove = { slug: 'remove', repo: path.join(f.root, 'remove') };
+    const keep = { slug: 'keep', repo: path.join(f.root, 'keep') };
+    for (const project of [remove, keep]) {
+      initGitRepo(project.repo);
+      pinProject(project, { home: f.root, env: f.env });
+    }
+    fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([remove, keep]));
+    const reservations = [
+      { pool: 'project-browsers', project: 'remove', item: '9223' },
+      { pool: 'project-browsers', project: 'keep', item: '9224' },
+      { pool: 'serve-ports', project: 'remove', worker: 'test', item: '5000' },
+    ];
+    fs.writeFileSync(path.join(f.dataDir, 'leases.json'), JSON.stringify({ leases: reservations }));
+    const browserRecord = JSON.stringify({ remove: { project: 'remove', port: 9223, headless: true } });
+    fs.writeFileSync(path.join(f.dataDir, 'browser-sessions.json'), browserRecord);
+    const result = f.project('unregister', 'remove');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(pinnedProjects({ home: f.root }), [keep]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'leases.json'), 'utf8')).leases, reservations.slice(1));
+    assert.equal(fs.readFileSync(path.join(f.dataDir, 'browser-sessions.json'), 'utf8'), browserRecord);
+    assert.ok(fs.existsSync(path.join(remove.repo, 'README.md')));
   } finally { f.cleanup(); }
 });

@@ -4,7 +4,7 @@ import { DATA_DIR } from './config.js';
 import { readDataFile } from './data-file-safety.js';
 import { verifyMessageCaller } from './messages.js';
 
-export function assertPinCaller(projects, { env = process.env, herdr, dataDir = DATA_DIR, bossOnly = false, stdin = process.stdin, stdout = process.stdout } = {}) {
+export function assertPinCaller(projects, { env = process.env, herdr, dataDir = DATA_DIR, bossOnly = false, ownerOrBoss = false, stdin = process.stdin, stdout = process.stdout } = {}) {
   const pane = env.HERDR_ENV === '1' || env.HERDR_PANE_ID || env.HERDR_WORKSPACE_ID || env.HERDR_WORKTREE;
   if (!pane) {
     if (bossOnly) throw new Error('Only the Boss can override Git pins.');
@@ -14,6 +14,7 @@ export function assertPinCaller(projects, { env = process.env, herdr, dataDir = 
   const caller = verifyMessageCaller({ ...env, HERDR_ENV: '1' }, herdr, 'harness pin');
   if (caller.role === 'boss') return caller;
   if (bossOnly) throw new Error('Only the Boss can override Git pins.');
+  if (ownerOrBoss) throw new Error('Only the Boss or Owner can forget Git pins.');
   let control;
   try { control = JSON.parse(readDataFile(path.join(dataDir, 'rules.json'), dataDir)).control; } catch { throw new Error('Cannot verify the project orchestrator for harness pin.'); }
   const owner = Object.entries(control?.projects || {}).find(([, project]) => project?.workspace === caller.workspaceId)?.[0]

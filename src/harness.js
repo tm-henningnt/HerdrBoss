@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from './config.js';
 import { expandHome, sharedWorktreeRoot } from './kit/config.js';
 import { commonGitDir } from './git-directory.js';
-import { checkProjectPin, sharedGitEnabled, safeGitPinName, gitPinChangesText, pinnedProjects } from './git-pins.js';
+import { checkProjectPin, sharedGitEnabled, safeGitPinName, gitPinChangesText, pinnedProjects, unpinProject } from './git-pins.js';
+import { dropLeases, readLeases, PROJECT_BROWSER_POOL_NAME } from './leases.js';
 import { recordHarnessFacts } from './harness-facts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,16 +103,19 @@ function stopOwnRuleState(text) {
   return allow ? 'allow' : null;
 }
 
-// Read one exact Codex command prefix. A broader, malformed, commented, or prompt rule does not count.
+// Read one exact Codex command prefix. Each element can be a string or a list of string alternatives.
+// A broader, malformed, commented, or prompt rule does not count.
 function codexPrefixRuleState(text, target) {
   let allow = false;
   let forbidden = false;
   for (const line of String(text).split('\n')) {
-    const match = /^\s*prefix_rule\(\s*pattern\s*=\s*(\[[^\]]*\])\s*,\s*decision\s*=\s*"(allow|forbidden)"\s*\)\s*$/.exec(line);
+    const match = /^\s*prefix_rule\(\s*pattern\s*=\s*(\[.*\])\s*,\s*decision\s*=\s*"(allow|forbidden)"\s*\)\s*$/.exec(line);
     if (!match) continue;
     let pattern;
     try { pattern = JSON.parse(match[1]); } catch { continue; }
-    if (!Array.isArray(pattern) || pattern.length !== target.length || pattern.some((part, index) => part !== target[index])) continue;
+    if (!Array.isArray(pattern) || pattern.length !== target.length) continue;
+    if (pattern.some((part) => typeof part !== 'string' && !(Array.isArray(part) && part.length && part.every((value) => typeof value === 'string')))) continue;
+    if (pattern.some((part, index) => Array.isArray(part) ? !part.includes(target[index]) : part !== target[index])) continue;
     if (match[2] === 'allow') allow = true;
     else forbidden = true;
   }
@@ -160,7 +164,7 @@ export function readProjectRepos(dataDir = DATA_DIR) {
   } catch { return []; }
 }
 
-export function unregisterProjectRepo(slug, { dataDir = DATA_DIR } = {}) {
+export function unregisterProjectRepo(slug, { dataDir = DATA_DIR, home = homeDir(), env = process.env } = {}) {
   const file = registryFile(dataDir);
   let rows;
   let contents;
@@ -171,6 +175,12 @@ export function unregisterProjectRepo(slug, { dataDir = DATA_DIR } = {}) {
   if (!Array.isArray(rows) || !rows.some((row) => row && row.slug === slug)) return { removed: false, backup: null };
 
   const backup = backupRegistry(file, contents);
+
+  // Remove reservations and pins before the row, so a failed cleanup can be retried.
+  // The saved browser profile stays. This removes no browser process or project file.
+  const reservation = (lease) => lease.pool === PROJECT_BROWSER_POOL_NAME && lease.project === slug;
+  if (readLeases(dataDir).leases.some(reservation)) dropLeases(reservation, { dataDir });
+  unpinProject(slug, { home, env });
 
   let temporary;
   try {
@@ -677,11 +687,18 @@ export function checkHarness({ home = homeDir(), dataDir = DATA_DIR, modelsFile 
   const add = (status, area, item, text) => findings.push({ status, area, item, text });
   const projects = readProjectRepos(dataDir);
   let pinProjects = projects;
-  try { pinProjects = [...projects, ...pinnedProjects({ home }).filter((p) => !projects.some((row) => row.slug === p.slug))]; }
+  let savedPins = [];
+  try {
+    savedPins = pinnedProjects({ home });
+    pinProjects = [...projects, ...savedPins.filter((p) => !projects.some((row) => row.slug === p.slug))];
+  }
   catch { add('bad', 'git pins', 'Shared Git integrity', 'Cannot read private Git pins. Ask the Boss. Do not run the hook.'); }
   for (const project of pinProjects) {
     const pin = checkProjectPin(project, { dataDir, home, env: { ...process.env, HOME: home }, allowBaseline: true });
-    add(pin.ok ? 'ok' : 'bad', 'git pins', `Shared Git integrity: ${safeGitPinName(project.slug)}`, `${safeGitPinName(project.slug)}: ${pin.baseline ? 'recorded a baseline' : pin.ok ? 'pins match' : `${pin.error || `changed ${gitPinChangesText(pin)}`}. Ask the Boss. Do not run the hook.`}`);
+    const saved = savedPins.find((row) => row.slug === project.slug);
+    const stale = saved && (!projects.some((row) => row.slug === project.slug) || !samePath(saved.repo, project.repo) || pin.error === 'Cannot read shared Git directory.');
+    const fix = stale ? ` Stale pin. Ask the Boss or Owner to run: herdr-boss harness pin --forget ${safeGitPinName(project.slug)} --reason TEXT` : '';
+    add(pin.ok && !stale ? 'ok' : 'bad', 'git pins', `Shared Git integrity: ${safeGitPinName(project.slug)}`, `${safeGitPinName(project.slug)}: ${pin.baseline ? 'recorded a baseline' : pin.ok ? 'pins match' : `${pin.error || `changed ${gitPinChangesText(pin)}`}. Ask the Boss. Do not run the hook.`}${fix}`);
   }
 
   const configFile = codexConfigFile(home);

@@ -216,6 +216,77 @@ test('harness check still checks a pinned repository after project-repos.json is
   const f = fixture(t); f.check(); fs.unlinkSync(path.join(f.dataDir, 'project-repos.json')); fs.writeFileSync(f.hook, 'changed');
   const [finding] = f.check(); assert.ok(finding); assert.equal(finding.status, 'bad'); assert.match(finding.text, /pre-push/);
 });
+
+function forgetPin(f, args = ['--forget', 'alpha', '--reason', 'fixture cleanup'], role = 'owner') {
+  const env = { ...f.env };
+  if (role !== 'owner') {
+    const bin = path.join(f.home, 'fake-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const pane = { pane_id: `ws:${role}`, workspace_id: 'ws', label: role };
+    fs.writeFileSync(path.join(bin, 'herdr'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ pane })}'\n`, { mode: 0o755 });
+    Object.assign(env, { PATH: `${bin}${path.delimiter}${env.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: pane.pane_id, HERDR_WORKSPACE_ID: 'ws' });
+  }
+  return spawnSync(process.execPath, ['--input-type=module', '-e', `process.stdin.isTTY = true; process.stdout.isTTY = true; process.argv = ${JSON.stringify([process.execPath, cli, 'harness', 'pin', ...args])}; await import(${JSON.stringify(cli)});`], { cwd: f.home, env, encoding: 'utf8' });
+}
+
+test('harness check lists stale pins after a manual slug rename or repository removal with the exact forget command', (t) => {
+  for (const scenario of ['rename', 'remove']) {
+    const f = fixture(t);
+    assert.equal(f.pin().status, 0);
+    if (scenario === 'rename') fs.writeFileSync(path.join(f.dataDir, 'project-repos.json'), JSON.stringify([{ slug: 'beta', repo: f.root }]));
+    else fs.rmSync(f.root, { recursive: true, force: true });
+    const finding = f.check().find((entry) => entry.item.endsWith(': alpha'));
+    assert.equal(finding.status, 'bad');
+    assert.match(finding.text, /stale pin/i);
+    assert.ok(finding.text.includes('herdr-boss harness pin --forget alpha --reason TEXT'));
+  }
+});
+
+for (const role of ['owner', 'boss']) test(`harness pin --forget from ${role} removes a stale pin without reading Git and audits the masked reason`, (t) => {
+  const f = fixture(t);
+  assert.equal(f.pin().status, 0);
+  const pin = projectPin(f);
+  fs.unlinkSync(path.join(f.dataDir, 'project-repos.json'));
+  fs.rmSync(f.root, { recursive: true, force: true });
+  const credential = ['fixture', 'credential'].join('-');
+  const result = forgetPin(f, ['--forget', 'alpha', '--reason', `retired Bearer ${credential}`], role);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /alpha.*forgot/i);
+  assert.equal(fs.existsSync(pin), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(privatePins(f), 'index.json'), 'utf8')).projects, []);
+  const audit = fs.readFileSync(path.join(f.dataDir, 'action-audit.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.equal(audit.command, 'harness pin --forget');
+  assert.equal(audit.project, 'alpha');
+  assert.match(audit.reason, /retired/);
+  assert.ok(!audit.reason.includes(credential));
+  assert.match(audit.reason, /\[REDACTED\]/);
+  assert.deepEqual(f.check(), []);
+});
+
+for (const role of ['worker', 'orch']) test(`harness pin --forget refuses ${role} before changing pins or audit`, (t) => {
+  const f = fixture(t);
+  assert.equal(f.pin().status, 0);
+  const pin = fs.readFileSync(projectPin(f)), index = fs.readFileSync(path.join(privatePins(f), 'index.json'));
+  const audit = fs.readFileSync(path.join(f.dataDir, 'action-audit.jsonl'));
+  const result = forgetPin(f, undefined, role);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Boss|boss/);
+  assert.deepEqual(fs.readFileSync(projectPin(f)), pin);
+  assert.deepEqual(fs.readFileSync(path.join(privatePins(f), 'index.json')), index);
+  assert.deepEqual(fs.readFileSync(path.join(f.dataDir, 'action-audit.jsonl')), audit);
+});
+
+test('harness pin --forget requires a known pin and a reason and rejects a simultaneous refresh', (t) => {
+  const f = fixture(t);
+  assert.equal(f.pin().status, 0);
+  const before = fs.readFileSync(path.join(privatePins(f), 'index.json'));
+  for (const args of [['--forget', 'alpha'], ['--forget', 'missing', '--reason', 'fixture'], ['alpha', '--forget', 'alpha', '--reason', 'fixture'], ['alpha', '--reason', '--forget']]) {
+    const result = forgetPin(f, args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /reason|Unknown.*pin|Usage/i);
+    assert.deepEqual(fs.readFileSync(path.join(privatePins(f), 'index.json')), before);
+  }
+});
 test('deleting a pin also fails during the ten-second cache window', async (t) => {
   const f = fixture(t), { checkProjectPin } = await import('../src/git-pins.js'), project = { slug: 'alpha', repo: f.root };
   f.check(); const opts = { ...f, cached: true, now: () => 100000 };

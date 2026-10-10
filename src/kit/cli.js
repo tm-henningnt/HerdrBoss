@@ -8,7 +8,7 @@ import { activeLaunchRecords, enableModel, markModelUnavailable } from './model-
 import { appendDelegatedRun, compareChangedPaths, gitStatusPaths, readDelegatedRuns, readJson, validateAllowedPaths, validateDelegatedRun, normalizeWorkerReport, validateWorkerReport } from './orchestration.js';
 import { buildGhArgs, buildGhLabelArgs, buildGhMilestoneArgs, loadLabelPreset, parseLabelSync } from './gh.js';
 import { cleanGhEnv, ghRunner, originRepo, syncLabels } from '../gh-labels.js';
-import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, runPiListing, startWorker, stopOwnWorker } from './workers.js';
+import { allowWorkerScope, collectWorker, commitWorker, createHerdrRunner, listWorkers, parkWorker, repairWorkerLedger, runPiListing, startWorker, stopOwnWorker } from './workers.js';
 import { initializeLifecyclePort } from './lifecycle.js';
 import { pruneWorktrees, worktreeDisk } from './worktrees.js';
 import { acquireProjectLock, listProjectLocks, pushWithLock, releaseProjectLock } from './locks.js';
@@ -29,6 +29,7 @@ const USAGE = `Kit commands:
   worker list
   wait [<worker>...] [--timeout SECONDS] [--stall SECONDS]
   worker park <name> --reason TEXT | worker unpark <name>
+  worker ledger repair <name> --reason TEXT
   worker allow <name> <path>... --reason TEXT
   worker scope add <name> <path>... --reason TEXT
   lock acquire <name> [--wait SECONDS] | lock release <name> [--slot long|N] | lock list
@@ -504,6 +505,15 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       knownFlags(flags, action === 'park' ? ['reason'] : []);
       return parkWorker(positional[0], { reason: flags.reason, unpark: action === 'unpark' }, { config, herdr, output });
     }
+    if (action === 'ledger') {
+      const usage = 'Usage: worker ledger repair NAME --reason TEXT';
+      const [operation, ...args] = rest;
+      if (operation !== 'repair') fail(usage);
+      const { positional, flags } = parseArgs(args);
+      knownFlags(flags, ['reason']);
+      if (positional.length !== 1) fail(usage);
+      return repairWorkerLedger(positional[0], { reason: flags.reason }, { config, herdr, env, output, dataDir: lockDataDir ?? env.HERDR_BOSS_DIR ?? DATA_DIR, now });
+    }
     if (action === 'collect') {
       const { positional, flags } = parseArgs(rest, { boolean: ['--record', '--no-record', '--gate-passed', '--gate-failed', '--keep-pane'], repeat: ['--allow'] });
       if (positional.length !== 1) fail(WORKER_COMMAND_USAGE.collect);
@@ -603,7 +613,7 @@ function commandKit(command, argv, { output = console.log, env = process.env, he
       if (rest.length) fail('Usage: worker list');
       return listWorkers(config, { herdr, output });
     }
-    fail('Usage: worker start|collect|commit|stop-own|list|park|unpark|allow|scope add');
+    fail('Usage: worker start|collect|commit|stop-own|list|park|unpark|ledger repair|allow|scope add');
   }
 
   if (command === 'worktree') {

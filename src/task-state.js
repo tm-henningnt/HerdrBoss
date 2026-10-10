@@ -55,7 +55,12 @@ export function workerFactFromRun(record, { isLive = () => true, isMerged = () =
   // Answers without a merge check. mergeable: a merged branch changes the phase.
   let phase;
   let mergeable = false;
-  if (record.finishedAt) { phase = record.outcome === 'done' ? 'review' : 'failed'; mergeable = phase === 'review'; }
+  if (record.finishedAt) {
+    if (record.outcome === 'done') phase = 'review';
+    else if (record.outcome === 'abandoned') phase = 'abandoned';
+    else phase = 'failed';
+    mergeable = phase === 'review';
+  }
   else if (record.collectedAt) { phase = 'review'; mergeable = true; }
   else if (isLive(record)) phase = 'live';
   else {
