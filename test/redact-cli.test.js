@@ -10,6 +10,11 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CLI = path.join(ROOT, 'src', 'cli.js');
 const TEST_HOST = 'fixture.eu.example.invalid';
+const EXTENSION_GROUPS = [
+  ['Q1w2E', 'R3t4Y5u6', 'I7o8P9a0S1d2F3g4H'],
+  ['Q1w2E3r4T5y6U7i8O', 'P9a0S1d2F3g4H5'],
+  ['Q1w2E3r4', 'T5y6U7i8', 'O9p0A1s2D3f4G5'],
+];
 let nextFixture = 0;
 
 function fixture(t, config = { redact: { tenantHosts: [TEST_HOST] } }) {
@@ -166,6 +171,55 @@ test('redact recognizes Qlik and extension shapes after earlier classes', (t) =>
   ].join('\n'));
 });
 
+test('redact recognizes all supported extension ID splits in text, URLs and wrapped lines', (t) => {
+  const fx = fixture(t);
+  const extensionIds = EXTENSION_GROUPS.map((groups) => groups.join('-'));
+  const input = extensionIds.flatMap((id) => [
+    `${id} ${id.toUpperCase()} ${id.toLowerCase()}`,
+    `https://example.test/extensions/${id}?view=summary`,
+    `(${id}), _${id}_`,
+    `extension ${id.slice(0, 15)}\n    ${id.slice(15)}`,
+  ]).join('\n') + '\n';
+  const result = runRedact(fx, input);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, extensionIds.flatMap(() => [
+    '<ext-id> <ext-id> <ext-id>',
+    'https://example.test/extensions/<ext-id>?view=summary',
+    '(<ext-id>), _<ext-id>_',
+    'extension <ext-id>',
+  ]).join('\n') + '\n');
+});
+
+test('redact rejects extension ID near misses and keeps earlier UUID and hex classes', (t) => {
+  const fx = fixture(t);
+  const nearMisses = EXTENSION_GROUPS.flatMap((groups) => {
+    const id = groups.join('-');
+    return [
+      id.slice(0, -1), `${id}X`,
+      `-${id}`, `${id}-`, `X${id}`, `1${id}`, `${id}1`,
+      groups.join('--'),
+      ...groups.map((group, index) => groups.map((value, n) => n === index ? 'Q'.repeat(group.length) : value).join('-')),
+      ...groups.map((group, index) => groups.map((value, n) => n === index ? '1'.repeat(group.length) : value).join('-')),
+    ];
+  });
+  nearMisses.push(
+    ['Q1w2E3r', 'T4y5U6i', 'O7p8A9s', 'D0f1G2h3'].join('-'),
+    ['Q1w2', 'E3r4T5y6U', 'I7o8P9a0S1d2F3g4H'].join('-'),
+    ['Q1w2E3r4T5y6U7i8O9', 'P0a1S2d3F4g5H'].join('-'),
+    'Q1'.repeat(16),
+    'ordinary-hyphenated-phrase-words',
+    'abc1234', 'abc1234def56',
+  );
+  const guid = ['a1b2c3d4', 'e5f6', '7890', 'abcd', 'ef0123456789'].join('-');
+  const commit = 'abcd1234'.repeat(5);
+  const input = [...nearMisses, guid, commit, ''].join('\n');
+  const result = runRedact(fx, input);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, [...nearMisses, '<uuid>', '<hex>', ''].join('\n'));
+});
+
 test('redact leaves ordinary words, short git ids and near misses unchanged', (t) => {
   const fx = fixture(t);
   const qlikId = 'Q1w2E3r4T5y6U7i8O9p0A1s2';
@@ -202,6 +256,37 @@ function trackedFixture(t, files) {
   }
   return { ...fx, cwd };
 }
+
+test('redact check reports all extension ID splits without matching text', (t) => {
+  const extensionIds = EXTENSION_GROUPS.map((groups) => groups.join('-'));
+  const fx = trackedFixture(t, {
+    'extensions.txt': [
+      'plain',
+      extensionIds.join(' '),
+      extensionIds[1].toUpperCase(),
+      `https://example.test/extensions/${extensionIds[2]}`,
+      `extension ${extensionIds[1].slice(0, 15)}`,
+      `    ${extensionIds[1].slice(15)}`,
+      '',
+    ].join('\n'),
+  });
+  const result = runRedact(fx, '', ['--check', 'extensions.txt'], fx.cwd);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, [
+    'extensions.txt:2 ext-id: 3',
+    'extensions.txt:3 ext-id: 1',
+    'extensions.txt:4 ext-id: 1',
+    'extensions.txt:5 ext-id: 1',
+    'ext-id: 6',
+    '',
+  ].join('\n'));
+  for (const id of extensionIds) {
+    assert.ok(!result.stdout.includes(id));
+    assert.ok(!result.stdout.includes(id.toUpperCase()));
+  }
+  for (const group of EXTENSION_GROUPS.flat()) assert.ok(!result.stdout.includes(group));
+});
 
 test('redact check prints only tracked file locations, classes and counts', (t) => {
   const qlikId = 'Q1w2E3r4T5y6U7i8O9p0A1s2';
