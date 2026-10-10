@@ -10,10 +10,10 @@ const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'
 const docsPath = new URL('../docs/cli.md', import.meta.url);
 
 test('browser help states the local header-forgery limit and appears once', () => {
-  const match = app.match(/browsers: \['Browsers', `([\s\S]*?)`\],/);
-  assert.ok(match, 'the Browsers help entry is present');
-  assert.match(match[1], /process on this machine can still forge the headers/i);
-  assert.match(match[1], /Use this setting only on the Owner's own machine\./);
+  const help = fs.readFileSync(new URL('../docs/help/browsers.md', import.meta.url), 'utf8');
+  assert.match(help, /process on this machine can still forge the headers/i);
+  assert.match(help, /Use this setting only on the Owner's own machine\./);
+  assert.doesNotMatch(app, /browsers: \['Browsers', `/);
   assert.doesNotMatch(app, /if \(topic === 'browsers'\) body \+= HELP\.browsers\[1\]/);
 });
 

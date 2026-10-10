@@ -123,7 +123,7 @@ test('large bookmark collections are collapsed, counted, and filterable per proj
   contains('the current-tab action', /data-browser-bookmark-open="tm-stacked-variance"/);
   contains('the new-tab action', /data-browser-bookmark-open-tab="tm-stacked-variance"/);
   assert.match(source, /\$\{browserBookmarkSection\(p\.slug, b\)\}/);
-  assert.match(source, /Filter bookmarks<\/b> to find a name or address/);
+  assert.match(fs.readFileSync(new URL('../docs/help/browsers.md', import.meta.url), 'utf8'), /Filter bookmarks\*\* to find a name or address/);
   assert.match(source, /data-browser-bookmark-filter/);
   assert.match(source, /browser-bookmark-result/);
 });
