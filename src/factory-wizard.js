@@ -6,6 +6,7 @@ import { managedFactory, transportFor, inspect, assertOwned, dockerCall, readHea
 import { factoryFile, readPrivate, writePrivate, updateFleet, assertVersion, effectiveMinimum, VOLUMES } from './factory-store.js';
 import { isHostUnreachable } from './factory-transport.js';
 import { hostGuideHint } from './host-guide-link.js';
+import { syncFactoryHarness } from './factory-harness.js';
 
 export const FACTORY_STEPS = Object.freeze(['container', 'volumes', 'herdr', 'service', 'harness-claude', 'harness-codex', 'harness-other', 'github', 'project']);
 
@@ -142,6 +143,7 @@ export async function configureFactory(args, io) {
         });
         await ensureClaudeHelper(docker, name, io);
         await ensureCodexbar(docker, name, io);
+        await syncFactoryHarness(docker, name, io);
       }
       step.status = 'done';
       step.detail = step.name === 'container' && host.codexSandbox !== 'user-namespaces'

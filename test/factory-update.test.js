@@ -8,12 +8,25 @@ import { DatabaseSync } from 'node:sqlite';
 import { factoryCommand } from '../src/factory-host.js';
 import { readFleet, writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
 import { assertPollerRegistry } from './helpers/factory-registry.js';
+import { runFactoryHarness } from './helpers/factory-harness.js';
 
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft15' };
 const image = { Id: 'sha256:tag-image', Config: { Labels: {
   'org.opencontainers.image.created': '2026-10-03T00:00:00Z',
   'org.herdr-boss.pins-sha256': 'b'.repeat(64),
 } } };
+
+test('service update synchronizes the factory harness after kit install', async (t) => {
+  const f = updateFixture(); t.after(f.cleanup);
+  assert.equal(await update(f), 0);
+  const home = f.volumePaths.home;
+  assert.ok(fs.existsSync(path.join(home, '.codex', 'rules', 'herdr.rules')));
+  assert.ok(fs.existsSync(path.join(home, '.pi', 'agent', 'extensions', 'herdr-guard.ts')));
+  const kit = f.calls.findIndex(({ args }) => args.includes('kit') && args.includes('install'));
+  const harness = f.calls.findIndex(({ args }) => args.some(word => word.includes('setupFactoryHarnessHome')));
+  assert.ok(kit >= 0 && harness > kit);
+  assert.match(f.output.join(''), /Harness setup: [0-9]+ changed/);
+});
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'factory-update-'));
@@ -44,6 +57,8 @@ function fixture() {
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
   const docker = { async run(args, options = {}) {
     calls.push({ args, options });
+    const harness = runFactoryHarness(args, { HOME: env.HOME, HERDR_BOSS_DIR: env.HERDR_BOSS_DIR });
+    if (harness) return harness;
     if (args[0] === 'container' && args[1] === 'inspect') return args[2] === 'hf-demo' ? ok([container]) : missing();
     if (args[0] === 'volume' && args[1] === 'inspect') return volumes.has(args[2]) ? ok([volumes.get(args[2])]) : missing();
     if (args[0] === 'image' && args[1] === 'inspect') return ok([image]);
@@ -108,6 +123,8 @@ process.stdout.write(args.slice(args.indexOf('--') + 1).map(file => diffs[file]?
   const docker = { async run(args, options = {}) {
     f.calls.push({ args, options });
     if (transportFault(args)) throw Object.assign(new Error('The factory host is unreachable.'), { code: 'FACTORY_HOST_UNREACHABLE' });
+    const harness = runFactoryHarness(args, { HOME: volumePaths.home, HERDR_BOSS_DIR: volumePaths.data });
+    if (harness) return harness;
     if (args[0] === 'container' && args[1] === 'inspect') {
       const found = args[2] === 'hf-demo' ? container : helpers.get(args[2]);
       return found ? ok([found]) : missing();

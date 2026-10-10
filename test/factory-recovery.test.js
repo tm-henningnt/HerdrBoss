@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { factoryCommand } from '../src/factory-host.js';
 import { writeFleet, writePrivate, VOLUMES } from '../src/factory-store.js';
 import { assertPollerRegistry } from './helpers/factory-registry.js';
+import { runFactoryHarness } from './helpers/factory-harness.js';
 
 const health = { schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', herdrReachable: true };
 const labels = { 'herdr-factory': 'demo', 'herdr-factory-spike': 'ft14' };
@@ -42,6 +43,8 @@ function fixture(remote = false) {
   const missing = () => ({ code: 1, stdout: '', stderr: 'No such object' });
   const docker = { async run(args, options = {}) {
     calls.push({ args, options });
+    const harness = runFactoryHarness(args, { HOME: volumePaths.home, HERDR_BOSS_DIR: volumePaths.data });
+    if (harness) return harness;
     if (args[0] === 'container' && args[1] === 'inspect') {
       const found = args[2] === 'hf-demo' ? container : helpers.get(args[2]);
       return found ? ok([found]) : missing();

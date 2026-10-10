@@ -186,6 +186,22 @@ export function pinProject(project, { home, env = process.env, now = Date.now, b
     return state;
   });
 }
+
+// Remove a reviewed cleanup candidate without reading its now-deleted Git directory.
+export function unpinProject(slug, options = {}) {
+  const directory = gitPinsDir(options);
+  const projects = readIndex(directory);
+  if (!projects.some(project => project.slug === slug)) return false;
+  assertPinDirectoryWritable(options);
+  return withPrivateMutation(directory, () => {
+    const current = readIndex(directory);
+    fs.rmSync(pinFile({ slug }, directory), { force: true });
+    writeDataFile(path.join(directory, 'index.json'), JSON.stringify({ schema: 1, projects: current.filter(project => project.slug !== slug) }) + '\n', directory);
+    const prefix = pinFile({ slug }, directory) + '\0';
+    for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
+    return true;
+  });
+}
 function changedNames(before, after) {
   const names = [];
   if (before.common !== after.common) names.push('common Git directory');

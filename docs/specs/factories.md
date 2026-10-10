@@ -239,14 +239,15 @@ Use placeholders only. Keep host names, tailnet names, addresses, and tenant dat
 
 A smoke run uses the prefix `smoke-` for its Herdr workspace label and project folder name. The factory work root is `/home/factory/work`. Put smoke folders directly under that root. The Owner script and `factory clean-smoke NAME` use this same contract.
 
-The command lists matching workspaces and folders with counts and names. It prints no folder paths. Without `--yes`, it requires the exact phrase `clean-smoke NAME` on stdin. A wrong or absent phrase stops cleanup. `--yes` skips that confirmation. `--dry-run` lists and checks without confirmation or removal.
+The command lists matching workspaces, folders, and project slugs with counts and names. It prints no folder paths. Without `--yes`, it requires the exact phrase `clean-smoke NAME` on stdin. A wrong or absent phrase stops cleanup. `--yes` skips that confirmation. `--dry-run` lists and checks without confirmation or removal.
 
-The command closes only workspaces whose labels start with `smoke-`. It removes only folders whose names start with `smoke-`. It refuses symbolic links in the root, matching folders, or their contents. It refuses a path that resolves outside the work root. It checks all matching folders before it closes a workspace. It checks the names again after confirmation. Every other workspace and folder stays. Regular files directly under the work root stay. Project registry rows stay. A repeat after a failure removes only the remaining matching resources.
+The command closes only workspaces whose labels start with `smoke-`. It removes only folders whose names start with `smoke-`. It unregisters only project slugs that start with `smoke-`. It removes their project records and git pins. A stale smoke record is removed even when its folder no longer exists. It refuses symbolic links in the root, matching folders, or their contents. It refuses a path or smoke registration outside the work root. It checks all matching folders and records before it closes a workspace. It checks the names again after confirmation. Every other workspace, folder, and project record stays. Regular files directly under the work root stay. A repeat after a failure removes only the remaining matching resources.
 
 ### Wizard
 
 - A resumable state machine in the style of `project new`. A finished step is skipped when its check still passes. Exit code 3 means it waits for the Owner. No secret enters the Mailbox.
 - Steps in this plan: container, volumes, herdr, service, harness-claude, harness-codex, harness-other (OpenCode), github, project.
+- The service step sets up the factory harness files through factory exec. It uses the kit templates and the numeric UID of the factory user. It adds Codex writable roots and rules, Claude autoMode lines, and the Pi guard extension. It keeps unrelated settings and refuses conflicting Codex rules. It runs harness sync in the factory. Output gives counts and item names only. Local harness sync keeps its manual setup rules.
 - `factory login` runs at a host terminal through `docker exec`. It shows only the URL or the code, waits, checks with a harmless call, and prints no token.
 
 ### Fleet summary and credentials (ADRs 0011, 0016)
@@ -274,6 +275,7 @@ The command closes only workspaces whose labels start with `smoke-`. It removes 
 ### Updates and recovery
 
 - Tier 1 (service): `git fetch`, `merge --ff-only` on the `code` volume, restart the supervised service. Panes survive.
+- After kit install, tier 1 runs the same factory harness setup as configure.
 - Before the service merge, save local changes in tracked documentation inside the factory. Put timestamped patches with mode 0600 in `~/work/boss-notes/update-patches/`. Save staged edits and working-file edits separately. A staged patch ends in `-index.patch`.
 - Save the notes and patches before the work-volume backup, so a data-migration rollback keeps them. Restore tracked files only after the backup and the fresh idle check.
 - Append added note lines from `docs/orchestration/memory.md` to `~/work/boss-notes/memory.md` instead of a patch. Keep existing factory notes. Print each saved path. Restore the saved files in the index and the working tree from `HEAD` before the merge. A repeat saves only new changes. A clean checkout creates no notes or patches. Keep untracked files.
@@ -292,6 +294,8 @@ The command closes only workspaces whose labels start with `smoke-`. It removes 
 - The source orchestrator publishes its status and commits `memory.md`. Workers finish or stop. The source closes its orchestrator pane at the end of the freeze.
 - Unpushed work blocks the freeze, and the command lists it.
 - The target clones from GitHub, runs `kit install`, creates the project record, and asks for secrets again in the wizard. A fresh orchestrator reads `memory.md`, runs `project check`, and publishes its status.
+- Before cloning, the target selects the lead kind with its policy. It checks the harness settings for that kind. A failure refuses the import and prints `herdr-boss factory configure NAME` as the repair command.
+- A failed import names the failed step: clone, workspace, kit, harness, or lead start. The message gives a safe cause and no secrets. A lead failure keeps the owned clone, lock, and workspace checkpoints. The message says `Run the same command again.` A retry uses those checkpoints. The transfer handler returns no bare HTTP 500.
 - The target accepts the start request with HTTP 202 and a job ID. It runs the import outside the HTTP service thread. The source checks the job each second. The start limit is 300 seconds. The limits for plan, switch, and cancel are 30 seconds.
 - A start timeout prints `The target is still working. Run the same command again.` The target continues. The same start command uses the same transfer ID. It resumes the owned clone and project lead checkpoints. It replaces an incomplete clone only when that transfer owns it. A finished import returns its result again. A connection failure keeps the `could not be reached` message.
 - The fleet guide credential permits the transfer POST request and the job GET request. A job response holds only status and result fields. The target refuses switch and cancel while the import job runs. Retry those actions after the job finishes.

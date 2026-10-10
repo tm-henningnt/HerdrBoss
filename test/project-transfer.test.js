@@ -15,12 +15,13 @@ import { writeFleetFile } from '../src/fleet-store.js';
 import { appendMessage, readMessages } from '../src/messages.js';
 import { installedKitRevision, kitRevision } from '../src/kit/agents-check.js';
 import { startWorker } from '../src/kit/workers.js';
-import { recordProjectRepo } from '../src/harness.js';
+import { recordProjectRepo, setupFactoryHarnessHome } from '../src/harness.js';
 import { writeProject } from '../src/projects.js';
 import { createProjectTransferLock, readProjectTransferLock } from '../src/project-transfer-locks.js';
 import { createProjectTransfer, projectTransferCommand, projectTransferRoot } from '../src/project-transfer.js';
 import { serve } from '../src/server.js';
 import { FACTORY_PROJECT_GROUP } from '../src/factory-role.js';
+import { POLICY_DEFAULTS } from '../src/control.js';
 
 const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1' };
 const SOURCE_ID = 'factory-source';
@@ -105,6 +106,7 @@ function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWork
     events: sequence,
   });
   for (const dir of [sourceData, targetData, sourcePrivate, targetPrivate, sourceRoot, targetRoot]) fs.mkdirSync(dir, { recursive: true });
+  setupFactoryHarnessHome({ home: root, dataDir: targetData, projectRoot: targetRoot });
   git(root, 'init', '--bare', '--initial-branch=main', remote);
   fs.mkdirSync(repo, { recursive: true });
   git(repo, 'init', '--initial-branch=main');
@@ -165,6 +167,82 @@ function decide(f, text) {
   assert.ok(ask, 'transfer must ask the Owner through the source Mailbox');
   appendMessage({ thread: 'boss', from: 'owner', to: 'boss', kind: 'reply', text, replyTo: ask.id, action: 'answer', status: 'new' }, { dir: f.sourceData });
 }
+
+test('target harness preflight refuses before clone and gives the exact factory configure command', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  fs.rmSync(path.join(f.root, '.codex'), { recursive: true });
+  fs.rmSync(path.join(f.root, '.claude'), { recursive: true });
+  const result = await command(f.source, 'start', f);
+  assert.equal(result.code, 1, result.text);
+  assert.match(result.text, /harness/i);
+  assert.match(result.text, /herdr-boss factory configure factory-two/);
+  assert.equal(fs.existsSync(path.join(f.targetRoot, 'alpha')), false);
+  assert.equal(readProjectTransferLock('alpha', { dataDir: f.targetData }), null);
+  assert.equal(f.herdr.calls.length, 0);
+});
+
+test('preflight checks the selected Pi lead instead of unrelated Claude and Codex settings', async (t) => {
+  const f = fixture(); t.after(f.cleanup);
+  fs.writeFileSync(path.join(f.targetData, 'policy.json'), JSON.stringify({ ...POLICY_DEFAULTS,
+    allowedKinds: ['pi'], orchestratorLadder: POLICY_DEFAULTS.orchestratorLadder.filter(row => row.kind === 'pi') }));
+  fs.rmSync(path.join(f.root, '.codex'), { recursive: true });
+  fs.rmSync(path.join(f.root, '.claude'), { recursive: true });
+  const result = await command(f.source, 'start', f);
+  assert.equal(result.code, 3, result.text);
+  const start = f.herdr.calls.find(args => args[0] === 'agent' && args[1] === 'start');
+  assert.equal(start[start.indexOf('--kind') + 1], 'pi');
+});
+
+test('failed lead start keeps its half import and resumes with the same command', async (t) => {
+  const lead = fakeHerdr();
+  let fail = true;
+  const herdr = args => {
+    if (args[0] === 'agent' && args[1] === 'start' && fail) throw Object.assign(new Error('PRIVATE-CAUSE https://private.example.invalid/secret'), { status: 500 });
+    return lead(args);
+  };
+  const f = fixture({ targetOptions: { herdr } }); t.after(f.cleanup);
+  const first = await command(f.source, 'start', f);
+  assert.equal(first.code, 1);
+  assert.match(first.text, /Transfer failed at lead start:/);
+  assert.match(first.text, /Run the same command again/);
+  assert.doesNotMatch(first.text, /HTTP 500|PRIVATE-CAUSE|private\.example/);
+  const file = path.join(f.targetData, 'project-transfers', 'alpha.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(state.status, 'starting'); assert.equal(state.cloneComplete, true);
+  assert.equal(state.workspace.agentStarted, false); assert.equal(state.workspace.kind, null);
+  const repo = path.join(f.targetRoot, 'alpha');
+  fs.writeFileSync(path.join(repo, 'resume-marker'), 'owned clone');
+  fail = false;
+  const resumed = await command(f.source, 'start', f);
+  assert.equal(resumed.code, 3, resumed.text);
+  assert.equal(fs.readFileSync(path.join(repo, 'resume-marker'), 'utf8'), 'owned clone');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).transferId, state.transferId);
+  assert.equal(lead.state.workspaces.length, 1);
+  assert.equal(lead.calls.filter(args => args[0] === 'agent' && args[1] === 'start').length, 1);
+});
+
+test('transfer failures name clone, workspace, kit, harness, and lead start without a bare 500 or private cause', async (t) => {
+  for (const step of ['clone', 'workspace', 'kit', 'harness', 'lead start']) {
+    await t.test(step, async (t) => {
+      const fault = () => { throw Object.assign(new Error('PRIVATE-CAUSE credential=private-value https://private.example.invalid/path'), { status: 500 }); };
+      const lead = fakeHerdr();
+      const targetOptions = step === 'kit' ? { install: fault } : step === 'workspace' || step === 'lead start'
+        ? { herdr: args => args[0] === (step === 'workspace' ? 'workspace' : 'agent') && args[1] === (step === 'workspace' ? 'create' : 'start') ? fault() : lead(args) } : {};
+      const f = fixture({ targetOptions }); t.after(f.cleanup);
+      if (step === 'clone') fs.rmSync(f.remote, { recursive: true });
+      if (step === 'harness') {
+        fs.rmSync(path.join(f.root, '.codex'), { recursive: true });
+        fs.rmSync(path.join(f.root, '.claude'), { recursive: true });
+      }
+      const result = await f.target.handle({ action: 'start', slug: 'alpha', transferId: crypto.randomUUID(), sourceFactoryId: SOURCE_ID,
+        sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(), sourceRemote: f.remote });
+      assert.notEqual(result.status, 500); assert.ok(result.status >= 400);
+      assert.match(result.body.error, new RegExp(`^Transfer failed at ${step}:`));
+      assert.match(result.body.error, /Run .*same command again/);
+      assert.doesNotMatch(result.body.error, /PRIVATE-CAUSE|private-value|private\.example/);
+    });
+  }
+});
 
 test('a slow start polls the accepted target job until the project lead is ready', async (t) => {
   let elapsed = 0;
@@ -258,7 +336,8 @@ test('start uses 300 seconds and plan, switch, and cancel use 30 seconds', async
   t.mock.method(AbortSignal, 'timeout', (ms) => { timeouts.push(ms); return original.call(AbortSignal, ms); });
   const f = fixture(); t.after(f.cleanup);
   assert.equal((await command(f.source, 'plan', f)).code, 0);
-  assert.equal((await command(f.source, 'start', f)).code, 3);
+  const started = await command(f.source, 'start', f);
+  assert.equal(started.code, 3, started.text);
   decide(f, 'Accept the switch');
   assert.equal((await command(f.source, 'switch', f)).code, 0);
   const g = fixture(); t.after(g.cleanup);
@@ -661,6 +740,9 @@ test('the HTTP transfer routes require fleetGuide and serve status during a slow
   const response = await request(guide);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).factoryId, TARGET_ID);
+  const malformed = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${guide}`, 'content-type': 'application/json' }, body: '{' });
+  assert.notEqual(malformed.status, 500);
+  assert.match((await malformed.json()).error, /^Transfer failed at harness:/);
   const start = { action: 'start', slug: 'alpha', transferId: '00000000-0000-4000-8000-000000000024',
     sourceFactoryId: SOURCE_ID, sourceName: SOURCE_NAME, sourceKitRevision: kitRevision(), sourceRemote: f.remote };
   const post = (body) => fetch(url, { method: 'POST', headers: { authorization: `Bearer ${guide}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });

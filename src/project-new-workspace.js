@@ -46,7 +46,7 @@ export function pickOrchestrator({ kind = null, policy, models }) {
 function loadTarget(context, kind) {
   const models = loadModels();
   const policy = loadPolicy({ file: path.join(context.dataDir, 'policy.json'), models, warn: () => {} });
-  return { policy, target: pickOrchestrator({ kind, policy, models }) };
+  return { policy, target: context.target ?? pickOrchestrator({ kind, policy, models }) };
 }
 
 // The text of the dry run.
@@ -157,12 +157,17 @@ function linkStatus(dataDir, slug, workspace) {
 // dataDir, ids (the saved ids), remember(patch) (merge into ids and save the state at once).
 export function workspaceStep(inputs, context) {
   if (!context.start) return { status: 'skipped', reason: 'no-start', detail: 'skipped: no --start' };
+  context.onStep?.('workspace');
   const herdr = context.herdr ?? createHerdrRunner();
   const hooks = { waitForPane: waitForWorkerPane, waitForReady: waitForAgentReady, readText: readAgentText, ...context.hooks };
   const { policy, target } = loadTarget(context, context.kind);
   const cwd = fs.realpathSync(inputs.path);
   // A new folder is not trusted. In a factory no one answers the trust dialog, so the agent would stay not ready.
-  if (context.factory) trustProjectFolder([inputs.path, cwd], context.home ?? (context.env ?? process.env).HOME);
+  if (context.factory) {
+    context.onStep?.('harness');
+    trustProjectFolder([inputs.path, cwd], context.home ?? (context.env ?? process.env).HOME);
+    context.onStep?.('workspace');
+  }
   const name = orchestratorName(inputs.slug);
   const ids = context.ids;
 
@@ -186,6 +191,7 @@ export function workspaceStep(inputs, context) {
   if (info.label !== 'orch') herdr(['pane', 'rename', pane, 'orch']);
 
   let kind = info.agent || target.kind;
+  context.onStep?.('lead start');
   if (!info.agent) {
     hooks.waitForPane(pane, workspace, cwd, herdr, hooks.wait);
     const launch = successorAgentArgs({ toKind: target.kind, project: inputs.slug, newPane: pane, newTab: info.tab_id ?? info.tabId, workspace },

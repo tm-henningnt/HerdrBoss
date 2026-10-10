@@ -7,11 +7,14 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { Worker } from 'node:worker_threads';
 import { DATA_DIR, PRIVATE_ACCESS_DIR } from './config.js';
 import { SLUG, writeProject } from './projects.js';
-import { readProjectRepos, recordProjectRepo } from './harness.js';
+import { readProjectRepos, recordProjectRepo, checkHarness, syncHarness } from './harness.js';
 import { kitRevision, installKit } from './kit/agents-check.js';
 import { FACTORY_PROJECT_GROUP, isFactoryRole } from './factory-role.js';
 import { createHerdrRunner } from './kit/workers.js';
-import { workspaceStep } from './project-new-workspace.js';
+import { pickOrchestrator, workspaceStep } from './project-new-workspace.js';
+import { loadModels } from './kit/config.js';
+import { loadPolicy } from './control.js';
+import { unpinProject } from './git-pins.js';
 import { appendMessage, closeMailboxItem, readMessages } from './messages.js';
 import { factoryRecords } from './fleet-poller.js';
 import { readFleetFile } from './fleet-store.js';
@@ -43,7 +46,14 @@ export function projectTransferRoot(options = {}) {
   return path.resolve(options.projectRoot || options.config?.projectRoot || path.join(env.HOME || os.homedir(), 'Projects'));
 }
 
-function refuse(message, status = 400) { throw Object.assign(new Error(message), { status }); }
+function refuse(message, status = 400) { throw Object.assign(new Error(message), { status, transferSafe: true }); }
+
+function transferFailureResponse(error, step = 'harness') {
+  const status = error.status === 500 ? 502 : error.status || 400;
+  const message = error.transferSafe ? safeError(error.message) : 'The transfer request could not be completed. Run the same command again.';
+  return { status, body: { error: /^Transfer failed at (clone|workspace|kit|harness|lead start):/.test(message)
+    ? message : `Transfer failed at ${step}: ${message}` } };
+}
 
 export function parseProjectTransferArgs(args) {
   const [action, slug, ...rest] = args;
@@ -215,7 +225,7 @@ function removeProjectRegistration(slug, repo, dataDir) {
   fs.renameSync(temporary, file);
 }
 
-function removeTargetFiles(slug, repo, dataDir, projectRoot) {
+function removeTargetFiles(slug, repo, dataDir, projectRoot, home) {
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedRepo = path.resolve(repo);
   if (path.dirname(resolvedRepo) !== resolvedRoot || path.basename(resolvedRepo) !== slug) refuse('The target project path is invalid.');
@@ -224,6 +234,7 @@ function removeTargetFiles(slug, repo, dataDir, projectRoot) {
     if (stat.isSymbolicLink()) refuse('The target project path is a symbolic link.');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   removeProjectRegistration(slug, resolvedRepo, dataDir);
+  unpinProject(slug, { home });
   fs.rmSync(path.join(dataDir, 'projects', `${slug}.json`), { force: true });
   fs.rmSync(path.join(dataDir, 'flows', `${slug}.json`), { force: true });
   fs.rmSync(resolvedRepo, { recursive: true, force: true });
@@ -244,12 +255,12 @@ function writeInitialProject(slug, repo, dataDir, revision, transfer) {
   }
 }
 
-function startFreshProjectLead({ slug, repo, dataDir, herdr, env, home, hooks, state }) {
+function startFreshProjectLead({ slug, repo, dataDir, herdr, env, home, hooks, state, target, onStep }) {
   if (!fs.existsSync(path.join(repo, 'docs', 'orchestration', 'memory.md'))) refuse('The GitHub project has no docs/orchestration/memory.md.');
   const ids = { ...(state.workspace || {}) };
   const inputs = { slug, name: slug, path: repo, goal: '' };
   workspaceStep(inputs, {
-    start: true, kind: null, factory: true, dataDir, herdr, env, home, hooks, ids,
+    start: true, kind: null, factory: true, dataDir, herdr, env, home, hooks, ids, target, onStep,
     remember(patch) {
       Object.assign(ids, patch); state.workspace = { ...ids };
       writeTransfer(state, dataDir);
@@ -357,7 +368,12 @@ export function createProjectTransfer(options = {}) {
     const receive = async (url, init) => {
       const response = await request(url, { ...init, headers, redirect: 'error', signal });
       if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
+        if (starting) {
+          const failure = await boundedJson(response);
+          if (typeof failure.error === 'string' && /^Transfer failed at (clone|workspace|kit|harness|lead start):/.test(failure.error)) {
+            refuse(safeError(failure.error), response.status === 500 ? 502 : response.status);
+          }
+        } else await response.body?.cancel().catch(() => {});
         refuse(`The target factory refused the transfer request (HTTP ${response.status}).`, response.status);
       }
       return { status: response.status, body: await boundedJson(response) };
@@ -444,86 +460,120 @@ export function createProjectTransfer(options = {}) {
       projectExists: registered || status || fs.existsSync(folder), transferOpen };
   };
 
-  const targetStart = async (body) => {
-    const local = settings();
-    const revision = currentKit();
-    if (body.sourceKitRevision !== revision) refuse('The source and target kit revisions do not match.', 409);
-    assertRemote(body.sourceRemote, allowGitRemote);
-    const existing = readProjectTransferLock(body.slug, { dataDir });
-    if (existing && existing.transferId !== body.transferId) refuse(LOCK_ERROR, 409);
-    const stateFile = transferFile(body.slug, dataDir);
-    let state = jsonFile(stateFile);
-    const repo = path.join(projectRoot, body.slug);
-    const retry = state?.transferId === body.transferId && state.status === 'starting';
-    const reusable = state?.status === 'cancelled';
-    if (state && (!retry && !reusable && !(state.transferId === body.transferId && ['pending', 'switched'].includes(state.status)))) refuse('The target project already has a transfer record.', 409);
-    if (state?.transferId === body.transferId && (state.slug !== body.slug || state.sourceFactoryId !== body.sourceFactoryId
-      || state.targetFactoryId !== local.factoryId || path.resolve(state.repoPath || '') !== path.resolve(repo))) {
-      refuse('The target transfer record is invalid.', 409);
+  const harnessPreflight = (selected = null) => {
+    let target = selected;
+    try {
+      const models = loadModels();
+      const policy = loadPolicy({ file: path.join(dataDir, 'policy.json'), models, warn: () => {} });
+      target ??= pickOrchestrator({ policy, models });
+      const areas = [...({ codex: ['codex writable_roots', 'codex rules'], claude: ['claude autoMode'],
+        pi: ['pi'], opencode: ['opencode'] }[target.kind] || []), `models.json ${target.kind}`, 'git pins'];
+      const failed = checkHarness({ home: env.HOME, dataDir }).filter(row => areas.includes(row.area) && row.status !== 'ok');
+      if (failed.length) throw new Error('not ready');
+    } catch {
+      const name = SLUG.test(settings().name) ? settings().name : 'NAME';
+      refuse(`Transfer failed at harness: The target lead harness is not ready. Run herdr-boss factory configure ${name}. Then run the same command again.`, 409);
     }
-    if (state?.transferId === body.transferId && ['pending', 'switched'].includes(state.status)) {
+    return target;
+  };
+
+  const targetStart = async (body) => {
+    let step = 'clone';
+    try {
+      const local = settings();
+      const revision = currentKit();
+      if (body.sourceKitRevision !== revision) refuse('The source and target kit revisions do not match.', 409);
+      assertRemote(body.sourceRemote, allowGitRemote);
+      const existing = readProjectTransferLock(body.slug, { dataDir });
+      if (existing && existing.transferId !== body.transferId) refuse(LOCK_ERROR, 409);
+      const stateFile = transferFile(body.slug, dataDir);
+      let state = jsonFile(stateFile);
+      const repo = path.join(projectRoot, body.slug);
+      const retry = state?.transferId === body.transferId && state.status === 'starting';
+      const reusable = state?.status === 'cancelled';
+      if (state && (!retry && !reusable && !(state.transferId === body.transferId && ['pending', 'switched'].includes(state.status)))) refuse('The target project already has a transfer record.', 409);
+      if (state?.transferId === body.transferId && (state.slug !== body.slug || state.sourceFactoryId !== body.sourceFactoryId
+        || state.targetFactoryId !== local.factoryId || path.resolve(state.repoPath || '') !== path.resolve(repo))) {
+        refuse('The target transfer record is invalid.', 409);
+      }
+      if (state?.transferId === body.transferId && ['pending', 'switched'].includes(state.status)) {
+        let existingPath;
+        try { existingPath = fs.lstatSync(repo); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (existingPath?.isSymbolicLink() || !existingPath?.isDirectory()) refuse('The target project path is invalid.', 409);
+        return { ok: true, factoryId: local.factoryId, status: state.status };
+      }
       let existingPath;
       try { existingPath = fs.lstatSync(repo); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (existingPath?.isSymbolicLink() || !existingPath?.isDirectory()) refuse('The target project path is invalid.', 409);
-      return { ok: true, factoryId: local.factoryId, status: state.status };
-    }
-    let existingPath;
-    try { existingPath = fs.lstatSync(repo); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (existingPath?.isSymbolicLink()) refuse('The target project path is a symbolic link.', 409);
-    if (existingPath && !existingPath.isDirectory()) refuse('The target project path is invalid.', 409);
-    const existingRegistration = readProjectRepos(dataDir).find((row) => row.slug === body.slug);
-    const existingProject = jsonFile(path.join(dataDir, 'projects', `${body.slug}.json`));
-    if (!retry && (existingPath || existingRegistration || existingProject)) refuse('The target already has this project.', 409);
-    if (retry && ((existingRegistration && path.resolve(existingRegistration.repo) !== path.resolve(repo))
-      || (existingProject && existingProject.transfer?.transferId !== body.transferId))) {
-      refuse('The target project changed during the transfer.', 409);
-    }
-    if (retry && existingPath) {
-      let completeClone = false;
-      let metadata;
-      try { metadata = fs.lstatSync(path.join(repo, '.git')); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (metadata && (!metadata.isDirectory() || metadata.isSymbolicLink())) refuse('The target project changed during the transfer.', 409);
-      try {
-        completeClone = Boolean(metadata) && git(repo, ['--git-dir=.git', 'rev-parse', '--verify', 'HEAD']).length > 0;
-      } catch { /* An interrupted clone can lack its Git metadata. */ }
-      if (completeClone && git(repo, ['--git-dir=.git', 'remote', 'get-url', 'origin']) !== body.sourceRemote) refuse('The target project changed during the transfer.', 409);
-      if (!completeClone) {
-        if (state.cloneComplete || existingRegistration || existingProject || state.workspace?.workspaceId || state.workspace?.paneId) {
-          refuse('The target project changed during the transfer.', 409);
+      if (existingPath?.isSymbolicLink()) refuse('The target project path is a symbolic link.', 409);
+      if (existingPath && !existingPath.isDirectory()) refuse('The target project path is invalid.', 409);
+      const existingRegistration = readProjectRepos(dataDir).find((row) => row.slug === body.slug);
+      const existingProject = jsonFile(path.join(dataDir, 'projects', `${body.slug}.json`));
+      if (!retry && (existingPath || existingRegistration || existingProject)) refuse('The target already has this project.', 409);
+      if (retry && ((existingRegistration && path.resolve(existingRegistration.repo) !== path.resolve(repo))
+        || (existingProject && existingProject.transfer?.transferId !== body.transferId))) {
+        refuse('The target project changed during the transfer.', 409);
+      }
+      step = 'harness';
+      const target = harnessPreflight();
+      step = 'clone';
+      if (retry && existingPath) {
+        let completeClone = false;
+        let metadata;
+        try { metadata = fs.lstatSync(path.join(repo, '.git')); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (metadata && (!metadata.isDirectory() || metadata.isSymbolicLink())) refuse('The target project changed during the transfer.', 409);
+        try {
+          completeClone = Boolean(metadata) && git(repo, ['--git-dir=.git', 'rev-parse', '--verify', 'HEAD']).length > 0;
+        } catch { /* An interrupted clone can lack its Git metadata. */ }
+        if (completeClone && git(repo, ['--git-dir=.git', 'remote', 'get-url', 'origin']) !== body.sourceRemote) refuse('The target project changed during the transfer.', 409);
+        if (!completeClone) {
+          if (state.cloneComplete || existingRegistration || existingProject || state.workspace?.workspaceId || state.workspace?.paneId) {
+            refuse('The target project changed during the transfer.', 409);
+          }
+          // This record and lock own the incomplete clone. No project lead uses it yet.
+          fs.rmSync(repo, { recursive: true, force: true });
         }
-        // This record and lock own the incomplete clone. No project lead uses it yet.
-        fs.rmSync(repo, { recursive: true, force: true });
       }
-    }
-    try { execFileSync('git', ['ls-remote', '--heads', '--', body.sourceRemote], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: options.gitTimeoutMs || 60000 }); }
-    catch { refuse('The GitHub remote is not reachable.'); }
-    if (!existing) createProjectTransferLock(body.slug, { transferId: body.transferId, side: 'target', peerFactoryId: body.sourceFactoryId, dataDir, now });
-    state = { schema: 1, slug: body.slug, transferId: body.transferId, status: 'starting', toFactory: local.name,
-      targetFactoryId: local.factoryId, sourceFactoryId: body.sourceFactoryId, sourceName: body.sourceName, repoPath: repo,
-      cloneComplete: retry && state.cloneComplete === true, workspace: retry ? state.workspace || {} : {} };
-    writeTransfer(state, dataDir);
-    try {
-      fs.mkdirSync(projectRoot, { recursive: true });
-      if (!fs.existsSync(repo)) {
-        try { execFileSync('git', ['clone', '--quiet', '--no-hardlinks', '--', body.sourceRemote, repo], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: options.gitTimeoutMs || 60000 }); }
-        catch { refuse('The GitHub project could not be cloned.'); }
-      }
-      if (!fs.existsSync(path.join(repo, 'docs', 'orchestration', 'memory.md'))) refuse('The GitHub project has no docs/orchestration/memory.md.');
-      state.cloneComplete = true; writeTransfer(state, dataDir);
-      const installed = options.install || installKit;
-      await installed(repo);
-      writeInitialProject(body.slug, repo, dataDir, revision, { status: 'pending', transferId: body.transferId, fromFactory: body.sourceName });
-      const ids = startFreshProjectLead({ slug: body.slug, repo, dataDir, herdr, env, home: env.HOME, hooks, state });
-      state.workspace = ids;
-      state.status = 'pending';
+      try { execFileSync('git', ['ls-remote', '--heads', '--', body.sourceRemote], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: options.gitTimeoutMs || 60000 }); }
+      catch { refuse('The GitHub remote is not reachable.'); }
+      if (!existing) createProjectTransferLock(body.slug, { transferId: body.transferId, side: 'target', peerFactoryId: body.sourceFactoryId, dataDir, now });
+      state = { schema: 1, slug: body.slug, transferId: body.transferId, status: 'starting', toFactory: local.name,
+        targetFactoryId: local.factoryId, sourceFactoryId: body.sourceFactoryId, sourceName: body.sourceName, repoPath: repo,
+        cloneComplete: retry && state.cloneComplete === true, workspace: retry ? state.workspace || {} : {} };
       writeTransfer(state, dataDir);
-      appendAudit(dataDir, local, body.sourceFactoryId, body.slug, body.transferId, 'prepared', now);
-      return { ok: true, factoryId: local.factoryId, status: 'pending' };
+      try {
+        fs.mkdirSync(projectRoot, { recursive: true });
+        if (!fs.existsSync(repo)) {
+          try { execFileSync('git', ['clone', '--quiet', '--no-hardlinks', '--', body.sourceRemote, repo], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: options.gitTimeoutMs || 60000 }); }
+          catch { refuse('The GitHub project could not be cloned.'); }
+        }
+        if (!fs.existsSync(path.join(repo, 'docs', 'orchestration', 'memory.md'))) refuse('The GitHub project has no docs/orchestration/memory.md.');
+        state.cloneComplete = true; writeTransfer(state, dataDir);
+        step = 'kit';
+        const installed = options.install || installKit;
+        await installed(repo);
+        writeInitialProject(body.slug, repo, dataDir, revision, { status: 'pending', transferId: body.transferId, fromFactory: body.sourceName });
+        step = 'harness';
+        if (target.kind === 'codex' && !syncHarness({ home: env.HOME, dataDir, codexOnly: true }).ok) throw new Error('Harness sync failed.');
+        harnessPreflight(target);
+        step = 'workspace';
+        const ids = startFreshProjectLead({ slug: body.slug, repo, dataDir, herdr, env, home: env.HOME, hooks, state, target, onStep: (value) => { step = value; } });
+        state.workspace = ids;
+        state.status = 'pending';
+        writeTransfer(state, dataDir);
+        appendAudit(dataDir, local, body.sourceFactoryId, body.slug, body.transferId, 'prepared', now);
+        return { ok: true, factoryId: local.factoryId, status: 'pending' };
+      } catch (error) {
+        // Retain the owned import and its workspace checkpoints for retry or cancel.
+        writeTransfer(state, dataDir);
+        throw error;
+      }
     } catch (error) {
-      // Retain the owned import and its workspace checkpoints for retry or cancel.
-      writeTransfer(state, dataDir);
-      throw error;
+      if (error.transferSafe && /^Transfer failed at harness:/.test(error.message)) throw error;
+      const causes = { clone: 'The GitHub project could not be cloned or checked.', kit: 'The project kit could not be installed.',
+        harness: 'The target harness settings could not be prepared.', workspace: 'The Herdr workspace could not be prepared.',
+        'lead start': 'The project lead could not start or become ready.' };
+      refuse(`Transfer failed at ${step}: ${error.transferSafe ? safeError(error.message) : causes[step]} Run the same command again.`, error.status === 500 ? 502 : error.status || 400);
     }
   };
 
@@ -562,7 +612,7 @@ export function createProjectTransfer(options = {}) {
       try { herdr(['pane', 'close', state.workspace.paneId]); }
       catch { refuse('The target project lead could not be closed. The transfer lock stays in place.', 409); }
     }
-    removeTargetFiles(body.slug, state.repoPath || path.join(projectRoot, body.slug), dataDir, projectRoot);
+    removeTargetFiles(body.slug, state.repoPath || path.join(projectRoot, body.slug), dataDir, projectRoot, env.HOME);
     releaseProjectTransferLock(body.slug, body.transferId, { dataDir });
     state.status = 'cancelled'; delete state.repoPath; delete state.workspace; writeTransfer(state, dataDir);
     appendAudit(dataDir, local, body.sourceFactoryId, body.slug, body.transferId, 'cancelled', now);
@@ -597,8 +647,7 @@ export function createProjectTransfer(options = {}) {
       else result = targetCancel(body);
       return { status: 200, body: result };
     } catch (error) {
-      const status = error.status || 400;
-      return { status, body: { error: safeError(error.message) } };
+      return transferFailureResponse(error, input?.action === 'start' ? 'clone' : 'workspace');
     }
   };
 
@@ -615,7 +664,7 @@ export function createProjectTransfer(options = {}) {
       if (state?.transferId !== jobId || !['starting', 'pending', 'switched'].includes(state.status)) refuse('The transfer job was not found.', 404);
       return { status: state.status === 'starting' ? 202 : 200,
         body: { ok: true, factoryId: settings().factoryId, status: state.status, jobId } };
-    } catch (error) { return { status: error.status || 400, body: { error: safeError(error.message) } }; }
+    } catch (error) { return transferFailureResponse(error, 'workspace'); }
   };
 
   const submit = async (input) => {
@@ -641,7 +690,7 @@ export function createProjectTransfer(options = {}) {
         // Injected test adapters can run in process. Production work uses an isolated thread.
         setImmediate(async () => {
           try { finish({ status: 200, body: await targetStart(body) }); }
-          catch (error) { finish({ status: error.status || 400, body: { error: safeError(error.message) } }); }
+          catch (error) { finish(transferFailureResponse(error, 'clone')); }
         });
       } else {
         let worker;
@@ -650,15 +699,15 @@ export function createProjectTransfer(options = {}) {
           workerData: { body, options: { dataDir, privateDir, config, projectRoot, gitTimeoutMs: options.gitTimeoutMs },
             settings: settings(), revision: currentKit() },
         }); } catch {
-          finish({ status: 503, body: { error: 'The target import could not start. Run the same command again.' } });
+          finish({ status: 503, body: { error: 'Transfer failed at clone: The target import could not start. Run the same command again.' } });
           return job.result;
         }
         worker.once('message', finish);
-        worker.once('error', () => { if (job.running) finish({ status: 503, body: { error: 'The target import stopped. Run the same command again.' } }); });
-        worker.once('exit', () => { if (job.running) finish({ status: 503, body: { error: 'The target import stopped. Run the same command again.' } }); });
+        worker.once('error', () => { if (job.running) finish({ status: 503, body: { error: 'Transfer failed at clone: The target import stopped. Run the same command again.' } }); });
+        worker.once('exit', () => { if (job.running) finish({ status: 503, body: { error: 'Transfer failed at clone: The target import stopped. Run the same command again.' } }); });
       }
       return jobStatus(body.slug, body.transferId);
-    } catch (error) { return { status: error.status || 400, body: { error: safeError(error.message) } }; }
+    } catch (error) { return transferFailureResponse(error); }
   };
 
   const command = async (action, slug, to) => {

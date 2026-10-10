@@ -6,8 +6,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { factoryCommand } from '../src/factory-host.js';
 import { writeFleet, writePrivate, factoryFile } from '../src/factory-store.js';
+import { readProjectRepos, recordProjectRepo } from '../src/harness.js';
+import { checkProjectPin, pinnedProjects, gitPinsDir } from '../src/git-pins.js';
+import { buildCandidateRecord, readRegister, writeRegister } from '../src/project-register.js';
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-clean-smoke-')));
@@ -38,9 +42,10 @@ function fixture(t) {
       }
     }
     if (args.includes('node') && args.includes('-e')) {
-      const scriptIndex = args.indexOf('-e') + 1;
-      const script = args[scriptIndex].replaceAll('/home/factory/work', work);
-      const result = spawnSync(process.execPath, ['-e', script, ...args.slice(scriptIndex + 1)], { encoding: 'utf8', input: options.input, env: { ...process.env, HOME: root } });
+      const scriptIndex = args.indexOf('-e', args.indexOf('node')) + 1;
+      const script = args[scriptIndex].replaceAll('/home/factory/work', work)
+        .replace('/home/factory/herdr-boss/src/factory-smoke-records.js', fileURLToPath(new URL('../src/factory-smoke-records.js', import.meta.url)));
+      const result = spawnSync(process.execPath, [...(args.includes('--input-type=module') ? ['--input-type=module'] : []), '-e', script, ...args.slice(scriptIndex + 1)], { encoding: 'utf8', input: options.input, env: { ...process.env, HOME: root, HERDR_BOSS_DIR: env.HERDR_BOSS_DIR } });
       return { code: result.status, stdout: result.stdout, stderr: result.stderr };
     }
     throw new Error('Unexpected fake Docker call.');
@@ -49,6 +54,74 @@ function fixture(t) {
     stdout: { write: (value) => output.push(value) }, stderr: { write: (value) => output.push(value) } };
   return { root, work, io, calls, output, workspaces };
 }
+
+function seedRecords(f) {
+  const dataDir = f.io.env.HERDR_BOSS_DIR;
+  fs.mkdirSync(path.join(dataDir, 'projects'), { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'flows'), { recursive: true });
+  for (const slug of ['smoke-agent', 'smoke-stale', 'project', 'smokey']) {
+    const repo = path.join(f.work, slug);
+    fs.mkdirSync(repo, { recursive: true });
+    const init = spawnSync('git', ['init', '--quiet', repo], { env: { ...process.env, HOME: f.root } });
+    assert.equal(init.status, 0);
+    recordProjectRepo(slug, repo, 'https://github.com/example/sample.git', { dataDir });
+    assert.equal(checkProjectPin({ slug, repo }, { home: f.root, dataDir, allowBaseline: true }).ok, true);
+    fs.writeFileSync(path.join(dataDir, 'projects', `${slug}.json`), JSON.stringify({ project: slug }));
+    fs.writeFileSync(path.join(dataDir, 'flows', `${slug}.json`), JSON.stringify({ slug }));
+  }
+  fs.rmSync(path.join(f.work, 'smoke-stale'), { recursive: true });
+  const rows = readProjectRepos(dataDir);
+  writeRegister({ version: 1, projects: rows.map(row => buildCandidateRecord(row, dataDir)) }, dataDir);
+  fs.writeFileSync(path.join(dataDir, 'policy.json'), JSON.stringify({ projects: Object.fromEntries(rows.map(row => [row.slug, { weight: 10 }])) }));
+  fs.writeFileSync(path.join(dataDir, 'rules.json'), JSON.stringify({ control: { projects: Object.fromEntries(rows.map(row => [row.slug, { running: 0 }])) } }));
+  return dataDir;
+}
+
+test('clean-smoke unregisters smoke records and pins even after their folders were deleted', async (t) => {
+  const f = fixture(t), dataDir = seedRecords(f);
+  assert.equal(await factoryCommand(['clean-smoke', 'demo'], f.io), 0);
+  assert.deepEqual(readProjectRepos(dataDir).map(row => row.slug), ['project', 'smokey']);
+  assert.deepEqual(pinnedProjects({ home: f.root }).map(row => row.slug), ['project', 'smokey']);
+  assert.equal(fs.readdirSync(gitPinsDir({ home: f.root })).filter(file => file.endsWith('.json')).length, 3);
+  assert.deepEqual(readRegister(dataDir).projects.map(row => row.slug), ['project', 'smokey']);
+  for (const file of ['policy.json', 'rules.json']) {
+    const data = JSON.parse(fs.readFileSync(path.join(dataDir, file), 'utf8'));
+    assert.deepEqual(Object.keys(data.projects || data.control.projects), ['project', 'smokey']);
+  }
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'projects')), ['project.json', 'smokey.json']);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'flows')), ['project.json', 'smokey.json']);
+  assert.match(f.output.join(''), /Project records: 2/);
+  assert.match(f.output.join(''), /2 smoke project records/);
+});
+
+test('clean-smoke dry-run and wrong confirmation keep registrations and pins', async (t) => {
+  const f = fixture(t), dataDir = seedRecords(f);
+  const pins = pinnedProjects({ home: f.root });
+  assert.equal(await factoryCommand(['clean-smoke', 'demo', '--dry-run'], f.io), 0);
+  f.io.stdin = Readable.from(['wrong\n']);
+  await assert.rejects(factoryCommand(['clean-smoke', 'demo'], f.io), /confirmation/);
+  assert.equal(readProjectRepos(dataDir).length, 4);
+  assert.deepEqual(pinnedProjects({ home: f.root }), pins);
+});
+
+test('clean-smoke confirms and removes stale records when no smoke folder or workspace remains', async (t) => {
+  const f = fixture(t), dataDir = seedRecords(f);
+  f.workspaces.shift();
+  for (const name of ['smoke-agent', 'smoke-folder']) fs.rmSync(path.join(f.work, name), { recursive: true });
+  assert.equal(await factoryCommand(['clean-smoke', 'demo'], f.io), 0);
+  assert.equal(readProjectRepos(dataDir).length, 2);
+  assert.equal(pinnedProjects({ home: f.root }).length, 2);
+  assert.match(f.output.join(''), /Type clean-smoke demo to confirm/);
+  assert.match(f.output.join(''), /Removed 0 smoke workspaces, 0 smoke folders, and 2 smoke project records/);
+});
+
+test('clean-smoke uses the same smoke- prefix for a registration named smoke-', async (t) => {
+  const f = fixture(t), dataDir = f.io.env.HERDR_BOSS_DIR;
+  const repo = path.join(f.work, 'smoke-'); fs.mkdirSync(repo);
+  recordProjectRepo('smoke-', repo, '', { dataDir });
+  assert.equal(await factoryCommand(['clean-smoke', 'demo'], f.io), 0);
+  assert.deepEqual(readProjectRepos(dataDir), []);
+});
 
 test('clean-smoke lists and removes only smoke- workspaces and work-root folders after typed confirmation', async (t) => {
   const f = fixture(t);
@@ -60,7 +133,7 @@ test('clean-smoke lists and removes only smoke- workspaces and work-root folders
   assert.match(text, /Workspaces: 1/); assert.match(text, /Folders: 2/);
   assert.match(text, /smoke-agent/); assert.match(text, /smoke-folder/);
   assert.match(text, /Type clean-smoke demo to confirm/);
-  assert.doesNotMatch(text, /project|smokey/); assert.equal(text.includes(f.root), false);
+  assert.doesNotMatch(text, /"(?:project|smokey)"/); assert.equal(text.includes(f.root), false);
   assert.equal(f.calls.some(({ args }) => args.includes('--group') || args[0] === 'stop' || args[0] === 'rm'), false);
 });
 

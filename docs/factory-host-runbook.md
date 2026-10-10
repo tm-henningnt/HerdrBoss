@@ -94,6 +94,8 @@ Check memory and swap before a Mac factory start. Start one container factory at
 
 After the service check, run `claude --version` and `opencode --version` in the factory container. A successful image build alone does not prove that an npm postinstall script ran. Keep harness logins for the Owner terminal.
 
+On a Windows host, run `herdr-boss factory configure NAME` before the first project transfer. The service step sets up the harness files inside the factory. It fills the Codex rules with the numeric UID of the factory user. It adds Codex writable roots, Claude autoMode lines, and the Pi guard extension from the kit templates. It then runs harness sync. The service update runs the same setup after kit install. Read the changed item names and counts. Output contains no file content. A transfer checks the lead harness before cloning. If that check fails, run the printed configure command. If a lead start fails, run the same transfer command again to resume the half import.
+
 Check `/api/health` through container loopback. It must return 200. Check the factory hostname separately. Without a login, that name must return 401. A response of 403 means the host rule rejected the name. Do not remove authentication to pass this check.
 
 ## Factory updates
