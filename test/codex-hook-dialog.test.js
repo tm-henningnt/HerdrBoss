@@ -252,11 +252,15 @@ test('a Codex close failure keeps the blocked record and lane block and reports 
   assert.equal(fixture.output.some((line) => line.includes('private close diagnostic')), false);
 });
 
-test('a non-Codex worker record does not gain a state field', (t) => {
+test('a non-Codex worker record has the shared running state without a hook block', (t) => {
   const fixture = workerFixture(t, 'claude-no-new-state', null, { workerKind: 'claude' });
   const result = fixture.run();
   const record = JSON.parse(fs.readFileSync(result.recordFile, 'utf8'));
-  assert.equal(Object.hasOwn(record, 'state'), false);
+  assert.equal(result.state, 'running');
+  assert.equal(record.state, 'running');
+  assert.equal(Object.hasOwn(record, 'reason'), false);
+  assert.equal(Object.hasOwn(record, 'blockedAt'), false);
+  assert.equal(fs.existsSync(path.join(fixture.dataDir, BLOCK_FILE)), false);
 });
 
 test('doctor prints the active Codex lane block and its recovery instruction', async (t) => {
