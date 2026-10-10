@@ -1,25 +1,62 @@
 # Qlik extension knowledge guides
 
-This folder stages content for the Qlik type. It does not choose the final type layout.
+This folder holds draft guides for Qlik extensions. It does not choose the final guide layout.
 
-The inventory dated 2026-10-09 names the source files for each guide. It reports that it did not run a tenant check.
+## Guide sources
 
-| Guide | Main sources |
-| --- | --- |
-| [Qlik CLI operations](qlik-cli-operations.md) | TmStackedVariance/docs/demo-app.md, docs/serve-live.md, demo/rebuild.sh, demo/export-demo-app.sh, scripts/upload.ts, scripts/lib/qlik.ts; TmGantt/scripts/demo-app.cjs, docs/development.md; TmProcessMining/docs/agents/QlikValidation.md, docs/architecture/DeliveryProcess.md, scripts/demo-app-asset.mjs, scripts/verify-script.mjs; TmHeatGrid/docs/development.md; TmVisualizationSuite/docs/agents/QlikValidation.md, demo/atlas/README.md, scripts/orchestrator/hosted/cdp.mjs. |
-| [Nebula.js and the extension API](nebula-extension-api.md) | TmStackedVariance/src/index.ts, src/definition.ts, src/component.ts, src/properties.ts, docs/guides/styling-panel-for-extensions.md; TmProcessMining/extensions/tm-pm-processmap/src/index.ts, src/qae/ext.ts, src/qae/panel.ts; TmHeatGrid/src/index.ts, src/qae/ext.ts, src/qae/data.ts; TmGantt/src/index.ts, src/qae/data.ts, src/qae/property-panel.ts; TmVisualizationSuite/extensions/temporal-patterns/src/index.ts, extensions/comparison-charts/src/property-panel.ts, packages/qlik-viz-core/src/authoring-sections.ts. |
-| [Qlik MCP tools](qlik-mcp-tools.md) | TmVisualizationSuite/docs/agents/QlikValidation.md and AGENTS.md; TmProcessMining/docs/agents/QlikValidation.md and AGENTS.md; active tool definitions observed on 2026-10-10. |
-| [Qlik Engine data and sessions](qlik-engine-data-sessions.md) | TmGantt/src/qae/data.ts, src/host/pager.ts, src/host/hooks.ts; TmStackedVariance/src/data.ts, src/paging.ts, src/selection.ts, scripts/serve-live/qlik-api-qix.stub.d.ts; TmProcessMining/extensions/tm-pm-processmap/src/cubes.ts, packages/qlik-host/src/paging.ts, scripts/verify-script.mjs; TmHeatGrid/src/qae/object-properties.ts, src/host/paging.ts, src/host/pager.ts; TmVisualizationSuite/spec/spec-architecture-shared-qlik-core.md, packages/qlik-viz-core/src/engine-pages.ts, scripts/orchestrator/sweep-qerror.sh. |
-| [Themes and dark mode](themes-dark-mode.md) | TmGantt/src/render/theme.ts, test/renderer/theme-colors.test.ts; TmStackedVariance/src/theme.ts, scripts/serve-live/themes/tm-sv-dark-test.json, docs/release/hosted-review.md; TmProcessMining/packages/qlik-host/src/theme.ts, packages/extension-shell/src/theme.ts, docs/guide/visualizations.md; TmHeatGrid/src/render/theme.ts, docs/development.md; TmVisualizationSuite/extensions/process-explorer/src/theme.ts, themes/tm-vis-suite-dark-test/theme.json, packages/qlik-viz-core/test/theme-locale.test.ts. |
-| [Hosted and local-browser evidence](hosted-local-browser-evidence.md) | TmStackedVariance/docs/evidence.md, docs/release/hosted-review.md, docs/serve-live.md; TmProcessMining/docs/agents/QlikValidation.md, docs/architecture/DeliveryProcess.md; TmGantt/docs/development.md, docs/product/sharing-and-reporting.md; TmHeatGrid/docs/development.md, docs/licensing.md; TmVisualizationSuite/docs/agents/QlikValidation.md, AGENTS.md; .worker/inputs/sc1-inventory.md. |
-| [Common errors and fixes](common-errors.md) | TmProcessMining/docs/agents/TenantDefectPatterns.md, docs/guide/data-quality.md, docs/guide/visualizations.md; TmStackedVariance/docs/serve-live.md, docs/verify.md, docs/demo-app.md; TmHeatGrid/docs/development.md; TmGantt/docs/development.md, docs/user-guide.md; TmVisualizationSuite/docs/agents/QlikValidation.md, scripts/orchestrator/sweep-qerror.sh. |
+### [Qlik CLI operations](qlik-cli-operations.md)
+
+- Extension repo B covers demo setup, local serving, export, upload, and Qlik API use.
+- Extension repo A covers development and demo app handling.
+- Extension repo C covers hosted validation, delivery, demo assets, and script checks.
+- Extension repo D covers development.
+- Extension repo E covers hosted validation and browser automation.
+
+### [Nebula.js and the extension API](nebula-extension-api.md)
+
+- Extension repo B covers extension entry points, properties, components, and Styling panels.
+- Extension repo C covers extension entry points and property panels.
+- Extension repo D covers extension entry points and data handling.
+- Extension repo A covers extension entry points, data, and property panels.
+- Extension repo E covers extension entry points and shared authoring sections.
+
+### [Qlik MCP tools](qlik-mcp-tools.md)
+
+- Extension repo E documents MCP validation.
+- Extension repo C documents MCP validation.
+
+### [Qlik Engine data and sessions](qlik-engine-data-sessions.md)
+
+- Extension repo A covers data reads, paging, and host hooks.
+- Extension repo B covers Engine reads, paging, selections, and local serving.
+- Extension repo C covers cube reads, paging, and script verification.
+- Extension repo D covers object properties and paging.
+- Extension repo E defines the shared Engine page validator and Qlik error checks.
+
+### [Themes and dark mode](themes-dark-mode.md)
+
+- Extension repo A covers host themes and palette fallbacks.
+- Extension repo B covers host themes and hosted review.
+- Extension repo C covers theme handling and visualization guidance.
+- Extension repo D covers host themes and development.
+- Extension repo E covers theme support and a theme test artifact.
+
+### [Hosted and local-browser evidence](hosted-local-browser-evidence.md)
+
+- Extension repo B covers evidence, hosted review, and local serving.
+- Extension repo C covers validation and delivery.
+- Extension repo A covers development and sharing.
+- Extension repo D covers development and licensing.
+- Extension repo E covers hosted validation.
+
+### [Common errors and fixes](common-errors.md)
+
+- Extension repo C covers tenant defects, validation, data quality, and visualization.
+- Extension repo B covers serving, verification, demo setup, and evidence.
+- Extension repo D covers development.
+- Extension repo A covers development and user guidance.
+- Extension repo E covers hosted validation and Qlik error checks.
 
 ## Evidence status
 
-Every guide separates source behavior, local checks, historical tenant reports, and current tenant checks.
-
-Tenant verification for this guide set on 2026-10-10 is not verified. The inventory reports no tenant check for this work.
-
-The accepted Owner rule keeps the managed-space viewer check open until a test user exists. A published sheet locked against property writes is the current hosted gate.
-
-Source: .worker/inputs/sc1-inventory.md:11-15, 203-213.
+Tenant verification for this guide set is unverified.

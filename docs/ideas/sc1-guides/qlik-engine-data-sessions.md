@@ -10,7 +10,7 @@ Treat qError as an error state. Treat an absent cube or empty role list as pendi
 
 Read qDataPages in qArea.qTop order. Join each qMatrix only after you validate its window.
 
-Sources: TmStackedVariance/src/data.ts:121-124, 163-174; TmVisualizationSuite/packages/qlik-viz-core/src/engine-pages.ts:153-171.
+Sources: extension repo B, src/data.ts:121-124, 163-174; extension repo E, shared Engine page validator.
 
 ## Validate pages
 
@@ -20,7 +20,7 @@ Reject short, over-long, malformed, or mis-offset pages. Match the final row cou
 
 The shared page validator makes these checks. It allows top-level coordinates only when a caller explicitly enables fixture fallback.
 
-Sources: TmVisualizationSuite/packages/qlik-viz-core/src/engine-pages.ts:153-171, 181-262.
+Sources: extension repo E, shared Engine page validator.
 
 ## Respect implementation limits
 
@@ -30,17 +30,33 @@ The shared suite helper keeps initial state pages below 10,000 cells and 500 row
 
 These are implementation limits from specific repositories. They are not universal Qlik Engine limits.
 
-Sources: TmStackedVariance/src/paging.ts:1-11, 23-55; TmVisualizationSuite/packages/qlik-viz-core/src/engine-pages.ts:67-78.
+Sources: extension repo B, src/paging.ts:1-11, 23-55; extension repo E, suite paging helper.
 
 ## Test load-script data
 
-Use small, invented inline tables for controlled reload checks. Keep test fields separate when you need independent model tables.
+1. Use small, invented inline tables for a controlled reload check.
 
-Reload the app. Read the result through the documented app evaluation path. Compare its tables with expected files.
+   Expected result: The load script contains test data.
 
-The Stacked Variance demo uses inline tables with no shared field names with its Facts table. The Process Mining verifier evaluates reloaded tables and compares them with expected data.
+2. Keep test fields separate when you need independent model tables.
 
-Sources: TmStackedVariance/docs/demo-app.md:160-170; TmProcessMining/docs/agents/QlikValidation.md:94-104; TmProcessMining/scripts/verify-script.mjs:14-17, 234-240.
+   Expected result: The test data forms separate model tables.
+
+3. Reload the app.
+
+   Expected result: The app reloads with the test data.
+
+4. Read the result through the documented app evaluation path.
+
+   Expected result: The evaluation returns the reloaded tables.
+
+5. Compare the tables with the expected files.
+
+   Expected result: Each table matches its expected file.
+
+The extension repo B demo uses inline tables with no shared field names with its Facts table. The extension repo C verifier evaluates reloaded tables and compares them with expected data.
+
+Sources: extension repo B, docs/demo-app.md:160-170; extension repo C, docs/agents/QlikValidation.md:94-104; extension repo C, scripts/verify-script.mjs:14-17, 234-240.
 
 ## Manage selection sessions
 
@@ -50,10 +66,8 @@ Handle a missing host method, refused call, or rejected promise as a failed sele
 
 Remove event listeners when the component ends. Clear selections after a local test because the session shares the signed-in user's app state.
 
-Sources: TmStackedVariance/src/selection.ts:73-116; TmVisualizationSuite/docs/agents/QlikValidation.md:191-194.
+Sources: extension repo B, src/selection.ts:73-116; extension repo E, docs/agents/QlikValidation.md:191-194.
 
 ## Tenant verification
 
-Tenant verification for this guide on 2026-10-10 is not verified. No Engine or session check ran for this guide task.
-
-Source: .worker/inputs/sc1-inventory.md:203-205, 210.
+Tenant verification for this guide is unverified.
