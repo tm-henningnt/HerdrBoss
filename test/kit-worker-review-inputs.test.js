@@ -9,6 +9,7 @@ import { startWorker } from './helpers/start-worker.js';
 import { git, setupFixture, TEST_HOME } from './helpers/kit-fixture.js';
 
 const kitBrief = path.resolve('kit/templates/worker-brief.md');
+const readOnlyReviewSection = '## Read-only review\n\nThis task is read-only. Do not change a repository file. Do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only.';
 
 function options(f) {
   f.config.briefTemplatePath = kitBrief;
@@ -31,6 +32,21 @@ function targetWorktree(f, name, branch) {
   return target;
 }
 
+test('worker start keeps narrow read-only maps and audits inside the stated scope', () => {
+  for (const [name, task, base] of [
+    ['map', 'Map docs/cli.md and its driver only.', undefined],
+    ['audit', 'Audit the review section of docs/cli.md only.', 'main'],
+  ]) {
+    const f = setupFixture(null);
+    const run = startWorker(name, { kind: 'codex', task, readOnly: true, ...(base ? { base } : {}) }, options(f));
+    const brief = fs.readFileSync(path.join(run.worktree, '.worker/brief.md'), 'utf8');
+    assert.ok(brief.includes('Stay inside the stated scope. Do not review other code.'), name);
+    assert.match(brief, /## Read-only task\n/);
+    assert.doesNotMatch(brief, /## Read-only review|## Review inputs|This task reviews the branch|Review the changes of this branch against/);
+    assert.equal(fs.existsSync(path.join(run.worktree, '.worker/inputs/review.diff')), false);
+  }
+});
+
 test('worker start copies the branch diff and changed file list for a read-only review worker', () => {
   const f = setupFixture(null);
   commitFeature(f.root);
@@ -43,6 +59,9 @@ test('worker start copies the branch diff and changed file list for a read-only 
   assert.equal(list, 'src/feature.js\n');
 
   const brief = fs.readFileSync(path.join(run.worktree, '.worker/brief.md'), 'utf8');
+  assert.ok(brief.includes(readOnlyReviewSection));
+  assert.ok(brief.includes('This task reviews the branch `review-target` against `main`.'));
+  assert.doesNotMatch(brief, /Stay inside the stated scope\. Do not review other code\./);
   assert.match(brief, /## Review inputs\n/);
   assert.match(brief, /review-target/);
   assert.match(brief, /\.worker\/inputs\/review\.diff/);
@@ -63,6 +82,9 @@ test('worker start copies the diff and status of an uncommitted review worktree'
   assert.equal(fs.existsSync(path.join(run.worktree, '.worker/inputs/review-files.txt')), false);
 
   const brief = fs.readFileSync(path.join(run.worktree, '.worker/brief.md'), 'utf8');
+  assert.ok(brief.includes(readOnlyReviewSection));
+  assert.match(brief, /This task reviews the tracked uncommitted changes of/);
+  assert.doesNotMatch(brief, /Stay inside the stated scope\. Do not review other code\./);
   assert.match(brief, /\.worker\/inputs\/review-status\.txt/);
   assert.match(brief, /Do not read another worktree\./);
 });
@@ -224,7 +246,7 @@ test('worker start takes no review inputs for a normal worker or a read-only wor
   const f = setupFixture(null);
   const normal = startWorker('author', { kind: 'codex', task: 'x', allow: ['src/'] }, options(f));
   assert.equal(fs.existsSync(path.join(normal.worktree, '.worker/inputs/review.diff')), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(normal.worktree, '.worker/brief.md'), 'utf8'), /## Review inputs/);
+  assert.doesNotMatch(fs.readFileSync(path.join(normal.worktree, '.worker/brief.md'), 'utf8'), /## Read-only|## Review inputs|Stay inside the stated scope\. Do not review other code\./);
 
   const onBase = startWorker('reviewer-base', { kind: 'codex', task: 'x', readOnly: true, base: 'main' }, options(f));
   assert.equal(fs.existsSync(path.join(onBase.worktree, '.worker/inputs/review.diff')), false);

@@ -1944,7 +1944,12 @@ function startWorkerOnce(name, options, {
       ? `Add \`${config.testThreadsFlag}\` to each test runner command.`
       : 'Use the form that the project instructions name. For Vitest 2 with the forks pool, use `--poolOptions.forks.maxForks=2 --poolOptions.forks.minForks=1`; `--maxWorkers=2` fails there. For Vitest 3 and later, use `--maxWorkers=2`.',
     readOnlySection: options.readOnly
-      ? '## Read-only review\n\nThis task is read-only. Do not change a repository file. Do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only.'
+      ? [
+        review.section ? '## Read-only review' : '## Read-only task',
+        '',
+        'This task is read-only. Do not change a repository file. Do not run `git stash`, `git reset`, or `git checkout` of any path or branch. Use `git show`, `git diff`, and `git log` only.',
+        ...(review.section ? [] : ['', 'Stay inside the stated scope. Do not review other code.']),
+      ].join('\n')
       : '',
     loadRule: 'Do not start a load generator, a stress test, a benchmark loop, or a parallel test run beyond the test thread flag. Run only the changed test files.',
   };
