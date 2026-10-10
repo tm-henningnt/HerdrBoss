@@ -350,7 +350,7 @@ test('service update backs up, fast-forwards the code volume, restarts only the 
     assert.equal(f.calls.some(({ args }) => args[0] === 'container' && args[1] === 'rm' && args[2] === 'hf-demo'), false);
     assert.ok(f.calls.some(({ args }) => args[0] === 'run' && args.includes('herdr-factory=demo') && args.includes('herdr-factory-spike=ft15')));
     assert.match(f.output.join(''), /updated factory demo service/i);
-    assert.match(f.output.join(''), /aaaaaaa -> bbbbbbb/);
+    assert.match(f.output.join(''), /Commit: aaaaaaa -> bbbbbbb\./);
     assert.doesNotMatch(f.output.join(''), /Boss pane is gone/i);
     assert.equal(fs.existsSync(path.join(f.env.HERDR_FACTORIES_DIR, 'demo', 'update-pending.json')), false);
   } finally { f.cleanup(); }

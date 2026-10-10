@@ -193,7 +193,8 @@ const USAGE = `herdr-boss <command>
   factory login NAME claude|codex|opencode  Sign in the agent app at the Owner terminal, then check the login.
   factory token NAME [--rotate]  Read or rotate the dashboard token at an Owner terminal. Boss rotation prints no token.
   factory boss start NAME [--harness claude|codex] [--resume] [--dry-run]  Start or check the factory Boss session.
-  factory connect [--check|--undo] NAME  Connect a registered factory to Fleet. Check prints name, state, and age only. Undo reverses the connection.
+  factory connect [--check|--undo] NAME  Connect a registered factory to Fleet through HTTPS Serve. Check prints name, state, and age only. Undo reverses the connection.
+  factory clean-smoke NAME [--dry-run] [--yes]  List and remove smoke- workspaces and work-root folders. Type clean-smoke NAME to confirm unless --yes is set.
   factory host add|list|remove  Keep private host connections. Use --docker-context CONTEXT for Docker. Run factory ssh HOST -- COMMAND... or factory docker HOST -- ARGS...
   goal set <project|pane> [--text TEXT] [--dry-run]  Set the /goal of a running orchestrator when its pane is idle.
                         Exit 0 goal active, 2 pane busy or not an orchestrator, 3 sent but not shown.

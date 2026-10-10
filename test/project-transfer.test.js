@@ -84,7 +84,7 @@ function fakeHerdr({ workspaces = [], panes = [], agentStatus = 'working', event
   return run;
 }
 
-function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWorkers = [] } = {}) {
+function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWorkers = [], dashboardUrl = DASHBOARD } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-project-transfer-'));
   const sourceData = path.join(root, 'source-data');
   const targetData = path.join(root, 'target-data');
@@ -138,7 +138,7 @@ function fixture({ sourceKit = kitRevision(), targetKit = sourceKit, runningWork
   const source = createProjectTransfer({
     role: 'source', dataDir: sourceData, privateDir: sourcePrivate,
     settings: () => ({ factoryId: SOURCE_ID, name: SOURCE_NAME }),
-    factories: [{ factoryId: TARGET_ID, name: TARGET_NAME, dashboardUrl: DASHBOARD, kitRevision: targetKit }],
+    factories: [{ factoryId: TARGET_ID, name: TARGET_NAME, dashboardUrl, kitRevision: targetKit }],
     projectRoot: sourceRoot, kitRevision: () => sourceKit, fetchImpl, herdr: sourceHerdr,
     hooks: { waitForPane: () => {}, waitForReady: () => true, readText: () => '', wait: () => {} },
     env: { ...process.env, HOME: root, HERDR_BOSS_DIR: sourceData },
@@ -173,6 +173,17 @@ test('plan checks both factories and a reachable remote without changing either 
   assert.deepEqual([fs.readdirSync(f.sourceData), fs.readdirSync(f.targetData), fs.readdirSync(f.targetRoot)], before);
   assert.equal(readProjectTransferLock('alpha', { dataDir: f.sourceData }), null);
   assert.equal(readProjectTransferLock('alpha', { dataDir: f.targetData }), null);
+});
+
+test('plan names HTTPS and factory connect when the registered dashboard uses plain HTTP', async (t) => {
+  const f = fixture({ dashboardUrl: 'http://factory-two.example.invalid:4478' }); t.after(f.cleanup);
+  const { code, text } = await command(f.source, 'plan', f);
+  assert.equal(code, 1);
+  assert.match(text, /safe dashboard connection/);
+  assert.match(text, /HTTPS.*factory connect factory-two/);
+  assert.doesNotMatch(text, /factory-two\.example|hf_guide_/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(readProjectTransferLock('alpha', { dataDir: f.sourceData }), null);
 });
 
 test('start clones, installs the kit, creates a fresh project lead, asks the Owner, and locks both projects', async (t) => {

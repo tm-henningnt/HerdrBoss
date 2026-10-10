@@ -284,8 +284,33 @@ test('factory new uses the host Codex setting and prints the tailnet policy for 
       '  {"src": ["tag:hf-head-office"], "dst": ["tag:hf-demo"], "ip": ["tcp:443"]}',
       ']',
       'tailscale up --advertise-tags=tag:hf-demo',
+      '// Alternative: one shared tag with acls. Use this block instead of the grants above.',
+      '// Merge these entries into the existing policy. Keep its other rules.',
+      '"tagOwners": {',
+      '  "tag:factory": ["autogroup:admin"]',
+      '},',
+      '"acls": [',
+      '  {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:factory:22,443,4477,4478"]}',
+      '],',
+      '"tests": [',
+      '  {"src": "autogroup:member", "accept": ["tag:factory:22,443,4477,4478"]}',
+      ']',
+      'tailscale up --advertise-tags=tag:factory',
       '',
     ].join('\n'));
+  } finally { f.cleanup(); }
+});
+
+test('factory new also prints a shared-tag ACL rule and its port tests', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await factoryCommand(['new', 'demo', '--image', 'example-factory:test'], f.io), 0);
+    const output = f.output.join('');
+    assert.match(output, /Alternative: one shared tag with acls/);
+    const policy = JSON.parse('{' + output.slice(output.indexOf('"tagOwners"', output.indexOf('Alternative:')), output.indexOf('tailscale up --advertise-tags=tag:factory')) + '}');
+    assert.deepEqual(policy.tagOwners, { 'tag:factory': ['autogroup:admin'] });
+    assert.deepEqual(policy.acls, [{ action: 'accept', src: ['autogroup:member'], dst: ['tag:factory:22,443,4477,4478'] }]);
+    assert.deepEqual(policy.tests, [{ src: 'autogroup:member', accept: ['tag:factory:22,443,4477,4478'] }]);
   } finally { f.cleanup(); }
 });
 
