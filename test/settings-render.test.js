@@ -552,27 +552,40 @@ test('Allocation shows effort choices only for models with an effort setting', a
   assert.match(html, /No effort setting/);
 });
 
-test('the Boss rules row keeps its input inside the card at a phone width', async () => {
+test('Allocation long policy text uses growing three-row textareas without changing draft values', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });
   const s = fixture();
+  s.policy.defaultOrchestratorGoal = 'Keep the approved goal text.';
+  s.policy.bossRules = 'Keep the standing rules text.';
   app.setState(s);
   app.setDraft(s.policy);
   const html = app.allocationView(s);
-  for (const [id, label] of [['sf-defaultOrchestratorGoal', 'Default project lead goal'], ['sf-bossRules', 'Boss rules']]) {
-    const at = html.indexOf(`<input id="${id}"`);
-    assert.ok(at > 0, `${label} renders its text input`);
+  for (const [id, label, key, value, maxLength] of [
+    ['sf-defaultOrchestratorGoal', 'Default project lead goal', 'defaultOrchestratorGoal', s.policy.defaultOrchestratorGoal, 4000],
+    ['sf-bossRules', 'Boss rules', 'bossRules', s.policy.bossRules, 1200],
+  ]) {
+    const at = html.indexOf(`<textarea id="${id}"`);
+    assert.ok(at > 0, `${label} renders its textarea`);
     const start = html.lastIndexOf('<label', at);
     const row = html.slice(start, html.indexOf('</label>', at));
     assert.ok(row.includes(`>${label}<button`), `${label} renders a setting row`);
-    assert.match(row, /\bgoal-setting\b/, `${label} carries the class that shrinks the input`);
+    assert.match(row, /\bgoal-setting\b/, `${label} keeps its setting-row class`);
+    assert.match(row, new RegExp(`<textarea id="${id}" rows="3" maxlength="${maxLength}" data-grow-textarea data-policy-text="${key}">${value}<\\/textarea>`), `${label} keeps its value, length limit, and policy draft key`);
   }
+  assert.match(css, /\.setting-line\.goal-setting textarea\s*\{[^}]*min-height:/);
+  assert.match(css, /\.setting-line\.goal-setting textarea\s*\{[^}]*width:\s*100%/);
+  const change = app.context.handlers.get('input').find((handler) => handler.toString().includes('el.dataset.policyText'));
+  const textarea = { dataset: { growTextarea: '', policyText: 'bossRules' }, value: 'Updated standing rules.', style: {}, scrollHeight: 70, closest: () => ({}) };
+  change({ target: textarea });
+  assert.equal(app.getDraft().bossRules, textarea.value, 'the textarea updates the same saved draft value');
+  assert.equal(textarea.style.height, '72px', 'typing grows the textarea to fit its content');
 });
 
-test('Allocation phone controls show long numbers and give goal text inputs a full row', () => {
+test('Allocation phone controls show long numbers and give goal textareas a full row', () => {
   assert.match(css, /\.setting-line input\[type="number"\]\s*\{[^}]*width:\s*10ch/);
   assert.match(css, /\.setting-line\.goal-setting\s*\{[^}]*flex-direction:\s*column/);
-  assert.match(css, /\.setting-line\.goal-setting input\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /\.setting-line\.goal-setting textarea\s*\{[^}]*width:\s*100%/);
 });
 
 test('the Allocation bar includes saved shares from projects without a live lead', async () => {
@@ -604,6 +617,7 @@ test('Settings wraps model names only at separators and keeps the usage mode cho
   const app = await views();
   app.setModels({
     opencode: { ...catalog, allowedModels: ['very-long-provider-name/model-name-with-parts'] },
+    claude: { ...catalog, allowedModels: ['claude-sonnet-5-5'] },
   });
   const s = fixture();
   s.policy.allowedKinds = ['opencode'];
@@ -613,9 +627,37 @@ test('Settings wraps model names only at separators and keeps the usage mode cho
   const modelLabel = /data-harness-model="opencode"[^>]*> <span>(.*?)<\/span>/.exec(html)?.[1] || '';
   assert.equal(modelLabel.replaceAll('<wbr>', ''), 'very-long-provider-name/model-name-with-parts');
   assert.equal([...modelLabel.matchAll(/<wbr>/g)].length, (modelLabel.match(/[/-]/g) || []).length);
+  const versionLabel = /data-harness-model="claude"[^>]*> <span>([\s\S]*?)<\/span><\/label>/.exec(html)?.[1] || '';
+  assert.match(versionLabel, /<span class="model-version">5-5<\/span>/, 'version hyphens stay in one copyable token');
+  assert.equal(versionLabel.replace(/<[^>]*>/g, ''), 'claude-sonnet-5-5', 'model text keeps its original characters');
+  assert.match(html, /class="setting-line preferred-model-setting"/);
   assert.match(css, /\.harness-model label > span:first-of-type\s*\{[^}]*overflow-wrap:\s*normal/);
   assert.match(css, /select\[data-provider\]\s*\{[^}]*min-width:\s*190px/);
+  assert.match(css, /\.harness \.setting-line\.preferred-model-setting\s*\{[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.harness \.setting-line\.preferred-model-setting > select\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /\.model-version\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(css, /\.advanced-settings \.settings-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+});
+
+test('Settings gives the four policy cards a full-width row and keeps provider source text readable', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  app.setDraft(s.policy);
+  const html = app.settingsView(s);
+  const coreStart = html.indexOf('<div class="settings-grid settings-core-grid">');
+  const extraStart = html.indexOf('<div class="settings-grid settings-extra-grid">');
+  assert.ok(coreStart >= 0 && extraStart > coreStart, 'the four main settings cards share their own full-width grid');
+  for (const title of ['Provider usage limits', 'Machine', 'Locks', 'Pictures and agent messages']) {
+    const at = html.indexOf(`<h2>${title}</h2>`, coreStart);
+    assert.ok(at > coreStart && at < extraStart, `${title} stays in the full-width card row`);
+  }
+  assert.match(html, /class="setting-line provider-mode-setting"/);
+  assert.match(css, /\.settings-grid\.settings-core-grid\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /@media \(min-width: 1600px\)\s*\{\s*\.settings-grid\.settings-core-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.setting-line\.provider-mode-setting\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /\.setting-line\.provider-mode-setting > select\[data-provider\] \+ \.setting-help\s*\{[^}]*flex:\s*1 1 100%/);
 });
 
 // The old page gave repeated settings a per-row key.

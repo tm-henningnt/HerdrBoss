@@ -877,8 +877,8 @@ function controlBlock(s) {
           ${settingRow('autoHandoverContextTokens', 'Hand over at context tokens', `<input id="${helpFid('autoHandoverContextTokens')}" type="number" min="50000" max="2000000" step="10000" value="${d.autoHandoverContextTokens}" data-policy-number="autoHandoverContextTokens">`)}
           ${settingRow('autoHandoverForceContextTokens', 'Force handover at context tokens', `<input id="${helpFid('autoHandoverForceContextTokens')}" type="number" min="50000" max="2000000" step="10000" value="${d.autoHandoverForceContextTokens}" data-policy-number="autoHandoverForceContextTokens">`)}
           ${settingRow('handoff.autoCooldownHours', 'Successor cooldown hours', `<input id="${helpFid('handoff.autoCooldownHours')}" type="number" min="1" max="72" step="1" value="${d.handoff?.autoCooldownHours ?? 6}" data-policy-handoff="autoCooldownHours">`)}
-          ${settingRow('defaultOrchestratorGoal', 'Default project lead goal', `<input id="${helpFid('defaultOrchestratorGoal')}" type="text" maxlength="4000" value="${esc(d.defaultOrchestratorGoal ?? '')}" data-policy-text="defaultOrchestratorGoal">`, { cls: 'goal-setting' })}
-          ${settingRow('bossRules', 'Boss rules', `<input id="${helpFid('bossRules')}" type="text" maxlength="1200" value="${esc(d.bossRules ?? '')}" data-policy-text="bossRules">`, { cls: 'goal-setting' })}
+          ${settingRow('defaultOrchestratorGoal', 'Default project lead goal', `<textarea id="${helpFid('defaultOrchestratorGoal')}" rows="3" maxlength="4000" data-grow-textarea data-policy-text="defaultOrchestratorGoal">${esc(d.defaultOrchestratorGoal ?? '')}</textarea>`, { cls: 'goal-setting' })}
+          ${settingRow('bossRules', 'Boss rules', `<textarea id="${helpFid('bossRules')}" rows="3" maxlength="1200" data-grow-textarea data-policy-text="bossRules">${esc(d.bossRules ?? '')}</textarea>`, { cls: 'goal-setting' })}
           ${settingRow('goals.autoCommand', 'Automatic Claude goal command', `<input id="${helpFid('goals.autoCommand')}" type="checkbox" data-policy-goal-bool="autoCommand" ${d.goals?.autoCommand ? 'checked' : ''}>`)}
           ${settingRow('opus.allowWithoutForce', 'Allow Opus without --force (otherwise reason required)', `<input id="${helpFid('opus.allowWithoutForce')}" type="checkbox" data-policy-opus-bool="allowWithoutForce" ${d.opus?.allowWithoutForce ? 'checked' : ''}>`)}
           ${settingRow('opus.maxConcurrent', 'Running Opus workers at most', `<input id="${helpFid('opus.maxConcurrent')}" type="number" min="1" max="8" value="${d.opus?.maxConcurrent ?? 2}" data-policy-opus="maxConcurrent">`)}
@@ -913,6 +913,10 @@ function helpButton(id, instance = '') {
 // A labelled setting row. for= ties the label to the field, so the info button in the label text does not become the control.
 function settingRow(id, text, control, { cls = '', field = id } = {}) {
   return `<label class="setting-line${cls ? ` ${cls}` : ''}" for="${helpFid(field)}"><span>${text}${id ? helpButton(id) : ''}</span>${control}</label>`;
+}
+function fitTextarea(field) {
+  field.style.height = 'auto';
+  field.style.height = `${field.scrollHeight + 2}px`;
 }
 let settingPopupEl = null;
 function settingPopup() {
@@ -1082,7 +1086,9 @@ function modelOn(kind, model, d = policyDraft) {
   return !(d?.excludedModels || []).includes(model) && !(d?.disabledModels?.[kind] || []).includes(model);
 }
 function modelNameHtml(model) {
-  return esc(model).replace(/([/-])/g, '$1<wbr>');
+  return String(model).split(/(\d+(?:-\d+)+)/g).map((part) => /^\d+(?:-\d+)+$/.test(part)
+    ? `<span class="model-version">${esc(part)}</span>`
+    : esc(part).replace(/([/-])/g, '$1<wbr>')).join('');
 }
 // The same precedence as providerFor on the server: harness route, legacy model route, then harness and prefix rules.
 // The provider of a legacy modelProviders route that this harness cannot use and that no harness route overrides.
@@ -1139,7 +1145,7 @@ function harnessSection(kind, cfg, d, unavailableModels = [], trialModels = []) 
   }).join('');
   return `<section class="harness" data-harness="${esc(kind)}" aria-labelledby="harness-${esc(kind)}">
     <div class="harness-head"><h3 id="harness-${esc(kind)}">${esc(kind)}</h3><label><input type="checkbox" data-kind="${esc(kind)}" ${d.allowedKinds.includes(kind) ? 'checked' : ''}> Available</label></div>
-    ${settingRow(null, 'Preferred model', `<select id="${helpFid(`preferred.${kind}`)}" data-preferred-model="${esc(kind)}"><option value="">Agent app default (${esc(cfg.defaultModel)})</option>${list.map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>`, { field: `preferred.${kind}` })}
+    ${settingRow(null, 'Preferred model', `<select id="${helpFid(`preferred.${kind}`)}" data-preferred-model="${esc(kind)}"><option value="">Agent app default (${esc(cfg.defaultModel)})</option>${list.map((model) => `<option value="${esc(model)}" ${d.preferredModels?.[kind] === model ? 'selected' : ''}>${esc(model)}</option>`).join('')}</select>`, { field: `preferred.${kind}`, cls: 'preferred-model-setting' })}
     <div class="harness-columns"><span>Model</span><span>Provider</span></div>
     <ul class="harness-models">${rows}</ul>
     <form class="add-model" data-add-model="${esc(kind)}"><input name="model" data-add-model-input="${esc(kind)}" autocomplete="off" spellcheck="false" placeholder="vendor/model-id" aria-label="New model string for ${esc(kind)}" maxlength="128"><button type="submit" class="quiet">Add model</button></form>
@@ -1286,7 +1292,7 @@ function settingsView(s) {
   const harnesses = Object.entries(models || {}).map(([kind, cfg]) => harnessSection(kind, cfg, d, s?.unavailableModels || [], s?.trialModels || [])).join('');
   const ignoredCount = Object.keys(models || {}).reduce((n, kind) => n + kindModels(kind, d).filter((model) => ignoredLegacyRoute(kind, model, d)).length, 0);
   const quotasByProvider = new Map((s.quotas || []).map((q) => [q.provider, q]));
-  const providerRows = Object.keys(d.providerModes).map((p) => settingRow(null, esc(PROVIDERS[p] || p), `<select id="${helpFid(`quota.mode.${p}`)}" data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore usage limit</option></select><span class="setting-help">${esc(quotaSourceText(quotasByProvider.get(p)))}</span>`, { field: `quota.mode.${p}` })).join('');
+  const providerRows = Object.keys(d.providerModes).map((p) => settingRow(null, esc(PROVIDERS[p] || p), `<select id="${helpFid(`quota.mode.${p}`)}" data-provider="${esc(p)}" aria-label="${esc(PROVIDERS[p] || p)} quota mode"><option value="managed" ${d.providerModes[p] === 'managed' ? 'selected' : ''}>Manage pace</option><option value="ignore" ${d.providerModes[p] === 'ignore' ? 'selected' : ''}>Ignore usage limit</option></select><span class="setting-help">${esc(quotaSourceText(quotasByProvider.get(p)))}</span>`, { field: `quota.mode.${p}`, cls: 'provider-mode-setting' })).join('');
   const machine = d.machine || {};
   const machineNumber = (key, label, max, nullable = false, min = 0) => settingRow(`machine.${key}`, label, `<input id="${helpFid(`machine.${key}`)}" type="number" min="${min}" max="${max}" ${nullable ? 'step="any" placeholder="Disabled"' : ''} value="${machine[key] ?? ''}" data-policy-machine="${key}">`);
   const guardMode = machineGuardMode(machine);
@@ -1410,8 +1416,8 @@ function settingsView(s) {
   // The Advanced fold opens by itself while it holds a warning: a harness finding that is not ok, or a service save error.
   const advancedIssues = harnessFindings.filter((finding) => finding.status !== 'ok').length + Object.values(serviceSettingsMessages).filter((text) => text && text !== 'Saved.').length;
   const advanced = foldCard({ slug: SETTINGS_FOLD, key: 'advanced', id: 'advanced-settings', className: 'advanced-settings', title: 'Advanced', hint: advancedIssues ? `Rarely used settings · ${advancedIssues} need${advancedIssues === 1 ? 's' : ''} attention` : 'Rarely used settings', forceOpen: advancedIssues > 0, body: `<div class="settings-grid">${avatarSettings(s)}${pricesPanel()}${serviceSettings}${harnessPanel}</div>`, boxed: false });
-  const settingsPanels = `${quotaPanel}${machineSettings}${lockSettings}${attachmentSettings}${watchRoutineSettings(s)}${poolSettingsPanel(s)}`;
-  return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each agent app. Set provider usage limits and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Agent apps</h2><div class="help-legend" role="group" aria-label="Help for the agent app settings"><span>Available${helpButton('harness.available')}</span><span>Preferred model${helpButton('harness.preferredModel')}</span><span>Model${helpButton('harness.model')}</span><span>Provider${helpButton('harness.provider')}</span><span>Add model${helpButton('harness.addModel')}</span></div>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its agent app' : 'their agent apps'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section><div class="settings-grid">${settingsPanels}</div>${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
+  const settingsPanels = `<div class="settings-grid settings-core-grid">${quotaPanel}${machineSettings}${lockSettings}${attachmentSettings}</div><div class="settings-grid settings-extra-grid">${watchRoutineSettings(s)}${poolSettingsPanel(s)}</div>`;
+  return `<header class="page-intro"><div><h1>Settings</h1><p>Assign models and provider routes in each agent app. Set provider usage limits and machine limits below.</p></div></header><section id="settings-plane" class="control-shell"><section class="panel"><h2>Agent apps</h2><div class="help-legend" role="group" aria-label="Help for the agent app settings"><span>Available${helpButton('harness.available')}</span><span>Preferred model${helpButton('harness.preferredModel')}</span><span>Model${helpButton('harness.model')}</span><span>Provider${helpButton('harness.provider')}</span><span>Add model${helpButton('harness.addModel')}</span></div>${ignoredCount ? `<p class="setting-help harness-help" role="note" style="color: var(--warn)">${ignoredCount} legacy provider route${ignoredCount === 1 ? ' is' : 's are'} not compatible with ${ignoredCount === 1 ? 'its agent app' : 'their agent apps'}. Herdr Boss treats ${ignoredCount === 1 ? 'it' : 'them'} as Unmetered. Choose a provider in each marked row before you apply the policy.</p>` : ''}<div class="harness-grid">${harnesses}</div></section>${settingsPanels}${advanced}<div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status" aria-live="polite">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : 'Policy saved'))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div></section>`;
 }
 
 // The handoff records that need the Owner: an open record whose source pane and successor pane still exist.
@@ -8303,6 +8309,7 @@ function render(force = false) {
     const scroll = captureScroll(route);
     if (KEYED_ROUTES.includes(route) && lastRoute === route) patchHtml($app, html);
     else $app.innerHTML = html;
+    for (const field of $app.querySelectorAll('textarea[data-grow-textarea]')) fitTextarea(field);
     lastRoute = route;
     lastRender = html;
     if (watchField) {
@@ -8694,6 +8701,7 @@ document.addEventListener('input', (e) => {
   if (e.target.dataset?.addModelInput) { e.target.removeAttribute('aria-invalid'); return; }
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
+  if (el.dataset.growTextarea !== undefined) fitTextarea(el);
   if (el.dataset.policyShare) {
     const slug = el.dataset.policyShare;
     if (!policyDraft.projects[slug]) return;
