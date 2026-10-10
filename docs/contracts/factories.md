@@ -73,7 +73,7 @@ Do not treat a valid example as authorization.
 **Purpose:** Give the head office a small, allow-listed view of one factory.
 **Producer:** The factory summary serializer at `GET /api/fleet/summary`.
 **Consumer:** The head office poller and Fleet page.
-**Version:** 1.1.0; major schema number 1.
+**Version:** 1.2.0; major schema number 1.
 **Schema:** [fleet-summary.v1.schema.json](schema/fleet-summary.v1.schema.json).
 **Sources:** Tickets [16](../tickets/factories/16-fleet-summary.md) and
 [17](../tickets/factories/17-head-office-fleet-page.md).
@@ -89,6 +89,7 @@ The head office supplies the registered kind for a remote factory.
 |---|---|
 | `factoryId`, `name` | Stable factory identity and display name. |
 | `version`, `kitRevision` | Factory software version and kit revision. |
+| `commit`, `startedAt` | Optional running commit and service start time. The values are `null` when the service does not report them. |
 | `generatedAt`, `dashboardUrl` | UTC creation time and dashboard base URL. |
 | `health` | State, tick age, Herdr reachability, and clock offset. |
 | `machine` | Load, CPU count, memory, and swap readings. |

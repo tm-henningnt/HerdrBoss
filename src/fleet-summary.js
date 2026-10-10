@@ -8,6 +8,7 @@ import { fleetMachineReadings } from './machine-samples.js';
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const isSlug = (value) => typeof value === 'string' && value.length <= 64 && SLUG.test(value);
 const KIT = /^[a-f0-9]{12,64}$/;
+const COMMIT = /^[a-f0-9]{7,40}$/i;
 const number = (value, max = Infinity) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= max ? value : null;
 const integer = (value, max) => number(value, max) === null ? null : Math.floor(value);
 const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
@@ -39,7 +40,7 @@ function publicClaudeHelper(value) {
   return null;
 }
 
-export function buildFleetSummary({ settings, state = {}, health, ownerItems = [], reviewPacks = [], spend = [], logins = [], claudeHelper = null, kind = null, machineSample = null, now = Date.now() }) {
+export function buildFleetSummary({ settings, state = {}, health, serviceVersion = state.version, ownerItems = [], reviewPacks = [], spend = [], logins = [], claudeHelper = null, kind = null, machineSample = null, now = Date.now() }) {
   const machine = state.machine || {};
   const rawMailbox = Array.isArray(ownerItems) ? ownerItems : [];
   const publicLogins = (Array.isArray(logins) ? logins : []).filter((row) => row && typeof row.harness === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(row.harness))
@@ -86,9 +87,10 @@ export function buildFleetSummary({ settings, state = {}, health, ownerItems = [
   const bossPane = Array.isArray(panes) ? panes.find((pane) => pane?.label === 'boss') : null;
   const boss = { running: Array.isArray(panes) ? Boolean(bossPane?.agent) : null,
     harness: typeof bossPane?.agent === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(bossPane.agent) ? bossPane.agent : null };
-  return assertFleetSummary({ schema: 1, contractVersion: '1.1.0', factoryId: settings.factoryId, name: settings.name,
+  return assertFleetSummary({ schema: 1, contractVersion: '1.2.0', factoryId: settings.factoryId, name: settings.name,
     kind: ['native', 'container'].includes(kind) ? kind : null,
-    version: health.version, kitRevision, generatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z'), dashboardUrl: settings.dashboardUrl,
+    version: health.version, kitRevision, commit: COMMIT.test(serviceVersion?.commit || '') ? serviceVersion.commit.toLowerCase() : null,
+    startedAt: isoTime(serviceVersion?.startedAt), generatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z'), dashboardUrl: settings.dashboardUrl,
     health: { status: health.herdrReachable === false || tickAgeSeconds > 90 ? 'degraded' : health.herdrReachable === true && tickAgeSeconds !== null ? 'healthy' : 'unknown',
       tickAgeSeconds, herdrReachable: health.herdrReachable ?? null, clockOffsetSeconds: health.clockOffsetSeconds ?? null },
     machine: { load1: number(machine.load?.[0]), load5: number(machine.load?.[1]), load15: number(machine.load?.[2]),

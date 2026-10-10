@@ -21,18 +21,31 @@ export function request(port, route, { method = 'GET', token, body, host, cookie
     req.on('error', reject); req.end(rawBody || (body ? JSON.stringify(body) : undefined));
   });
 }
-async function start(t, fleet = {}) {
+async function start(t, fleet = {}, version = null, readVersion = () => version) {
   const cfg = { ...loadConfig(), host: '127.0.0.1', port: 0, tickSeconds: 3600, allowedHosts: ['*.localhost'] };
   const engine = new EventEmitter();
   engine.state = { updatedAt: new Date().toISOString(), herdr: { panes: [] }, errors: [], kit: { current: 'abcdef012345' },
     machine: { load: [1, 2, 3], cpus: 4, memTotalGB: 8, memFreePercent: 55, swapUsedMB: 3, path: '/private/fixture' },
     projects: [], quotas: [], token: 'invented-secret', messages: [{ text: 'PRIVATE MESSAGE' }] };
   engine.tick = async () => engine.state; engine.log = () => {};
-  const app = serve(cfg, { liveDataDir: root, createEngine: () => engine, health: async () => ({ schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true, clockOffsetSeconds: null }), fleet });
+  const app = serve(cfg, { liveDataDir: root, createEngine: () => engine, health: async () => ({ schema: 1, contractVersion: '1.0.0', version: '0.1.0', kitRevision: 'abcdef012345', tickAgeSeconds: 1, herdrReachable: true, clockOffsetSeconds: null }), fleet,
+    ...(version ? { readVersion } : {}) });
   t.after(() => app.close());
   if (!app.server.listening) await once(app.server, 'listening');
   return { app, cfg, port: app.server.address().port };
 }
+
+test('the state API reports the service version snapshot from service start', async (t) => {
+  const version = { commit: 'abc1234', commitDate: '2026-10-10', kitRevision: 'd5a92aea96a1', startedAt: '2026-10-10T08:30:00.000Z' };
+  let reads = 0;
+  const { port } = await start(t, {}, version, () => { reads += 1; return version; });
+  const state = await request(port, '/api/state');
+  assert.deepEqual(state.body.version, version);
+  const summary = await request(port, '/api/fleet/summary');
+  assert.equal(summary.body.commit, version.commit);
+  assert.equal(summary.body.startedAt, version.startedAt.replace('.000', ''));
+  assert.equal(reads, 1);
+});
 
 test('the real fleet summary route emits the closed contract without private state', async (t) => {
   const { port } = await start(t);
@@ -348,7 +361,7 @@ test('the summary and rollup hold no account identity or HMAC key, and a factory
   const now = Date.parse('2026-10-06T10:00:00Z');
   const state = { quotas: readings, projects: [], machine: {}, control: {} };
   const summary = buildFleetSummary({ settings: { factoryId: 'win1', name: 'win1', dashboardUrl: 'https://win1.example', shareItemTitles: false, accounts: [account] }, state, health, now, kind: 'container' });
-  assert.equal(summary.contractVersion, '1.1.0');
+  assert.equal(summary.contractVersion, '1.2.0');
   assert.equal(summary.quotas.find((row) => row.harness === 'codex').accountKey, account.accountKey);
   const rollup = buildFleetRollup([{ name: 'win1', factoryId: 'win1', status: 'healthy', ageSeconds: 5, lastSeenAt: '2026-10-06T10:00:00Z', summary }], { now });
   for (const text of [JSON.stringify(summary), JSON.stringify(rollup)]) {

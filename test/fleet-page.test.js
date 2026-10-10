@@ -128,8 +128,8 @@ test('the Fleet page shows poller diagnostics without hostile registry field nam
 test('the compact comparison carries every hand-computed fact for each factory', async () => {
   const { html } = await render();
   assert.match(html, /data-fleet-factory="factory-zero"/);
-  assert.match(html, /native · 10 s · 2 \/ 8 workers · 61% claude · spend \$6\.10 · 2 owner · 0\.1\.0 \/ 2e0a5d394ccc/);
-  assert.match(html, /container · 12 s · 3 \/ 8 workers · 61% claude · spend \$8\.20 · 1 owner · 0\.1\.0 \/ 9c1f04ea77b2/);
+  assert.match(html, /native · 10 s · 2 \/ 8 workers · 61% claude · spend \$6\.10 · 2 owner · commit unknown · kit 2e0a5d394ccc · uptime unknown · version 0\.1\.0/);
+  assert.match(html, /container · 12 s · 3 \/ 8 workers · 61% claude · spend \$8\.20 · 1 owner · commit unknown · kit 9c1f04ea77b2 · uptime unknown · version 0\.1\.0/);
   assert.match(html, /kit differs/);
   // The fresh-only totals are the hand-computed sums.
   assert.match(html, /data-fleet-total="workers"><span class="fleet-k">Workers<\/span><span class="fleet-v">5<\/span>/);
@@ -139,6 +139,19 @@ test('the compact comparison carries every hand-computed fact for each factory',
   assert.match(visibleTotal(html, 'workers'), /2 of 3 · win2 unavailable/);
   assert.match(visibleTotal(html, 'spend'), /win2 unavailable/);
   assert.doesNotMatch(html, /title="2 of 3 factories reporting/);
+});
+
+test('the Fleet line shows each reported commit, kit revision, and uptime, with unknown for missing fields', async () => {
+  const { fleetView } = await import('../public/fleet.js');
+  const { buildFleetRollup } = await import('../src/fleet-rollup.js');
+  const startedAt = '2026-10-05T10:00:00Z';
+  const rows = [
+    factory('factory-a', { summary: summary('factory-a', { commit: 'abc1234', startedAt }) }),
+    factory('factory-b', { summary: summary('factory-b') }),
+  ];
+  const html = fleetView({ factories: rows, pollSeconds: 30, rollup: buildFleetRollup(rows, { now: Date.parse('2026-10-05T12:00:00Z') }) });
+  assert.match(html, /commit abc1234 · kit 2e0a5d394ccc · uptime 2 h/);
+  assert.match(html, /commit unknown · kit 2e0a5d394ccc · uptime unknown/);
 });
 
 test('each total shows one short coverage line and keeps the long detail in a collapsed element', async () => {

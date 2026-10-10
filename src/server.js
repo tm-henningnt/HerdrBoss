@@ -33,6 +33,7 @@ import { roamgateAvailable, roamgateUrl } from './roamgate.js';
 import { createAccessControl, loginPage } from './access.js';
 import { createRotatingLog } from './server-log.js';
 import { createHealth } from './health.js';
+import { readServiceVersion } from './service-version.js';
 import { createFleetPoller } from './fleet-poller.js';
 import { readFleetFile } from './fleet-store.js';
 import { createFleetReadAccess, createFleetGuideAccess } from './fleet-access.js';
@@ -228,7 +229,7 @@ export function assertPreviewHost(host) {
   return value;
 }
 
-export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), fleet = {}, docsSite = defaultDocsSite, hostGuide = {} } = {}) {
+export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, createEngine = (config, options) => new Engine(config, options), rawTokens, closeTab = browserCloseTab, browserActions = {}, projectNew = {}, goalSet = {}, machineTools = {}, health = createHealth(), readVersion = readServiceVersion, fleet = {}, docsSite = defaultDocsSite, hostGuide = {} } = {}) {
   initializeLifecyclePort();
   const browser = { browserStatus, listBrowserTabs, browserScreenshot, browserNavigate, browserNavigationState, browserHistoryAction, browserClick, browserInsertText, browserKey, browserNewTab, requestBrowser, tabAttached, ...browserActions };
   let uploads = [];
@@ -251,6 +252,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
     privateDirectory: PRIVATE_ACCESS_DIR,
   });
   const engine = readOnlyPreview ? createEngine(cfg, { push: false, act: false }) : createEngine(cfg);
+  const serviceVersion = readVersion();
   const fleetGuidance = createFleetGuidance({ dir: DATA_DIR, settings: fleetSettings.read, now: fleet.now,
     deliver: async (text) => {
       const herdr = engine.state?.herdr;
@@ -329,7 +331,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         return (await import('./factory-claude-helper.js')).claudeHelperState({ home: os.homedir() });
       } catch { return undefined; }
     })();
-    return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody, claudeHelper,
+    return buildFleetSummary({ settings: fleetSettings.read(), state: engine.state, health: healthBody, serviceVersion, claudeHelper,
       ownerItems: readMessages(), logins: await readFleetLogins(), machineSample: latestMachineSample(), spend: fleetSpend(spendSummary({ days: 7 })),
       reviewPacks: (reviewStore.packHeads({ dir: DATA_DIR }).length ? reviewStore.listPacks({ dir: DATA_DIR }) : []).map((pack) => ({ id: `${pack.slug}-${pack.pack}`.slice(0, 64), waitingItems: pack.counts.open || 0 })) });
   };
@@ -354,6 +356,7 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
   };
   const dashboardState = (data) => ({
     ...data,
+    version: serviceVersion,
     ...(Array.isArray(engine.dashboardManagedBrowsers) ? { managedBrowsers: engine.dashboardManagedBrowsers } : {}),
     projectRegisterSlugs: readRegister().projects.map(({ slug }) => slug),
   });
