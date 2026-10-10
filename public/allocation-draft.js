@@ -39,6 +39,31 @@ export function distributeRemainder(shares, slugs, fixed = 0) {
   return out;
 }
 
+// Move a policy-only project's share to the remaining policy projects by their current shares.
+// Largest remainders go first; slug order breaks ties so the result is stable.
+export function redistributePolicyShare(shares, slugs, removedSlug) {
+  const out = { ...shares, [removedSlug]: 0 };
+  const recipients = slugs.filter((slug) => slug !== removedSlug);
+  const removed = clean(shares[removedSlug]) ? shares[removedSlug] : 0;
+  if (!removed || !recipients.length) return out;
+  const weights = recipients.map((slug) => clean(shares[slug]) ? shares[slug] : 0);
+  const totalWeight = weights.reduce((sum, share) => sum + share, 0);
+  const parts = recipients.map((slug, index) => ({
+    slug,
+    share: totalWeight ? weights[index] : 1,
+    raw: removed * (totalWeight ? weights[index] / totalWeight : 1 / recipients.length),
+  }));
+  let left = removed;
+  for (const part of parts) {
+    const whole = Math.floor(part.raw);
+    out[part.slug] = (clean(shares[part.slug]) ? shares[part.slug] : 0) + whole;
+    left -= whole;
+  }
+  parts.sort((a, b) => (b.raw % 1) - (a.raw % 1) || a.slug.localeCompare(b.slug));
+  for (let i = 0; i < left; i++) out[parts[i].slug]++;
+  return out;
+}
+
 // Move the boundary after project index to position. The projects to its right share the rest (largest remainder method).
 // fixed is the total of the shares that the form does not edit. A move while the total is above 100 changes nothing.
 export function moveShares(shares, slugs, index, position, fixed = 0) {
@@ -118,7 +143,14 @@ export function allocationFooterHtml(total, stale) {
   return `<div class="allocation-total" data-allocation-total>${totalHtml(total)}</div>${reload}`;
 }
 
-// A row for a project that the policy holds and the project list does not. The share is read-only.
-export function staleRowHtml(slug, share) {
-  return `<div class="allocation-row stale" data-stale-row="${escapeHtml(slug)}"><div class="allocation-name"><b>${escapeHtml(slug)}</b><small>not in the project list</small></div><div class="share-values"><span><small>Set</small><strong class="num">${share}%</strong></span></div></div>`;
+// A row for a policy project with no live orchestrator. The Owner can still edit its policy.
+export function staleRowHtml(slug, entry = {}, status = 'Closed workspace · No orchestrator', kinds = [], models = []) {
+  const project = { mode: 'auto', excludedKinds: [], excludedModels: [], ...entry };
+  const kindRows = kinds.map((kind) => `<label><input type="checkbox" data-exclude-kind="${escapeHtml(slug)}:${escapeHtml(kind)}" ${project.excludedKinds.includes(kind) ? 'checked' : ''}> ${escapeHtml(kind)}</label>`).join('');
+  const modelRows = models.map((model) => `<label><input type="checkbox" data-exclude-model="${escapeHtml(slug)}:${escapeHtml(model)}" ${project.excludedModels.includes(model) ? 'checked' : ''}> ${escapeHtml(model)}</label>`).join('');
+  return `<div class="allocation-row stale" data-stale-row="${escapeHtml(slug)}" data-project-row="${escapeHtml(slug)}"><div class="allocation-name"><b>${escapeHtml(slug)}</b><small>${escapeHtml(status)}</small></div>
+    <label class="share-values"><span><small>Set</small><input class="num share-input" type="number" min="0" max="100" step="1" required value="${escapeHtml(project.share ?? 0)}" data-policy-share="${escapeHtml(slug)}" aria-label="${escapeHtml(slug)} set share"></span></label>
+    <select data-mode="${escapeHtml(slug)}" aria-label="${escapeHtml(slug)} activity mode">${['auto','active','idle','paused'].map((mode) => `<option value="${mode}" ${project.mode === mode ? 'selected' : ''}>${mode}</option>`).join('')}</select>
+    <details class="project-exclude"><summary>Exclude kinds / models</summary><div class="exclude-grid">${kindRows}${modelRows}</div></details>
+    <button type="button" class="quiet" data-remove-policy-project="${escapeHtml(slug)}">Remove from policy</button></div>`;
 }

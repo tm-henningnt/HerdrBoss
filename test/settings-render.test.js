@@ -58,7 +58,7 @@ async function views(code = source) {
     }
   }
   const body = code.replace(/^import [^\n]*\n/gm, '');
-  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, chatBubble, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, getDraft: () => policyDraft };`, context);
+  vm.runInNewContext(`${body}\nthis.views = { settingsView, allocationView, agentsView, boardView, browsersView, browserBookmarkSection, chatBubble, saveServiceSettings, setModels: (m) => { models = m; }, setState: (v) => { state = v; }, setDraft: (v) => { policyDraft = v; }, setBrowserSessions: (v) => { browserSessions = v; }, getDraft: () => policyDraft };`, context);
   return { ...context.views, context };
 }
 
@@ -81,6 +81,52 @@ function fixture() {
   };
 }
 const catalog = { defaultModel: 'a', defaultEffort: 'high', allowedEfforts: ['high'], allowedModels: ['a', 'b'] };
+
+test('Allocation shows closed policy projects with editable settings and a registered state', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  s.policy.projects.closed = { share: 20, mode: 'active', excludedKinds: ['codex'], excludedModels: ['a'] };
+  s.policy.defaultOrchestratorGoal = '';
+  s.policy.bossRules = '';
+  s.projectRegisterSlugs = ['closed'];
+  s.herdr = { panes: [], workspaces: [] };
+  s.projects = [{ slug: 'closed', workspace: 'closed-workspace' }];
+  s.control.workspaces = [];
+  app.setState(s);
+
+  const html = app.allocationView(s);
+  const shareAt = html.indexOf('data-policy-share="closed"');
+  const removeAt = html.indexOf('data-remove-policy-project="closed"');
+  const rowStart = shareAt < 0 ? -1 : html.lastIndexOf('<div class="allocation-row', shareAt);
+  const row = rowStart < 0 || removeAt < 0 ? '' : html.slice(rowStart, removeAt + 80);
+  const includes = (label, pattern) => assert.ok(pattern.test(row), `The closed policy row is missing ${label}.`);
+  includes('the closed state', /Closed workspace/);
+  includes('the orchestrator state', /No orchestrator/);
+  includes('the register state', /Registered in project register/);
+  includes('the share input', /data-policy-share="closed"/);
+  includes('the mode selector', /data-mode="closed"/);
+  includes('the kind exclusion', /data-exclude-kind="closed:codex" checked/);
+  includes('the model exclusion', /data-exclude-model="closed:a" checked/);
+  includes('the remove action', /data-remove-policy-project="closed"[^>]*>Remove from policy/);
+});
+
+test('large bookmark collections are collapsed, counted, and filterable per project', async () => {
+  const app = await views();
+  const bookmarks = Array.from({ length: 250 }, (_, index) => ({ name: `Sample bookmark ${index + 1}`, url: `https://preview.example/${index + 1}` }));
+  const details = app.browserBookmarkSection('tm-stacked-variance', { bookmarks, startPage: null });
+  const contains = (label, pattern) => assert.ok(pattern.test(details), `The bookmark dropdown is missing ${label}.`);
+  assert.ok(/^<details class="browser-bookmarks"[^>]*>/.test(details) && !/^<details[^>]*\bopen\b/.test(details), 'The bookmark dropdown must start closed.');
+  contains('the count badge', /browser-bookmark-count/);
+  contains('the total count', /<summary>Bookmarks <span[^>]*>250<\/span><\/summary>/);
+  contains('the filter field', /type="search"[^>]*data-browser-bookmark-filter="tm-stacked-variance"/);
+  contains('the current-tab action', /data-browser-bookmark-open="tm-stacked-variance"/);
+  contains('the new-tab action', /data-browser-bookmark-open-tab="tm-stacked-variance"/);
+  assert.match(source, /\$\{browserBookmarkSection\(p\.slug, b\)\}/);
+  assert.match(source, /Filter bookmarks<\/b> to find a name or address/);
+  assert.match(source, /data-browser-bookmark-filter/);
+  assert.match(source, /browser-bookmark-result/);
+});
 
 test('Settings renders editable roots and saves paths as strings', async () => {
   const app = await views();
@@ -153,6 +199,32 @@ test('Settings renders and saves the visible project browser switch, off by defa
   assert.deepEqual(sent.changes, { 'browser.allowVisible': true });
   assert.deepEqual(validateServiceSettings({ 'browser.allowVisible': true }), { 'browser.allowVisible': true });
   assert.throws(() => validateServiceSettings({ 'browser.allowVisible': 'true' }), /must be true or false/);
+});
+
+test('Settings renders and saves the tenant host display switch, off by default', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  const setting = s.serviceSettings.find((item) => item.setting === 'browser.showTenantHosts');
+  assert.deepEqual(setting && { value: setting.value, source: setting.source }, { value: false, source: 'default' });
+  const html = app.settingsView(s);
+  assert.match(html, /type="checkbox" data-service-setting="browser\.showTenantHosts" data-service-group="Browsers" aria-label="browser\.showTenantHosts"/);
+  assert.equal((html.match(/data-setting-help="browser\.showTenantHosts"/g) || []).length, 1);
+
+  const toggle = { type: 'checkbox', dataset: { serviceSetting: 'browser.showTenantHosts' }, checked: true };
+  app.context.document = {
+    querySelectorAll: () => [toggle],
+    querySelector: () => ({ textContent: '' }),
+  };
+  let sent;
+  app.context.fetch = async (_url, request) => {
+    sent = JSON.parse(request.body);
+    return { ok: true, json: async () => ({ settings: [] }) };
+  };
+  await app.saveServiceSettings('Browsers', { disabled: false });
+  assert.deepEqual(sent.changes, { 'browser.showTenantHosts': true });
+  assert.deepEqual(validateServiceSettings({ 'browser.showTenantHosts': true }), { 'browser.showTenantHosts': true });
+  assert.throws(() => validateServiceSettings({ 'browser.showTenantHosts': 'true' }), /must be true or false/);
 });
 
 test('Settings renders the Haiku pace tolerance beside the general pace tolerance', async () => {

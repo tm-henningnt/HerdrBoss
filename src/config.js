@@ -163,7 +163,7 @@ const DEFAULTS = {
     // Sweep old code-sign clones that no running Chrome process owns.
     sweepCodeSignClones: true,
   },
-  browser: { idleCloseMinutes: 20, allowVisible: false },
+  browser: { idleCloseMinutes: 20, allowVisible: false, showTenantHosts: false },
   workers: { staleIdleMinutes: 120, paneCloseDelayMinutes: 2, uncollectedNoticeMinutes: 30, autoCloseReview: true, leaseGraceMinutes: 30 },
   // Remove a clean worker worktree and its merged branch after collection.
   worktrees: { minFreeGb: 8, pruneAtCollect: true },
@@ -225,6 +225,7 @@ const SERVICE_SETTINGS = [
   ['Browsers', 'browsers.sweepCodeSignClones'],
   ['Browsers', 'browser.idleCloseMinutes'],
   ['Browsers', 'browser.allowVisible'],
+  ['Browsers', 'browser.showTenantHosts'],
   ['Browsers', 'chromePath'],
   ['Releases', 'releases.repos'],
   ['Service', 'tickSeconds'],
@@ -484,6 +485,7 @@ const SERVICE_SETTING_BOOLEANS = new Set([
   'analytics.actionsMinutes',
   'factories.claudeUsageHelper',
   'browser.allowVisible',
+  'browser.showTenantHosts',
   'worktrees.pruneAtCollect',
   'workers.autoCloseReview',
 ]);

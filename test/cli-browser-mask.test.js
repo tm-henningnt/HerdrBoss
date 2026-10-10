@@ -393,7 +393,8 @@ const WORKER_ENVS = {
 };
 
 test('a worker with only HERDR_WORKTREE gets names and indexes, also with --full', (t) => {
-  const { run } = bookmarksCli(t);
+  const { run, dataDir } = bookmarksCli(t);
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ browser: { showTenantHosts: true } }));
   for (const [label, extra] of Object.entries(WORKER_ENVS)) {
     for (const flags of [[], ['--full']]) {
       const result = run(['bookmarks', 'alpha', 'list', ...flags], extra);
@@ -495,17 +496,19 @@ test('bookmarks add keeps a plain URL and a host that starts with a scheme word'
   }
 });
 
-test('the error text for a worker never unmasks a host with --full, and the Owner keeps --full', (t) => {
+test('dashboard host reveal does not unmask browser error text sent to a worker', (t) => {
   const { dataDir } = bookmarksCli(t);
-  const script = (env) => `
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ browser: { showTenantHosts: true } }));
+  const script = (worker) => `
     import { browserErrorText } from ${JSON.stringify(new URL('../src/cli.js', import.meta.url).href)};
-    process.stdout.write(await browserErrorText('ENOTFOUND https://other.example.org/x', { full: true }));
+    process.stdout.write(await browserErrorText('ENOTFOUND https://other.example.org/x', { full: true, env: ${worker ? "{ HERDR_WORKTREE: 'fixture' }" : '{}'} }));
   `;
   const base = { ...process.env, HERDR_BOSS_DIR: dataDir, HOME: path.dirname(dataDir) };
   for (const key of ['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_WORKTREE']) delete base[key];
-  const owner = spawnSync(process.execPath, ['--input-type=module', '-e', script()], { encoding: 'utf8', env: base });
-  assert.equal(owner.stdout, 'ENOTFOUND https://other.example.org/x');
-  const worker = spawnSync(process.execPath, ['--input-type=module', '-e', script()], { encoding: 'utf8', env: { ...base, HERDR_WORKTREE: '/tmp/wt-x' } });
+  const owner = spawnSync(process.execPath, ['--input-type=module', '-e', script(false)], { encoding: 'utf8', env: base });
+  assert.equal(owner.stdout.includes('other.example.org'), true);
+  const workerEnv = { HERDR_WORKTREE: '/tmp/wt-x' };
+  const worker = spawnSync(process.execPath, ['--input-type=module', '-e', script(true)], { encoding: 'utf8', env: { ...base, ...workerEnv } });
   assert.ok(!worker.stdout.includes('other.example.org'), worker.stdout);
   assert.ok(worker.stdout.includes('<tenant>'), worker.stdout);
 });

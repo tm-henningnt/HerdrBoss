@@ -29,6 +29,8 @@ Each proposal uses one Mailbox decision card. The card states what, why, cost, a
 
 Project browsers run headless. Use the Browsers page to sign in without opening a Chrome window on the service machine.
 
+On the Browsers page, select **Bookmarks N** to open one project's list. Use **Filter bookmarks** to search by name or address. Select the summary again to close the list. **Open** uses the current tab. **New tab** opens another tab.
+
 1. Open the **Browsers** page in Herdr Boss.
 2. For the project, select **Show preview**. Select the project browser screenshot to open the large view.
 3. Enter the site's sign-in address. Select **Open sign-in tab**. The page opens in the project profile and turns on **Control browser**.
@@ -36,6 +38,8 @@ Project browsers run headless. Use the Browsers page to sign in without opening 
 5. Finish the sign-in steps in the image. The project browser keeps the login in its profile. A site can ask you to sign in again when the login expires.
 
 Only the Owner can open a sign-in tab or send sign-in input from this view.
+
+The **Show tenant hosts** switch is in Settings, Browsers. It is off by default. Turn it on to show full browser URL hosts on the dashboard for an Owner page that sends a same-origin browser signal. A process on this machine can still forge the headers. Use this setting only on the Owner's own machine. Browser output sent to agents, messages, reports, status files, logs, and published files stays masked.
 
 The Browsers page lists the last 50 independent browser launches. Each row shows the time, browser PID, first observed pane, launcher kind, and project. Herdr Boss keeps this association when a process becomes an orphan. The event log also holds the observed process start identity. A process gets one row for its PID and start identity. The launcher kind is `perf-harness`, `agent-browser`, `playwright`, or `unknown`. Raw arguments, URLs, environment values, and profile paths are not stored in these fields. Run `herdr-boss browser audit [PROJECT]` to read the list at a terminal.
 

@@ -182,7 +182,7 @@ test('app.js builds the form from the draft module and has no equal-split fallba
   assert.match(app, /default, not saved/);
 });
 
-test('a project that is not in the project list keeps its share, counts in the total, and is never changed by a save', () => {
+test('a policy-only project keeps its share in the total and can be edited before it is removed', () => {
   const loaded = policyOf({ a: 40, b: 30, old: 20 });
   const draft = buildDraftShares(['a', 'b'], loaded);
   assert.deepEqual(draft.shares, { a: 40, b: 30 });
@@ -195,11 +195,32 @@ test('a project that is not in the project list keeps its share, counts in the t
   const over = checkSave({ slugs: ['a', 'b'], loaded, shares: { a: 60, b: 30 }, defaults: [], touched: ['a'], boundaries: 1, fixed });
   assert.equal(over.action, 'refuse', 'the stale share counts: 60 + 30 + 20 is above 100');
   assert.match(over.message, /110/);
-  assert.match(staleRowHtml('old', 20), /not in the project list/);
-  assert.match(staleRowHtml('old', 20), /20%/);
-  assert.doesNotMatch(staleRowHtml('old', 20), /<input|<button/);
-  assert.match(app, /staleRowHtml\(slug, share\)/);
-  assert.doesNotMatch(app, /\]\.share = 0;\n/, 'no code zeroes a share');
+  const html = staleRowHtml('old', { share: 20, mode: 'active', excludedKinds: ['codex'], excludedModels: ['a'] }, 'Closed workspace · No orchestrator · Registered in project register', ['codex'], ['a']);
+  assert.ok(/Closed workspace · No orchestrator · Registered in project register/.test(html), 'The policy-only row is missing its project state.');
+  assert.match(html, /20/);
+  assert.match(html, /data-policy-share="old"/);
+  assert.match(html, /data-mode="old"/);
+  assert.match(html, /data-exclude-kind="old:codex" checked/);
+  assert.match(html, /data-exclude-model="old:a" checked/);
+  assert.match(html, /data-remove-policy-project="old"[^>]*>Remove from policy/);
+  assert.match(app, /staleRowHtml\(slug, d\.projects\[slug\]/);
+});
+
+test('removing a policy-only project zeroes its share and redistributes it proportionally', async () => {
+  const draftModule = await import('../public/allocation-draft.js');
+  assert.equal(typeof draftModule.redistributePolicyShare, 'function');
+  const result = draftModule.redistributePolicyShare({ alpha: 30, beta: 30, gamma: 20, closed: 20 }, ['alpha', 'beta', 'gamma', 'closed'], 'closed');
+  assert.deepEqual(result, { alpha: 38, beta: 37, gamma: 25, closed: 0 });
+  assert.equal(shareTotal(result, ['alpha', 'beta', 'gamma', 'closed']), 100);
+});
+
+test('the remove action keeps PC1 confirmation checks for policy-only shares', () => {
+  const loaded = policyOf({ alpha: 30, beta: 30, gamma: 20, closed: 20 });
+  const shares = { alpha: 38, beta: 37, gamma: 25, closed: 0 };
+  const result = checkSave({ slugs: Object.keys(shares), loaded, shares, defaults: [], touched: Object.keys(shares), boundaries: 0 });
+  assert.equal(result.action, 'confirm');
+  assert.equal(result.confirmSum, undefined);
+  assert.equal(result.rows.filter((row) => row.old !== row.next).length, 4);
 });
 
 test('a boundary move keeps the room of a stale project, and a distribute counts it', () => {
@@ -241,4 +262,17 @@ test('a keyed refresh with a dirty draft keeps the typed edit and the reload lin
   assert.equal(document.activeElement, input);
   assert.ok(find(root, (el) => el.getAttribute('data-reload-shares') !== null), 'the reload line shows');
   assert.ok(find(root, (el) => el.getAttribute('role') === 'alert'), 'the total warning shows');
+});
+
+test('three or more changed shares still require confirmation when policy-only slugs are included', () => {
+  const loaded = policyOf({ alpha: 40, beta: 30, closed: 20, archived: 10 });
+  const slugs = ['alpha', 'beta', 'closed', 'archived']; // closed and archived have policy rows but no live orchestrator.
+  const shares = { alpha: 42, beta: 28, closed: 18, archived: 12 };
+  const result = checkSave({ loaded, slugs, shares, defaults: [], touched: slugs, boundaries: 1 });
+
+  assert.equal(result.action, 'confirm');
+  assert.deepEqual(result.rows.filter((row) => row.old !== row.next).map((row) => row.slug), slugs);
+  assert.match(app, /const slugs = policyShareSlugs\(\)/);
+  assert.doesNotMatch(app, /fixed:\s*staleShares\(\)/);
+  assert.match(app, /confirmed \? \{ confirmed: true \}/);
 });

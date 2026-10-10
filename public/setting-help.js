@@ -810,6 +810,13 @@ export const SETTING_HELP = Object.fromEntries([
     lower: 'Turning it off refuses visible browser launches and restarts.',
     apply: 'service',
   }),
+  S('service', 'browser.showTenantHosts', 'Show tenant hosts', {
+    what: 'Shows full outside hosts in project browser URLs on this dashboard for an Owner page that sends a same-origin browser signal. A process on this machine can forge the headers. Use this setting only on the Owner\'s own machine. It does not change masking in agent, CLI, message, report, status, log, or published output.',
+    default: 'Off', unit: 'Switch', range: 'On or off',
+    raise: 'Turn it on to show the real host in browser URLs on the dashboard.',
+    lower: 'Turn it off to mask outside hosts in browser URLs.',
+    apply: 'service',
+  }),
   S('service', 'chromePath', 'Chrome path', {
     what: 'The Chrome executable that Herdr Boss starts for a project browser. A running browser keeps its executable until it restarts.',
     default: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', unit: 'Path', range: 'An absolute path or a path that starts with ~. No .. segment, not /',

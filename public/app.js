@@ -28,7 +28,7 @@ import { effectiveAsk } from './review-ask.js';
 import { createReviewSync, createDrafts, NOTE_DEBOUNCE_MS } from './review-sync.js';
 import { createWizard } from './project-wizard-ui.js';
 import { goalSetBlockHtml, goalDialogHtml, goalJobRunning, goalStatusText, pollGoalStatus } from './goal-set.js';
-import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
+import { buildDraftShares, draftSignature, shareTotal, distributeRemainder, moveShares, redistributePolicyShare, totalHtml, checkSave, confirmText, sumConfirmText, allocationFooterHtml, staleRowHtml } from './allocation-draft.js';
 import { stackedBars, lineChart, stripBars, outcomeBars, legendHtml, foldSeries, spendSeries, claudeSpend, quotaSeries, quotaPlanSeries, quotaPlanDetailsHtml, quotaPlanStandingHtml, firstTimeRate, activityFilter, activityChoices, eventLevel, dayLabel, usd, minutes, compact, ACTIVITY_RANGES, ACTIVITY_LEVELS, SERIES_CLASSES, DENIAL_RANGES, DEFAULT_DENIAL_RANGE, denialRange, denialSeries, denialMarkers, denialDetailsHtml, denialLegendHtml, policyChangesTitle, policyChangesListHtml, policyChangesDetailsHtml, lockWaitSeries, lockWaitDetailsHtml, lockLaneHourSeries, lockLaneHourDetailsHtml, lockAdmissionHtml, memorySeries, memoryDetailsHtml, diskFreeCard, hourLabel, mbText, communicationSeries, communicationDailyDetailsHtml, communicationResponseHtml, communicationNudgeDetailsHtml, actionsMinutesSeries, actionsMinutesScope, actionsMinutesDetailsHtml } from './analytics.js';
 import { ATTACHMENT_LIMIT, attachmentFileError, attachmentStripState, attachmentPickerHtml, attachmentStripHtml } from './attachment-ui.js';
 import { createClientStore } from './store.js';
@@ -664,12 +664,18 @@ function staleShares() {
   const live = state?.control?.projects || {};
   return Object.fromEntries(Object.entries(policyDraft?.projects || {}).filter(([slug]) => !live[slug]).map(([slug, entry]) => [slug, entry.share]));
 }
+function policyShareSlugs() {
+  return [...new Set([...allocationProjects().map((project) => project.slug), ...Object.keys(policyDraft?.projects || {})])];
+}
+function policyDraftShares() {
+  return Object.fromEntries(policyShareSlugs().map((slug) => [slug, policyDraft.projects[slug]?.share ?? 0]));
+}
 const staleTotal = () => Object.values(staleShares()).reduce((sum, share) => sum + (Number.isInteger(share) ? share : 0), 0);
 function allocationTotal() {
   return shareTotal(draftShares(), allocationProjects().map((p) => p.slug)) + staleTotal();
 }
 function draftShares() {
-  return Object.fromEntries(allocationProjects().map((p) => [p.slug, policyDraft.projects[p.slug]?.share || 0]));
+  return Object.fromEntries(allocationProjects().map((p) => [p.slug, policyDraft.projects[p.slug]?.share ?? 0]));
 }
 // The policy without the project shares and without the entries of default projects. A difference shows a change outside the shares.
 function policyWithoutShares(policy, defaults) {
@@ -684,16 +690,21 @@ const OWNER_PAGE_HEADERS = { 'x-herdr-boss-caller': 'page' };
 
 function allocationSaveCheck() {
   if (!policyDraft || !allocationMeta || !state?.policy) return { action: 'save' };
-  const slugs = allocationProjects().map((p) => p.slug);
+  const slugs = policyShareSlugs();
   return checkSave({
-    slugs, loaded: allocationMeta.loaded, shares: draftShares(), defaults: allocationMeta.defaults,
+    slugs, loaded: allocationMeta.loaded, shares: policyDraftShares(), defaults: allocationMeta.defaults,
     touched: [...allocationMeta.touched], boundaries: allocationMeta.boundaries.size,
-    fixed: staleShares(),
     otherChanged: policyWithoutShares(policyDraft, allocationMeta.defaults) !== policyWithoutShares(state.policy, allocationMeta.defaults),
   });
 }
 
 function allocationProjects() { return Object.values(state?.control?.projects || {}); }
+function policyOnlyStatus(s, slug) {
+  const workspace = (s.control?.workspaces || []).find((item) => item.slug === slug);
+  const parts = [workspace ? 'Open workspace' : 'Closed workspace', 'No orchestrator'];
+  if ((s.projectRegisterSlugs || []).includes(slug)) parts.push('Registered in project register');
+  return parts.join(' · ');
+}
 const SHARE_COLORS = ['var(--accent)', 'var(--info)', 'var(--ok)', 'var(--warn)', 'var(--muted)'];
 // The project order of projectSlugs sets the bar segments, the project cards, and the card accents.
 function allocationColor(s, slug) {
@@ -753,6 +764,22 @@ function distributeRemaining() {
   markPolicyDirty();
 }
 
+function removePolicyProject(slug) {
+  if (!policyDraft?.projects?.[slug]) return;
+  if (!window.confirm(`Remove ${slug} from policy? Its share will be set to zero and redistributed to other policy projects. Apply policy to save this change.`)) return;
+  const slugs = policyShareSlugs();
+  const before = policyDraftShares();
+  const after = redistributePolicyShare(before, slugs, slug);
+  const changed = slugs.filter((entry) => after[entry] !== before[entry]);
+  if (!changed.length) return;
+  for (const entry of changed) {
+    policyDraft.projects[entry].share = after[entry];
+    allocationMeta?.touched.add(entry);
+  }
+  updateShares();
+  markPolicyDirty();
+}
+
 function controlBlock(s) {
   ensureDraft(s);
   if (!policyDraft || !s.control) return '';
@@ -794,6 +821,10 @@ function controlBlock(s) {
     const excluded = workspace.boss || (d.excludedWorkspaces || []).some((entry) => entry === workspace.label || entry === workspace.workspace);
     return `<label class="setting-line workspace-exclusion"><span>${esc(workspace.label)}${workspace.boss ? ' · automatically excluded while the boss pane is present' : ''}</span><input type="checkbox" data-workspace-exclusion="${esc(workspace.label)}" aria-label="${esc(workspace.label)} is not a project" ${excluded ? 'checked' : ''} ${workspace.boss ? 'disabled' : ''}></label>`;
   }).join('');
+  const policyOnlyRows = Object.keys(staleShares()).map((slug) => {
+    const projectModels = [...new Set(d.allowedKinds.flatMap((kind) => kindModels(kind, d).filter((model) => modelOn(kind, model, d))))];
+    return staleRowHtml(slug, d.projects[slug], policyOnlyStatus(s, slug), d.allowedKinds, projectModels);
+  }).join('');
   return `<section id="control-plane"><h2>Policy settings</h2>
     <div class="panel control-shell">
       <div class="control-grid">
@@ -822,7 +853,7 @@ function controlBlock(s) {
         <div class="allocation-bar" role="group" aria-label="Project allocation, 0 to 100 percent">${shareSegments}${shareHandles}</div>
         <div class="allocation-scale"><span>0%</span><span>100%</span></div>
         ${allocationFooterHtml(allocationTotal(), policyStale)}
-        ${projectRows}${Object.entries(staleShares()).map(([slug, share]) => staleRowHtml(slug, share)).join('')}</div>
+        ${projectRows}${policyOnlyRows}</div>
       <div class="control-actions ${policyDirty ? 'pending' : ''}"><span data-policy-status role="status">${esc(saveMessage || (policyDirty ? 'Unsaved changes · Apply policy to keep them' : `${s.control.runningWorkers}/${d.maxWorkers} workers active · policy saved`))}</span><button id="save-policy" ${policyDirty ? '' : 'disabled'}>Apply policy</button></div>
     </div></section>`;
 }
@@ -1285,7 +1316,7 @@ function settingsView(s) {
     'log.maxMegabytes': [1, 1000],
     'log.keepFiles': [1, 2],
   };
-  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'browser.allowVisible', 'worktrees.pruneAtCollect', 'workers.autoCloseReview']);
+  const serviceSettingBooleans = new Set(['browsers.reapOrphanDaemons', 'browsers.sweepCodeSignClones', 'watch.quietHours', 'push', 'analytics.actionsMinutes', 'factories.claudeUsageHelper', 'browser.allowVisible', 'browser.showTenantHosts', 'worktrees.pruneAtCollect', 'workers.autoCloseReview']);
   // The group names are the keys of the service settings. The page shows the plain words.
   const settingsGroupLabels = { Quota: 'Usage limit', 'Quota plan': 'Usage limit plan' };
   const serviceRows = settingsGroups.map((group) => {
@@ -1492,7 +1523,7 @@ function browserNotRespondingBlock(slug, b, allowVisible = false) {
   return `<div class="browser-warning" role="alert"><div><strong>Not responding</strong><span>${esc(b.probeReason || 'The browser failed two checks in a row.')}</span></div><button type="button" data-browser-restart="${esc(slug)}" data-browser-mode="${mode}" title="Restart the browser in ${mode} mode. Saved tabs reopen in a separate window for each tab. Restart drops query strings and fragments. It also drops path parameters. It skips login and callback pages and sign-in hosts. A busy command or a connected CDP client can prevent the restart.">Restart</button></div>`;
 }
 
-// A small bookmark list and a start-page field for each project card.
+// Bookmarks stay folded until the Owner needs one. The filter is scoped to this project.
 function browserBookmarkSection(slug, b) {
   const list = Array.isArray(b?.bookmarks) ? b.bookmarks : [];
   const editing = browserBookmarkDraft?.slug === slug ? browserBookmarkDraft.index : null;
@@ -1502,8 +1533,29 @@ function browserBookmarkSection(slug, b) {
     }
     return `<li class="browser-bookmark-row"><span class="browser-bookmark-name" title="${esc(bookmark.url)}">${esc(bookmark.name)}</span><span class="browser-bookmark-actions"><button type="button" data-browser-bookmark-open="${esc(slug)}" data-index="${index}" title="Open in the current tab">Open</button><button type="button" data-browser-bookmark-open-tab="${esc(slug)}" data-index="${index}" title="Open in a new tab">New tab</button><button type="button" data-browser-bookmark-rename="${esc(slug)}" data-index="${index}">Rename</button><button type="button" data-browser-bookmark-up="${esc(slug)}" data-index="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(bookmark.name)} up">↑</button><button type="button" data-browser-bookmark-down="${esc(slug)}" data-index="${index}" ${index === list.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(bookmark.name)} down">↓</button><button type="button" data-browser-bookmark-remove="${esc(slug)}" data-index="${index}" class="danger" aria-label="Delete ${esc(bookmark.name)}">Delete</button></span></li>`;
   }).join('');
-  return `<div class="browser-bookmarks" data-browser-bookmarks="${esc(slug)}"><h4>Bookmarks</h4>${list.length ? `<ol class="browser-bookmark-list">${rows}</ol>` : '<p class="browser-bookmark-empty">No bookmarks.</p>'}<div class="browser-bookmark-tools"><button type="button" data-browser-bookmark-add="${esc(slug)}">Add current page</button></div><form class="browser-start-page" data-browser-start-page="${esc(slug)}"><label>Start page <input type="text" name="url" value="${esc(b?.startPage ?? '')}" placeholder="https://… (blank clears)" aria-label="${esc(slug)} start page" autocomplete="off" spellcheck="false"></label><button type="submit">Save</button></form></div>`;
+  return `<details class="browser-bookmarks" data-browser-bookmarks="${esc(slug)}"><summary>Bookmarks <span class="browser-bookmark-count">${list.length}</span></summary><div class="browser-bookmark-content"><label class="browser-bookmark-filter">Filter bookmarks <input type="search" data-browser-bookmark-filter="${esc(slug)}" aria-label="Filter ${esc(slug)} bookmarks" autocomplete="off"></label>${list.length ? `<ol class="browser-bookmark-list">${rows}</ol>` : '<p class="browser-bookmark-empty">No bookmarks.</p>'}<p class="browser-bookmark-result" data-browser-bookmark-result role="status" hidden></p><div class="browser-bookmark-tools"><button type="button" data-browser-bookmark-add="${esc(slug)}">Add current page</button></div><form class="browser-start-page" data-browser-start-page="${esc(slug)}"><label>Start page <input type="text" name="url" value="${esc(b?.startPage ?? '')}" placeholder="https://… (blank clears)" aria-label="${esc(slug)} start page" autocomplete="off" spellcheck="false"></label><button type="submit">Save</button></form></div></details>`;
 }
+
+document.addEventListener('input', (event) => {
+  const input = event.target.closest?.('[data-browser-bookmark-filter]');
+  if (!input) return;
+  const section = input.closest('.browser-bookmarks');
+  if (!section) return;
+  const query = input.value.trim().toLocaleLowerCase();
+  const rows = [...section.querySelectorAll('.browser-bookmark-row')];
+  let matches = 0;
+  for (const row of rows) {
+    const editValue = row.querySelector('input')?.value || '';
+    const title = row.querySelector('[title]')?.title || '';
+    row.hidden = !!query && !`${row.textContent} ${editValue} ${title}`.toLocaleLowerCase().includes(query);
+    if (!row.hidden) matches++;
+  }
+  const result = section.querySelector('[data-browser-bookmark-result]');
+  if (result) {
+    result.textContent = query ? `${matches} of ${rows.length} bookmarks match.` : '';
+    result.hidden = !query;
+  }
+});
 
 function browserResources(s) {
   const projects = Object.values(s.control?.projects || {});
@@ -1561,7 +1613,7 @@ async function refreshBrowserNavigation(slug) {
   const tab = browserSelectedTab[slug];
   if (!tab) return;
   const params = new URLSearchParams({ project: slug, tab });
-  const response = await fetch(`/api/browser-sessions/navigation?${params}`, { cache: 'no-store' });
+  const response = await fetch(`/api/browser-sessions/navigation?${params}`, { cache: 'no-store', headers: OWNER_PAGE_HEADERS });
   const value = await response.json();
   if (!response.ok) throw new Error(value.error || 'Could not read browser history.');
   if (browserSelectedTab[slug] !== tab) return;
@@ -1584,7 +1636,7 @@ async function captureBrowserGrid(slug) {
   await Promise.all(tabs.map(async (tab) => {
     try {
       const params = new URLSearchParams({ project: slug, tab: tab.id });
-      const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store' });
+      const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store', headers: OWNER_PAGE_HEADERS });
       if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Screenshot failed.'); }
       const next = URL.createObjectURL(await response.blob());
       const previous = urls[tab.id];
@@ -1611,7 +1663,7 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
   try {
     // Agents open and close tabs, so reload the list on request and at least every 10 s.
     if (reloadTabs || !browserTabs[slug] || Date.now() - (browserTabsAt[slug] || 0) > 10000) {
-      const response = await fetch(`/api/browser-sessions/tabs?project=${encodeURIComponent(slug)}`);
+      const response = await fetch(`/api/browser-sessions/tabs?project=${encodeURIComponent(slug)}`, { headers: OWNER_PAGE_HEADERS });
       const tabs = await response.json();
       if (!response.ok) throw new Error(tabs.error || 'Could not list browser pages.');
       const changed = JSON.stringify(tabs) !== JSON.stringify(browserTabs[slug]);
@@ -1627,7 +1679,7 @@ async function refreshBrowserPreview(slug, reloadTabs = false) {
     if (gridMode(slug)) { await captureBrowserGrid(slug); return; }
     if (!browserSelectedTab[slug]) throw new Error('No inspectable page is open in this browser.');
     const params = new URLSearchParams({ project: slug, tab: browserSelectedTab[slug] });
-    const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store' });
+    const response = await fetch(`/api/browser-sessions/screenshot?${params}`, { cache: 'no-store', headers: OWNER_PAGE_HEADERS });
     if (!response.ok) { const result = await response.json(); throw new Error(result.error || 'Screenshot failed.'); }
     const next = URL.createObjectURL(await response.blob());
     const previous = browserPreviewUrls[slug];
@@ -6626,6 +6678,10 @@ function project(s, slug) {
 // Short notes for each page. They say what the page shows and how to use it; the CLI and setup are in docs/.
 
 const HELP = {
+  browsers: ['Browsers', `
+    <h3>Bookmarks</h3><p>Each project keeps its bookmarks in a closed dropdown. Select <b>Bookmarks N</b> to open it, then use <b>Filter bookmarks</b> to find a name or address. Select the summary again to close the list. <b>Open</b> loads a bookmark in the current tab; <b>New tab</b> opens it in another tab.</p>
+    <p>Turn on <b>Show tenant hosts</b> in Settings to show full hosts in project browser URLs on this dashboard. The browser page must send a same-origin signal. A process on this machine can still forge the headers. Use this setting only on the Owner's own machine. Other browser output stays masked.</p>
+  `],
   overview: ['Overview', `
     <p>The state of all projects and shared resources at one glance.</p>
     <p>Run <code>herdr-boss setup</code> for the first-hour steps. Run <code>herdr-boss setup --resume</code> after a step waits for you. If another run changes your progress, resume setup. After a crash, resume setup to continue your saved progress.</p>
@@ -6733,8 +6789,8 @@ const HELP = {
     <h3>Workspace projects</h3><p>Clear a workspace switch to include that workspace as a project. An excluded workspace stays on Agents and shows <b>Not a project</b>. It gets no project share or worker slots. Herdr Boss stores workspace labels and resolves saved Herdr IDs to labels. The Boss workspace stays excluded while a pane is labelled <code>boss</code>.</p>
     <h3>Project shares</h3><p>Drag a boundary on the bar, or focus it and use the arrow keys. Projects to the left stay fixed; the rest share the remainder. A share is advisory. The mode sets a project to auto, active, idle, or paused.</p>
     <p>The line <b>Total</b> next to the bar shows the sum of the shares. When the sum is below 100, select <b>Distribute the remaining N</b> to add the remainder to the largest share. Herdr Boss never adds it by itself. A sum above 100 blocks <b>Apply policy</b>.</p>
-    <p>A project that is in the policy but not in the project list shows <b>not in the project list</b> with its saved share. You cannot edit that share. It counts in the total, and <b>Apply policy</b> never changes it.</p>
-    <p>A project without a saved share shows the marker <b>default, not saved</b>. The default is a part of the room that the saved shares leave. Herdr Boss writes it only when you change that share or confirm the dialog. <b>Apply policy</b> asks you to confirm when it changes more than one boundary, or changes the total by more than 5 points. The dialog lists the old and new share of every project.</p>
+    <p>A project in the policy with no live orchestrator stays editable. Its row shows whether its workspace is open or closed and whether the project is registered. You can change its share, mode, and exclusions. <b>Remove from policy</b> asks for confirmation, sets the share to zero, and redistributes it among the other policy projects. <b>Apply policy</b> then uses the same share confirmations as every other project.</p>
+    <p>A project without a saved share shows the marker <b>default, not saved</b>. The default is a part of the room that the saved shares leave. Herdr Boss writes it only when you change that share or confirm the dialog. <b>Apply policy</b> asks you to confirm when it changes three or more shares, changes more than one boundary, or changes the total by more than 5 points. The dialog lists the old and new share of every project. A total other than 100 needs a second confirmation.</p>
     <p>When the policy changes on the server while you have unsaved edits, the page shows <b>The policy changed on the server. Reload the shares?</b> Select <b>Reload the shares</b> to discard your edits and load the saved shares.</p>
     <p>The <b>set share</b> is the share in your policy draft. The bar widths show it. The <b>effective share</b> is the number of worker slots the project has now, divided by the applied maximum of working agents. It changes only after you select <b>Apply policy</b>.</p>
     <p>A bar label such as <b>30% · 2</b> shows the set share and the effective slots. A narrow segment shows fewer labels; its tooltip shows all values.</p>
@@ -7977,7 +8033,10 @@ function updateShares() {
   for (const [slug, p] of Object.entries(policyDraft.projects)) {
     const row = [...document.querySelectorAll('[data-project-row]')].find((x) => x.dataset.projectRow === slug);
     if (!row) continue;
-    row.querySelector('.share-value').textContent = `${p.share}%`;
+    const shareValue = row.querySelector('.share-value');
+    if (shareValue) shareValue.textContent = `${p.share}%`;
+    const shareInput = row.querySelector('[data-policy-share]');
+    if (shareInput && document.activeElement !== shareInput) shareInput.value = Number.isFinite(p.share) ? String(p.share) : '';
     const marker = row.querySelector('[data-share-default]');
     if (marker) marker.hidden = !defaultShareSlugs().includes(slug);
   }
@@ -8269,6 +8328,15 @@ document.addEventListener('input', (e) => {
   if (e.target.dataset?.addModelInput) { e.target.removeAttribute('aria-invalid'); return; }
   if (!e.target.closest('#control-plane, #settings-plane') || !policyDraft) return;
   const el = e.target;
+  if (el.dataset.policyShare) {
+    const slug = el.dataset.policyShare;
+    if (!policyDraft.projects[slug]) return;
+    policyDraft.projects[slug].share = el.value === '' ? NaN : Number(el.value);
+    allocationMeta?.touched.add(slug);
+    updateShares();
+    markPolicyDirty();
+    return;
+  }
   if (el.dataset.policyNumber) policyDraft[el.dataset.policyNumber] = Number(el.value);
   if (el.dataset.policyText) policyDraft[el.dataset.policyText] = el.value;
   if (el.dataset.policyMachine) { policyDraft.machine ||= {}; policyDraft.machine[el.dataset.policyMachine] = el.value === '' ? null : Number(el.value); }
@@ -8746,13 +8814,13 @@ function applyBookmarkResult(slug, result) {
 }
 
 async function postBookmark(slug, body) {
-  const result = await postJson('/api/browser-sessions/bookmarks', { project: slug, ...body });
+  const result = await postJson('/api/browser-sessions/bookmarks', { project: slug, ...body }, OWNER_PAGE_HEADERS);
   applyBookmarkResult(slug, result);
   return result;
 }
 
 // Navigation and input on a tab that an agent holds need one confirmation per tab.
-async function postBrowserAction(url, body, headers = {}) {
+async function postBrowserAction(url, body, headers = OWNER_PAGE_HEADERS) {
   const key = `${body.project}:${body.tab}`;
   try { return await postJson(url, { ...body, confirmAttached: browserConfirmedTabs.has(key) }, headers); }
   catch (error) {
@@ -8795,7 +8863,7 @@ async function closeBrowserTab(slug, tabId, button = null) {
   try {
     const body = { project: slug, tabId };
     if (agent) body.force = true;
-    await postJson('/api/browser-sessions/tab-close', body);
+    await postJson('/api/browser-sessions/tab-close', body, OWNER_PAGE_HEADERS);
     if (browserSelectedTab[slug] === tabId) delete browserSelectedTab[slug];
     delete browserNavigation[slug]; delete browserAddressDraft[slug];
     previewMessage(slug, 'Closed one tab. The browser keeps running.');
@@ -9295,6 +9363,10 @@ document.addEventListener('click', async (e) => {
   for (const [action, attr] of [['plan', 'handoffPlan'], ['prepare', 'handoffPrepare'], ['output', 'handoffOutput'], ['activate', 'handoffActivate']]) {
     if (e.target.dataset[attr]) { await runHandoffAction(action, e.target.dataset[attr]); return; }
   }
+  if (e.target.closest?.('[data-remove-policy-project]')) {
+    removePolicyProject(e.target.closest('[data-remove-policy-project]').dataset.removePolicyProject);
+    return;
+  }
   if (e.target.closest?.('[data-distribute-remaining]')) { distributeRemaining(); return; }
   if (e.target.closest?.('[data-reload-shares]')) {
     policyDirty = false; policyDraft = null; allocationMeta = null; policyStale = false; saveMessage = '';
@@ -9372,13 +9444,13 @@ document.addEventListener('click', (e) => {
 addEventListener('popstate', () => { lastRender = ''; render(); if (location.pathname === '/browsers') for (const slug of browserPreviewOpen) if (!browserPreviewUrls[slug]) refreshBrowserPreview(slug, true); if (location.hash) revealHash(); });
 
 const clientResources = {
-  state: { url: '/api/state' },
+  state: { url: '/api/state', options: { headers: OWNER_PAGE_HEADERS } },
   mailboxCounts: { url: '/api/mailbox?folder=needs-you', intervalMs: 30000 },
   chats: { url: '/api/chats', intervalMs: 30000 },
   roamgate: { url: '/api/roamgate', intervalMs: 30000 },
   models: { url: '/api/models', intervalMs: 30000 },
   usage: { url: '/api/usage', intervalMs: 30000 },
-  browserSessions: { url: '/api/browser-sessions', intervalMs: 30000 },
+  browserSessions: { url: '/api/browser-sessions', intervalMs: 30000, options: { headers: OWNER_PAGE_HEADERS } },
   handoffs: { url: '/api/handoffs', intervalMs: 30000 },
   denials: { url: '/api/denials', intervalMs: 30000 },
   prices: { url: '/api/settings/prices', intervalMs: 30000 },

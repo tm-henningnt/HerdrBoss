@@ -61,3 +61,31 @@ test('the Projects page card classes are not restyled by a page sheet', () => {
     assert.deepEqual(bad, [], `${sheet} must not start a selector with a class of the main sheet`);
   }
 });
+
+test('wide pages use the viewport width and responsive minimum-width grids', () => {
+  const css = read('style.css');
+  const rule = (selector) => css.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`))?.[1] || '';
+  const grid = (selector) => {
+    const declaration = rule(selector);
+    assert.match(declaration, /grid-template-columns:\s*repeat\(auto-(?:fill|fit),\s*minmax\(/, `${selector} must fill available width with responsive cards`);
+    assert.match(declaration, /min\(100%,\s*\d+px\)/, `${selector} must keep one card on a phone`);
+  };
+
+  assert.doesNotMatch(rule('main'), /max-width\s*:/, 'main must use the viewport width');
+  grid('\\.control-grid > div');
+  grid('\\.settings-grid');
+  grid('\\.board-cols');
+  grid('\\.ws-grid');
+  grid('\\.project-selector-grid');
+});
+
+test('browser bookmark summary keeps a 44px target in the browser layout', () => {
+  const css = read('style.css');
+  const rule = (selector) => css.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`))?.[1] || '';
+  const layout = rule('\\.browser-bookmarks');
+  const summary = rule('\\.browser-bookmarks > summary');
+  assert.match(layout, /display:\s*grid/);
+  assert.match(summary, /display:\s*flex/);
+  assert.match(summary, /align-items:\s*center/);
+  assert.match(summary, /min-height:\s*44px/);
+});
