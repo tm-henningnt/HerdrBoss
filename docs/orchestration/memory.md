@@ -950,3 +950,8 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Evidence of the rendered result, isolated preview at a true 393 px viewport (`browser viewport --tab ID 393x852 --mobile`; `browser size` plus restart gave 500 px): one logo control and one menu on /fleet, /board and /mailbox, light and dark; share bar fills to 100 percent at 1920 and 2560 px; opencode IDs wrap at hyphens; usage mode select shows its text.
 - Open minor findings, queued as GUI-FIX3: the lead goal and Boss rules single-line inputs cut text at 393 px (use a textarea); Settings preferred-model selects truncate at 393 px and one model ID wraps mid-token; the bottom card row of Settings fills only about 60 percent of the width at 1920 and 2560 px; the usage-limit source text wraps in a narrow column at 2560 px. The missing succession select label did not reproduce.
 - Method: use `browser viewport` for a per-tab phone size. Do not use `browser size` plus restart for a phone check.
+
+## Release checkpoint r48
+
+- Reviewed branches: `gui3` 032236d and `gui4` (GUI-FIX1 round 2): the Allocation lead goal and Boss rules are growing textareas; the Settings card row spans the full width at 1600 px and above; the usage source text has its own row; the agent app selects fill the row with an ellipsis and a visible arrow. Evidence: 1,196 focused tests passed; isolated preview at a 393 px viewport and at 1920 and 2560 px; a second rendered check found the fixed 79 px textarea and the clipped select, and round 2 fixed both.
+- State: integrated only. Suite, ff-only, restart and push are pending.
