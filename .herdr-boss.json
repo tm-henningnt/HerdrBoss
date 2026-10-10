@@ -1,4 +1,5 @@
 {
+  "slug": "herdrboss",
   "baseBranch": "main",
   "evidenceTiers": [
     "unit",
