@@ -1028,3 +1028,10 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Rule: when two branches change the kit, the merged tree needs one `kit/CHANGES.md` entry for its own revision. Run `test/kit-*.test.js` in the integration tree.
 - Evidence: worker scoped tests passed for each branch; browser checks at 1280 and 393 px for regfix. Not checked in a browser: MB-FORM, SL1 and the alert Dismiss button.
 - State: integrated only. Suite, ff-only, restart and push are pending.
+
+## Release checkpoint r55 (MB-MENU2, alone)
+
+- Reviewed branch: `mm2` as `mm2c` 02cd187. Cause 1 (reproduced in the project browser with CDP touch emulation at 393x852): the compatibility mousedown of a tap moves focus from a menu link to the trigger, `focusout` closes the menu, and the click then reopens it, so a second tap never closes it. Fix: `focusout` ignores a focus move to a nav trigger. Cause 2 (code review and simulation only): iOS sends no click for a tap on a plain area, so a `pointerup` handler closes the open menu. The menu code moved to `public/nav-menu.js`.
+- Evidence: 143 real taps over 13 pages, all correct; live update tick, back button, swipe and Help checked; 15 new touch tests (3 fail without the fixes); 126 focused tests passed. Screenshots at 393 px dark and light. Not verified: WebKit (not installed) and a physical iPhone. The Owner symptom may differ from cause 1; if the phone still fails, ask for the page and the tapped entry.
+- Rule: a browser task needs a Claude, OpenCode or Pi worker, because Codex cannot launch Chromium.
+- State: integrated only. Suite, ff-only, restart and push are pending.
