@@ -971,4 +971,5 @@ Owner queue (credentials, billing, and Owner-applied settings):
 - Review: a Haiku diff review found two Major (a project name in the public docs; no warning that the class has no load guard) and four Minor findings; all fixed. Focused tests 529 of 529 (13 lock test files plus the changed files).
 - Risk accepted: a project that marks a CPU-heavy command as network-bound runs up to the cap without the load guard. The docs and the setting help warn about it.
 - First declared command: the project that needs it declares it in its own config; the Boss relays.
+- The first r50 suite found a defect that the worker's scoped tests did not run: after the queue field change, `Engine.tick` still read the removed `queue` variable (`ReferenceError`, `src/engine.js` machine sample call). Fixed in the integration tree to read the full-suite queue; rule for lock briefs: run the engine tests (`test/engine-*.test.js`, `test/browser-*.test.js`) as well as the lock tests.
 - State: integrated only. Suite, ff-only, restart and push are pending.

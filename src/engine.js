@@ -1442,7 +1442,7 @@ export class Engine extends EventEmitter {
           }
           snap.machine.limits.swapHoursLine = this.memory.swapHours.line;
         }
-        if (this.act) this.recordMachineSample(snap, queue, now);
+        if (this.act) this.recordMachineSample(snap, queues.get(FULL_SUITE_LOCK) ?? [], now);
       }
       if (this.act) this.recordMemorySample(now);
       // The unmetered lane lists the permitted free models that can start. It never affects least-over selection.
