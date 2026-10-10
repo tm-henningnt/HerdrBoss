@@ -1019,7 +1019,19 @@ Run `herdr-boss todo migrate` once from the Boss pane to import open Mailbox ask
 
 `POST /api/todo/post` accepts `text`, `caller`, and optional `priority` and `blocks`. The caller holds only `HERDR_ENV`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`. The service verifies them. `POST /api/todo/cancel` accepts `key`, `caller`, and optional `note`. `POST /api/todo/migrate` accepts the Boss `caller`. `POST /api/todo/action` accepts an item `id` and `action`, with `reason`, `until`, `decision`, or `answer` when required. The optional `updatedAt` refuses an answer to a changed item. `POST /api/messages` accepts a To do item id in `replyTo`. It saves one answer on a repeat request with the same `clientId`. `GET /api/mailbox?folder=todo` returns the open list, inactive items, and `mailbox.todoOpen`. The dashboard access and same-origin checks apply. A read-only preview refuses each POST route.
 
-Slice (c) adds the digests and kit rules. The [design note](specs/owner-todo.md) records the split.
+Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. When an orchestrator waits for the Owner, it names the To do item key. A worker sends its Owner ask to the orchestrator for posting. `herdr-boss check agents` warns when the project's live orchestrator says it waits for the Owner and the project has no open To do item. It reads at most 30 recent pane lines. It returns counts and guidance only. It shows no pane text or read error text. The live check needs the project's published workspace.
+
+Set `ownerTodo` in `policy.json` or in Settings, To do digest:
+
+```json
+{ "ownerTodo": { "digestTime": "08:00", "timeZone": "local", "notify": false } }
+```
+
+The default `digestTime` is `null` (off). An empty Settings time saves `null`. A time must use 24-hour `HH:MM` format. `timeZone` defaults to `local`, the service time zone. A valid time zone name such as `Europe/Oslo` follows daylight saving changes. `notify` is a boolean and defaults to false. Select Apply policy after an edit.
+
+The first acting tick at or after the time posts one Mailbox item of kind `digest`. It lists the open count and at most five project names and titles, in To do order. A new date replaces the previous digest and makes it unread. It keeps the same id. A repeated tick or restart adds no second digest for that date. A late tick posts the current date only. A read-only preview posts nothing. Digests stay out of Chat.
+
+Each Monday in the chosen zone adds a weekly summary of the five oldest open items. It gives the project and title only. With `notify: true`, the existing desktop alert path sends the open count and a Mailbox hint. Quiet hours hold the notice. They do not delay the digest. Desktop delivery is best effort. See the [design note](specs/owner-todo.md).
 
 ## Agent messages
 
@@ -1435,6 +1447,19 @@ Do not edit this block. It comes from `public/setting-help.js`.
 | Agent message text retention days | `agentMessages.retentionDays` | How long Herdr Boss keeps agent-message text. An hourly sweep removes older text. | 14 | Days | 1 to 90 | A higher value keeps agent-message text longer. | A lower value removes older text at the next sweep. Metadata rows use a separate retention setting. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent message metadata retention days | `agentMessages.metaRetentionDays` | How long Herdr Boss keeps agent-message metadata after it removes the message text. A row has no message text. | 180 | Days | 7 to 730 | A higher value keeps message metadata longer. | A lower value removes older metadata at the next sweep. | Select Apply policy. The change takes effect at the next engine tick. |
 | Agent prompt timeout | `agentMessages.promptTimeoutSeconds` | The time limit for one Herdr agent prompt process. On a timeout, tell reads the pane input. If it equals the sent text, tell retries submit once. It clears only its own unsubmitted input while the agent is idle. Then it reads the pane again. | 25 | Seconds | 1 to 120 | A higher value gives Herdr more time to send a prompt. A blocked prompt delays the caller longer. | A lower value ends a blocked prompt sooner. A slow delivery can time out. | Select Apply policy. The change takes effect at the next engine tick. |
+
+#### To do digest
+
+- Controls: The daily digest time, its time zone, and its desktop notification.
+- Effect: One Mailbox digest of open To do items. Each Monday includes the five oldest open items.
+- Safe to change: The default is off. A new digest replaces the previous digest. The service posts at most once per date in the chosen time zone.
+- Restart: No restart. Select Apply policy.
+
+| Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Daily digest time | `ownerTodo.digestTime` | The time for a short list of open To do items in the Mailbox. Leave it empty to turn the digest off. The first tick at or after this time posts the digest. Monday includes the five oldest open items by age. | Off | Time | 00:00 to 23:59 in HH:MM format, or empty | A later time posts the digest later in the day. | An earlier time posts the digest earlier in the day. | Select Apply policy. The change takes effect at the next engine tick. |
+| Digest time zone | `ownerTodo.timeZone` | The time zone for the daily digest date and time. Use local for the service time zone. Use a time zone name such as Europe/Oslo for a fixed zone. The service follows daylight saving changes. | local | Time zone | local or a valid time zone name | A zone ahead of UTC reaches the chosen time earlier. | A zone behind UTC reaches the chosen time later. | Select Apply policy. The change takes effect at the next engine tick. |
+| Desktop digest notification | `ownerTodo.notify` | Send a desktop notice when the service saves a daily digest. The notice gives the open count. Quiet hours hold it until they end. The Mailbox digest does not wait for the notice. | Off | Switch | On or off | Turning it on sends a desktop notice with each new digest. | Turning it off keeps delivery in the Mailbox. | Select Apply policy. The change takes effect at the next engine tick. |
 
 #### Watch
 

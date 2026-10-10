@@ -5,6 +5,10 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkAgentsExclude, globMatches, KIT_ROOT, loadModels } from './config.js';
 import { mergeModels } from '../control.js';
+import { DATA_DIR } from '../config.js';
+import { openMessageStore } from '../message-store.js';
+import { todoState } from '../owner-todo-model.js';
+import { paneText } from '../goal.js';
 
 export const STUB_TEMPLATE = path.join(KIT_ROOT, 'kit', 'templates', 'agents-stub.md');
 export const KIT_TEMPLATE = path.join(KIT_ROOT, 'kit', 'templates', 'project-kit.md');
@@ -502,7 +506,7 @@ export function checkOrchestrationText(text, { file, models = [] } = {}) {
 // The kit file is docs/orchestration/herdr-boss.md in the directory of the AGENTS.md file.
 // The check also scans the orchestration files of that directory. Their findings are warnings with a file name.
 // The scan skips the files that skippedFile names, and the summary gives their count, not their names.
-export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
+export function checkAgentsFile(file, { rulesFile, relative = file, herdr = null, dir = DATA_DIR, now = Date.now() } = {}) {
   const root = path.dirname(file);
   const kitPath = path.join(root, KIT_FILE);
   const kitText = fs.existsSync(kitPath) ? fs.readFileSync(kitPath, 'utf8') : null;
@@ -522,6 +526,7 @@ export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
     if (skippedFile(other, text, exclude)) { skipped += 1; continue; }
     findings.push(...checkOrchestrationText(text, { file: other, models }));
   }
+  findings.push(...ownerWaitFindings(root, { herdr, dir, now }));
   const errors = findings.filter((finding) => finding.level === 'error').length;
   const warnings = findings.length - errors;
   return {
@@ -533,6 +538,43 @@ export function checkAgentsFile(file, { rulesFile, relative = file } = {}) {
     lines: findings.map((finding) => `${finding.level}${finding.file ? ` ${finding.file}` : ''} line ${finding.line}: ${finding.message}`),
     summary: `${relative}: ${plural(errors, 'error')}, ${plural(warnings, 'warning')}${skipped ? `; ${plural(skipped, 'file')} skipped` : ''}`,
   };
+}
+
+// Inspect only this project's live orchestrator. Return counts, never screen text or a read error.
+function ownerWaitFindings(root, { herdr, dir, now }) {
+  if (!herdr) return [];
+  let project;
+  try { project = JSON.parse(fs.readFileSync(path.join(root, '.herdr-boss.json'), 'utf8')).slug; } catch { return []; }
+  if (typeof project !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(project)) return [];
+  let workspace;
+  try { workspace = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).control?.projects?.[project]?.workspace; } catch { return []; }
+  if (!workspace) return [];
+  const warning = (message) => [{ level: 'warn', line: 1, message }];
+  let panes;
+  try {
+    const result = herdr(['pane', 'list']);
+    panes = Array.isArray(result) ? result : result?.panes;
+    if (!Array.isArray(panes)) throw new Error('Unavailable');
+  } catch { return warning('Owner wait check unavailable: pane list could not be read.'); }
+  let waiting = 0;
+  let failed = 0;
+  for (const pane of panes.filter((pane) => (pane.workspace_id ?? pane.workspaceId ?? pane.workspace) === workspace
+    && pane.label === 'orch' && (pane.agent ?? pane.agent_kind))) {
+    const id = pane.pane_id ?? pane.paneId ?? pane.id;
+    if (!id) continue;
+    try {
+      const text = paneText(herdr(['pane', 'read', id, '--source', 'recent-unwrapped', '--lines', '30'], { timeout: 5000 }));
+      const wait = /\b(?:waiting|awaiting|waits|blocked)\s+(?:(?:for|on|by)\s+)?(?:the\s+)?Owner\b/i;
+      if (text.split('\n').some((line) => wait.test(line) && !/\b(?:not|no longer|never|do not|don't)\s+(?:waiting|awaiting|waits|blocked)\b/i.test(line))) waiting += 1;
+    } catch { failed += 1; }
+  }
+  const findings = failed ? warning(`Owner wait check unavailable: ${failed} pane read${failed === 1 ? '' : 's'} failed.`) : [];
+  if (!waiting) return findings;
+  let open;
+  try { open = openMessageStore({ dir }).all().filter((item) => item.kind === 'todo' && item.to === 'owner' && item.project === project && todoState(item, now) === 'open').length; }
+  catch { return [...findings, ...warning('Owner wait check unavailable: To do items could not be read.')]; }
+  if (!open) findings.push(...warning(`Owner wait: ${waiting} waiting pane${waiting === 1 ? '' : 's'}, 0 open To do items for this project. Post each ask with herdr-boss todo post FILE. Name the item key.`));
+  return findings;
 }
 
 // AGENTS.md with the current stub. It replaces the text between the markers, or puts the stub after the first heading.

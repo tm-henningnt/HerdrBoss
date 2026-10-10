@@ -22,6 +22,7 @@ const POLICY_KEYS_WITHOUT_CONTROL = new Set([
   'machine', // the machine.* keys are checked one by one below
   'attachments', // the attachments.retentionDays key has its own explanation below
   'agentMessages', // the retention and prompt timeout controls have their own explanations below
+  'ownerTodo', // the ownerTodo.* controls have their own explanations below
   'locks', // the locks.* keys are checked one by one below
   'orchestratorLadder', // the succession list editor on Allocation
   'allowedKinds', // the Available switch of each harness: harness.available
@@ -45,6 +46,13 @@ test('every policy machine key and top-level policy setting has an explanation',
     assert.ok(SETTING_HELP[key], `policy key ${key} has no explanation. Add one, or list the key in POLICY_KEYS_WITHOUT_CONTROL with its reason.`);
   }
   for (const key of noControl) assert.ok(key in POLICY_DEFAULTS, `${key} is listed as without a control but is not a policy key`);
+});
+
+test('every To do digest setting has an explanation and an off default', () => {
+  for (const key of Object.keys(POLICY_DEFAULTS.ownerTodo)) assert.equal(SETTING_HELP[`ownerTodo.${key}`]?.group, 'owner-todo');
+  assert.equal(SETTING_HELP['ownerTodo.digestTime']?.default, 'Off');
+  assert.equal(SETTING_HELP['ownerTodo.timeZone']?.default, 'local');
+  assert.equal(SETTING_HELP['ownerTodo.notify']?.default, 'Off');
 });
 
 test('every lock lane policy key has a Locks group explanation', () => {

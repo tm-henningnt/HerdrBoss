@@ -86,6 +86,31 @@ function fixture() {
 }
 const catalog = { defaultModel: 'a', defaultEffort: 'high', allowedEfforts: ['high'], allowedModels: ['a', 'b'] };
 
+test('Settings exposes labeled To do digest controls and keeps their draft edits', async () => {
+  const app = await views();
+  app.setModels({ codex: catalog, claude: catalog });
+  const s = fixture();
+  app.setState(s);
+  const html = app.settingsView(s);
+  for (const field of ['digestTime', 'timeZone', 'notify']) {
+    assert.ok(html.includes(`data-policy-owner-todo="${field}"`), field);
+    const input = html.match(new RegExp(`<input[^>]*id="([^"]+)"[^>]*data-policy-owner-todo="${field}"[^>]*>`));
+    assert.ok(input, field);
+    assert.match(html, new RegExp(`<label[^>]*for="${input[1]}"`));
+  }
+  assert.ok(html.includes('data-setting-help="ownerTodo.digestTime"'));
+  const change = async (field, value, checked = false) => {
+    const target = { id: '', value, checked, dataset: { policyOwnerTodo: field }, closest: () => true, matches: () => false };
+    for (const handler of app.context.handlers.get('change') || []) await handler({ target });
+  };
+  await change('digestTime', '09:15');
+  await change('timeZone', 'Europe/Oslo');
+  await change('notify', '', true);
+  assert.deepEqual(JSON.parse(JSON.stringify(app.getDraft().ownerTodo)), { digestTime: '09:15', timeZone: 'Europe/Oslo', notify: true });
+  await change('digestTime', '');
+  assert.equal(app.getDraft().ownerTodo.digestTime, null);
+});
+
 test('Allocation shows closed policy projects with editable settings and a registered state', async () => {
   const app = await views();
   app.setModels({ codex: catalog, claude: catalog });

@@ -99,6 +99,8 @@ Use the task below as the complete work order:
 
 ## Work rules
 
+Post every ask to the Owner with `herdr-boss todo post FILE` from a verified Boss or orchestrator pane. Pane text is not delivery. When you wait for the Owner, name the To do item key. A worker sends its ask to the orchestrator for posting.
+
 Use subagents for reads, surveys, and review. Keep the main thread for decisions. Use a cheap model for a subagent that only reads. When the brief lists several issues, finish each issue with its own acceptance check and its own evidence in the report.
 
 Workers never run impeccable ignores or edit .impeccable/config.json. A hook finding does not authorize an ignore command or a config edit. Report a false positive in the worker report; the orchestrator decides.

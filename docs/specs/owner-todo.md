@@ -24,7 +24,25 @@ The key combines the verified project with the title. Normalize case and spaces 
 
 Slice (a) builds validation, direct posting, storage, count, sorting, the To do view and Owner actions. `todoOwnerActionRecorded` is the notice seam. It sends no notice in this slice. The dashboard uses the existing access and preview guards.
 
-Slice (b) builds notice delivery to the poster, poster cancellation, replies with `say --reply-to`, and migration of existing asks. These paths are implemented. Slice (c) builds the daily digest, weekly summary, kit rules and agent checks. Browser checks at 1280 and 393 px, in dark and light themes, remain an orchestrator gate.
+Slice (b) builds notice delivery to the poster, poster cancellation, replies with `say --reply-to`, and migration of existing asks. These paths are implemented. Slice (c) adds the daily digest, weekly summary, kit rules and agent checks. Browser checks at 1280 and 393 px, in dark and light themes, remain an orchestrator gate.
+
+## Digests
+
+Set `ownerTodo` in `policy.json` or in Settings, To do digest. The defaults are `digestTime: null`, `timeZone: "local"` and `notify: false`. An empty time in Settings saves `null` and turns the digest off. A time uses 24-hour `HH:MM` format. The time zone is `local` or a valid time zone name, such as `Europe/Oslo`. Local means the service time zone. It can differ from the browser time zone. Select Apply policy to save.
+
+The first acting service tick at or after the chosen time posts one Mailbox item of kind `digest`. A late tick posts the current date only. It does not post missed dates. A preview posts nothing. The digest gives the open count and at most five items in the To do list order. It includes each project and title. It excludes item bodies, steps and blocked work.
+
+Keep one Owner To do digest in the message store. Replace its content on the next date. Keep its id. Reset its read and closed state. Save the digest date in the same store mutation. A repeated tick, service restart or schedule edit on that date adds no second digest. Keep the digest out of Chat.
+
+Each Monday digest adds a weekly summary. Use Monday in the chosen time zone. List at most five open items by their original age, oldest first. Priority does not change this order. Give the project and title only. Closed, blocked and future snoozed items are not open. An expired snooze is open.
+
+When `notify` is on, use the existing desktop alert path. Give the open count and a Mailbox hint. Quiet hours hold the notice until they end. The digest does not wait for the notice. Desktop delivery is best effort.
+
+## Owner waits
+
+Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. An orchestrator that waits for the Owner names the To do item key. A worker sends an Owner ask to its orchestrator for posting.
+
+`herdr-boss check agents` also checks the current project's live orchestrator pane. Use the project's published workspace to select the pane. Read at most 30 recent unwrapped lines. Warn when the pane says it waits for the Owner and the project has no open To do item. An open item from another project does not remove the warning. Return counts and guidance only. Never return pane text or pane-read error text. Warn when a pane read or To do read fails. If the project has no published workspace, the live wait check does not run.
 
 ## Action notices
 

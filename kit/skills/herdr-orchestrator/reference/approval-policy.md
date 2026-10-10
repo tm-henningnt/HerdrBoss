@@ -10,9 +10,9 @@ A subagent read or survey inside approved work is allowed. Get the Owner's yes b
 
 ## Proposal flow
 
-Make one proposal file and one Mailbox decision card for each proposal. The card states what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
+Make one proposal file and one To do decide item for each proposal. The item states what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
 
-Only the Boss runs `mail post`; orchestrators send the proposal file to the Boss. Write the file with these headings and fields:
+Send the proposal file to the Boss for posting. Write the file with these headings and fields:
 
 ```md
 ## What
@@ -41,4 +41,4 @@ Send the Boss the absolute file path and card type `decide`. For a file named `p
 herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."
 ```
 
-The Boss posts the file with `herdr-boss mail post --to owner --action decide FILE` as the Owner's decision card.
+The Boss writes a To do decide file with Title, Why, Steps, Expected result, How to answer, What it blocks, and Type sections. Put the proposal file in Steps. Set Type to `decide`. Post it with `herdr-boss todo post FILE`. Name the returned item key when you wait for the Owner. Pane text is not delivery.

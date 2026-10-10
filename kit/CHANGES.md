@@ -326,3 +326,8 @@ Summary: The demo app helper reads the sheet state per sheet, refuses when the s
 ## 7b9d7994e55b
 Impact: useful
 Summary: Add the herdr-boss redact filter. The worker brief template and the orchestrator skill require filtered, counts-only searches, no broad searches of sibling repositories, and output piped through herdr-boss redact.
+
+## 62b93ebb686c
+
+Impact: required
+Summary: Post every Owner ask with herdr-boss todo post FILE. Pane text is not delivery. Name the To do item key when waiting for the Owner. Check agents warns about an Owner wait without an open project item and returns counts only.

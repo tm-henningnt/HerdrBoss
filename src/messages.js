@@ -125,7 +125,7 @@ const cutCodePoints = (text, max) => {
 
 // The title of a mailbox item: the report title, or the first line of the text without Markdown marks. It holds no control character.
 export function mailboxTitle(item) {
-  const source = (item?.kind === 'report' || item?.kind === 'review') && item.title ? String(item.title) : String(item?.text ?? '').split(LINE_BREAKS).find((part) => part.trim()) ?? '';
+  const source = ['report', 'review', 'digest'].includes(item?.kind) && item.title ? String(item.title) : String(item?.text ?? '').split(LINE_BREAKS).find((part) => part.trim()) ?? '';
   const plain = source.replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[*_`]+/g, '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim();
   return cutCodePoints(plain, TITLE_MAX).text.trim();
 }
@@ -150,7 +150,7 @@ export function ownerPromptText(record, question = null) {
 // ---------- Owner mailbox ----------
 
 // Every agent reply and Boss report to the Owner is a mailbox item. An item without a known action is information.
-export const isMailboxItem = (record) => !!record && record.to === 'owner' && (record.kind === 'reply' || record.kind === 'report' || record.kind === 'review');
+export const isMailboxItem = (record) => !!record && record.to === 'owner' && ['reply', 'report', 'review', 'digest'].includes(record.kind);
 export const mailboxAction = (record) => (ACTIONS.includes(record?.action) ? record.action : 'read');
 const needsOwnerAction = (record) => NEEDS_YOU_ACTIONS.has(mailboxAction(record));
 // An information item is done when it is closed, closed by the Boss, or read. Old read items have no closedAt.
@@ -160,6 +160,7 @@ const MESSAGE_CHANNEL_RULES = [
   { kind: 'agent', action: '*', channel: 'agent' },
   { kind: 'todo', action: '*', channel: 'mail' },
   { kind: 'todo-notice', action: '*', channel: 'mail' },
+  { kind: 'digest', action: '*', channel: 'mail' },
   { kind: '*', action: 'needs-you', mailboxItem: true, channel: 'both' },
   { kind: '*', action: 'reply-to', channel: 'parent' },
   { kind: 'report', action: '*', channel: 'mail' },
@@ -201,7 +202,7 @@ export function isMailAnswer(record, byId) {
 // The records that the Chat shows. A Mailbox answer stays in the Mailbox.
 export function chatRecords(records) {
   const byId = messagesById(records);
-  return records.filter((record) => !['agent', 'todo', 'todo-notice'].includes(record.kind) && !isMailAnswer(record, byId));
+  return records.filter((record) => !['agent', 'todo', 'todo-notice', 'digest'].includes(record.kind) && !isMailAnswer(record, byId));
 }
 
 // One summary for each thread from the chat records: the last record, the count, and the unread records to the Owner.
@@ -249,7 +250,7 @@ export function placeText(record) {
   if (!isMailboxItem(record)) return 'sent in chat';
   const action = mailboxAction(record);
   if (NEEDS_YOU_ACTIONS.has(action)) return `posted as a Mailbox item (${action})`;
-  if (record.kind === 'report' || record.kind === 'review') return 'posted as a Mailbox item (read)';
+  if (['report', 'review', 'digest'].includes(record.kind)) return 'posted as a Mailbox item (read)';
   return 'sent in chat';
 }
 

@@ -84,7 +84,7 @@ These are the shared operating rules for the orchestrator of this project.
 - Use `herdr-boss gh issue create|comment|edit ... --body-file FILE` for issues. Use `herdr-boss gh label create|list|edit|sync` for labels, for example `herdr-boss gh label sync --preset triage`, and `herdr-boss gh milestone create|list` for milestones. These commands refuse a delete and a secret in a value. Do not use raw `gh` for them.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
-- Each `herdr-boss say` reply is an item in the Owner mailbox. Set `--action decide`, `--action approve`, or `--action answer` only when the Owner must act. Everything else is information; omit `--action`.
+- Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. When you wait for the Owner, name the To do item key. Use `herdr-boss say` for information and replies.
 - Send a picture with `herdr-boss say --image FILE "TEXT"`; the Boss's `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.
@@ -102,8 +102,8 @@ These are the shared operating rules for the orchestrator of this project.
 - Approved work is a backlog task, an Owner goal, a fix for a finding of approved work, or a defect fix.
 - A subagent read or survey inside approved work is allowed. Get the Owner's yes before a survey, review, or audit that is itself new work outside these approved categories.
 - Get the Owner's yes before a refactor, a new feature, a new test program, or a release outside an Owner request.
-- Make one Mailbox decision card for each proposal. State what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
-- The Boss alone runs `mail post` for proposals. Write a proposal file with these headings and fields:
+- Make one To do decide item for each proposal. State what, why, cost, and recommendation. The Boss's yes does not replace the Owner's yes.
+- Send a proposal file to the Boss for posting. Write the proposal file with these headings and fields:
 
   ```md
   ## What
@@ -125,7 +125,7 @@ These are the shared operating rules for the orchestrator of this project.
   ```
 
 - Run `herdr-boss proposal check FILE`. Fix every reported error.
-- Send the Boss the absolute file path and card type `decide`: `herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."` The Boss posts it with `herdr-boss mail post --to owner --action decide FILE`.
+- Send the Boss the absolute file path and card type `decide`: `herdr-boss tell boss "Proposal file: $PWD/proposal.md; card type: decide."` The Boss writes a To do decide file with all To do headings and the proposal file in Steps. The Boss posts it with `herdr-boss todo post FILE`. Name the returned item key when you wait.
 
 ## CI minutes
 
