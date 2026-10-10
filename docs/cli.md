@@ -756,7 +756,7 @@ Each `project register` subcommand runs a caller check before it reads an option
 
 Every subcommand that writes the register accepts `--dry-run`. A dry run prints the same result lines as the real run. It writes no register file and no audit line. A refused command prints a reason and writes nothing. A refusal names the class of a value that matches the secret scan, never the value itself. A remote must be `owner/name` or a URL without credentials, a query string, or a fragment. An SSH remote may have a user name without a password.
 
-The **Project register** settings control the open project cap and issue triage. The cap starts at three and does not count pinned projects. Triage starts off. When enabled, it checks the default label on each registered issue repository at the configured interval. A project can set its own label. A ready issue on a parked project creates a Mailbox proposal with **Accept** and **Deny** actions. Accept opens the project. Deny waits 24 hours before another proposal for that project. Set a project's `autoOpen` field to `on` only when the service may open it without Mailbox acceptance.
+The **Project register** settings control the open project cap, auto-park, and issue triage. The cap starts at three and does not count pinned projects. Auto-park starts at 24 hours without activity. It parks an open, unpinned project after the same checks as `project park`. A running worker, an unmerged worker branch, or a pending Mailbox item keeps the project open. Set `register.autoParkHours` to `0` to turn it off. Commits, worker completion, and Owner Mailbox answers refresh activity. Triage starts off. When enabled, it checks the default label on each registered issue repository at the configured interval. A project can set its own label. A ready issue on a parked project creates a Mailbox proposal with **Accept** and **Deny** actions. Accept opens the project. Deny waits 24 hours before another proposal for that project. Set a project's `autoOpen` field to `on` only when the service may open it without Mailbox acceptance.
 
 `project register import` reads three sources: the rows of `project-repos.json`, the project keys of `policy.json`, and the published status files in the folder `projects/`. It adds one record for each slug that the register does not hold. It keeps each record that the register already holds, so a second import adds nothing and keeps the edits of the Owner. A slug that names a Herdr workspace gets the state `open`. Every other new record gets the state `parked`. When Herdr lists no workspaces, the command prints a warning on the error stream and parks every new record.
 
@@ -764,7 +764,7 @@ The **Project register** settings control the open project cap and issue triage.
 
 `project scan DIR` walks DIR and prints one line for each Git repository. It prints `skip` for a folder name that is no project slug, `registered` for a slug that the register holds, and `propose` for a new slug with its path and its remote. The scan prints each remote without credentials, query strings, or fragments. `--depth N` sets the depth of the walk. The depth is a whole number from 0 to 10, and 2 is the default. The scan follows no symlink, skips each hidden folder, and ignores a `.git` symlink. Folder names and paths have no control characters in the output. Without `--add`, the scan changes no file and has no caller check. Add `--add` to register each new repository through `project register add`. The register command checks the caller, validates the record, takes the register lock, and writes the audit line. Add `--dry-run` with `--add` to print each record that the scan would register without writing it.
 
-A command that writes the register appends one line per written record to the file `project-audit.jsonl` in the data folder. The audit file has mode 0600. Each line holds the fields `at`, `slug`, `action`, `by`, `result`, `failedCheck`, and `dryRun`. The action is `register-add` or `register-edit`. The value of `by` is `owner-cli`, the value of `result` is `done`, `failedCheck` is `null`, and `dryRun` is false. A line holds no path, no remote, and no value of a record. A dry run appends no line.
+A command that writes the register appends one line per written record to the file `project-audit.jsonl` in the data folder. The audit file has mode 0600. Each line holds the fields `at`, `slug`, `action`, `by`, `result`, `failedCheck`, and `dryRun`. An auto-park line can also hold `reason`. A normal register write uses `register-add` or `register-edit`, `owner-cli`, `done`, a null `failedCheck`, and false for `dryRun`. A line holds no path, no remote, and no value of a record. A dry run appends no line.
 
 ## Release approval
 
@@ -778,7 +778,7 @@ The setting `releases.repos` in `config.json` lists the repositories that the co
 
 | Command | Action |
 |---|---|
-| `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. For a Qlik extension repo with `requireDemoApp`, require exactly one separate `.qvf` asset. Refuse a Qlik extension ZIP that contains a `.qvf` file. Print the approval ID. |
+| `herdr-boss release request REPO TAG [--notes FILE] [--pack PACK] [--not-latest]` | Read the draft release with `gh`, hash each asset from a fresh download, scan the notes and the assets, and post one Mailbox item of action `approve`. For a Qlik extension repo with `requireDemoApp`, require exactly one separate `.qvf` asset. Refuse an extension archive that contains a `.qvf` file. Inspect ZIP, TAR, and gzip TAR archives through two nested levels. Inflate only `.qvf` entries and archive entries. Refuse an archive-like asset or nested entry that the gate cannot inspect. Print the approval ID. |
 | `herdr-boss release add-asset REPO TAG FILE... --reason TEXT [--append-notes FILE]` | Hash and scan each file and the optional notes. Post one Mailbox item of action `approve`. The release may be a draft or published. |
 | `herdr-boss release apply-asset REPO TAG --approval ID` | Check the Owner's approval, the files, the scan, and the release body. Then upload the files and append the approved Demo app notes block. |
 | `herdr-boss release cancel REPO TAG [--reason TEXT]` | Settle an open request as superseded. Only the pane that requested it or the Boss pane can run this command. |
@@ -786,6 +786,8 @@ The setting `releases.repos` in `config.json` lists the repositories that the co
 | `herdr-boss release status [REPO]` | Print JSON with the drafts and the last published release of each listed repository, and the open requests. |
 
 The item shows the repository, the tag, the draft link, the changelog, the assets with size and SHA-256, the demo app asset with its name, size, and SHA-256, the scan result, the build commit, the answer of the review pack named with `--pack`, and the effect. The approval ID is the ID of the item. Only one request can be open for each repository and tag. A second request prints the open ID when the release data still matches. The command compares notes when the request has a notes hash. It compares the asset names, sizes, and SHA-256 values. If the data changed, the command says that the request is stale. Run `release cancel` before you request again.
+
+For a required demo app, the archive inspection has one 200 MB inflated-byte limit and one 5,000-entry limit across all assets and nested archives. It checks up to two nested archive levels. It refuses `.tar.xz`, `.tar.bz2`, `.tbz2`, `.gz`, `.xz`, `.rar`, `.7z`, `.zst`, and unknown archive extensions.
 
 The add-asset item shows the repository, tag, reason, each new file with its size and SHA-256, and the scan result. When you give `--append-notes`, the item shows the Demo app block. Only one release approval can be open for a repository and tag. A repeated identical add-asset request prints the open ID. Cancel an open request before you change its files, reason, notes, or target release.
 
@@ -798,7 +800,7 @@ The request reads the notes from `--notes FILE` when you give it. The add-asset 
 1. The item exists for exactly this repository and tag, and it is open.
 2. The latest answer of the Owner is Approve, and it is newer than the request.
 3. The assets have the same names, sizes, and SHA-256 hashes as the card.
-4. A required Qlik demo app still matches the card, and no Qlik extension ZIP contains a `.qvf` file.
+4. A required Qlik demo app still matches the card, and no Qlik extension archive contains a `.qvf` file. A failed demo app gate reports its cause.
 5. The scan of the changelog and the assets passes.
 6. The release is still a draft.
 
@@ -1480,15 +1482,16 @@ Do not edit this block. It comes from `public/setting-help.js`.
 
 #### Project register (Advanced)
 
-- Controls: The open project cap and GitHub issue triage for the local project register.
-- Effect: The Projects page and project lifecycle. Triage reads issues with the selected label and asks before it opens a parked project.
-- Safe to change: Triage starts off. Turn it on only when the register has repository sources for projects on this factory.
+- Controls: The open project cap, auto-park idle time, and GitHub issue triage for the local project register.
+- Effect: The Projects page and project lifecycle. Auto-park closes idle projects after the park checks. Triage reads issues with the selected label and asks before it opens a parked project.
+- Safe to change: Auto-park starts at 24 hours. Set it to 0 to turn it off. Triage starts off. Turn it on only when the register has repository sources for projects on this factory.
 - Restart: No restart. Select Save in the group.
 
 | Setting | Key | What it does | Default | Unit | Range | Raise it | Lower it | Apply |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Open project cap | `register.cap` | Limits the number of open projects. The open button refuses a new project when the cap is full. | 3 | Projects | 1 to 20 | A higher cap lets more projects stay open at once. | A lower cap keeps the Projects page smaller. | Select Save in the group. The change takes effect at once. |
 | Pinned projects count toward cap | `register.capCountsPinned` | Counts pinned projects when the service checks the open project cap. | Off | Switch | On or off | Turning it on uses a cap slot for each pinned project. | Turning it off keeps pinned projects outside the cap. | Select Save in the group. The change takes effect at once. |
+| Auto-park idle projects | `register.autoParkHours` | After 24 hours without activity, parks an open, unpinned project. The setting can change the idle time. Auto-park runs the project park checks first. | 24 | Hours | 0 to 8760; 0 turns auto-park off | A higher value keeps projects open for longer. | A lower value parks idle projects sooner. A project with a running worker, an unmerged worker branch, or a pending Mailbox item stays open. | Select Save in the group. The change takes effect at once. |
 | Auto-open from triage | `register.triage.enabled` | Lets the service read ready issues for parked projects and create Mailbox proposals to open them. | Off | Switch | On or off | Turning it on lets GitHub issues create one Mailbox proposal when an open slot is free. | Turning it off stops issue reads and new proposals. Existing Mailbox items stay available. | Select Save in the group. The change takes effect at once. |
 | Triage label | `register.triage.label` | The default GitHub issue label for project sources without a label override. | ready-for-agent | GitHub label | 1 to 100 characters without control characters | Use the label that the Owner applies to ready issues. A project can set its own label. | Changing this label affects only project sources that use the default. | Select Save in the group. The change takes effect at once. |
 | Triage poll minutes | `register.triage.pollMinutes` | The time between reads of GitHub issues for parked projects. | 30 | Minutes | 5 to 1440 | A higher value reads GitHub less often. | A lower value finds ready issues sooner and makes more GitHub calls. | Select Save in the group. The change takes effect at once. |

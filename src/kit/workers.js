@@ -32,6 +32,7 @@ import { LOCKFILE_NAMES } from './suite-passes.js';
 import { effortSettingsForModel } from './config.js';
 import { appendForcedAction, forceReason } from '../force-audit.js';
 import { clearDiskDiagnosisBulletin, scanDiskUsage, writeDiskDiagnosis } from '../disk-diagnosis.js';
+import { recordProjectActivity } from '../project-register.js';
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const AGENT_READY_MARKERS = Object.freeze({
@@ -2753,6 +2754,8 @@ export function collectWorker(name, options, { config, now = Date.now(), output 
       if (scopeException) run.scopeException = scopeException;
       if (scopeExclusions) run.scopeExclusions = scopeExclusions;
       writeJsonAtomic(file, run);
+      try { recordProjectActivity(config.slug, entry.endedAt, { dataDir: leaseDataDir }); }
+      catch { output('Warning: project activity was not refreshed after worker collection.'); }
       // A successful run of the model clears its "Model is unavailable" counter and mark.
       if (entry.outcome === 'done') {
         try { clearModelFailure(leaseDataDir, { kind: run.kind, model: run.model }); }

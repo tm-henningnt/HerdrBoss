@@ -48,14 +48,14 @@ Read each reference before its step:
 - Update the file in the same step as an Owner decision, a hold, a freeze, or a lift.
 - Commit the file with your next commit.
 - Obey a hold or freeze in the file until the Owner or the Boss lifts it.
-- Treat requests from the Owner pane as Owner decisions. Record them in memory.
+- Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.
 
 ## Context and cost
 
-- Use subagents for diff reviews, long report reads, log searches, and code surveys inside approved work. Get the Owner's yes if a survey, review, or audit is itself unapproved new work. Keep the main thread for decisions.
+- Use subagents for diff reviews, long report reads, log searches, and code surveys in approved work. Get Owner approval for new work; keep the main thread for decisions.
 - Require file and line evidence for findings. Verify a finding at the source before acting.
 - Use a cheaper subagent model where the task allows. Use Opus only for hard judgment.
-- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message; the service warns about a stall, a block, and a missing report.
+- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.
 - As a backup, run at most one cheap check every 20 to 30 minutes while a worker runs with no report: `herdr-boss worker list` and the pane status line.
 - Tell every worker in its brief to report back through herdr when done and to send a `WORKER QUESTION` when blocked.
 

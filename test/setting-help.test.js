@@ -77,6 +77,8 @@ test('project register settings explain cap and Mailbox triage behavior', () => 
   assert.match(group.affects, /asks before it opens/);
   assert.equal(SETTING_HELP['register.cap']?.default, '3');
   assert.equal(SETTING_HELP['register.capCountsPinned']?.default, 'Off');
+  assert.equal(SETTING_HELP['register.autoParkHours']?.default, '24');
+  assert.match(SETTING_HELP['register.autoParkHours']?.what || '', /24 hours.*unpinned/i);
   assert.equal(SETTING_HELP['register.triage.enabled']?.default, 'Off');
   assert.equal(SETTING_HELP['register.triage.label']?.default, 'ready-for-agent');
   assert.equal(SETTING_HELP['register.triage.pollMinutes']?.default, '30');

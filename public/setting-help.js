@@ -109,9 +109,9 @@ export const SETTING_GROUPS = [
   },
   {
     id: 'project-register', title: 'Project register', advanced: true,
-    controls: 'The open project cap and GitHub issue triage for the local project register.',
-    affects: 'The Projects page and project lifecycle. Triage reads issues with the selected label and asks before it opens a parked project.',
-    safe: 'Triage starts off. Turn it on only when the register has repository sources for projects on this factory.',
+    controls: 'The open project cap, auto-park idle time, and GitHub issue triage for the local project register.',
+    affects: 'The Projects page and project lifecycle. Auto-park closes idle projects after the park checks. Triage reads issues with the selected label and asks before it opens a parked project.',
+    safe: 'Auto-park starts at 24 hours. Set it to 0 to turn it off. Triage starts off. Turn it on only when the register has repository sources for projects on this factory.',
     restart: 'No restart. Select Save in the group.',
   },
   {
@@ -1015,6 +1015,13 @@ export const SETTING_HELP = Object.fromEntries([
     default: 'Off', unit: 'Switch', range: 'On or off',
     raise: 'Turning it on uses a cap slot for each pinned project.',
     lower: 'Turning it off keeps pinned projects outside the cap.',
+    apply: 'service',
+  }),
+  S('project-register', 'register.autoParkHours', 'Auto-park idle projects', {
+    what: 'After 24 hours without activity, parks an open, unpinned project. The setting can change the idle time. Auto-park runs the project park checks first.',
+    default: '24', unit: 'Hours', range: '0 to 8760; 0 turns auto-park off',
+    raise: 'A higher value keeps projects open for longer.',
+    lower: 'A lower value parks idle projects sooner. A project with a running worker, an unmerged worker branch, or a pending Mailbox item stays open.',
     apply: 'service',
   }),
   S('project-register', 'register.triage.enabled', 'Auto-open from triage', {

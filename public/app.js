@@ -1335,6 +1335,7 @@ function settingsView(s) {
     'workers.uncollectedNoticeMinutes': [1, 1440],
     'workers.leaseGraceMinutes': [1, 1440],
     'register.cap': [1, 20],
+    'register.autoParkHours': [0, 8760],
     'register.triage.pollMinutes': [5, 1440],
     'watch.maxWorkers': [1, 40],
     'watch.maxWorkersByLane': [1, 40],
@@ -6864,6 +6865,7 @@ const HELP = {
     <p>The Projects page is the register of the projects you track. Search by title, area, client tag, or next action. Filter by area or state, and sort by last activity, priority, or title. Groups use areas. A client appears as a tag.</p>
     <p>Open projects show first. Parked and archived projects stay in closed folds. Pin up to three open projects to keep them in focus. Select rows to open, park, or archive several projects. Select a project title to see its published status and live work.</p>
     <p><b>Open</b> starts the project lead from the current project files and restores the workspace. <b>Park</b> closes the project's Herdr workspace after the safety checks. It keeps the repository, project status, Mailbox, and other state. Park is different from pause: a paused project keeps its panes. The read-only preview disables register actions.</p>
+    <p>Auto-park closes an open, unpinned project after it has had no activity for the time in <b>Settings → Project register → Auto-park idle projects</b>. It runs the same checks as <code>project park</code>. A running worker, an unmerged worker branch, or an unanswered Mailbox item keeps the project open. Set the hours to <code>0</code> to turn auto-park off.</p>
     <p>In Settings, set the open project cap and optional GitHub triage. Triage starts off. When it is on, the service reads the selected issue label for parked projects and adds one proposal to the Mailbox when a slot is free. Select <b>Accept</b> to open the project, or <b>Deny</b> to wait 24 hours before another proposal for that project. Keep a project's <code>autoOpen</code> off to require Accept.</p>
     <p>The register uses a GitHub remote as the issue source when you add a project. Use <code>--issue-repo OWNER/REPO</code> to set another source, or <code>--issue-clear</code> to remove one. Use <code>--issue-label LABEL</code> to set a label for that source; use <code>--issue-repo</code> when the project has no source yet.</p>
     <p>The page puts the sections in the order of use: <b>Now</b>, then the plan and progress, then history (all work, notes, and links), then <b>Details</b>.</p>

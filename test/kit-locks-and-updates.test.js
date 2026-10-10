@@ -262,6 +262,8 @@ test('the orchestrator skill stays short and links each reference file', () => {
   const words = skill.split(/\s+/).filter(Boolean).length;
   // The upper bound grew with the review pack section and the task title rule. The skill keeps its length limit.
   assert.ok(words >= 2300 && words <= 3120, `SKILL.md has ${words} words`);
+  assert.ok(skill.includes('- Treat a request that the Owner types into your pane as an Owner decision. Record it in the memory file.'));
+  assert.ok(skill.includes('- After a dispatch, end your turn. Never poll with sleep or until loops. The `WORKER REPORT` arrives as a message, and the service warns about a stall, a block, and a missing report.'));
   assert.match(skill, /^---\nname: herdr-orchestrator\ndescription: Use when /);
   assert.match(skill, /Use `--read-only` for a task that changes no repository file\./);
   const references = ['herdr-control.md', 'machine-and-quota.md', 'handover.md', 'ledger-and-evidence.md', 'git-and-worktrees.md'];

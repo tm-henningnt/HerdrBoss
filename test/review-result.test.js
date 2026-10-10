@@ -22,8 +22,9 @@ const {
   proposeVerdict, hasChangeText, singleLine, boundResult, resultMarkdown, promptText, plannerPromptText,
 } = await import('../src/review-result.js');
 const {
-  readMessages, postReview, postReviewResult, closeSubmittedReview, reviewResultDelivery, deliverQueued, ownerPromptText, MAX_DELIVERY_ATTEMPTS,
+  readMessages, postReview, postReviewResult, postReviewAnswer, closeSubmittedReview, reviewResultDelivery, deliverQueued, ownerPromptText, MAX_DELIVERY_ATTEMPTS,
 } = await import('../src/messages.js');
+const { readRegister, writeRegister } = await import('../src/project-register.js');
 
 const T0 = Date.parse('2026-10-01T08:00:00.000Z');
 const roots = [];
@@ -438,6 +439,27 @@ test('the result is one Owner message to the project thread, queued for the orch
   assert.deepEqual(record.review, { slug: 'shop', pack: 'checkout-redesign', version: 1 });
   assert.equal(record.text, promptText(result));
   assert.equal(ownerPromptText(record), record.text, 'the prompt is the stored text, with no hint line');
+});
+
+test('Owner review-result and review-answer messages refresh project activity', (t) => {
+  const { dir, mail } = setup(t);
+  writeRegister({ version: 1, projects: [{
+    slug: 'shop', title: 'Shop', group: '', clientTag: '', repo: '', remote: '', factory: 'factory-zero',
+    state: 'open', pinned: false, priority: 'normal', issueSource: null, autoOpen: 'off',
+    lastOpenedAt: '', lastActivityAt: new Date(T0).toISOString(), nextAction: '', notes: '', createdAt: new Date(T0).toISOString(),
+  }] }, dir);
+  acceptAll(dir);
+  const { result } = submitPack(where(dir));
+
+  const reviewResult = postReviewResult({ result, replyTo: mail.id }, { dir, now: T0 + 2000 });
+  assert.equal(reviewResult.from, 'owner');
+  assert.equal(readRegister(dir).projects[0].lastActivityAt, new Date(T0 + 2000).toISOString());
+
+  const reviewAnswer = postReviewAnswer({
+    slug: 'shop', pack: 'checkout-redesign', version: 1, item: 'cart-themes', answer: { rev: 1, decision: 'accept' }, replyTo: mail.id,
+  }, { dir, now: T0 + 3000 });
+  assert.equal(reviewAnswer.from, 'owner');
+  assert.equal(readRegister(dir).projects[0].lastActivityAt, new Date(T0 + 3000).toISOString());
 });
 
 test('a second post for the same pack version returns the first message and adds none', (t) => {

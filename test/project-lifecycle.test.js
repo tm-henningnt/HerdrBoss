@@ -303,6 +303,25 @@ test('project park checks before it releases the browser reservation or closes t
   assert.ok(!f.calls.some((args) => args[0] === 'browser' && args[1] === 'close'), 'park never closes a browser');
 });
 
+test('auto-park can suppress internal park audit rows for one combined result', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  assert.equal(await run(f, ['park', 'acme-web'], {
+    lifecycleOptions: { ...f.lifecycle, auditBy: 'auto-park', suppressAudit: true },
+  }), 0);
+  assert.deepEqual(audit(f), []);
+  assert.equal(f.result().projects[0].state, 'parked');
+});
+
+test('auto-park suppresses a lifecycle refusal audit so its caller can write one skip', async (t) => {
+  const f = fixture(t, { state: 'open' });
+  f.lifecycle.listProjectLocks = () => [{ project: 'acme-web', name: 'release', state: 'live' }];
+  assert.equal(await run(f, ['park', 'acme-web'], {
+    lifecycleOptions: { ...f.lifecycle, auditBy: 'auto-park', suppressAudit: true },
+  }), 1);
+  assert.deepEqual(audit(f), []);
+  assert.equal(f.result().projects[0].state, 'open');
+});
+
 test('project park refuses a busy check and does not release resources or change state', async (t) => {
   const f = fixture(t, { state: 'open' });
   f.lifecycle.listProjectLocks = () => [{ project: 'acme-web', name: 'release', state: 'live' }];
