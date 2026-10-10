@@ -8,9 +8,9 @@ Export one default supernova function. Return the QAE property defaults, data ta
 
 Declare the hypercube path and allowed dimension and measure counts in the data target.
 
-The Stacked Variance entry point uses this shape. The Heat Grid entry point declares one straight hypercube with two dimensions and one required measure.
+The extension repo B entry point uses this shape. The extension repo D heat grid takes one or two measures. The second measure is optional.
 
-Sources: TmStackedVariance/src/index.ts:5-16; TmHeatGrid/src/qae/data.ts:1-10; TmHeatGrid/src/index.ts:8-20.
+Sources: extension repo B, src/index.ts:5-16; extension repo D, src/qae/data.ts:3-10; extension repo D, src/index.ts:8-20.
 
 ## Define properties
 
@@ -20,7 +20,7 @@ Read the object layout before rendering. Treat absent saved values as absent unl
 
 Some host panel defaults remain absent until the author changes them. Verify those values in a live edit panel.
 
-Sources: TmStackedVariance/src/properties.ts; TmStackedVariance/src/definition.ts:98-132; TmStackedVariance/docs/guides/styling-panel-for-extensions.md:85-100.
+Sources: extension repo B, src/properties.ts; extension repo B, src/definition.ts:98-132; extension repo B, docs/guides/styling-panel-for-extensions.md:85-100.
 
 ## Read data
 
@@ -30,9 +30,9 @@ Order pages by qArea.qTop before joining their matrices. Check qError on the lay
 
 Page limits belong to each extension. Do not copy one extension's cap into another extension's contract.
 
-The Heat Grid shell reads through the host model. It creates no second Engine session or side-channel object.
+The extension repo D shell reads through the host model. It creates no second Engine session or side-channel object.
 
-Sources: TmStackedVariance/src/index.ts:8-12; TmStackedVariance/src/data.ts:121-124, 163-174; TmHeatGrid/src/index.ts:40-52.
+Sources: extension repo B, src/index.ts:8-12; extension repo B, src/data.ts:121-124, 163-174; extension repo D, src/index.ts:40-52.
 
 ## Handle selections
 
@@ -44,7 +44,7 @@ Add event listeners only when the host can remove them. Remove each listener whe
 
 The selection helper catches rejected calls and returns false. It also builds a fresh signature from cube size and dimension state counts.
 
-Sources: TmStackedVariance/src/selection.ts:73-116, 120-131; TmStackedVariance/src/component.ts:67-92.
+Sources: extension repo B, src/selection.ts:73-116, 120-131; extension repo B, src/component.ts:67-92.
 
 ## Build the property and Styling panels
 
@@ -56,7 +56,7 @@ Static panel definitions do not prove dynamic lists or host re-render behavior. 
 
 Shared authoring sections define the order for data roles, optional controls, appearance, license, and about panels.
 
-Sources: TmStackedVariance/src/definition.ts:98-132, 424-438; TmVisualizationSuite/extensions/comparison-charts/src/property-panel.ts:4-14; TmVisualizationSuite/packages/qlik-viz-core/src/authoring-sections.ts:1-33.
+Sources: extension repo B, src/definition.ts:98-132, 424-438; extension repo E, extensions/comparison-charts/src/property-panel.ts:4-14; extension repo E, packages/qlik-viz-core/src/authoring-sections.ts:1-33.
 
 ## Keep rendering alive after denied writes
 
@@ -64,12 +64,8 @@ Treat property persistence as optional. Keep the chart render path independent f
 
 The component catches rejected property writes and continues with its existing render state. Unit evidence does not replace the hosted locked-sheet check.
 
-Source: TmStackedVariance/src/component.ts:67-92; .worker/inputs/sc1-inventory.md:11-15.
+Source: extension repo B, src/component.ts:67-92.
 
 ## Tenant verification
 
-Tenant verification for this guide on 2026-10-10 is not verified. The accepted inventory says it did not run a tenant check.
-
-Historical record: the hosted-client report dated 2026-10-02 says seven panel controls changed and persisted after reload. That report does not verify this guide's current extension version.
-
-Sources: .worker/inputs/sc1-inventory.md:203-205; TmStackedVariance/docs/release/hosted-review.md:41-53.
+Tenant verification for this guide is unverified.

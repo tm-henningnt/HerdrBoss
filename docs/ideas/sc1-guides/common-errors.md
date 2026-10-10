@@ -10,13 +10,12 @@ Use the error message and the failed boundary to select a fix. Read the affected
 | Selection appears to succeed but nothing changes | The selected value may not exist or the host may reject the selection. | Read available field values first. Check the selection result and read current selections again. |
 | Reload succeeds but the data is wrong | A clean reload does not prove correct model output. | Read back every expected table and compare it with a golden file. |
 | Load script reports Invalid expression | Scalar Max or Min may be used as aggregation without GROUP BY. | Use RangeMax or RangeMin for scalar values. Add GROUP BY only when aggregation is intended. |
-| Theme creation returns 422 RL-422-001 | A theme archive was sent through extension creation. | Use qlik theme create or qlik theme patch for a theme artifact. Reported in TmProcessMining/docs/agents/TenantDefectPatterns.md with no date; not verified for this guide. |
-| App creation returns 403 Forbidden | The app create request uses the word personal as a space ID. | Use a valid space ID. Reported in TmProcessMining/docs/agents/TenantDefectPatterns.md with no date; not verified for this guide. |
+| Theme creation returns 422 RL-422-001 | A theme archive was sent through extension creation. | Use qlik theme create or qlik theme patch for a theme artifact. |
 | Live page cannot start | The port is in use, no leased port is available, or the second OAuth client is absent for that port range. | Acquire a permitted port lease. Free only a port you own. Check the project's local setup without printing credentials. |
 | Chart reports that it is too small | The object has insufficient width or height for the chart content. | Increase the object size. Recheck long labels and segment counts. |
 | Read-back matches but chart is blank | Archive byte equality does not prove that the chart renders. | Open the object in the normal Qlik client and inspect its layout and render state. |
 
-Sources: TmProcessMining/docs/agents/TenantDefectPatterns.md:9-35; TmProcessMining/docs/agents/QlikValidation.md:73-88, 94-104; TmStackedVariance/src/data.ts:163-174; TmStackedVariance/src/paging.ts:1-11, 23-55; TmStackedVariance/src/selection.ts:92-108; TmStackedVariance/docs/serve-live.md:41-49; TmStackedVariance/docs/demo-app.md:111-113; TmStackedVariance/docs/evidence.md:49-83; TmVisualizationSuite/docs/agents/QlikValidation.md:248-266; active Qlik MCP tool descriptions observed on 2026-10-10.
+Sources: extension repo C, docs/agents/TenantDefectPatterns.md:9-35; extension repo C, docs/agents/QlikValidation.md:73-88, 94-104; extension repo B, src/data.ts:163-174; extension repo B, src/paging.ts:1-11, 23-55; extension repo B, src/selection.ts:92-108; extension repo B, docs/serve-live.md:41-49; extension repo B, docs/demo-app.md:111-113; extension repo B, docs/evidence.md:49-83; extension repo E, docs/agents/QlikValidation.md:248-266.
 
 ## Fix order
 
@@ -30,8 +29,4 @@ Do not report a hosted fix after a local check alone.
 
 ## Tenant verification
 
-Tenant verification for this guide on 2026-10-10 is not verified. The accepted inventory says it did not run a tenant check.
-
-The historical reports cited above are not a current reproduction of these errors or fixes.
-
-Source: .worker/inputs/sc1-inventory.md:203-205.
+Tenant verification for this guide is unverified.

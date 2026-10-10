@@ -8,9 +8,9 @@ Use the theme API to read styles, palettes, and special colors. Validate each va
 
 Use a theme palette that supports the number of series. Keep a fallback for missing palettes.
 
-The Stacked Variance theme adapter reads host styles, fonts, and data-color palettes. The Gantt adapter also defines fallback colors and palette selection.
+The extension repo B theme adapter reads host styles, fonts, and data-color palettes. The extension repo A adapter also defines fallback colors and palette selection.
 
-Sources: TmStackedVariance/src/theme.ts:1-8, 50-67, 89-103; TmGantt/src/render/theme.ts:1-8, 22-60, 63-92.
+Sources: extension repo B, src/theme.ts:1-8, 50-67, 89-103; extension repo A, src/render/theme.ts:1-8, 22-60, 63-92.
 
 ## Add author controls
 
@@ -18,7 +18,7 @@ Place user-facing appearance controls in the Styling panel. Let the theme supply
 
 Check color, text, grid, font, axis, legend, and background values in both light and dark themes.
 
-Sources: TmStackedVariance/src/definition.ts:98-132; TmHeatGrid/docs/development.md:239-250.
+Sources: extension repo B, src/definition.ts:98-132; extension repo D, docs/development.md:239-250.
 
 ## Package a custom theme
 
@@ -29,9 +29,9 @@ The documented commands create and update a theme:
     qlik theme create --file <theme-archive>
     qlik theme patch <theme-id> --file <theme-archive>
 
-Package a test theme from its repository source. Do not copy theme values into this guide.
+Use `themes/tm-vis-suite-dark-test/theme.json` in extension repo E as the test theme source. Do not copy theme values into this guide.
 
-Source: TmVisualizationSuite/docs/agents/QlikValidation.md:248-253.
+Sources: extension repo E, docs/agents/QlikValidation.md:248-253; extension repo E, themes/tm-vis-suite-dark-test/theme.json.
 
 ## Check dark mode
 
@@ -39,14 +39,8 @@ Use the local live page to check the chart with real Engine data. Record this as
 
 Use the normal Qlik client to check client chrome, panel controls, and hosted theme behavior. Record the artifact version and test date.
 
-Historical tenant report: the hosted-client run dated 2026-10-02 reports passing light and dark tenant themes after reload. Its earlier 2026-10-01 review has checks that were not reached.
-
-Sources: TmStackedVariance/docs/release/hosted-review.md:3-20, 41-53; TmStackedVariance/docs/serve-live.md:3-22.
+Source: extension repo B, docs/serve-live.md:3-22.
 
 ## Tenant verification
 
-Tenant verification for this guide on 2026-10-10 is not verified. The accepted inventory says it did not run a tenant check.
-
-Historical theme evidence is limited to the dated report above. It does not verify the current tenant or extension version.
-
-Source: .worker/inputs/sc1-inventory.md:203-205.
+Tenant verification for this guide is unverified.
