@@ -46,7 +46,7 @@ test('the kit, orchestrator skill, user guide, and CLI describe the Owner approv
   }
   assert.ok(userGuide.includes(phrases.at(-1)));
   assert.ok(cli.includes(phrases.at(-1)));
-  assert.match(cli, /--action decide/);
+  assert.match(cli, /herdr-boss todo post FILE/);
   assert.ok(cli.includes('## Choices\n- Accept\n- Deny'), 'the proposal command must show Accept and Deny choices');
 });
 
