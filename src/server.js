@@ -64,7 +64,7 @@ import * as reviewStore from './review-store.js';
 import { attachState } from './factory-store.js';
 import { createDocsSite, IMAGE_TYPES as DOC_IMAGE_TYPES } from './docs-site.js';
 import { ATTACHMENT_ID, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, UPLOAD_LIMIT_PER_MINUTE, readAttachment, storeAttachment } from './attachments.js';
-import { postTodo, actOnTodo, cancelTodo, replyToTodo, migrateTodo } from './owner-todo.js';
+import { postTodo, listTodos, todoStatus, actOnTodo, cancelTodo, replyToTodo, migrateTodo } from './owner-todo.js';
 import { createProcessFactsApi } from './process-facts-api.js';
 import { enterProcessFactsService } from './process-facts.js';
 
@@ -1337,6 +1337,29 @@ export function serve(cfg, { readOnlyPreview = false, previewHost, liveDataDir, 
         if (body.headless != null && typeof body.headless !== 'boolean') return send(res, 400, { error: 'headless must be boolean.' });
         try { return send(res, 200, await requestBrowser(body.project, { launch: body.launch !== false, headless: body.headless ?? null })); }
         catch (e) { return send(res, 409, { error: e.message }); }
+      }
+      if (p === '/api/todo/list' && req.method === 'GET') {
+        const caller = {
+          HERDR_ENV: req.headers['x-herdr-env'],
+          HERDR_PANE_ID: req.headers['x-herdr-pane-id'],
+          HERDR_WORKSPACE_ID: req.headers['x-herdr-workspace-id'],
+        };
+        try {
+          const items = listTodos({ env: caller, herdr: todoHerdr, control: engine.state?.control, store: messageStore });
+          return send(res, 200, { ok: true, items });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
+      }
+      if (p === '/api/todo/status' && req.method === 'GET') {
+        const caller = {
+          HERDR_ENV: req.headers['x-herdr-env'],
+          HERDR_PANE_ID: req.headers['x-herdr-pane-id'],
+          HERDR_WORKSPACE_ID: req.headers['x-herdr-workspace-id'],
+        };
+        const id = url.searchParams.get('id');
+        try {
+          const item = todoStatus(id, { env: caller, herdr: todoHerdr, control: engine.state?.control, store: messageStore });
+          return send(res, 200, { ok: true, ...item });
+        } catch (error) { return send(res, error.status || 400, { error: error.message }); }
       }
       if (p === '/api/todo/post' && req.method === 'POST') {
         const body = await jsonBody(req);

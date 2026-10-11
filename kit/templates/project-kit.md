@@ -84,7 +84,17 @@ These are the shared operating rules for the orchestrator of this project.
 - Use `herdr-boss gh issue create|comment|edit ... --body-file FILE` for issues. Use `herdr-boss gh label create|list|edit|sync` for labels, for example `herdr-boss gh label sync --preset triage`, and `herdr-boss gh milestone create|list` for milestones. These commands refuse a delete and a secret in a value. Do not use raw `gh` for them.
 - Record an Owner request typed into your pane as an Owner decision in `docs/orchestration/memory.md`.
 - A prompt that starts with `[owner]` is an Owner message from the dashboard. Reply with `herdr-boss say --reply-to <id> "<answer>"`. Record an Owner decision from it in `docs/orchestration/memory.md`.
-- Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. When you wait for the Owner, name the To do item key. Use `herdr-boss say` for information and replies.
+- Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. When you wait for the Owner, name the To do item key. Use `herdr-boss say` for information and replies. Use these headings once each. Put non-empty content below each heading. Priority is optional:
+  ```md
+  ## Title
+  ## Type
+  ## Why
+  ## Steps
+  ## Expected result
+  ## How to answer
+  ## What it blocks
+  ## Priority
+  ```
 - Send a picture with `herdr-boss say --image FILE "TEXT"`; the Boss's `mail post` uploads local Markdown images. An Owner picture arrives as `Attachment: <path>`; read it with your image tool.
 - Write the full text of an Owner decision into `docs/orchestration/memory.md`, not a pointer.
 - The kit file and the Owner decisions in `memory.md` are the operating rules of this project. Report a conflict with them to the Boss. Do not work around them.

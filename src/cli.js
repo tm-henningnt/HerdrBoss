@@ -284,7 +284,7 @@ const USAGE = `herdr-boss <command>
   messages [THREAD]     Print the message records of one thread, or of all threads, as JSON.
   messages relay ID... --by boss  Mark queued Owner messages as relayed by the Boss.
   mail post --to owner [--title TEXT] [--action read|decide|approve|answer] FILE  Post a Markdown report for the Owner from the boss pane.
-  todo post FILE [--priority urgent|high|normal|low] [--blocks TEXT]  Post an Owner action for the verified caller's project.
+  todo list | status ID | post FILE | cancel KEY | migrate  Read or manage To do items for the verified caller's project.
   mail close ID... --note TEXT  Close open Owner mailbox items as answered through the Boss.
   tell TARGET TEXT [--file FILE] [--kind nudge|reminder|reply] [--reply-to ID]
                         Store an agent message, then send it to a pane, agent, or project's orchestrator.
@@ -428,8 +428,37 @@ async function messageCommand(cmd, args) {
   console.log(`Report ${record.id} ${placeText(record)}.`);
 }
 
+const TODO_USAGE = `Usage: herdr-boss todo
+  herdr-boss todo list
+  herdr-boss todo status ID
+  herdr-boss todo post FILE [--priority urgent|high|normal|low] [--blocks TEXT]
+  herdr-boss todo cancel KEY [--note TEXT]
+  herdr-boss todo migrate`;
+const TODO_FORMAT = ['Title', 'Type', 'Why', 'Steps', 'Expected result', 'How to answer', 'What it blocks', 'Priority']
+  .map((heading) => `## ${heading}`).join('\n');
+const TODO_HELP = `${TODO_USAGE}\n\nFormat: use a Markdown file. Put non-empty content below each heading. Priority is optional.\n\n${TODO_FORMAT}`;
+
 async function todoCommand(args) {
+  if ((args.length === 1 && args[0] === '--help') || (args.length === 2 && args[0] === 'post' && args[1] === '--help')) {
+    console.log(TODO_HELP);
+    return;
+  }
   const caller = Object.fromEntries(['HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID'].map((key) => [key, process.env[key]]));
+  if (args[0] === 'list') {
+    if (args.length !== 1) throw new Error('Usage: todo list');
+    const { items } = await todoRequest('list', { caller }, { method: 'GET' });
+    if (!items.length) { console.log('No open To do items.'); return; }
+    console.log('Key\tType\tTitle\tState');
+    for (const item of items) console.log([item.key, item.type, item.title, item.state].join('\t'));
+    return;
+  }
+  if (args[0] === 'status') {
+    if (args.length !== 2 || args[1].startsWith('--')) throw new Error('Usage: todo status ID');
+    const result = await todoRequest('status', { id: args[1], caller }, { method: 'GET' });
+    console.log(`State: ${result.state}`);
+    if (result.answer) console.log(`Answer: ${result.answer}`);
+    return;
+  }
   if (args[0] === 'migrate') {
     if (args.length !== 1) throw new Error('Usage: todo migrate');
     const result = await todoRequest('migrate', { caller });
@@ -460,12 +489,25 @@ async function todoCommand(args) {
   console.log(`To do item ${result.item.id} posted for ${result.item.project}. Key: ${result.item.key}`);
 }
 
-async function todoRequest(action, body) {
+async function todoRequest(action, body, { method = 'POST' } = {}) {
   let response;
   try {
-    response = await fetch(`http://127.0.0.1:${loadConfig().port}/api/todo/${action}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000),
-    });
+    const url = new URL(`http://127.0.0.1:${loadConfig().port}/api/todo/${action}`);
+    const headers = {};
+    const options = { method, headers, signal: AbortSignal.timeout(20000) };
+    if (method === 'GET') {
+      if (body.id) url.searchParams.set('id', body.id);
+      const requestHeaders = {
+        'x-herdr-env': body.caller?.HERDR_ENV,
+        'x-herdr-pane-id': body.caller?.HERDR_PANE_ID,
+        'x-herdr-workspace-id': body.caller?.HERDR_WORKSPACE_ID,
+      };
+      for (const [name, value] of Object.entries(requestHeaders)) if (value) headers[name] = value;
+    } else {
+      headers['content-type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    response = await fetch(url, options);
   } catch { throw new Error(`The Herdr Boss service could not be reached. Start it, then retry todo ${action}.`); }
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'The To do action failed.');

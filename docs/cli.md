@@ -981,6 +981,12 @@ The `say` text is 1 to 4000 characters. The report file is Markdown, up to 64 KB
 
 Run `herdr-boss todo post FILE [--priority P] [--blocks TEXT]` from the Boss pane or an orchestrator pane. The service must be running. It verifies the pane with Herdr. It uses the project of the verified workspace. The Boss posts for `boss`. A worker or plain terminal cannot post. The file cannot select a project.
 
+Run `herdr-boss todo list` from the Boss or an orchestrator pane to list open items for that project. Each row shows the key, type, title, and current state. The command does not list items from another project.
+
+Run `herdr-boss todo status ID` to read one item's state and its latest answer, if it has one. Use the item ID that `todo post` prints. The service verifies the caller pane and project for both commands.
+
+Run `herdr-boss todo --help` or `herdr-boss todo post --help` to print the command usage and the exact file headings. Read commands use GET routes and work in a read-only preview.
+
 Write a regular Markdown file of at most 64 KB. Use these headings once each. Give each section content.
 
 ```md
@@ -1021,7 +1027,7 @@ Run `herdr-boss say --reply-to ITEMID "TEXT"` from an Owner terminal outside an 
 
 Run `herdr-boss todo migrate` once from the Boss pane to import open Mailbox asks that wait for the Owner. The command prints the imported count. A repeat run prints zero for the same asks. It uses the project and title key. It does not overwrite an existing item or reopen a closed item. Each imported ask keeps its original age. The old Mailbox item closes with a reference to its To do item. The import masks private legacy content. It excludes read items, closed items, and items with an Owner reply. The Boss posts asks from memory files later with `todo post`.
 
-`POST /api/todo/post` accepts `text`, `caller`, and optional `priority` and `blocks`. The caller holds only `HERDR_ENV`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`. The service verifies them. `POST /api/todo/cancel` accepts `key`, `caller`, and optional `note`. `POST /api/todo/migrate` accepts the Boss `caller`. `POST /api/todo/action` accepts an item `id` and `action`, with `reason`, `until`, `decision`, or `answer` when required. The optional `updatedAt` refuses an answer to a changed item. `POST /api/messages` accepts a To do item id in `replyTo`. It saves one answer on a repeat request with the same `clientId`. `GET /api/mailbox?folder=todo` returns the open list, inactive items, and `mailbox.todoOpen`. The dashboard access and same-origin checks apply. A read-only preview refuses each POST route.
+`POST /api/todo/post` accepts `text`, `caller`, and optional `priority` and `blocks`. The caller holds only `HERDR_ENV`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID`. The service verifies them. `GET /api/todo/list` returns the verified caller project's open items. `GET /api/todo/status?id=ID` returns the state and latest answer for an item in that project. Both GET routes take caller values in `x-herdr-env`, `x-herdr-pane-id` and `x-herdr-workspace-id` headers. `POST /api/todo/cancel` accepts `key`, `caller`, and optional `note`. `POST /api/todo/migrate` accepts the Boss `caller`. `POST /api/todo/action` accepts an item `id` and `action`, with `reason`, `until`, `decision`, or `answer` when required. The optional `updatedAt` refuses an answer to a changed item. `POST /api/messages` accepts a To do item id in `replyTo`. It saves one answer on a repeat request with the same `clientId`. `GET /api/mailbox?folder=todo` returns the open list, inactive items, and `mailbox.todoOpen`. The dashboard access and same-origin checks apply. A read-only preview refuses each POST route.
 
 Post every ask to the Owner with `herdr-boss todo post FILE`. Pane text is not delivery. When an orchestrator waits for the Owner, it names the To do item key. A worker sends its Owner ask to the orchestrator for posting. `herdr-boss check agents` warns when the project's live orchestrator says it waits for the Owner and the project has no open To do item. It reads at most 30 recent pane lines. It returns counts and guidance only. It shows no pane text or read error text. The live check needs the project's published workspace.
 

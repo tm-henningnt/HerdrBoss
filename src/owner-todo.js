@@ -126,6 +126,24 @@ export function postTodo(text, options = {}, { env = process.env, herdr, control
   }, { now });
 }
 
+export function listTodos({ env = process.env, herdr, control, dir = DATA_DIR, store = openMessageStore({ dir }), now = Date.now() } = {}) {
+  const { project } = todoCaller('todo list', { env, herdr, control, dir });
+  return todoView(store.all(), now).todo
+    .filter((item) => item.project === project)
+    .map(({ key, type, title, state }) => ({ key, type, title, state }));
+}
+
+export function todoStatus(id, { env = process.env, herdr, control, dir = DATA_DIR, store = openMessageStore({ dir }), now = Date.now() } = {}) {
+  const { project } = todoCaller('todo status', { env, herdr, control, dir });
+  if (typeof id !== 'string' || !id.trim()) throw new TodoError('Give a To do item ID.');
+  const item = store.all().find((record) => record.kind === 'todo' && record.id === id);
+  if (!item) throw new TodoError('This To do item is no longer available.', 404);
+  if (item.project !== project) throw new TodoError('Only the verified poster project can read this To do item.', 403);
+  const action = [...(item.ownerActions || [])].reverse().find((saved) => saved.action === 'answer');
+  const answer = action?.decision ? (action.decision === 'accept' ? 'Accept' : 'Deny') : action?.answer || null;
+  return { state: todoState(item, now), answer };
+}
+
 export function cancelTodo(key, note = '', { env = process.env, herdr, control, dir = DATA_DIR, store = openMessageStore({ dir }), now = Date.now() } = {}) {
   const { project } = todoCaller('todo cancel', { env, herdr, control, dir });
   if (typeof key !== 'string' || !key || typeof note !== 'string' || note.length > 2000) throw new TodoError('Give an item key and an optional note of at most 2000 characters.');
