@@ -51,7 +51,8 @@ async function start(t, options = {}) {
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const post = (url, body, headers = {}) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-  return { base, post, paneCalls, port: server.address().port };
+  const get = (url, headers = {}) => fetch(`${base}${url}`, { headers });
+  return { base, get, post, paneCalls, port: server.address().port };
 }
 
 test('the service verifies the posting pane, scopes the project, lists To do and saves an Owner action', async (t) => {
@@ -74,10 +75,18 @@ test('the service verifies the posting pane, scopes the project, lists To do and
 });
 
 test('To do routes keep the existing access and read-only-preview guards', async (t) => {
-  const { post } = await start(t);
+  const { get, post } = await start(t);
   assert.equal((await post('/api/todo/post', { text })).status, 403);
   assert.equal((await post('/api/todo/cancel', { key: 'alpha:missing' })).status, 403);
   assert.equal((await post('/api/todo/migrate', {})).status, 403);
+  assert.equal((await get('/api/todo/list')).status, 403);
+  const callerHeaders = {
+    'x-herdr-env': caller.HERDR_ENV,
+    'x-herdr-pane-id': caller.HERDR_PANE_ID,
+    'x-herdr-workspace-id': caller.HERDR_WORKSPACE_ID,
+  };
+  assert.equal((await get('/api/todo/list', callerHeaders)).status, 200);
+  assert.equal((await get('/api/todo/status?id=missing', callerHeaders)).status, 404);
   assert.equal((await post('/api/todo/post', { text, caller }, { origin: 'https://example.test' })).status, 403);
   assert.equal((await post('/api/todo/action', { id: 'missing', action: 'done' }, { 'sec-fetch-site': 'cross-site' })).status, 403);
   const preview = await start(t, { readOnlyPreview: true });
@@ -85,6 +94,7 @@ test('To do routes keep the existing access and read-only-preview guards', async
   assert.equal((await preview.post('/api/todo/action', { id: 'missing', action: 'done' })).status, 403);
   assert.equal((await preview.post('/api/todo/cancel', { key: 'alpha:missing', caller })).status, 403);
   assert.equal((await preview.post('/api/todo/migrate', { caller })).status, 403);
+  assert.equal((await preview.get('/api/todo/list', callerHeaders)).status, 200);
 });
 
 test('the real todo post CLI reads a file and sends it to the service with caller metadata', async (t) => {
@@ -102,6 +112,38 @@ test('the real todo post CLI reads a file and sends it to the service with calle
   assert.equal(item.priority, 'urgent');
   assert.equal(item.blocks, 'CLI release.');
   await assert.rejects(run(process.execPath, [cli, 'todo', 'post', file, '--project', 'beta'], { env: process.env, timeout: 15000 }), /Unknown option/);
+});
+
+test('todo help prints usage and the exact file headings without a service', async () => {
+  const run = promisify(execFile);
+  const cli = new URL('../src/cli.js', import.meta.url).pathname;
+  const headings = ['Title', 'Type', 'Why', 'Steps', 'Expected result', 'How to answer', 'What it blocks', 'Priority'];
+  for (const args of [['--help'], ['post', '--help']]) {
+    const result = await run(process.execPath, [cli, 'todo', ...args], { env: process.env, timeout: 15000 });
+    assert.match(result.stdout, /Usage: herdr-boss todo/);
+    for (const heading of headings) assert.ok(result.stdout.includes(`## ${heading}`), `missing ${heading}`);
+  }
+});
+
+test('todo list and status use the verified project and show the saved answer', async (t) => {
+  const { post, port, paneCalls } = await start(t);
+  const posted = await post('/api/todo/post', { text: text.replace('Check the preview', 'Check the CLI status'), caller });
+  assert.equal(posted.status, 200);
+  const { item } = await posted.json();
+  const run = promisify(execFile);
+  const cli = new URL('../src/cli.js', import.meta.url).pathname;
+  const env = { ...process.env, ...caller, HERDR_BOSS_PORT: String(port) };
+  const listed = await run(process.execPath, [cli, 'todo', 'list'], { env, timeout: 15000 });
+  assert.match(listed.stdout, /Key\s+Type\s+Title\s+State/);
+  assert.ok(listed.stdout.includes(item.key));
+  assert.match(listed.stdout, /check\s+Check the CLI status\s+open/);
+
+  const answered = await post('/api/todo/action', { id: item.id, action: 'answer', answer: 'Ready for release.' });
+  assert.equal(answered.status, 200);
+  const status = await run(process.execPath, [cli, 'todo', 'status', item.id], { env, timeout: 15000 });
+  assert.match(status.stdout, /State: done/);
+  assert.match(status.stdout, /Answer: Ready for release\./);
+  assert.equal(paneCalls.length, 3, 'post, list, and status each verify the caller pane');
 });
 
 test('the service applies secret refusal and the project rate limit to duplicate HTTP posts', async (t) => {

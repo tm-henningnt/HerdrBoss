@@ -20,6 +20,14 @@ The Boss and an orchestrator can run `herdr-boss todo post FILE`. The service ve
 
 The key combines the verified project with the title. Normalize case and spaces in the title. A duplicate updates the open item. Keep its id and creation time. Accept at most 10 posts per project per minute. Count duplicate updates too. Check the key and the rate limit in one message-store mutation.
 
+## Poster commands
+
+Run `todo list` from a verified Boss or orchestrator pane. Verify the pane and workspace with the shared caller check. List open items for the verified project only. Show the key, type, title, and effective state. Use the To do priority and age order. Return no item body or Owner answer.
+
+Run `todo status ID` from a verified Boss or orchestrator pane. Find the item by its id. Verify that its project matches the caller project. Return its effective state and its latest saved answer, if any. Return `Accept` or `Deny` for a decision answer. Return a not-found error for an unknown id. Return a forbidden error for another project's item.
+
+Use `GET /api/todo/list` and `GET /api/todo/status?id=ID` for these read commands. Pass `HERDR_ENV`, `HERDR_PANE_ID`, and `HERDR_WORKSPACE_ID` in the `x-herdr-env`, `x-herdr-pane-id`, and `x-herdr-workspace-id` headers. Keep both routes read-only so they work in a read-only preview.
+
 ## Slices
 
 Slice (a) builds validation, direct posting, storage, count, sorting, the To do view and Owner actions. `todoOwnerActionRecorded` is the notice seam. It sends no notice in this slice. The dashboard uses the existing access and preview guards.

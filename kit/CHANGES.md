@@ -331,3 +331,7 @@ Summary: Add the herdr-boss redact filter. The worker brief template and the orc
 
 Impact: required
 Summary: Post every Owner ask with herdr-boss todo post FILE. Pane text is not delivery. Name the To do item key when waiting for the Owner. Check agents warns about an Owner wait without an open project item and returns counts only.
+
+## 3055f2109e9e
+Impact: required
+Summary: Add the exact Owner To do file headings and commands to list project items and read their status.

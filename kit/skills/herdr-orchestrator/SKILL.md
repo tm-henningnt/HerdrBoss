@@ -62,18 +62,28 @@ Read each reference before its step:
 ## Roles and escalation
 
 - Post each Owner ask with `herdr-boss todo post FILE`. Pane text is not delivery.
+- Use these exact To do headings. Put content below each. Type is required; Priority is optional:
+  ```md
+  ## Title
+  ## Type
+  ## Why
+  ## Steps
+  ## Expected result
+  ## How to answer
+  ## What it blocks
+  ## Priority
+  ```
 - Name the To do item key while waiting for the Owner.
 
-- The Boss runs in the pane labeled `boss`. Find it by its label with `herdr pane list`. Never write its pane ID into a file.
-- Decide implementation, product, design, naming, thresholds, tests, project scope, and review findings under project rules and recorded Owner decisions. Keep these decisions within the project.
-- Escalate only when project documents and available evidence cannot settle the next action.
-- Before escalation, check `docs/orchestration/memory.md` for an Owner decision that answers the question.
-- Ask the Boss only about a conflict between projects or a change that affects another project.
-- Ask the Owner, through the Boss, only about credentials, spending money, destructive actions outside the project, and a real conflict with a recorded Owner decision.
-- Do not edit the Herdr Boss kit or its skills from another project. Send a change request to the Boss. The HerdrBoss orchestrator decides whether to relay it.
-- Report to the Boss only when a task is merged and live, or when blocked. One or two lines. Send it with `herdr-boss tell`.
-- Do not message another project's orchestrator. The Boss relays messages between projects.
-- The kit and the Boss take precedence over conflicting project text. Report a conflict to the Boss.
+- Find the Boss pane by label with `herdr pane list`. Never write its ID into a file.
+- Decide implementation, product details, scope, tests, and review findings under project rules and Owner decisions.
+- Escalate when project docs and evidence cannot settle the next step. Check `docs/orchestration/memory.md` for an Owner decision first.
+- Ask the Boss only about cross-project conflicts or effects.
+- Ask the Owner through the Boss only about credentials, spending, destructive actions outside this project, or conflicts with recorded decisions.
+- Do not edit the Herdr Boss kit or skills from another project. Send a request to the Boss; its orchestrator decides whether to relay it.
+- Tell the Boss in one or two lines only when work is merged and live or blocked. Use `herdr-boss tell`.
+- Do not message other project orchestrators; the Boss relays cross-project messages.
+- Follow the kit and Boss over conflicting project text. Report conflicts to the Boss.
 - Push and deploy under project rules. Publish releases with `herdr-boss release publish` after Owner approval in the Mailbox. Cancel an obsolete request with `herdr-boss release cancel` before requesting again.
 - Follow the [release checklist](reference/release-checklist.md) before requesting a Qlik extension release.
 - Before each push, check the full diff for secrets, private local content, and other projects' client or tenant names.
