@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { loadModels } from '../src/kit/config.js';
 import { startWorker } from './helpers/start-worker.js';
-import { openCodeConfigText, opencodeTuiAcceptsModelFlags, resetOpenCodeTuiFlagsCache, unsupportedOpenCodeFlag } from '../src/kit/opencode-cli.js';
+import { detectOpenCodeCli, openCodeConfigText, opencodeTuiAcceptsModelFlags, resetOpenCodeTuiFlagsCache, unsupportedOpenCodeFlag } from '../src/kit/opencode-cli.js';
 import { git, setupFixture } from './helpers/kit-fixture.js';
 
 const MODEL = 'opencode/mimo-v2.6-flash-free';
@@ -56,9 +56,54 @@ test('the capability check tells a v2 TUI from a TUI that accepts the flags and 
   } finally { resetOpenCodeTuiFlagsCache(); }
 });
 
+test('OpenCode 1.18 help selects the unchanged TUI flags', () => {
+  const profile = detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode v1.18.2',
+    top: 'USAGE\n  opencode [flags]\nFLAGS\n  -m, --model string  Model\n  --agent string      Agent\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --model string  Model\n',
+  }) });
+  assert.deepEqual(profile, { version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false });
+});
+
+test('OpenCode 2.0.25 help selects run flags and keeps the brief as its message', () => {
+  const profile = detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode v2.0.25',
+    top: 'USAGE\n  opencode <subcommand> [flags]\nFLAGS\n  --prompt string  Prompt\nSUBCOMMANDS\n  run  Run OpenCode with a message\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --model, -m string  Model\n  --agent string      Agent\n',
+  }) });
+  assert.deepEqual(profile, { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: '--agent', config: false });
+});
+
+test('OpenCode run without an agent flag selects the worker and model through config', () => {
+  const profile = detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode v2.0.25',
+    top: 'USAGE\n  opencode <subcommand> [flags]\nSUBCOMMANDS\n  run  Run OpenCode with a message\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --model string  Model\n',
+  }) });
+  assert.deepEqual(profile, { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: null, config: true });
+});
+
+test('OpenCode help with no supported launch form names the missing flags', () => {
+  assert.throws(() => detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode v2.0.25',
+    top: 'USAGE\n  opencode <subcommand> [flags]\nSUBCOMMANDS\n  run  Run OpenCode with a message\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --standalone  Private server\n',
+  }) }), /opencode run --model.*opencode run -m.*opencode -m.*opencode --agent/);
+});
+
+function stubHelp({ version, top, run }) {
+  return (_command, args) => {
+    if (args[0] === '--version') return version;
+    if (args[0] === '--help') return top;
+    if (args[0] === 'run' && args[1] === '--help') return run;
+    throw new Error(`unexpected opencode args: ${args.join(' ')}`);
+  };
+}
+
 test('unsupportedOpenCodeFlag names the refused flag and ignores other text', () => {
   assert.equal(unsupportedOpenCodeFlag('ERROR\n  Unrecognized flag: -m in command opencode'), '-m');
   assert.equal(unsupportedOpenCodeFlag('Unrecognized flag: --agent in command opencode'), '--agent');
+  assert.equal(unsupportedOpenCodeFlag('Unrecognized flag: --agent in command opencode run'), '--agent');
   assert.equal(unsupportedOpenCodeFlag('Did you mean this?'), null);
   assert.equal(unsupportedOpenCodeFlag(undefined), null);
 });
@@ -70,7 +115,7 @@ test('openCodeConfigText selects the model and the worker agent', () => {
 });
 
 // A worker start fixture with an injectable capability answer and a fake pane.
-function startFixture(t, name, { tuiModelFlags = false, flagError = null } = {}) {
+function startFixture(t, name, { tuiModelFlags = false, openCodeProfile = null, openCodeCliDetector = null, flagError = null } = {}) {
   const f = setupFixture(null);
   f.env.HERDR_BOSS_DIR = path.join(f.root, 'boss-data');
   const commands = [];
@@ -99,32 +144,62 @@ function startFixture(t, name, { tuiModelFlags = false, flagError = null } = {})
   const excludeFile = path.resolve(f.root, git(f.root, 'rev-parse', '--git-path', 'info/exclude'));
   const start = (options = {}) => startWorker(name, { kind: 'opencode', task: 'x', allow: ['src/'], model: MODEL, ...options }, {
     config: f.config, models: loadModels(), herdr, env: f.env, rulesFile: f.rulesFile,
-    wait: () => {}, output: () => {}, tuiSupportsModelFlags: () => tuiModelFlags,
+    wait: () => {}, output: () => {},
+    ...(openCodeCliDetector ? { openCodeCliDetector } : {}),
+    ...(openCodeProfile ? { openCodeCliDetector: () => openCodeProfile } : {}),
+    ...(!openCodeCliDetector && !openCodeProfile ? { tuiSupportsModelFlags: () => tuiModelFlags } : {}),
     readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
   });
   return { f, commands, herdr, start, excludeFile };
 }
 
-test('a v2 launch sets the model and agent in opencode.json and passes no -m or --agent', (t) => {
-  const fx = startFixture(t, 'oc-v2-config', { tuiModelFlags: false });
+test('a v2 launch runs the brief as a message in the Herdr pane and records the CLI version', (t) => {
+  const fx = startFixture(t, 'oc-v2-run', { openCodeProfile: { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: '--agent', config: false } });
   const run = fx.start();
   assert.equal(run.model, MODEL);
+  assert.equal(run.opencodeVersion, '2.0.25');
+  assert.equal(JSON.parse(fs.readFileSync(run.recordFile, 'utf8')).opencodeVersion, '2.0.25');
   const startArgs = fx.commands.find((args) => args[0] === 'agent' && args[1] === 'start');
   const afterDash = startArgs.slice(startArgs.indexOf('--') + 1);
-  assert.deepEqual(afterDash, [], 'the v2 TUI gets no launch flags');
+  assert.deepEqual(afterDash, ['run', '--model', MODEL, '--agent', 'worker', 'Read .worker/brief.md in your working directory and execute it.']);
+  assert.equal(fx.commands.some((args) => args[0] === 'agent' && args[1] === 'prompt'), false, 'the run message carries the brief');
+  assert.equal(fs.existsSync(path.join(run.worktree, 'opencode.json')), false);
+});
+
+test('a v2 run without an agent flag writes worker and model config', (t) => {
+  const profile = { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: null, config: true };
+  const fx = startFixture(t, 'oc-v2-config', { openCodeProfile: profile });
+  const run = fx.start();
+  const startArgs = fx.commands.find((args) => args[0] === 'agent' && args[1] === 'start');
+  assert.deepEqual(startArgs.slice(startArgs.indexOf('--') + 1), ['run', '--model', MODEL, 'Read .worker/brief.md in your working directory and execute it.']);
   const config = JSON.parse(fs.readFileSync(path.join(run.worktree, 'opencode.json'), 'utf8'));
   assert.equal(config.model, MODEL);
   assert.equal(config.default_agent, 'worker');
   assert.match(fs.readFileSync(fx.excludeFile, 'utf8'), /^\/opencode\.json$/m);
+  assert.equal(run.opencodeVersion, '2.0.25');
 });
 
 test('a TUI that accepts the flags keeps the old launch path and writes no config file', (t) => {
-  const fx = startFixture(t, 'oc-v1-flags', { tuiModelFlags: true });
+  const fx = startFixture(t, 'oc-v1-flags', { openCodeProfile: { version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false } });
   const run = fx.start();
   const startArgs = fx.commands.find((args) => args[0] === 'agent' && args[1] === 'start');
   const afterDash = startArgs.slice(startArgs.indexOf('--') + 1);
   assert.deepEqual(afterDash, ['-m', MODEL, '--agent', 'worker']);
+  assert.equal(run.opencodeVersion, '1.18.2');
   assert.equal(fs.existsSync(path.join(run.worktree, 'opencode.json')), false);
+});
+
+test('an OpenCode CLI with no accepted launch form fails before it creates a worktree', (t) => {
+  const fx = startFixture(t, 'oc-no-launch', { openCodeCliDetector: () => detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode v2.0.25',
+    top: 'USAGE\n  opencode <subcommand> [flags]\nSUBCOMMANDS\n  run  Run OpenCode with a message\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --standalone  Private server\n',
+  }) }) });
+  const worktree = fx.f.config.worktreePath('oc-no-launch');
+  const runFile = path.join(fx.f.config.runsPath, 'oc-no-launch.json');
+  assert.throws(() => fx.start(), /opencode run --model.*opencode run -m/);
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(fs.existsSync(runFile), false);
 });
 
 test('an Unrecognized flag pane fails loudly, closes the pane, and removes the worktree and branch', (t) => {

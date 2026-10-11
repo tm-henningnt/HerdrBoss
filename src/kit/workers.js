@@ -25,7 +25,7 @@ import { closeFailedWorkerPane, retryOpenCodeStart, withOpenCodeStartLock } from
 import { clearCodexLaneBlock, CODEX_HOOK_BLOCK_REASON, CODEX_HOOK_REVIEW_INSTRUCTION, hasCodexHookReviewDialog, waitForCodexHookReview, writeCodexLaneBlock } from '../codex-lane.js';
 import { processStartIdentity } from './process-info.js';
 import { activeLaunchRecords, clearModelFailure, detectLaunchBlock, launchBlockedError, markModelUnavailable, modelFailureMark, newPaneLines, untilText } from './model-unavailable.js';
-import { OPEN_CODE_CONFIG_NAME, openCodeConfigText, opencodeTuiAcceptsModelFlags, unsupportedOpenCodeFlag } from './opencode-cli.js';
+import { detectOpenCodeCli, OPEN_CODE_CONFIG_NAME, openCodeConfigText, unsupportedOpenCodeFlag } from './opencode-cli.js';
 import { archiveWorkerReports } from './worker-archive.js';
 import { briefCopy, firstParagraph, maskText, titleFromTask } from '../worker-view.js';
 import { assertProjectTransferAllowsWorker } from '../project-transfer-locks.js';
@@ -1647,7 +1647,8 @@ function startWorkerOnce(name, options, {
   leaseOptions = null,
   browserLookup,
   refreshKit = refreshKitIfRequired,
-  tuiSupportsModelFlags = opencodeTuiAcceptsModelFlags,
+  openCodeCliDetector = detectOpenCodeCli,
+  tuiSupportsModelFlags = null,
   readProcessStart = processStartIdentity,
   piModelLister = null,
 } = {}) {
@@ -1765,9 +1766,17 @@ function startWorkerOnce(name, options, {
     if ((rules.control?.runningOpus ?? 0) >= limit) overrideKinds.add('opus-capacity');
   }
   if (modelRoute) output(`routed to ${modelRoute.lane}: ${modelRoute.usedPercent}% used against ${modelRoute.expectedPercent}% expected`);
-  // A v2 OpenCode TUI rejects --model and --agent. Select the model and the worker agent in a project config file instead.
-  const openCodeConfig = options.kind === 'opencode' && tuiSupportsModelFlags({ env }) === false;
-  const launchArgs = openCodeConfig ? [] : modelLaunchArgs;
+  let openCodeProfile = null;
+  if (options.kind === 'opencode') {
+    // Keep compatibility with older tests and callers that inject the old TUI capability check.
+    openCodeProfile = tuiSupportsModelFlags
+      ? (tuiSupportsModelFlags({ env })
+        ? { version: null, mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false }
+        : { version: null, mode: 'tui', modelFlag: null, agentFlag: null, config: true })
+      : openCodeCliDetector({ env });
+  }
+  const openCodeConfig = openCodeProfile?.config === true;
+  let launchArgs = openCodeConfig ? [] : modelLaunchArgs;
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
   const projectPolicy = policy?.projects?.[config.slug];
@@ -1818,6 +1827,11 @@ function startWorkerOnce(name, options, {
   const requestedPaths = options.allow ?? [];
   if (options.readOnly && requestedPaths.length) throw new Error('--read-only cannot be used with --allow.');
   const workerDir = workerDirName(name, !!options.noWorktree);
+  if (openCodeProfile?.mode === 'run') {
+    launchArgs = ['run', openCodeProfile.modelFlag, model];
+    if (openCodeProfile.agentFlag) launchArgs.push(openCodeProfile.agentFlag, 'worker');
+    launchArgs.push(briefPrompt(workerDir));
+  }
   const allowedErrors = validateAllowedPaths(requestedPaths);
   if (allowedErrors.length) throw new Error(allowedErrors.join('\n'));
   if (!options.readOnly && !requestedPaths.length) throw new Error('Give at least one --allow path or use --read-only.');
@@ -2030,6 +2044,7 @@ function startWorkerOnce(name, options, {
   let dependencyClone = { attempted: false, cloned: false };
   const record = {
     name, kind: options.kind, model, modelSource,
+    ...(openCodeProfile?.version ? { opencodeVersion: openCodeProfile.version } : {}),
     ...(modelFallback ? { modelFallback } : {}),
     ...(modelRoute ? { modelRoute } : {}),
     ...(opusForce ? { force: true } : {}),
@@ -2273,17 +2288,22 @@ function startWorkerOnce(name, options, {
       }
       if (options.kind === 'claude' && opusForce) alertBossForOpus(name, model, { ...options, allowedByPolicy: opusAllowed }, config, env, herdr, now, output);
       let delivery;
-      const preBriefBaseline = options.kind === 'opencode' ? readPaneSnapshot() : null;
-      try { delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir); }
-      catch (deliverError) {
-        // The brief text stays on the pane. A retry must not scan it.
-        launchBaseline = null;
-        checkLaunchBlock({ baseline: preBriefBaseline, cutAtBrief: true });
-        throw deliverError;
+      if (openCodeProfile?.mode === 'run') {
+        delivery = 'run-message';
+        output(`Started OpenCode run ${name} with the brief message.`);
+      } else {
+        const preBriefBaseline = options.kind === 'opencode' ? readPaneSnapshot() : null;
+        try { delivery = deliverBrief(name, options.kind, herdr, readWorkerText, wait, output, plan.workerDir); }
+        catch (deliverError) {
+          // The brief text stays on the pane. A retry must not scan it.
+          launchBaseline = null;
+          checkLaunchBlock({ baseline: preBriefBaseline, cutAtBrief: true });
+          throw deliverError;
+        }
+        if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
+        if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
+        if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
       }
-      if (delivery === 'resent') output(`Resent the brief prompt to ${name}: the first prompt did not reach the agent.`);
-      if (delivery === 'stalled-retry') output(`Resent the brief prompt to ${name} after agent_prompt_stalled.`);
-      if (delivery === 'submitted') output(`Sent Enter to ${name}: the brief prompt was typed but not submitted.`);
       record.state = 'running';
       writeJsonAtomic(recordFile, record);
       return { ...record, recordFile, dryRun: false };

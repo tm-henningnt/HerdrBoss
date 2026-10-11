@@ -69,6 +69,7 @@ function startFixture({ browserLookup } = {}) {
   const lines = [];
   const start = (name, options = {}, env = ORCH) => startWorker(name, { kind: 'codex', task: 'x', allow: ['src/'], ...options }, {
     config, models: loadModels(), herdr, env, rulesFile, wait: () => {}, output: (line) => lines.push(line), browserLookup,
+    openCodeCliDetector: () => ({ version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false }),
     readProcessStart: () => 'Mon Sep 28 10:00:00 2026',
   });
   return { root, config, starts, lines, start };
