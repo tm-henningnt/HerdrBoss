@@ -207,7 +207,8 @@ test('OpenCode start lock runs and releases when the real process identity reade
     assert.equal(withOpenCodeStartLock(process.env.TEST_START_DIR, () => {
       const owner = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.equal(owner.pid, process.pid);
-      assert.equal(owner.pidStart, null);
+      // An empty PATH still finds ps in the default system path, so the start identity is a string or null.
+      assert.ok(owner.pidStart === null || typeof owner.pidStart === 'string');
       assert.ok(owner.token);
       return 'started';
     }), 'started');
