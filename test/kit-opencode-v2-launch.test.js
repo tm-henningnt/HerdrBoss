@@ -65,6 +65,52 @@ test('OpenCode 1.18 help selects the unchanged TUI flags', () => {
   assert.deepEqual(profile, { version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false });
 });
 
+test('OpenCode 1.x falls back to legacy TUI flags when help cannot be read', () => {
+  const profile = detectOpenCodeCli({ refresh: true, run: (_command, args) => {
+    if (args[0] === '--version') return 'opencode v1.18.2';
+    throw new Error('help unavailable');
+  } });
+  assert.deepEqual(profile, { version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false });
+});
+
+test('unreadable or unversioned OpenCode falls back to cached legacy TUI flags', () => {
+  let calls = 0;
+  const run = () => { calls++; throw new Error('OpenCode help unavailable'); };
+  try {
+    resetOpenCodeTuiFlagsCache();
+    const first = detectOpenCodeCli({ run });
+    const second = detectOpenCodeCli({ run: () => { throw new Error('detection was not cached'); } });
+    const expected = { version: null, mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false };
+    assert.deepEqual(first, expected);
+    assert.deepEqual(second, expected);
+    assert.equal(calls, 3, 'version and both help commands are checked only once');
+  } finally { resetOpenCodeTuiFlagsCache(); }
+});
+
+test('OpenCode version comes only from an anchored version output line', () => {
+  const profile = detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'diagnostic build 9.8.7',
+    top: 'OpenCode help version 8.7.6\nFLAGS\n  --model string  Model\n  --agent string  Agent\n',
+    run: 'OpenCode run help version 7.6.5\nFLAGS\n  --model string  Model\n  --agent string  Agent\n',
+  }) });
+  assert.deepEqual(profile, { version: null, mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false });
+
+  const valid = detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: 'opencode CLI v3.1.4',
+    top: 'USAGE\n  opencode <subcommand> [flags]\n',
+    run: 'FLAGS\n  --model string  Model\n',
+  }) });
+  assert.deepEqual(valid, { version: '3.1.4', mode: 'run', modelFlag: '--model', agentFlag: null, config: true });
+});
+
+test('OpenCode 3.x requires run help to accept the long --model flag', () => {
+  assert.throws(() => detectOpenCodeCli({ refresh: true, run: stubHelp({
+    version: '3.2.0',
+    top: 'USAGE\n  opencode <subcommand> [flags]\n',
+    run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  -m string  Model\n',
+  }) }), /opencode run --model/);
+});
+
 test('OpenCode 2.0.25 help selects run flags and keeps the brief as its message', () => {
   const profile = detectOpenCodeCli({ refresh: true, run: stubHelp({
     version: 'opencode v2.0.25',
@@ -88,7 +134,7 @@ test('OpenCode help with no supported launch form names the missing flags', () =
     version: 'opencode v2.0.25',
     top: 'USAGE\n  opencode <subcommand> [flags]\nSUBCOMMANDS\n  run  Run OpenCode with a message\n',
     run: 'USAGE\n  opencode run [flags] [<message...>]\nFLAGS\n  --standalone  Private server\n',
-  }) }), /opencode run --model.*opencode run -m.*opencode -m.*opencode --agent/);
+  }) }), /opencode run --model/);
 });
 
 function stubHelp({ version, top, run }) {
@@ -179,6 +225,26 @@ test('a v2 run without an agent flag writes worker and model config', (t) => {
   assert.equal(run.opencodeVersion, '2.0.25');
 });
 
+test('an existing opencode.json stays unchanged and the run flag carries the model', (t) => {
+  const profile = { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: null, config: true };
+  const fx = startFixture(t, 'oc-v2-existing-config', { openCodeProfile: profile });
+  const configPath = path.join(fx.f.root, 'opencode.json');
+  const original = '{"model":"existing/model","default_agent":"custom"}\n';
+  fs.writeFileSync(configPath, original);
+  const run = fx.start({ noWorktree: true });
+  const startArgs = fx.commands.find((args) => args[0] === 'agent' && args[1] === 'start');
+  assert.deepEqual(startArgs.slice(startArgs.indexOf('--') + 1), ['run', '--model', MODEL, 'Read .worker/oc-v2-existing-config/brief.md in your working directory and execute it.']);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+  assert.equal(run.worktree, fx.f.root);
+});
+
+test('OpenCode rejects model strings that look like flags or contain whitespace or controls', (t) => {
+  const fx = startFixture(t, 'oc-v2-invalid-model', { openCodeProfile: { version: '2.0.25', mode: 'run', modelFlag: '--model', agentFlag: '--agent', config: false } });
+  for (const model of ['--agent', 'model with space', 'model\tname', 'model\u0000name']) {
+    assert.throws(() => fx.start({ model }), /OpenCode model must not start with a dash or contain whitespace or control characters/);
+  }
+});
+
 test('a TUI that accepts the flags keeps the old launch path and writes no config file', (t) => {
   const fx = startFixture(t, 'oc-v1-flags', { openCodeProfile: { version: '1.18.2', mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false } });
   const run = fx.start();
@@ -197,7 +263,7 @@ test('an OpenCode CLI with no accepted launch form fails before it creates a wor
   }) }) });
   const worktree = fx.f.config.worktreePath('oc-no-launch');
   const runFile = path.join(fx.f.config.runsPath, 'oc-no-launch.json');
-  assert.throws(() => fx.start(), /opencode run --model.*opencode run -m/);
+  assert.throws(() => fx.start(), /opencode run --model/);
   assert.equal(fs.existsSync(worktree), false);
   assert.equal(fs.existsSync(runFile), false);
 });

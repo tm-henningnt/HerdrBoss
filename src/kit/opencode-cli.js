@@ -7,6 +7,7 @@ const OPEN_CODE_CONFIG_FILE = 'opencode.json';
 const UNSUPPORTED_FLAG = /unrecognized flag:\s*(\S+)\s+in command opencode(?:\s+run)?/i;
 
 let cachedTuiModelFlags = null;
+let cachedOpenCodeDetection = null;
 
 function helpListsFlag(help, flag) {
   return String(help ?? '').split(/\r?\n/).some((line) => {
@@ -26,8 +27,15 @@ function runOpenCode(run, args, env, timeoutMs) {
 }
 
 function parseVersion(text) {
-  const match = /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)\b/.exec(String(text ?? ''));
-  return match?.[1] ?? null;
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const value = line.trim();
+    if (/^\d+\.\d+\.\d+$/.test(value)) return value;
+    if (/^opencode\b/i.test(value)) {
+      const match = /(?:^|\s)v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)(?=$|\s)/i.exec(value);
+      if (match) return match[1];
+    }
+  }
+  return null;
 }
 
 function unsupportedLaunch(version, rejected) {
@@ -37,19 +45,36 @@ function unsupportedLaunch(version, rejected) {
 }
 
 // Return the selected launch form and the version that worker start must record.
-export function detectOpenCodeCli({ run = execFileSync, env = process.env, timeoutMs = HELP_TIMEOUT_MS } = {}) {
+function legacyTuiProfile(version = null) {
+  return { version, mode: 'tui', modelFlag: '-m', agentFlag: '--agent', config: false };
+}
+
+function cacheDetection(profile, error = null) {
+  cachedOpenCodeDetection = { profile: profile ? { ...profile } : null, error: error?.message ?? null };
+}
+
+export function detectOpenCodeCli({ run = execFileSync, env = process.env, refresh = false, timeoutMs = HELP_TIMEOUT_MS } = {}) {
+  if (refresh) cachedOpenCodeDetection = null;
+  if (!refresh && cachedOpenCodeDetection) {
+    if (cachedOpenCodeDetection.error) throw new Error(cachedOpenCodeDetection.error);
+    return { ...cachedOpenCodeDetection.profile };
+  }
+
   const versionResult = runOpenCode(run, ['--version'], env, timeoutMs);
   const topResult = runOpenCode(run, ['--help'], env, timeoutMs);
   const runResult = runOpenCode(run, ['run', '--help'], env, timeoutMs);
-  const version = parseVersion(versionResult.text) || parseVersion(topResult.text) || parseVersion(runResult.text);
-  if (!version) throw new Error('Could not read the OpenCode version from `opencode --version` or its help. Worker start stopped before worktree creation.');
-  const major = version ? Number(version.split('.')[0]) : null;
+  const version = versionResult.ok ? parseVersion(versionResult.text) : null;
+  if (!version) {
+    const profile = legacyTuiProfile();
+    cacheDetection(profile);
+    return { ...profile };
+  }
+  const major = Number(version.split('.')[0]);
 
   const tuiModelFlag = helpListsFlag(topResult.text, '-m') ? '-m' : null;
   const tuiAgentFlag = helpListsFlag(topResult.text, '--agent') ? '--agent' : null;
-  const runExists = runResult.ok && /\bopencode\s+run\b/i.test(runResult.text);
-  const runModelFlag = helpListsFlag(runResult.text, '--model') ? '--model'
-    : helpListsFlag(runResult.text, '-m') ? '-m' : null;
+  const runExists = runResult.ok;
+  const runModelFlag = helpListsFlag(runResult.text, '--model') ? '--model' : null;
   const runAgentFlag = helpListsFlag(runResult.text, '--agent') ? '--agent' : null;
 
   let profile;
@@ -57,29 +82,26 @@ export function detectOpenCodeCli({ run = execFileSync, env = process.env, timeo
     if (tuiModelFlag && tuiAgentFlag) {
       profile = { version, mode: 'tui', modelFlag: tuiModelFlag, agentFlag: tuiAgentFlag, config: false };
     } else {
-      const rejected = [];
-      if (!tuiModelFlag) rejected.push('opencode -m');
-      if (!tuiAgentFlag) rejected.push('opencode --agent');
-      throw unsupportedLaunch(version, rejected);
+      profile = legacyTuiProfile(version);
     }
-  } else if (major === null || major >= 2) {
+  } else if (major >= 2) {
     if (runExists && runModelFlag) {
       profile = { version, mode: 'run', modelFlag: runModelFlag, agentFlag: runAgentFlag, config: !runAgentFlag };
     } else {
       const rejected = [];
       if (!runExists) rejected.push('opencode run');
-      if (!runModelFlag) {
-        rejected.push('opencode run --model');
-        if (!helpListsFlag(runResult.text, '-m')) rejected.push('opencode run -m');
-      }
-      if (!tuiModelFlag) rejected.push('opencode -m');
-      if (!tuiAgentFlag) rejected.push('opencode --agent');
-      throw unsupportedLaunch(version, rejected);
+      if (!runModelFlag) rejected.push('opencode run --model');
+      const error = unsupportedLaunch(version, rejected);
+      cacheDetection(null, error);
+      throw error;
     }
   } else {
-    throw unsupportedLaunch(version, ['opencode -m', 'opencode --agent', 'opencode run --model']);
+    const error = unsupportedLaunch(version, ['opencode -m', 'opencode --agent']);
+    cacheDetection(null, error);
+    throw error;
   }
 
+  cacheDetection(profile);
   return { ...profile };
 }
 
@@ -96,6 +118,7 @@ export function opencodeTuiAcceptsModelFlags({ run = execFileSync, env = process
 // Drop cached help answers. Tests use this after they change the fake CLI.
 export function resetOpenCodeTuiFlagsCache() {
   cachedTuiModelFlags = null;
+  cachedOpenCodeDetection = null;
 }
 
 // The flag that the OpenCode CLI refused, or null.

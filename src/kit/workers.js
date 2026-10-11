@@ -897,6 +897,12 @@ function validateSelection(kind, options, models, config, resourcePolicy = null,
   return { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs, force: isOpus(model) && (!!options.force || opusAllowed), opusAllowed, modelFailureOverride: !!modelFailure };
 }
 
+function validateOpenCodeModel(model) {
+  if (typeof model === 'string' && (model.startsWith('-') || /[\s\p{Cc}]/u.test(model))) {
+    throw new Error('OpenCode model must not start with a dash or contain whitespace or control characters.');
+  }
+}
+
 function appendWorkerEvent(env, event, now) {
   const dir = env.HERDR_BOSS_DIR || DATA_DIR;
   const line = { at: new Date(now).toISOString(), ...event };
@@ -1654,6 +1660,7 @@ function startWorkerOnce(name, options, {
 } = {}) {
   if (!NAME_PATTERN.test(name)) throw new Error('Worker name must match [a-z][a-z0-9-]{0,31}.');
   if (env.HERDR_ENV !== '1') throw new Error('Run worker start from a Herdr-managed pane (HERDR_ENV=1).');
+  if (options.kind === 'opencode') validateOpenCodeModel(options.model);
   const caller = verifyCallerPane(env, herdr, options.orch);
   const reason = forceReason(options.force || options.forceSwap, options.reason, options.forceSwap && !options.force ? '--force-swap' : '--force');
   if (config?.slug) assertProjectTransferAllowsWorker(config.slug, { dataDir: env.HERDR_BOSS_DIR || DATA_DIR });
@@ -1758,6 +1765,7 @@ function startWorkerOnce(name, options, {
   const bossDir = env.HERDR_BOSS_DIR || path.join(os.homedir(), '.herdr-boss');
   const knownUnavailable = [...Object.values(rules.unavailableModels || {}), ...activeLaunchRecords(bossDir, now)];
   const { model, modelSource, modelFallback, modelRoute, effort, effortSource, launchArgs: modelLaunchArgs, force: opusForce, opusAllowed, modelFailureOverride } = validateSelection(options.kind, options, mergeModels(modelConfig, policy), config, policy, onOpusRefused, knownUnavailable, now, rules.control?.runningOpus ?? 0, rules.lanes);
+  if (options.kind === 'opencode') validateOpenCodeModel(model);
   if (modelFailureOverride) overrideKinds.add('model-unavailable');
   if (options.force && isOpus(model)) {
     const opus = policy?.opus;
@@ -1775,7 +1783,7 @@ function startWorkerOnce(name, options, {
         : { version: null, mode: 'tui', modelFlag: null, agentFlag: null, config: true })
       : openCodeCliDetector({ env });
   }
-  const openCodeConfig = openCodeProfile?.config === true;
+  let openCodeConfig = openCodeProfile?.config === true;
   let launchArgs = openCodeConfig ? [] : modelLaunchArgs;
   const agentsWarning = agentsDrift(config.root, rulesPath);
   if (agentsWarning) output(agentsWarning);
@@ -2083,9 +2091,16 @@ function startWorkerOnce(name, options, {
     }
     addExclude(worktree);
     if (openCodeConfig) {
-      // A v2 TUI reads the project config of its working folder. The exclude keeps the file out of the worker commit.
-      fs.writeFileSync(path.join(worktree, OPEN_CODE_CONFIG_NAME), openCodeConfigText(model), { mode: 0o600 });
-      output(`Wrote ${OPEN_CODE_CONFIG_NAME} in ${worktree} with model ${model} and agent worker.`);
+      // Keep an existing project config intact. The run command already carries the selected model.
+      const configPath = path.join(worktree, OPEN_CODE_CONFIG_NAME);
+      try {
+        fs.writeFileSync(configPath, openCodeConfigText(model), { mode: 0o600, flag: 'wx' });
+        output(`Wrote ${OPEN_CODE_CONFIG_NAME} in ${worktree} with model ${model} and agent worker.`);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        openCodeConfig = false;
+        output(`Kept existing ${OPEN_CODE_CONFIG_NAME} in ${worktree}; the run flag carries the selected model.`);
+      }
     }
     fs.mkdirSync(path.join(worktree, plan.workerDir), { recursive: true });
     fs.mkdirSync(plan.tmpDir, { recursive: true });
